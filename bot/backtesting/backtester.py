@@ -45,6 +45,9 @@ from bot.engines.simulation import (
     calculate_pnl,            # Calculates gross profit before fees are subtracted
 )
 
+# claude code changed: new import — Kraken Multi-Venue Execution, Step 14.
+from bot.config.execution_costs import get_venue_execution_costs
+
 # ── REGIME-AWARE IMPORTS — unchanged ──────────────────────────
 
 # RegimeDetector classifies the current market every single candle
@@ -103,7 +106,13 @@ class Backtester:
     - Produces clean result dict for dashboard/scorer
     """
 
-    def __init__(self, df: pd.DataFrame, initial_balance: float = 10000, allow_unvalidated_strategies: bool = False):   # claude code changed: new param
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        initial_balance: float = 10000,
+        allow_unvalidated_strategies: bool = False,
+        venue_id: str = "binance",   # claude code changed: new param — Kraken Multi-Venue Execution, Step 14
+    ):
         # Store the original DataFrame safely so we never mutate the caller's data
         self.original_df = df.copy() if df is not None else pd.DataFrame()
 
@@ -111,6 +120,24 @@ class Backtester:
         self.initial_balance = initial_balance
         # The running balance that changes as trades win and lose
         self.balance = initial_balance
+
+        # claude code changed: new — Kraken Multi-Venue Execution, Step 14.
+        # Selects which venue's REAL, already-verified cost model (Step 8's
+        # get_venue_execution_costs()) is applied when simulating fills
+        # against this DataFrame. Does NOT change the price data itself —
+        # `df` is whatever the caller fetched (Binance-sourced in this
+        # project via bot.data_fetcher) regardless of venue_id. A
+        # venue_id="kraken" backtest means "this same Binance price history,
+        # simulated with Kraken's real fee schedule" — an execution-cost
+        # estimate, not a true historical Kraken backtest (this project
+        # never fetches or fabricates Kraken OHLCV history). Default
+        # "binance" is proven identical to this class's pre-Step-14
+        # bare-constant behavior, since Step 8 confirmed Binance's table
+        # row equals the global defaults exactly.
+        self.venue_id = venue_id
+        _costs = get_venue_execution_costs(venue_id)
+        self.fee_rate = _costs["fee_rate"]
+        self.slippage_rate = _costs["slippage_rate"]
 
         # ── SYSTEM COMPONENTS — each instantiated once before the loop ──
         # PositionSizer — claude code changed: new — the real sizer, same
@@ -323,7 +350,9 @@ class Backtester:
             return None    # Unexpected signal value — cannot open a trade
 
         # Apply entry slippage — simulates paying slightly more/less than signal price
-        entry = apply_slippage(entry_p, direction, True)
+        # claude code changed: was apply_slippage(entry_p, direction, True) —
+        # Step 14 threads through this run's venue-selected slippage_rate.
+        entry = apply_slippage(entry_p, direction, True, slippage_rate=self.slippage_rate)
 
         # claude code changed: was an inline "risk = balance * risk_per_trade;
         # qty = risk / distance" formula with no flooring, no risk cap, and
@@ -435,7 +464,8 @@ class Backtester:
 
         # ── APPLY SLIPPAGE ─────────────────────────────────────
         # We receive slightly worse price on exit — market impact of our sell/buy order
-        exit_price = apply_slippage(raw_exit, direction, False)
+        # claude code changed: Step 14 — threads through venue-selected slippage_rate.
+        exit_price = apply_slippage(raw_exit, direction, False, slippage_rate=self.slippage_rate)
 
         qty = self.open_trade.quantity      # Units we were holding
         entry = self.open_trade.entry_price  # The price we originally entered at
@@ -446,7 +476,8 @@ class Backtester:
         gross = calculate_pnl(direction, entry, exit_price, qty)
 
         # Exchange fees charged on this round trip (entry + exit)
-        fees = calc_fees(entry, exit_price, qty)
+        # claude code changed: Step 14 — threads through venue-selected fee_rate.
+        fees = calc_fees(entry, exit_price, qty, fee_rate=self.fee_rate)
         self.total_fees += fees   # Add to the session running total
 
         # Slippage cost is the dollar difference between raw exit and actual fill
@@ -608,8 +639,10 @@ class Backtester:
         final_price = float(self.df["close"].iloc[-1])
 
         # Apply exit slippage to the final price — simulates realistic fill
+        # claude code changed: Step 14 — threads through venue-selected slippage_rate.
         final_exit = apply_slippage(
-            final_price, self.open_trade.direction, is_entry=False
+            final_price, self.open_trade.direction, is_entry=False,
+            slippage_rate=self.slippage_rate,
         )
 
         qty = self.open_trade.quantity       # Units we were holding
@@ -619,7 +652,8 @@ class Backtester:
         gross = calculate_pnl(self.open_trade.direction, entry, final_exit, qty)
 
         # Exchange fees for this final round trip
-        fees = calc_fees(entry, final_exit, qty)
+        # claude code changed: Step 14 — threads through venue-selected fee_rate.
+        fees = calc_fees(entry, final_exit, qty, fee_rate=self.fee_rate)
         self.total_fees += fees   # Add to session total
 
         # Slippage cost for the force close
@@ -724,6 +758,12 @@ class Backtester:
         return {
             "trades": [],                                       # No trades taken
             "final_balance": round(self.initial_balance, 2),  # Balance unchanged
+            # claude code changed: new — Kraken Multi-Venue Execution, Step 14.
+            # See Backtester.__init__'s venue_id docstring: this only tags
+            # which cost model was applied, never which price data was used.
+            "venue_id": self.venue_id,
+            "fee_rate": self.fee_rate,
+            "slippage_rate": self.slippage_rate,
             "total_trades": 0,
             "wins": 0,
             "losses": 0,
@@ -872,6 +912,13 @@ class Backtester:
         # Return the complete results dict — every key used by the dashboard is here
         return {
             "trades": self.closed_trades,   # Full list of trade dicts with all context
+
+            # claude code changed: new — Kraken Multi-Venue Execution, Step 14.
+            # Tags which cost model was applied — self.original_df's price
+            # data is never venue-swapped, only the fee/slippage assumption.
+            "venue_id": self.venue_id,
+            "fee_rate": self.fee_rate,
+            "slippage_rate": self.slippage_rate,
 
             # ── Core metrics — dashboard key names must not change ──
             "final_balance": round(self.balance, 2),   # Ending account balance
@@ -1372,7 +1419,12 @@ def analyze_rejections(rejection_table: dict) -> dict:
 # ============================================================
 # FUNCTION WRAPPER — PRESERVES OLD API
 # ============================================================
-def backtest(df: pd.DataFrame, initial_balance: float = 5000, allow_unvalidated_strategies: bool = False) -> dict:   # claude code changed: new param
+def backtest(
+    df: pd.DataFrame,
+    initial_balance: float = 5000,
+    allow_unvalidated_strategies: bool = False,
+    venue_id: str = "binance",   # claude code changed: new param — Kraken Multi-Venue Execution, Step 14
+) -> dict:
     """
     Backward-compatible wrapper.
 
@@ -1380,6 +1432,17 @@ def backtest(df: pd.DataFrame, initial_balance: float = 5000, allow_unvalidated_
         backtest(df, initial_balance=5000)
 
     while the real work is now done by the Backtester class.
+
+    venue_id: claude code changed: new — see Backtester.__init__'s venue_id
+        docstring. Selects which venue's real cost model is applied; never
+        changes df's price data. Every existing caller in this codebase
+        calls backtest(df) positionally-only, so the "binance" default
+        (proven identical to pre-Step-14 behavior) leaves all of them
+        unaffected.
     """
     # Create a Backtester instance and run it — returns the full results dict
-    return Backtester(df=df, initial_balance=initial_balance, allow_unvalidated_strategies=allow_unvalidated_strategies).run()   # claude code changed: new arg
+    return Backtester(
+        df=df, initial_balance=initial_balance,
+        allow_unvalidated_strategies=allow_unvalidated_strategies,
+        venue_id=venue_id,
+    ).run()

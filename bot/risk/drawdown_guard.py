@@ -43,6 +43,22 @@
 #   equity (free balance + value of all open positions) — otherwise
 #   capital merely LOCKED in open positions would look like a loss and
 #   could trip the switch with zero real drawdown.
+#
+# - claude code changed: new — Kraken Multi-Venue Execution, Step 12.
+#   Multi-venue note: ExecutionEngine now optionally takes an `adapter`
+#   (Step 10), and ExecutionCoordinator (also Step 10) can hold one
+#   ExecutionEngine per venue, each with its OWN DrawdownGuard instance.
+#   This is exactly the correct design, not a gap: each guard only ever
+#   reads its own venue's MarketData.get_balance(), so a position open
+#   on Kraken has zero effect on Binance's guard math and vice versa —
+#   the free-balance approximation above stays valid independently PER
+#   VENUE, as long as that individual venue still holds at most one
+#   position at a time (still true today; verified directly in
+#   bot/tests/test_risk_controls_inheritance.py, which also confirms two
+#   engines never accidentally share a DrawdownGuard instance). There is
+#   deliberately no aggregate/portfolio-wide drawdown view across venues
+#   — each venue is a separate real balance/account, so per-venue limits
+#   are the economically correct ones, not a missing feature.
 # ============================================================
 
 import logging

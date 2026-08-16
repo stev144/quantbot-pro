@@ -251,6 +251,16 @@ class TradeRecord(models.Model):
     exit_narrative = models.TextField(default="", blank=True)
 
 
+    # ---- Venue ----
+    # claude code changed: new — Kraken Multi-Venue Execution, Step 15.
+    # Which exchange this trade actually executed on — matches
+    # ExchangeAdapter.venue_id / ExecutionEngine.venue_id (Steps 2, 10).
+    # Defaults to "binance" so every pre-existing row and every caller
+    # that doesn't pass venue= is unaffected — this is a purely additive
+    # migration, same discipline as the Provenance Fields block above.
+    venue = models.CharField(max_length=20, default="binance", blank=True)
+
+
     # ---- Status ----
 
     # "OPEN"  — trade is currently live on the exchange
@@ -296,9 +306,21 @@ class TradeRecord(models.Model):
         # makes that structurally impossible at the database level — the
         # INSERT itself fails — rather than relying solely on Python-level
         # checks that a crash can bypass.
+        #
+        # claude code changed: was fields=["symbol"] — Kraken Multi-Venue
+        # Execution, Step 15. symbol-only scoping meant ExecutionCoordinator
+        # (Step 10) opening the SAME symbol on two DIFFERENT venues at once
+        # — a real, intended capability — would hit this constraint on the
+        # second INSERT, silently losing that trade's database record
+        # (caught by TradeLogger.log_entry()'s broad except Exception).
+        # Scoping by (symbol, venue) together still blocks the original bug
+        # (a true duplicate: same symbol AND same venue, both OPEN) while
+        # correctly permitting the same symbol OPEN on two different
+        # venues. No behavior change for the default single-venue path —
+        # every existing row has venue="binance".
         constraints = [
             models.UniqueConstraint(
-                fields=["symbol"],
+                fields=["symbol", "venue"],
                 condition=models.Q(status="OPEN"),
                 name="unique_open_trade_per_symbol",
             )

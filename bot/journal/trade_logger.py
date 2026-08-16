@@ -54,7 +54,7 @@ class TradeLogger:
     # Called by ExecutionEngine after a confirmed entry fill.
     # Creates a new TradeRecord row in the database.
     # ============================================================
-    def log_entry(self, signal, fill_result, risk_amount, narrative=None):
+    def log_entry(self, signal, fill_result, risk_amount, narrative=None, venue="binance"):
         """
         Records the opening of a live trade to the database.
 
@@ -70,6 +70,11 @@ class TradeLogger:
                      field at its model default — kept optional so this
                      signature stays backward-compatible rather than a
                      hard requirement.
+        venue:       claude code changed: new — Kraken Multi-Venue
+                     Execution, Step 15. Which exchange this trade actually
+                     executed on (ExecutionEngine.venue_id). Defaults to
+                     "binance" so every caller that doesn't pass this is
+                     unaffected — matches TradeRecord.venue's own default.
         """
 
         try:
@@ -105,6 +110,9 @@ class TradeLogger:
                 verdict_rejection_reason  = narrative.verdict_rejection_reason if narrative else "",
                 entry_narrative           = narrative.entry_narrative if narrative else "",
 
+                # ---- Venue ---- claude code changed: new block — Step 15
+                venue = venue,
+
                 # ---- Status ----
                 # Trade is now live — exit fields are all null at this point
                 status = "OPEN"
@@ -135,7 +143,7 @@ class TradeLogger:
     # Called by ExecutionEngine after a confirmed exit fill.
     # Finds the open TradeRecord and updates it with exit data.
     # ============================================================
-    def log_exit(self, symbol, exit_result, risk_amount, reason="unknown", narrative=None):
+    def log_exit(self, symbol, exit_result, risk_amount, reason="unknown", narrative=None, venue="binance"):
         """
         Updates the open TradeRecord with exit data and calculated P&L.
 
@@ -151,6 +159,12 @@ class TradeLogger:
                      available at ExecutionEngine's call site. None skips
                      exit-narrative completion (record.exit_narrative stays
                      at its model default).
+        venue:       claude code changed: new — Kraken Multi-Venue
+                     Execution, Step 15. Must match the venue this trade's
+                     log_entry() call used — scopes the OPEN-record lookup
+                     below so a symbol open on two different venues at once
+                     (Step 10's ExecutionCoordinator) can't have the wrong
+                     venue's record found/updated. Defaults to "binance".
         """
 
         try:
@@ -166,15 +180,19 @@ class TradeLogger:
             # position, so the newest OPEN record is the correct match —
             # and logs critically so the operator knows duplicate OPEN
             # rows existed for this symbol and should investigate.
+            # claude code changed: was filter(symbol=symbol, status="OPEN")
+            # — Step 15 adds venue=venue so this can't find/update the
+            # WRONG venue's OPEN record when the same symbol is open on
+            # more than one venue at once.
             candidates = list(
-                TradeRecord.objects.filter(symbol=symbol, status="OPEN").order_by("-id")
+                TradeRecord.objects.filter(symbol=symbol, venue=venue, status="OPEN").order_by("-id")
             )
 
             if not candidates:
                 logger.error(
-                    f"[TradeLogger] No OPEN TradeRecord found for {symbol}. "
-                    f"Cannot log exit. Entry may have failed to record. "
-                    f"Check database manually."
+                    f"[TradeLogger] No OPEN TradeRecord found for {symbol} "
+                    f"on {venue}. Cannot log exit. Entry may have failed to "
+                    f"record. Check database manually."
                 )
                 return
 

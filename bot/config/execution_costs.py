@@ -30,3 +30,42 @@ SLIPPAGE_RATE = 0.0005
 # Simulated exchange fee — Binance standard taker fee, charged on both
 # entry and exit during backtesting. 0.001 = 0.1%.
 FEE_RATE = 0.001
+
+# claude code changed: new — Kraken Multi-Venue Execution, Step 8. Real,
+# per-venue cost table. Additive only — FEE_RATE/SLIPPAGE_RATE above are
+# UNCHANGED and still consumed directly by bot/engines/simulation.py's
+# backtester and by OrderManager's default (no-override) dry-run path.
+# This table is what BinanceAdapter/KrakenAdapter.get_execution_costs()
+# now read from, instead of each adapter importing/hardcoding its own
+# rate — kraken's fee_rate here is the exact same value that used to live
+# as a standalone KRAKEN_FEE_RATE constant in kraken_adapter.py, only
+# relocated, not changed.
+VENUE_EXECUTION_COSTS = {
+    "binance": {
+        "fee_rate": FEE_RATE,
+        "slippage_rate": SLIPPAGE_RATE,
+    },
+    "kraken": {
+        # Kraken's published lowest-tier (<$10k 30-day volume) spot taker
+        # fee, per Kraken's public fee schedule — a first-pass, publicly-
+        # documented estimate, not fetched from a live account's actual
+        # negotiated tier.
+        "fee_rate": 0.0026,
+        # No Kraken-specific slippage data exists yet — shares the same
+        # estimate as Binance until real data justifies differentiating it.
+        "slippage_rate": SLIPPAGE_RATE,
+    },
+}
+
+
+def get_venue_execution_costs(venue_id: str) -> dict:
+    """
+    Returns {"fee_rate": float, "slippage_rate": float} for venue_id.
+    Falls back to the default (Binance-modeled) global rates for an
+    unrecognized venue_id — fails soft to a known-good default rather
+    than KeyError, since a missing table entry should degrade gracefully
+    rather than crash order/cost-model construction.
+    """
+    return VENUE_EXECUTION_COSTS.get(
+        venue_id, {"fee_rate": FEE_RATE, "slippage_rate": SLIPPAGE_RATE}
+    )

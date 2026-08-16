@@ -92,10 +92,37 @@ class OrderManager:
         retry_delay=2,
         confirm_timeout=30,
         rate_limit_backoff=60,
-        dry_run=False
+        dry_run=False,
+        fee_rate=None,
+        slippage_rate=None,
     ):
         # The ccxt exchange instance — already authenticated
         self.exchange = exchange
+
+        # claude code changed: new — Kraken Multi-Venue Execution, Step 15.
+        # ccxt exchange instances already expose a stable .id ("binance",
+        # "kraken" — confirmed empirically), so this needs no new
+        # constructor param anywhere. Used only to tag log lines below so
+        # an operator watching logs during multi-venue activity can tell
+        # which venue a given line belongs to (since Step 10, this class
+        # can be constructed by any adapter). "unknown" when exchange is
+        # None — some existing tests construct OrderManager(exchange=None).
+        self.venue_id = getattr(exchange, "id", "unknown")
+
+        # claude code changed: new — Kraken Multi-Venue Execution, Step 8.
+        # Fixes a real bug: _simulate_fill() previously always used the
+        # module-level FEE_RATE/SLIPPAGE_RATE (Binance-modeled) regardless
+        # of which venue's adapter constructed this OrderManager, so
+        # KrakenAdapter's dry-run fills were silently charged Binance's fee
+        # rate, contradicting KrakenAdapter.get_execution_costs()'s own
+        # advertised number. Defaults to None so every existing caller
+        # (ExecutionEngine's OrderManager(exchange, dry_run=dry_run) — never
+        # passes these) is 100% unaffected and keeps using the global
+        # Binance-modeled defaults exactly as before. Only real (non-dry-run)
+        # fills already reflect the actual exchange-reported fee regardless
+        # of this — this only affects simulated dry-run fills.
+        self.fee_rate = fee_rate if fee_rate is not None else FEE_RATE
+        self.slippage_rate = slippage_rate if slippage_rate is not None else SLIPPAGE_RATE
 
         # claude code changed: new — when True, place_order()/place_stop_loss()
         # never call the authenticated create_order() endpoint. Instead they
@@ -149,7 +176,7 @@ class OrderManager:
 
         # Log intent with full context before touching the exchange
         logger.info(
-            f"[OrderManager] {side.upper()} | {symbol} | "
+            f"[OrderManager:{self.venue_id}] {side.upper()} | {symbol} | "
             f"Qty: {quantity} | Price: {price or 'MARKET'}"
         )
 
@@ -186,7 +213,7 @@ class OrderManager:
                 # Log the exchange-assigned order ID immediately
                 # This ID is the key to all subsequent status checks
                 logger.info(
-                    f"[OrderManager] Submitted | ID: {order.get('id')} | "
+                    f"[OrderManager:{self.venue_id}] Submitted | ID: {order.get('id')} | "
                     f"Attempt: {attempt + 1}/{self.max_retries}"
                 )
 
@@ -204,7 +231,7 @@ class OrderManager:
                 # Account balance too low — retrying won't create funds
                 # From a risk perspective: this should never happen if
                 # position sizing is correctly implemented upstream
-                logger.error(f"[OrderManager] Insufficient funds — aborting: {e}")
+                logger.error(f"[OrderManager:{self.venue_id}] Insufficient funds — aborting: {e}")
                 raise  # Propagate as-is to strategy engine
 
 
@@ -212,7 +239,7 @@ class OrderManager:
                 # Order parameters rejected by exchange
                 # Common causes: quantity below minimum, price precision wrong
                 # These are configuration bugs — fix the strategy, not the retry
-                logger.error(f"[OrderManager] Invalid order parameters — aborting: {e}")
+                logger.error(f"[OrderManager:{self.venue_id}] Invalid order parameters — aborting: {e}")
                 raise  # Propagate as-is
 
 
@@ -229,7 +256,7 @@ class OrderManager:
 
                 # Log with severity — rate limits in live trading are serious
                 logger.warning(
-                    f"[OrderManager] Rate limit hit ({rate_limit_hits}/"
+                    f"[OrderManager:{self.venue_id}] Rate limit hit ({rate_limit_hits}/"
                     f"{self.rate_limit_max_retries}): {e}"
                 )
 
@@ -237,7 +264,7 @@ class OrderManager:
                 # Something is structurally wrong — halt all trading activity
                 if rate_limit_hits >= self.rate_limit_max_retries:
                     logger.critical(
-                        "[OrderManager] Rate limit max retries exceeded — "
+                        "[OrderManager:{self.venue_id}] Rate limit max retries exceeded — "
                         "halting. Check API key permissions and request frequency."
                     )
                     raise RateLimitException(
@@ -247,7 +274,7 @@ class OrderManager:
 
                 # Otherwise back off hard — 60 seconds minimum
                 # This is not exponential because rate limits need a full reset
-                logger.info(f"[OrderManager] Backing off {self.rate_limit_backoff}s for rate limit...")
+                logger.info(f"[OrderManager:{self.venue_id}] Backing off {self.rate_limit_backoff}s for rate limit...")
                 time.sleep(self.rate_limit_backoff)
 
 
@@ -264,10 +291,10 @@ class OrderManager:
 
                 # Log with attempt context for post-trade review
                 logger.warning(
-                    f"[OrderManager] Retryable error on attempt "
+                    f"[OrderManager:{self.venue_id}] Retryable error on attempt "
                     f"{attempt + 1}/{self.max_retries}: {e}"
                 )
-                logger.info(f"[OrderManager] Retrying in {sleep_time}s...")
+                logger.info(f"[OrderManager:{self.venue_id}] Retrying in {sleep_time}s...")
 
                 # Wait the calculated backoff before next attempt
                 time.sleep(sleep_time)
@@ -280,7 +307,7 @@ class OrderManager:
 
             except Exception as e:
                 logger.error(
-                    f"[OrderManager] Unexpected error on attempt "
+                    f"[OrderManager:{self.venue_id}] Unexpected error on attempt "
                     f"{attempt + 1}: {type(e).__name__}: {e}"
                 )
                 # Use base delay — we don't know the cause so don't escalate
@@ -288,7 +315,7 @@ class OrderManager:
 
         # All retry attempts exhausted — order has definitively failed
         logger.critical(
-            f"[OrderManager] Order FAILED after {self.max_retries} attempts | "
+            f"[OrderManager:{self.venue_id}] Order FAILED after {self.max_retries} attempts | "
             f"{symbol} {side} {quantity}"
         )
 
@@ -315,7 +342,7 @@ class OrderManager:
         symbol = order.get("symbol")
 
         # Log the start of confirmation with full identifiers
-        logger.info(f"[OrderManager] Confirming | ID: {order_id} | Symbol: {symbol}")
+        logger.info(f"[OrderManager:{self.venue_id}] Confirming | ID: {order_id} | Symbol: {symbol}")
 
         # Record start time for timeout enforcement
         start_time = time.time()
@@ -337,7 +364,7 @@ class OrderManager:
                 # Build and return the normalised result object
                 # ------------------------------------------------
                 if order_status == "closed":
-                    logger.info(f"[OrderManager] Order {order_id} confirmed FILLED")
+                    logger.info(f"[OrderManager:{self.venue_id}] Order {order_id} confirmed FILLED")
                     return self._build_result(status, intended_price)
 
 
@@ -347,7 +374,7 @@ class OrderManager:
                 # Do not re-enter until cause is understood
                 # ------------------------------------------------
                 if order_status == "canceled":
-                    logger.error(f"[OrderManager] Order {order_id} CANCELLED by exchange")
+                    logger.error(f"[OrderManager:{self.venue_id}] Order {order_id} CANCELLED by exchange")
 
                     # Raise typed exception — strategy engine should not
                     # automatically re-enter when an order is cancelled
@@ -374,14 +401,14 @@ class OrderManager:
                     # in time and opportunity than the missing fraction is worth
                     if fill_pct >= self.min_fill_pct:
                         logger.warning(
-                            f"[OrderManager] Accepting partial fill: "
+                            f"[OrderManager:{self.venue_id}] Accepting partial fill: "
                             f"{fill_pct * 100:.1f}% of order {order_id}"
                         )
                         return self._build_result(status, intended_price)
 
                     # Below threshold — log progress and continue polling
                     logger.info(
-                        f"[OrderManager] Partial fill {fill_pct * 100:.1f}% "
+                        f"[OrderManager:{self.venue_id}] Partial fill {fill_pct * 100:.1f}% "
                         f"— continuing to poll..."
                     )
 
@@ -394,7 +421,7 @@ class OrderManager:
 
             except Exception as e:
                 # Exchange status check failed — log and retry the poll
-                logger.warning(f"[OrderManager] Status check error: {e}")
+                logger.warning(f"[OrderManager:{self.venue_id}] Status check error: {e}")
                 time.sleep(self.poll_interval)
 
         # --------------------------------------------------------
@@ -404,7 +431,7 @@ class OrderManager:
         # strategy engine doesn't know about. Recovery is critical.
         # --------------------------------------------------------
         logger.critical(
-            f"[OrderManager] TIMEOUT reached for order {order_id} "
+            f"[OrderManager:{self.venue_id}] TIMEOUT reached for order {order_id} "
             f"after {self.confirm_timeout}s — initiating recovery"
         )
 
@@ -461,7 +488,7 @@ class OrderManager:
 
         # Log the full execution summary for post-trade review
         logger.info(
-            f"[OrderManager] Execution summary | "
+            f"[OrderManager:{self.venue_id}] Execution summary | "
             f"Fill: {actual_fill} | Intended: {intended_price} | "
             f"Slippage: {slippage_pct:.4f}% | "
             f"Fee: {fee_usdt} {fee_currency} | "
@@ -512,33 +539,37 @@ class OrderManager:
                 price = self.exchange.fetch_ticker(symbol).get("last")
             except Exception as e:
                 logger.warning(
-                    f"[OrderManager] DRY RUN — ticker fetch failed for {symbol}, "
+                    f"[OrderManager:{self.venue_id}] DRY RUN — ticker fetch failed for {symbol}, "
                     f"cannot simulate market fill: {e}"
                 )
                 price = None
 
         if not price or price <= 0:
             logger.error(
-                f"[OrderManager] DRY RUN — no valid reference price for {symbol}, "
+                f"[OrderManager:{self.venue_id}] DRY RUN — no valid reference price for {symbol}, "
                 f"cannot simulate fill"
             )
             raise Exception(f"DRY RUN fill simulation failed: no price for {symbol}")
 
         # Adverse slippage: buys fill slightly above reference, sells slightly
         # below — same direction real slippage always costs the trader
+        # claude code changed: was module-level SLIPPAGE_RATE/FEE_RATE —
+        # now self.slippage_rate/self.fee_rate (Step 8), so a venue-specific
+        # OrderManager (constructed by KrakenAdapter with Kraken's own
+        # rates) simulates fills that actually reflect that venue.
         if side.lower() == "buy":
-            fill_price = round(price * (1 + SLIPPAGE_RATE), 8)
+            fill_price = round(price * (1 + self.slippage_rate), 8)
         else:
-            fill_price = round(price * (1 - SLIPPAGE_RATE), 8)
+            fill_price = round(price * (1 - self.slippage_rate), 8)
 
-        fee_usdt = round(fill_price * quantity * FEE_RATE, 6)
+        fee_usdt = round(fill_price * quantity * self.fee_rate, 6)
 
         slippage_pct = abs(fill_price - price) / price * 100
 
         order_id = f"DRYRUN-{symbol.replace('/', '')}-{int(time.time() * 1000)}"
 
         logger.info(
-            f"[OrderManager] DRY RUN fill simulated | {side.upper()} | {symbol} | "
+            f"[OrderManager:{self.venue_id}] DRY RUN fill simulated | {side.upper()} | {symbol} | "
             f"Fill: {fill_price} | Qty: {quantity} | Fee: {fee_usdt} | ID: {order_id}"
         )
 
@@ -569,7 +600,7 @@ class OrderManager:
         # ---- Attempt 1: Direct fetch ----
         # The order may have filled just after the timeout was triggered
         try:
-            logger.info(f"[OrderManager] Recovery attempt 1: direct fetch {order_id}")
+            logger.info(f"[OrderManager:{self.venue_id}] Recovery attempt 1: direct fetch {order_id}")
 
             # Fetch the current state one more time
             status = self.exchange.fetch_order(order_id, symbol)
@@ -577,7 +608,7 @@ class OrderManager:
             # If it filled during/after timeout — return it normally
             if status.get("status") == "closed":
                 logger.warning(
-                    f"[OrderManager] Order {order_id} was filled — "
+                    f"[OrderManager:{self.venue_id}] Order {order_id} was filled — "
                     f"recovered successfully after timeout"
                 )
                 return self._build_result(status, intended_price)
@@ -585,7 +616,7 @@ class OrderManager:
             # If the order is still sitting open on the exchange
             if status.get("status") == "open":
                 logger.warning(
-                    f"[OrderManager] Order {order_id} still OPEN after timeout. "
+                    f"[OrderManager:{self.venue_id}] Order {order_id} still OPEN after timeout. "
                     f"Strategy engine must decide: wait, cancel, or reprice."
                 )
 
@@ -605,13 +636,13 @@ class OrderManager:
             raise
 
         except Exception as e:
-            logger.error(f"[OrderManager] Recovery attempt 1 failed: {e}")
+            logger.error(f"[OrderManager:{self.venue_id}] Recovery attempt 1 failed: {e}")
 
 
         # ---- Attempt 2: Scan open orders ----
         # If direct fetch failed, check the open orders list as a fallback
         try:
-            logger.info(f"[OrderManager] Recovery attempt 2: scanning open orders")
+            logger.info(f"[OrderManager:{self.venue_id}] Recovery attempt 2: scanning open orders")
 
             # Fetch all currently open orders for this symbol
             open_orders = self.exchange.fetch_open_orders(symbol)
@@ -621,7 +652,7 @@ class OrderManager:
                 if o.get("id") == order_id:
                     # Found it — still open, raise typed exception
                     logger.warning(
-                        f"[OrderManager] Order {order_id} found in open orders — "
+                        f"[OrderManager:{self.venue_id}] Order {order_id} found in open orders — "
                         f"still not filled"
                     )
                     raise OrderStillOpenException(
@@ -634,7 +665,7 @@ class OrderManager:
             raise
 
         except Exception as e:
-            logger.error(f"[OrderManager] Recovery attempt 2 failed: {e}")
+            logger.error(f"[OrderManager:{self.venue_id}] Recovery attempt 2 failed: {e}")
 
 
         # ---- Final fallback: truly unknown state ----
@@ -642,7 +673,7 @@ class OrderManager:
         # This is the most dangerous state. Log as critical.
         # The operator must check the exchange dashboard manually.
         logger.critical(
-            f"[OrderManager] Order {order_id} state UNKNOWN after all recovery attempts. "
+            f"[OrderManager:{self.venue_id}] Order {order_id} state UNKNOWN after all recovery attempts. "
             f"Check exchange dashboard immediately. Do not place new orders on {symbol}."
         )
 
@@ -707,7 +738,7 @@ class OrderManager:
         """
 
         logger.info(
-            f"[OrderManager] Placing STOP LOSS | {side.upper()} | {symbol} | "
+            f"[OrderManager:{self.venue_id}] Placing STOP LOSS | {side.upper()} | {symbol} | "
             f"Qty: {quantity} | Stop: {stop_price}"
         )
 
@@ -721,7 +752,7 @@ class OrderManager:
         # Fixes architecture audit finding C-2 (issue 2).
         if self.dry_run:
             logger.info(
-                f"[OrderManager] DRY RUN — no resting stop placed for {symbol}; "
+                f"[OrderManager:{self.venue_id}] DRY RUN — no resting stop placed for {symbol}; "
                 f"software-polled fallback in manage_positions() will protect it"
             )
             return {
@@ -747,7 +778,7 @@ class OrderManager:
             )
 
             logger.info(
-                f"[OrderManager] Stop loss resting on exchange | "
+                f"[OrderManager:{self.venue_id}] Stop loss resting on exchange | "
                 f"ID: {order.get('id')} | Trigger: {stop_price}"
             )
 
@@ -761,18 +792,18 @@ class OrderManager:
 
         except ccxt.InsufficientFunds as e:
             # Balance won't change by retrying — abort immediately
-            logger.error(f"[OrderManager] Insufficient funds placing stop loss — aborting: {e}")
+            logger.error(f"[OrderManager:{self.venue_id}] Insufficient funds placing stop loss — aborting: {e}")
             raise
 
         except ccxt.InvalidOrder as e:
             # Bad params won't fix themselves on retry — abort immediately
-            logger.error(f"[OrderManager] Invalid stop-loss order parameters — aborting: {e}")
+            logger.error(f"[OrderManager:{self.venue_id}] Invalid stop-loss order parameters — aborting: {e}")
             raise
 
         except Exception as e:
             # Any other failure — caller must know protection failed to attach
             logger.critical(
-                f"[OrderManager] Stop-loss placement FAILED for {symbol}: "
+                f"[OrderManager:{self.venue_id}] Stop-loss placement FAILED for {symbol}: "
                 f"{type(e).__name__}: {e}. Position has NO exchange-side protection."
             )
             raise
@@ -800,11 +831,11 @@ class OrderManager:
             status = self.exchange.fetch_order(order_id, symbol)
 
             if status.get("status") == "closed":
-                logger.info(f"[OrderManager] Resting order {order_id} has FILLED")
+                logger.info(f"[OrderManager:{self.venue_id}] Resting order {order_id} has FILLED")
                 return self._build_result(status, intended_price)
 
             if status.get("status") == "canceled":
-                logger.info(f"[OrderManager] Resting order {order_id} is cancelled")
+                logger.info(f"[OrderManager:{self.venue_id}] Resting order {order_id} is cancelled")
                 return None
 
             # Still open/untriggered — the normal, expected state
@@ -812,7 +843,7 @@ class OrderManager:
 
         except Exception as e:
             logger.warning(
-                f"[OrderManager] Could not check resting order {order_id}: {e}"
+                f"[OrderManager:{self.venue_id}] Could not check resting order {order_id}: {e}"
             )
             return None
 
@@ -826,14 +857,14 @@ class OrderManager:
     def cancel_order(self, order_id, symbol):
 
         # Log the cancellation intent
-        logger.info(f"[OrderManager] Cancelling order...! {order_id} on {symbol}")
+        logger.info(f"[OrderManager:{self.venue_id}] Cancelling order...! {order_id} on {symbol}")
 
         try:
             # Send cancellation to exchange
             result = self.exchange.cancel_order(order_id, symbol)
 
             # Log success with order ID for audit trail
-            logger.info(f"[OrderManager] Order {order_id} cancelled successfully")
+            logger.info(f"[OrderManager:{self.venue_id}] Order {order_id} cancelled successfully")
 
             # Return exchange response — may contain final fill info
             return result
@@ -842,7 +873,7 @@ class OrderManager:
             # Order doesn't exist — likely already filled or previously cancelled
             # From a quant perspective: verify position state after this scenario
             logger.warning(
-                f"[OrderManager] Order {order_id} not found — "
+                f"[OrderManager:{self.venue_id}] Order {order_id} not found — "
                 f"may have already filled. Verify position state."
             )
             return None
@@ -851,7 +882,7 @@ class OrderManager:
             # Cancellation failed for an unknown reason — log and return None
             # Caller must check open orders to confirm cancellation status
             logger.error(
-                f"[OrderManager] Cancel failed for {order_id}: {e}. "
+                f"[OrderManager:{self.venue_id}] Cancel failed for {order_id}: {e}. "
                 f"Verify order state manually."
             )
             return None

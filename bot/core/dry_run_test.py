@@ -23,8 +23,9 @@
 #   7. PositionSizer calculates a valid quantity
 #   8. Exchange connection (API ping — no orders placed)
 #   9. MarketData fetches real price and candles
-#  10. Full pipeline dry run — signal to narrative, no order
-#  11. Edge case tests — flat market + volatility spike
+#  10. Venue readiness (Binance + Kraken adapters) — claude code changed: new — Step 17
+#  11. Full pipeline dry run — signal to narrative, no order
+#  12. Edge case tests — flat market + volatility spike
 # ============================================================
 import os          # For retrieving environment variables
 import sys         # For sys.exit() on critical failure
@@ -634,6 +635,53 @@ def test_exchange_connection(results: TestResults):
         results.fail_test("Exchange connection", f"{type(e).__name__}: {e}")
 
 
+# claude code changed: new — Kraken Multi-Venue Execution, Step 17. Gives
+# this file's existing "run before going live" mechanism real Kraken
+# coverage for the first time, and makes the NOT_READY/DRY_RUN_READY/
+# PAPER_TRADING_READY/LIVE_READY classification visible on every run —
+# tested unconditionally (not gated behind KRAKEN_ENABLED), same spirit as
+# bot/tests/test_kraken_adapter.py's own tests.
+def test_venue_readiness(results: TestResults):
+    """Reports real, evidence-based readiness for Binance and Kraken adapters."""
+
+    print()
+    print("── 10. VENUE READINESS ──────────────────────────────")
+
+    try:
+        import ccxt
+        from bot.engines.binance_adapter import BinanceAdapter
+        from bot.engines.kraken_adapter import KrakenAdapter
+        from bot.engines.venue_readiness import VenueReadiness, assess_venue_readiness
+
+        adapters = {
+            "binance": BinanceAdapter(ccxt.binance(), dry_run=True),
+            "kraken": KrakenAdapter(ccxt.kraken(), dry_run=True),
+        }
+
+        for venue_id, adapter in adapters.items():
+            report = assess_venue_readiness(adapter)
+
+            summary = (
+                f"{venue_id}: {report.classification.value} "
+                f"(dry-run order: {'OK' if report.checks['dry_run_order_works'] else 'FAILED'}, "
+                f"public connectivity: {'OK' if report.checks['public_connectivity'] else 'FAILED'}, "
+                f"authenticated: {'OK' if report.checks['authenticated_connectivity'] else 'NO credentials'})"
+            )
+
+            if report.classification == VenueReadiness.NOT_READY:
+                # A real problem — dry-run/public connectivity should
+                # always work regardless of credentials.
+                results.fail_test(f"Venue readiness: {venue_id}", summary)
+            else:
+                # DRY_RUN_READY or LIVE_READY are both healthy states here
+                # — LIVE_READY is simply not expected without real
+                # credentials, not a failure of this check.
+                results.pass_test(f"Venue readiness: {summary}")
+
+    except Exception as e:
+        results.fail_test("Venue readiness", f"{type(e).__name__}: {e}")
+
+
 def test_full_pipeline(results: TestResults, df: pd.DataFrame):
     """
     Tests the complete signal pipeline end-to-end.
@@ -642,7 +690,7 @@ def test_full_pipeline(results: TestResults, df: pd.DataFrame):
     """
 
     print()
-    print("── 10. FULL PIPELINE DRY RUN ────────────────────────")
+    print("── 11. FULL PIPELINE DRY RUN ────────────────────────")
 
     try:
         from bot.engines.regime_detector import RegimeDetector
@@ -706,7 +754,7 @@ def test_edge_cases(results: TestResults):
     """Tests system behavior under edge-case market conditions."""
 
     print()
-    print("── 11. EDGE CASE TESTS ─────────────────────────────")
+    print("── 12. EDGE CASE TESTS ─────────────────────────────")
 
     try:
         from bot.engines.regime_detector import RegimeDetector
@@ -766,6 +814,7 @@ def main():
     test_position_sizer(results)
     test_simulation_helpers(results)
     test_exchange_connection(results)
+    test_venue_readiness(results)   # claude code changed: new — Step 17
     test_full_pipeline(results, df)
     test_edge_cases(results)
 

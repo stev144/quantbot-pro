@@ -82,3 +82,86 @@ class TradePersistenceTest(TestCase):
         record = TradeRecord.objects.get(symbol="BTC/USDT")
         self.assertEqual(record.exit_narrative, "")
         self.assertEqual(record.status, "WIN")   # PnL calc itself unaffected
+
+
+# claude code changed: new class — Kraken Multi-Venue Execution, Step 15.
+# Proves TradeRecord.venue and the (symbol, venue) unique-OPEN constraint
+# fix actually work — the real gap Step 10's ExecutionCoordinator exposed.
+class TradeRecordVenueTest(TestCase):
+
+    def _entry_signal(self, symbol="BTC/USDT"):
+        return {
+            "signal": "BUY", "symbol": symbol, "entry": 50000.0,
+            "sl": 49000.0, "tp": 53000.0, "rsi": 55.0,
+            "reason": "ema_buy_setup", "strategy": "MovingAverageStrategy",
+        }
+
+    def _fill_result(self, price=50010.0):
+        return {
+            "fill_price": price, "filled_qty": 0.1, "fee_usdt": 5.0,
+            "order_id": "abc123", "slippage_pct": 0.02,
+        }
+
+    def test_venue_omitted_defaults_to_binance(self):
+        TradeLogger().log_entry(self._entry_signal(), self._fill_result(), risk_amount=100.0)
+
+        record = TradeRecord.objects.get(symbol="BTC/USDT", status="OPEN")
+        self.assertEqual(record.venue, "binance")
+
+    def test_explicit_venue_is_persisted(self):
+        TradeLogger().log_entry(
+            self._entry_signal(), self._fill_result(), risk_amount=100.0, venue="kraken",
+        )
+
+        record = TradeRecord.objects.get(symbol="BTC/USDT", status="OPEN")
+        self.assertEqual(record.venue, "kraken")
+
+    def test_same_symbol_open_on_two_different_venues_is_allowed(self):
+        # claude code changed: THE regression test for the constraint fix —
+        # this would have raised IntegrityError before Step 15.
+        TradeLogger().log_entry(
+            self._entry_signal(), self._fill_result(), risk_amount=100.0, venue="binance",
+        )
+        TradeLogger().log_entry(
+            self._entry_signal(), self._fill_result(), risk_amount=100.0, venue="kraken",
+        )
+
+        open_records = TradeRecord.objects.filter(symbol="BTC/USDT", status="OPEN")
+        self.assertEqual(open_records.count(), 2)
+        self.assertEqual(
+            set(open_records.values_list("venue", flat=True)), {"binance", "kraken"},
+        )
+
+    def test_true_duplicate_same_symbol_same_venue_still_blocked(self):
+        # The original bug protection must survive the constraint change.
+        from django.db import IntegrityError, transaction
+
+        TradeLogger().log_entry(
+            self._entry_signal(), self._fill_result(), risk_amount=100.0, venue="binance",
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                TradeRecord.objects.create(
+                    symbol="BTC/USDT", side="BUY", venue="binance",
+                    entry_price=50000.0, sl=49000.0, tp=53000.0, quantity=0.1,
+                    order_id="dupe", status="OPEN",
+                )
+
+    def test_log_exit_scoped_by_venue_updates_the_correct_record(self):
+        TradeLogger().log_entry(
+            self._entry_signal(), self._fill_result(price=50000.0), risk_amount=100.0, venue="binance",
+        )
+        TradeLogger().log_entry(
+            self._entry_signal(), self._fill_result(price=50000.0), risk_amount=100.0, venue="kraken",
+        )
+
+        # Close only the Kraken leg.
+        TradeLogger().log_exit(
+            symbol="BTC/USDT", exit_result=self._fill_result(price=51000.0),
+            risk_amount=100.0, reason="take_profit", venue="kraken",
+        )
+
+        binance_record = TradeRecord.objects.get(symbol="BTC/USDT", venue="binance")
+        kraken_record = TradeRecord.objects.get(symbol="BTC/USDT", venue="kraken")
+        self.assertEqual(binance_record.status, "OPEN")   # untouched
+        self.assertEqual(kraken_record.status, "WIN")     # closed

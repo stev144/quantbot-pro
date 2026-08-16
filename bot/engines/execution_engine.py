@@ -43,6 +43,8 @@ from bot.risk.drawdown_guard      import DrawdownGuard
 from bot.journal.trade_logger     import TradeLogger
 from bot.journal.models           import TradeRecord    # claude code changed: new import — DB-backed duplicate-position guard
 from bot.engines.trade_narrative  import TradeNarrativeGenerator, TradeNarrative   # claude code changed: new import — Phase 4 (DB persistence of trade provenance)
+from bot.engines.binance_adapter  import BinanceAdapter   # claude code changed: new import — Kraken Multi-Venue Execution, Step 10
+from bot.engines.order_intent     import OrderIntent, StopLossIntent   # claude code changed: new import — Step 10
 from typing import Dict   # claude code changed: new import
 
 # Create logger specific to this module
@@ -64,7 +66,7 @@ class ExecutionEngine:
     - TradeLogger:     database record keeping
     """
 
-    def __init__(self, exchange, dry_run=False):
+    def __init__(self, exchange, dry_run=False, adapter=None):
         # Store exchange reference — passed to components that need it
         self.exchange = exchange
 
@@ -75,9 +77,27 @@ class ExecutionEngine:
         # meant DRY_RUN could never write a TradeRecord.
         self.dry_run = dry_run
 
+        # claude code changed: new — Kraken Multi-Venue Execution, Step 10.
+        # Defaults to constructing a BinanceAdapter internally when no
+        # adapter is given, so bot_runner.py's existing
+        # ExecutionEngine(exchange, dry_run=DRY_RUN) call needs ZERO
+        # changes: BinanceAdapter constructs the exact same OrderManager/
+        # MarketData classes below, with the exact same (Binance-modeled)
+        # default cost rates (Step 8 confirmed Binance's venue-table row
+        # equals the global defaults exactly) — behavior-identical to the
+        # old direct construction, not just tested to be so. Passing a
+        # KrakenAdapter (or any ExchangeAdapter) here is what actually lets
+        # this class run against a different venue.
+        self.adapter = adapter or BinanceAdapter(exchange, dry_run=dry_run)
+        self.venue_id = self.adapter.venue_id
+
         # OrderManager — handles all order placement and confirmation safely
         # Contains retry logic, slippage capture, and typed exceptions
-        self.order_manager = OrderManager(exchange, dry_run=dry_run)    # claude code changed: pass through dry_run
+        # claude code changed: was OrderManager(exchange, dry_run=dry_run) —
+        # now borrowed from self.adapter, which already constructed it with
+        # venue-correct cost rates (Step 8). Same instance the adapter
+        # itself uses for place_order()/place_stop_loss() below.
+        self.order_manager = self.adapter.order_manager
 
         # PositionTracker — fast in-memory dict of all open positions
         # Checked every candle to decide if exits should fire
@@ -85,7 +105,9 @@ class ExecutionEngine:
 
         # MarketData — fetches live candles, price, and account balance
         # Balance is fetched fresh before every new entry
-        self.market_data = MarketData(exchange, dry_run=dry_run)    # claude code changed: pass through dry_run
+        # claude code changed: was MarketData(exchange, dry_run=dry_run) —
+        # now borrowed from self.adapter, same reasoning as order_manager above.
+        self.market_data = self.adapter.market_data
 
         # PositionSizer — calculates trade quantity from account risk %
         # claude code changed: was PositionSizer(risk_pct=0.01) — a hardcoded
@@ -172,13 +194,19 @@ class ExecutionEngine:
         # order (and a second OPEN TradeRecord — see the unique constraint
         # in bot/journal/models.py) on top of one the bot has simply
         # forgotten about.
-        if TradeRecord.objects.filter(symbol=symbol, status="OPEN").exists():
+        # claude code changed: was filter(symbol=symbol, status="OPEN") —
+        # Kraken Multi-Venue Execution, Step 15. Adds venue=self.venue_id
+        # so this guard can't wrongly block a legitimate same-symbol entry
+        # on a DIFFERENT venue (Step 10's ExecutionCoordinator can hold the
+        # same symbol open on two venues at once — see
+        # bot/journal/models.py's Meta.constraints for the matching fix).
+        if TradeRecord.objects.filter(symbol=symbol, venue=self.venue_id, status="OPEN").exists():
             logger.critical(
-                f"[ExecutionEngine] Signal ignored for {symbol} — an OPEN "
-                f"TradeRecord already exists in the database but "
-                f"PositionTracker has no record of it in memory (likely a "
-                f"restart after a crash). Reconcile manually before trading "
-                f"this symbol again."
+                f"[ExecutionEngine] Signal ignored for {symbol} on "
+                f"{self.venue_id} — an OPEN TradeRecord already exists in "
+                f"the database but PositionTracker has no record of it in "
+                f"memory (likely a restart after a crash). Reconcile "
+                f"manually before trading this symbol again."
             )
             return  # Exit method — do nothing
 
@@ -278,18 +306,24 @@ class ExecutionEngine:
         )
 
         # ----------------------------------------------------------
-        # STEP 5: Place entry order via OrderManager
-        # OrderManager handles retries, confirmation, and slippage.
-        # Returns a rich result dict on success.
-        # Raises typed exceptions on failure — each handled separately.
+        # STEP 5: Place entry order via the venue adapter
+        # claude code changed: was self.order_manager.place_order(...) —
+        # now goes through self.adapter.place_order() via a typed
+        # OrderIntent (Step 6), so entry execution actually flows through
+        # the venue's adapter (Step 8's cost model, Step 5's
+        # normalize_symbol indirectly available) instead of bypassing it.
+        # Return shape is IDENTICAL to before: both BinanceAdapter and
+        # KrakenAdapter's place_order() return exactly
+        # OrderManager._build_result()'s dict shape (confirmed in Steps
+        # 3-4, 6-7's own tests) — nothing downstream changes.
+        # Raises the same typed exceptions place_order() always has —
+        # both adapters delegate straight to the shared OrderManager for
+        # this method, so exception propagation is unchanged too.
         # ----------------------------------------------------------
+        entry_intent = OrderIntent.for_entry(signal, quantity)
+
         try:
-            result = self.order_manager.place_order(
-                symbol=symbol,
-                side=order_side,            # lowercase "buy" or "sell"
-                quantity=quantity,
-                price=signal["entry"]       # limit order at signal entry price
-            )
+            result = self.adapter.place_order(**entry_intent.to_place_order_kwargs())
 
         except OrderStillOpenException as e:
             # Order was submitted but fill is unconfirmed.
@@ -388,15 +422,16 @@ class ExecutionEngine:
         # rationale and the scope note on why take-profit is not placed
         # as a matching resting order here.
         # ----------------------------------------------------------
-        exit_side_for_stop = "sell" if signal["signal"] == "BUY" else "buy"    # claude code changed: new — opposite side closes the position, same logic _close_position() already uses below
+        # claude code changed: was self.order_manager.place_stop_loss(...) —
+        # now goes through self.adapter.place_stop_loss() via a typed
+        # StopLossIntent (Step 6). BinanceAdapter delegates identically to
+        # OrderManager; KrakenAdapter's own implementation (Step 4) was
+        # deliberately built to return the exact same shape — return
+        # handling below is unchanged.
+        stop_intent = StopLossIntent.for_position(symbol, signal, filled_qty=result["filled_qty"])
 
         try:
-            stop_order = self.order_manager.place_stop_loss(
-                symbol=symbol,
-                side=exit_side_for_stop,
-                quantity=result["filled_qty"],      # protect the quantity that actually filled, not the requested quantity
-                stop_price=signal["sl"],
-            )
+            stop_order = self.adapter.place_stop_loss(**stop_intent.to_place_stop_loss_kwargs())
             position["sl_order_id"] = stop_order["order_id"]    # claude code changed: new
 
         except Exception as e:
@@ -417,7 +452,7 @@ class ExecutionEngine:
         # Creates a new TradeRecord with status="OPEN".
         # Updated later by log_exit() when trade closes.
         # ----------------------------------------------------------
-        self.trade_logger.log_entry(signal, result, risk_amount, narrative=narrative)   # claude code changed: new arg — Phase 4
+        self.trade_logger.log_entry(signal, result, risk_amount, narrative=narrative, venue=self.venue_id)   # claude code changed: new arg — Phase 4; venue= added Step 15
 
         logger.info(
             f"[ExecutionEngine] Entry complete | {symbol} | "
@@ -588,22 +623,22 @@ class ExecutionEngine:
         # Exit side is always opposite of entry side
         # Long (BUY) exits by selling back the asset
         # Short (SELL) exits by buying back the asset
-        exit_side = "sell" if position["side"] == "BUY" else "buy"
+        # claude code changed: was self.order_manager.place_order(...) —
+        # now goes through self.adapter.place_order() via a typed
+        # OrderIntent (Step 6). OrderIntent.for_exit() mirrors this exact
+        # side-inversion logic and always builds a MARKET order with
+        # price=None, matching the original call exactly.
+        exit_intent = OrderIntent.for_exit(symbol, position)
 
         logger.info(
             f"[ExecutionEngine] Closing position | {symbol} | "
-            f"Reason: {reason} | Exit side: {exit_side} | "
+            f"Reason: {reason} | Exit side: {exit_intent.side.value} | "
             f"Qty: {position['quantity']}"
         )
 
         # ---- Place market exit order ----
         try:
-            exit_result = self.order_manager.place_order(
-                symbol=symbol,
-                side=exit_side,                  # "sell" to close long, "buy" to close short
-                quantity=position["quantity"],   # exact quantity we entered with
-                price=None                       # None = market order (guaranteed fill)
-            )
+            exit_result = self.adapter.place_order(**exit_intent.to_place_order_kwargs())
 
         except OrderStillOpenException as e:
             # Exit order placed but fill unconfirmed — position may still be open
@@ -654,6 +689,7 @@ class ExecutionEngine:
             risk_amount=position["risk_amount"],   # original dollar risk
             reason=reason,                           # "stop_loss" or "take_profit"
             narrative=self._open_narratives.pop(symbol, None),   # claude code changed: new
+            venue=self.venue_id,   # claude code changed: new — Step 15
         )
 
         logger.info(
@@ -694,6 +730,7 @@ class ExecutionEngine:
             risk_amount=position["risk_amount"],
             reason=reason,
             narrative=self._open_narratives.pop(symbol, None),   # claude code changed: new — Phase 4
+            venue=self.venue_id,   # claude code changed: new — Step 15
         )
 
         logger.info(

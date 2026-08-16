@@ -40,11 +40,19 @@ def get_market_state(regime_result, cross_section_dispersion):
     cross_section_dispersion is computed by get_cross_sectional_dispersion()
     below from real per-symbol research_data/*_cross_section.csv files.
 
-    Liquidity conditions are deliberately marked unavailable — nothing in
-    this codebase computes bid/ask spread, order book depth, or volume-
-    based liquidity (RegimeDetector uses only OHLC, not volume, for its
-    four indicators). Reporting a liquidity number would mean inventing
-    one; the audit's "no fake metrics" instruction rules that out.
+    Liquidity conditions are deliberately marked unavailable.
+
+    claude code changed: Kraken Multi-Venue Execution, Step 18 — updated
+    this reason. A real order-book-based liquidity metric now exists
+    (bot/engines/liquidity.py::compute_liquidity_snapshot(), fed by
+    ExchangeAdapter.get_order_book(), Step 9) — the old reason ("no
+    metric exists") went stale the moment that shipped. Still not wired
+    in here: computing it would mean a live exchange round-trip inside
+    this page's synchronous request, the exact same architectural
+    constraint get_execution_state() below already documents for
+    unrealized_pnl ("not implemented here since that's a real
+    architectural decision — sync exchange call latency in a page load,
+    not a one-line addition"). Same reasoning, same choice, applied here.
     """
     return {
         "regime": regime_result.regime,
@@ -56,7 +64,16 @@ def get_market_state(regime_result, cross_section_dispersion):
         "volatility_extreme": regime_result.volatility_extreme,
         "summary": regime_result.summary,
         "cross_section_dispersion": cross_section_dispersion,
-        "liquidity": {"available": False, "reason": "No volume/order-book-based liquidity metric exists in the codebase"},
+        "liquidity": {
+            "available": False,
+            "reason": (
+                "A real order-book-based liquidity metric exists "
+                "(bot/engines/liquidity.py, ExchangeAdapter.get_order_book()) "
+                "but isn't computed here — would require a live exchange "
+                "call inside this page's synchronous request, the same "
+                "architectural constraint unrealized_pnl below documents."
+            ),
+        },
     }
 
 

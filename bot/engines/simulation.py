@@ -36,13 +36,20 @@ logger = logging.getLogger(__name__)
 # On exit:   you receive slightly LESS than the signal price
 # This models the market impact of placing a real order
 # ============================================================
-def apply_slippage(price: float, direction: str, is_entry: bool) -> float:
+def apply_slippage(price: float, direction: str, is_entry: bool, slippage_rate: float = None) -> float:
     """
     Adjusts a price to simulate realistic slippage.
 
     price:      the raw signal price (entry or exit level)
     direction:  "LONG" or "SHORT" — determines which way slippage hurts
     is_entry:   True if entering the trade, False if exiting
+    slippage_rate: claude code changed: new — Kraken Multi-Venue Execution,
+        Step 14. Optional override; None (the default) falls back to the
+        module-level SLIPPAGE_RATE exactly as before this param existed —
+        every existing caller that doesn't pass it is unaffected. Lets
+        Backtester simulate a different venue's real slippage assumption
+        (bot.config.execution_costs.get_venue_execution_costs(), Step 8)
+        against the SAME price series, not a different one.
 
     Returns the slippage-adjusted price as a float.
 
@@ -59,29 +66,32 @@ def apply_slippage(price: float, direction: str, is_entry: bool) -> float:
         logger.warning(f"[Simulation] Invalid price for slippage: {price}")
         return price    # Return as-is — cannot apply slippage to bad price
 
+    # claude code changed: was bare SLIPPAGE_RATE — Step 14.
+    rate = slippage_rate if slippage_rate is not None else SLIPPAGE_RATE
+
     if direction == "LONG":
 
         if is_entry:
             # Entering long — we buy at a slightly higher price
             # Market moves against us as our order fills
-            adjusted = price * (1 + SLIPPAGE_RATE)
+            adjusted = price * (1 + rate)
 
         else:
             # Exiting long — we sell at a slightly lower price
             # Market moves against us as our sell order fills
-            adjusted = price * (1 - SLIPPAGE_RATE)
+            adjusted = price * (1 - rate)
 
     elif direction == "SHORT":
 
         if is_entry:
             # Entering short — we sell at a slightly lower price
             # Market moves against us as our sell order fills
-            adjusted = price * (1 - SLIPPAGE_RATE)
+            adjusted = price * (1 - rate)
 
         else:
             # Exiting short — we buy back at a slightly higher price
             # Market moves against us as our buy order fills
-            adjusted = price * (1 + SLIPPAGE_RATE)
+            adjusted = price * (1 + rate)
 
     else:
         # Unknown direction — return price unchanged and log warning
@@ -97,13 +107,17 @@ def apply_slippage(price: float, direction: str, is_entry: bool) -> float:
 # Simulates the trading fees charged by the exchange
 # Binance charges on both the entry and exit of every trade
 # ============================================================
-def calc_fees(entry_price: float, exit_price: float, quantity: float) -> float:
+def calc_fees(entry_price: float, exit_price: float, quantity: float, fee_rate: float = None) -> float:
     """
     Calculates total fees for a complete trade (entry + exit).
 
     entry_price: the actual fill price on entry (after slippage)
     exit_price:  the actual fill price on exit (after slippage)
     quantity:    number of units traded
+    fee_rate: claude code changed: new — Kraken Multi-Venue Execution,
+        Step 14. Optional override; None (the default) falls back to the
+        module-level FEE_RATE exactly as before this param existed. Same
+        venue-cost-model-swap purpose as apply_slippage()'s slippage_rate.
 
     Returns total fees in USDT as a float.
 
@@ -130,11 +144,14 @@ def calc_fees(entry_price: float, exit_price: float, quantity: float) -> float:
         )
         return 0.0    # Return zero — protect against bad data
 
+    # claude code changed: was bare FEE_RATE — Step 14.
+    rate = fee_rate if fee_rate is not None else FEE_RATE
+
     # Entry fee — charged when opening the position
-    entry_fee = entry_price * quantity * FEE_RATE
+    entry_fee = entry_price * quantity * rate
 
     # Exit fee — charged when closing the position
-    exit_fee = exit_price * quantity * FEE_RATE
+    exit_fee = exit_price * quantity * rate
 
     # Total fees for the complete round trip
     total_fees = entry_fee + exit_fee

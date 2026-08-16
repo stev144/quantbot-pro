@@ -61,11 +61,12 @@
                 {% if execution.open_positions %}
                 <div class="term-table-wrap">
                     <table class="term-table">
-                        <thead><tr><th>Symbol</th><th>Side</th><th class="num">Entry</th><th class="num">Qty</th><th>Opened</th></tr></thead>
+                        <thead><tr><th>Symbol</th><th>Venue</th><th>Side</th><th class="num">Entry</th><th class="num">Qty</th><th>Opened</th></tr></thead>
                         <tbody>
                             {% for p in execution.open_positions %}
                             <tr>
                                 <td class="label-cell">{{ p.symbol }}</td>
+                                <td><span class="badge dim">{{ p.venue|upper }}</span></td>
                                 <td class="{% if p.side == 'buy' %}dir-long{% else %}dir-short{% endif %}">{{ p.side|upper }}</td>
                                 <td class="num">{{ p.entry_price }}</td>
                                 <td class="num">{{ p.quantity }}</td>
@@ -87,11 +88,12 @@
                 {% if execution.recent_closed %}
                 <div class="term-table-wrap">
                     <table class="term-table">
-                        <thead><tr><th>Symbol</th><th>Result</th><th class="num">Net P&amp;L</th><th class="num">R</th><th>Closed</th></tr></thead>
+                        <thead><tr><th>Symbol</th><th>Venue</th><th>Result</th><th class="num">Net P&amp;L</th><th class="num">R</th><th>Closed</th></tr></thead>
                         <tbody>
                             {% for t in execution.recent_closed %}
                             <tr class="{% if t.status == 'WIN' %}row-win{% elif t.status == 'LOSS' %}row-loss{% endif %}">
                                 <td class="label-cell">{{ t.symbol }}</td>
+                                <td><span class="badge dim">{{ t.venue|upper }}</span></td>
                                 <td><span class="badge {% if t.status == 'WIN' %}pos{% else %}neg{% endif %}">{{ t.status }}</span></td>
                                 <td class="num {% if t.net_pnl > 0 %}pos{% elif t.net_pnl < 0 %}neg{% endif %}">{{ t.net_pnl }}</td>
                                 <td class="num">{{ t.r_multiple }}</td>

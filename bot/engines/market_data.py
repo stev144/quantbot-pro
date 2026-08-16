@@ -26,6 +26,12 @@ class MarketData:
         # Store the exchange instance passed in from bot_runner
         self.exchange = exchange
 
+        # claude code changed: new — Kraken Multi-Venue Execution, Step 15.
+        # Same reasoning as OrderManager's own self.venue_id — see that
+        # class's __init__ comment. "unknown" when exchange is None (some
+        # existing tests construct MarketData(exchange=None)).
+        self.venue_id = getattr(exchange, "id", "unknown")
+
         # Use provided cache_ttl or fall back to config default
         self.cache_ttl = cache_ttl or CANDLE_CACHE_TTL
 
@@ -66,7 +72,7 @@ class MarketData:
         # Cache is stale — fetch fresh candles from exchange
         try:
             # Minimal logging — only on fetch, not on cache hit
-            logger.debug(f"[MarketData] Fetching candles | {symbol} | {timeframe}")
+            logger.debug(f"[MarketData:{self.venue_id}] Fetching candles | {symbol} | {timeframe}")
 
             # Call ccxt unified method
             candles = self.exchange.fetch_ohlcv(
@@ -77,7 +83,7 @@ class MarketData:
 
             # Validate we received data
             if not candles or len(candles) == 0:
-                logger.warning(f"[MarketData] Empty response for {symbol}")
+                logger.warning(f"[MarketData:{self.venue_id}] Empty response for {symbol}")
                 return None
 
             # Store in cache
@@ -88,12 +94,12 @@ class MarketData:
 
         except ccxt.NetworkError as e:
             # Network issue — return stale cache if available
-            logger.debug(f"[MarketData] Network error fetching {symbol}: {e}")
+            logger.debug(f"[MarketData:{self.venue_id}] Network error fetching {symbol}: {e}")
             return self.cache.get(cache_key)
 
         except Exception as e:
             # Any other error
-            logger.error(f"[MarketData] Fetch failed for {symbol}: {type(e).__name__}")
+            logger.error(f"[MarketData:{self.venue_id}] Fetch failed for {symbol}: {type(e).__name__}")
             return None
 
 
@@ -112,27 +118,34 @@ class MarketData:
             price = ticker.get("last")
 
             if price is None or price <= 0:
-                logger.debug(f"[MarketData] Invalid price for {symbol}: {price}")
+                logger.debug(f"[MarketData:{self.venue_id}] Invalid price for {symbol}: {price}")
                 return None
 
             return float(price)
 
         except ccxt.NetworkError as e:
-            logger.debug(f"[MarketData] Network error fetching price: {e}")
+            logger.debug(f"[MarketData:{self.venue_id}] Network error fetching price: {e}")
             return None
 
         except Exception as e:
-            logger.error(f"[MarketData] Price fetch failed: {type(e).__name__}")
+            logger.error(f"[MarketData:{self.venue_id}] Price fetch failed: {type(e).__name__}")
             return None
 
 
     # ============================================================
     # GET DYNAMIC ACCOUNT BALANCE
     # ============================================================
-    def get_balance(self):
+    def get_balance(self, currency="USDT"):
         """
-        Returns the current free USDT balance from the exchange.
+        Returns the current free balance for `currency` from the exchange.
         Called before every new position.
+
+        claude code changed: was hardcoded to "USDT" with no parameter —
+        Kraken Multi-Venue Execution Step 3 needs ExchangeAdapter.get_balance()
+        to be currency-aware (a second venue may be funded/quoted
+        differently). Default preserves every existing call site's exact
+        behavior — confirmed via grep, the only real caller
+        (execution_engine.py) calls this with no arguments.
         """
 
         # claude code changed: new — dry run never calls the authenticated
@@ -141,22 +154,22 @@ class MarketData:
         # is being risked). Returns the fixed paper balance from
         # bot.config.risk instead. Fixes architecture audit finding C-2.
         if self.dry_run:
-            logger.info(f"[MarketData] DRY RUN — paper balance: ${DRY_RUN_PAPER_BALANCE:.2f}")
+            logger.info(f"[MarketData:{self.venue_id}] DRY RUN — paper balance: ${DRY_RUN_PAPER_BALANCE:.2f}")
             return DRY_RUN_PAPER_BALANCE
 
         try:
             balances = self.exchange.fetch_balance()
-            usdt_free = balances.get("USDT", {}).get("free", 0.0)
+            currency_free = balances.get(currency, {}).get("free", 0.0)   # claude code changed: was hardcoded balances.get("USDT", ...)
 
             # Log balance only on significant changes (info level)
-            logger.info(f"[MarketData] Balance: ${usdt_free:.2f}")
+            logger.info(f"[MarketData:{self.venue_id}] Balance: {currency_free:.2f} {currency}")   # claude code changed: was f"${usdt_free:.2f}"
 
-            return float(usdt_free)
+            return float(currency_free)
 
         except ccxt.AuthenticationError as e:
-            logger.critical(f"[MarketData] Auth failed — check API keys: {e}")
+            logger.critical(f"[MarketData:{self.venue_id}] Auth failed — check API keys: {e}")
             raise
 
         except Exception as e:
-            logger.error(f"[MarketData] Balance fetch failed: {type(e).__name__}")
+            logger.error(f"[MarketData:{self.venue_id}] Balance fetch failed: {type(e).__name__}")
             return 0.0
