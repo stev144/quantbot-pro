@@ -10,6 +10,12 @@
 # 5. Last detected regime shown in heartbeat
 # 6. Component health checks on startup before trading begins
 # 7. All bot. import prefixes correct for your project structure
+# 8. claude code changed: new — optional, independent Kraken venue
+#    (KRAKEN_ENABLED=true; see bot/engines/kraken_adapter.py). Disabled by
+#    default — Binance-only behavior is completely unchanged when it's
+#    off. When on, Kraken gets its OWN candle fetch, RegimeDetector,
+#    StrategyRouter, and ExecutionEngine — it never sees or uses
+#    Binance's regime/signal. See VenueSession/process_venue_candle below.
 #
 # HOW TO RUN:
 #   python bot/core/bot_runner.py
@@ -19,6 +25,11 @@
 #   2. Set DRY_RUN = True below
 #   3. Watch logs for 30 minutes
 #   4. Only set DRY_RUN = False when confident
+#
+# Kraken: set KRAKEN_ENABLED=true to also trade Kraken (same symbol,
+# fully independent pipeline). KRAKEN_DRY_RUN defaults true regardless of
+# DRY_RUN above — each venue's dry-run/live state is controlled
+# independently (see build_kraken_adapter() in bot/engines/kraken_adapter.py).
 # ============================================================
 
 import sys                   # claude code changed: new — needed for the sys.path fix below
@@ -26,6 +37,7 @@ import time                # Sleep between candles + latency measurement
 import logging               # Structured logging
 import logging.handlers      # Rotating file handler
 import os                    # Environment variable access for API keys
+from dataclasses import dataclass   # claude code changed: new — VenueSession
 import pandas as pd          # OHLCV DataFrame building
 import ccxt                  # Exchange connection
 
@@ -97,6 +109,12 @@ from bot.engines.execution_engine import ExecutionEngine
 # Cross-checks Binance's price against a second exchange before trading on it.
 from bot.engines.price_validator import PriceCrossChecker
 
+# claude code changed: new import — optional, independent Kraken venue.
+# build_kraken_adapter() already gates on KRAKEN_ENABLED/credentials and
+# refuses to construct a live adapter without real API keys (Step 4) —
+# reused as-is, no new credential/dry-run logic invented here.
+from bot.engines.kraken_adapter import build_kraken_adapter
+
 # Position tracker — live memory of open positions
 # Accessed via engine.position_tracker
 
@@ -147,10 +165,16 @@ def setup_logging():
 # DRY_RUN = True  → logs signals but places NO real orders
 # DRY_RUN = False → live trading with real money
 # Always start with True — only flip when confident
+# Applies to the Binance session only — Kraken's dry-run state is
+# controlled independently via KRAKEN_DRY_RUN (see build_kraken_adapter()).
 DRY_RUN = True
 
 # ── TRADING PAIR ─────────────────────────────────────────────
 SYMBOL = "XRP/USDT"    # Must match ccxt format exactly
+# claude code changed: Kraken (when enabled) trades this SAME symbol,
+# fully independently — confirmed directly listed on Kraken under this
+# exact quote currency (Step 5's real-data audit), so no symbol
+# normalization/fallback is needed for this specific pair.
 
 # ── TIMEFRAME ────────────────────────────────────────────────
 TIMEFRAME = "1h"         # "1h", "4h", "1d" — must match candle interval
@@ -185,6 +209,12 @@ TRACKED_SYMBOLS = [SYMBOL]
 # claude code changed: new — fixes architecture audit issue 6. Independent
 # exchange used to sanity-check Binance's price every candle before trading
 # on it. Does not replace Binance as the primary data source.
+#
+# claude code changed: NOTE — this is a price SANITY CHECK on Binance,
+# unrelated to Kraken potentially being traded as its own independent
+# venue below (VenueSession). Kraken here is only ever a reference price;
+# when KRAKEN_ENABLED also makes it a traded venue, that trading path
+# never reads from or writes to this checker.
 SECONDARY_EXCHANGE = "kraken"
 
 # ── API CREDENTIALS ──────────────────────────────────────────
@@ -194,6 +224,30 @@ SECONDARY_EXCHANGE = "kraken"
 #   export BINANCE_API_SECRET="your_secret_here"
 API_KEY    = os.getenv("BINANCE_API_KEY",    "YOUR_API_KEY_HERE")
 API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_API_SECRET_HERE")
+
+
+# ============================================================
+# VENUE SESSION
+# claude code changed: new — bundles everything one venue's independent
+# candle-fetch -> regime -> signal -> execute pipeline needs, so run_bot()
+# can iterate a list of these instead of hardcoding a single Binance-only
+# pipeline. Each venue gets its OWN RegimeDetector/StrategyRouter instance
+# — same config/strategy logic every venue (never duplicated/forked
+# per venue), just independent STATE — so one venue's price action can
+# never influence another venue's signal.
+# ============================================================
+@dataclass
+class VenueSession:
+    venue_id: str
+    exchange: object            # ccxt exchange instance for this venue
+    symbol: str
+    engine: object               # ExecutionEngine
+    detector: object              # RegimeDetector
+    router: object                # StrategyRouter
+    narrator: object               # TradeNarrativeGenerator
+    last_regime: str = "UNKNOWN"
+    last_signal: str = "NONE"
+
 
 # ============================================================
 # OHLCV TO DATAFRAME CONVERTER
@@ -256,6 +310,9 @@ def measure_latency(exchange) -> int:
     """
     Measures API round-trip latency in milliseconds.
     Returns int milliseconds. Returns -1 if measurement fails.
+
+    Uses the module-level SYMBOL — safe for any venue's exchange instance
+    since every venue trades this same symbol (see VenueSession above).
     """
 
     try:
@@ -284,7 +341,8 @@ def print_heartbeat(
 ):
     """
     Prints a single heartbeat line confirming all systems are alive.
-    Called every HEARTBEAT_INTERVAL_SECONDS from the main loop.
+    Called every HEARTBEAT_INTERVAL_SECONDS from the main loop, once per
+    venue session.
     """
 
     logger = logging.getLogger(__name__)
@@ -344,6 +402,7 @@ def print_heartbeat(
     # ── BUILD HEARTBEAT LINE ──────────────────────────────────
     heartbeat = (
         f"[HEARTBEAT] "
+        f"Venue: {getattr(engine, 'venue_id', 'unknown')} | "   # claude code changed: new — Step 15
         f"Engines: {engines_status} | "
         f"Risk: {risk_status} | "
         f"Regime detector: {regime_status} | "
@@ -377,10 +436,16 @@ def print_heartbeat(
 # STARTUP COMPONENT CHECK
 # Verifies all components initialise before the loop starts
 # ============================================================
-def check_components(engine, detector, router, narrator, price_checker) -> bool:
+def check_components(engine, detector, router, narrator, price_checker=None) -> bool:
     """
     Verifies all key components are available and functional.
-    Called once on startup — returns True if all OK, False if not.
+    Called once on startup per venue session — returns True if all OK,
+    False if not.
+
+    price_checker: claude code changed: now optional (was required) —
+    only the Binance session has one (it's a price sanity check using
+    Kraken as a reference; a venue never checks itself against itself).
+    None skips that one check for any other venue's session.
     """
 
     logger = logging.getLogger(__name__)
@@ -438,15 +503,17 @@ def check_components(engine, detector, router, narrator, price_checker) -> bool:
     # audit issue 6). Only checks the object is constructed, same as the
     # other checks — a live secondary-exchange fetch failure at runtime is
     # already handled per-candle inside PriceCrossChecker.check() itself.
-    try:
-        _ = price_checker.secondary_exchange_id
-        logger.info(
-            f"[BotRunner] ✓ PriceCrossChecker — OK "
-            f"(secondary: {price_checker.secondary_exchange_id})"
-        )
-    except Exception as e:
-        logger.error(f"[BotRunner] ✗ PriceCrossChecker — FAILED: {e}")
-        all_ok = False
+    # claude code changed: now conditional — see docstring above.
+    if price_checker is not None:
+        try:
+            _ = price_checker.secondary_exchange_id
+            logger.info(
+                f"[BotRunner] ✓ PriceCrossChecker — OK "
+                f"(secondary: {price_checker.secondary_exchange_id})"
+            )
+        except Exception as e:
+            logger.error(f"[BotRunner] ✗ PriceCrossChecker — FAILED: {e}")
+            all_ok = False
 
     if all_ok:
         logger.info("[BotRunner] All component checks passed")
@@ -459,22 +526,200 @@ def check_components(engine, detector, router, narrator, price_checker) -> bool:
 
 
 # ============================================================
+# PROCESS ONE VENUE'S CANDLE
+# claude code changed: new — extracted from run_bot()'s main loop body so
+# it's a standalone, testable function and so each venue's errors are
+# caught HERE rather than aborting a whole multi-venue loop iteration —
+# one venue's network hiccup must never stop another venue's candle from
+# being checked this pass.
+# ============================================================
+def process_venue_candle(session: VenueSession, price_checker=None) -> str:
+    """
+    Runs one full candle-processing pass for a SINGLE venue:
+    fetch -> build_dataframe -> [Binance-only price sanity check] ->
+    detect regime -> route -> execute_signal -> manage_positions ->
+    dry-run logging.
+
+    price_checker: only meaningful for the Binance session (sanity-checks
+    Binance's own price against a secondary reference) — None for any
+    other venue. This is unrelated to that other venue being traded in
+    its own right; nothing here ever compares one traded venue's price
+    against another's.
+
+    Returns "ok", "network_error", "rate_limited", or "error" — run_bot()
+    uses the worst status across all sessions processed this pass to
+    decide how long to sleep before the next iteration, reproducing this
+    file's original single-venue retry timing exactly (NetworkError -> 60s,
+    RateLimitExceeded -> 120s, any other failure -> 60s, otherwise the
+    normal candle interval) rather than a naive per-venue rewrite letting
+    one venue's transient error fall through to the full hour-long wait.
+    """
+    logger = logging.getLogger(__name__)
+
+    try:
+        logger.info(
+            f"[BotRunner:{session.venue_id}] ── {session.symbol} ──────────────"
+        )
+
+        # ── FETCH OHLCV CANDLES ───────────────────────────
+        candles = session.exchange.fetch_ohlcv(
+            symbol    = session.symbol,
+            timeframe = TIMEFRAME,
+            limit     = CANDLE_LIMIT,
+        )
+
+        # Guard: empty candle response
+        if not candles:
+            logger.warning(
+                f"[BotRunner:{session.venue_id}] Empty candle response — skipping this venue this loop"
+            )
+            return "error"
+
+        # ── BUILD DATAFRAME ───────────────────────────────
+        df = build_dataframe(candles)
+
+        if df is None:
+            logger.warning(
+                f"[BotRunner:{session.venue_id}] DataFrame build failed — skipping this venue this loop"
+            )
+            return "error"
+
+        logger.info(f"[BotRunner:{session.venue_id}] DataFrame ready — {len(df)} candles")
+
+        # ── CROSS-EXCHANGE PRICE SANITY CHECK (Binance only) ──
+        # claude code changed: unchanged logic, now conditional on a
+        # price_checker being given — see docstring above.
+        if price_checker is not None:
+            latest_close = float(df["close"].iloc[-1])
+            price_check = price_checker.check(session.symbol, latest_close)
+
+            if price_check["suspicious"]:
+                logger.warning(
+                    f"[BotRunner:{session.venue_id}] Skipping — suspicious price for {session.symbol} | "
+                    f"Primary: {price_check['primary_price']} | "
+                    f"{price_check['secondary_exchange']}: {price_check['secondary_price']} | "
+                    f"Deviation: {price_check['deviation_pct']:.3f}%"
+                )
+                return "error"
+
+        # ── DETECT MARKET REGIME ──────────────────────────
+        regime_result = session.detector.detect(df)
+        session.last_regime = regime_result.regime    # Update heartbeat state
+
+        logger.info(
+            f"[BotRunner:{session.venue_id}] Regime: {regime_result.regime} "
+            f"({regime_result.confidence}) | "
+            f"ADX: {regime_result.adx:.1f} | "
+            f"ATR ratio: {regime_result.atr_ratio:.2f}"
+        )
+
+        # ── ROUTE TO CORRECT STRATEGY ─────────────────────
+        signal = session.router.route(df, regime_result)
+        session.last_signal = signal["signal"]    # Update heartbeat state
+
+        logger.info(
+            f"[BotRunner:{session.venue_id}] Signal: {signal['signal']} | "
+            f"Strategy: {signal.get('strategy', 'none')} | "
+            f"Reason: {signal.get('reason', 'none')}"
+        )
+
+        # ── PROCESS VALID SIGNAL ──────────────────────────
+        if signal["signal"] in ("BUY", "SELL"):
+
+            # Inject symbol — strategies don't know which pair
+            signal["symbol"] = session.symbol
+
+            if session.engine.dry_run:
+                # Dry run — log signal before executing against paper money
+                logger.info(
+                    f"[BotRunner:{session.venue_id}] DRY RUN | "
+                    f"{signal['signal']} {session.symbol} | "
+                    f"Entry: {signal['entry']} | "
+                    f"SL: {signal['sl']} | "
+                    f"TP: {signal['tp']} | "
+                    f"RSI: {signal['rsi']:.1f} | "
+                    f"Regime: {signal['regime']} ({signal['regime_confidence']})"
+                )
+
+                # Generate narrative even in dry run — useful for review
+                narrative = session.narrator.generate_entry(signal, session.symbol)
+                logger.info(
+                    f"[BotRunner:{session.venue_id}] DRY RUN NARRATIVE: "
+                    f"{narrative.entry_narrative[:150]}..."
+                )
+
+            else:
+                # Live mode — about to execute the signal
+                logger.info(
+                    f"[BotRunner:{session.venue_id}] Executing {signal['signal']} on {session.symbol}"
+                )
+
+            # claude code changed: uses session.engine.dry_run rather than
+            # the module-level DRY_RUN — correct for whichever venue this
+            # is (Kraken's dry-run state is independent, see KRAKEN_DRY_RUN).
+            session.engine.execute_signal(signal)
+
+        # ── MANAGE OPEN POSITIONS ─────────────────────────
+        session.engine.manage_positions()    # Executes exits when SL/TP hit (real or simulated)
+
+        if session.engine.dry_run:
+            # Dry run — log current paper positions after management ran
+            positions = session.engine.position_tracker.get_all_positions()
+
+            if positions:
+                for sym, pos in positions.items():
+                    logger.info(
+                        f"[BotRunner:{session.venue_id}] DRY RUN position | "
+                        f"{sym} | {pos['side']} | "
+                        f"Entry: {pos['entry_price']} | "
+                        f"SL: {pos['sl']} | "
+                        f"TP: {pos['tp']}"
+                    )
+            else:
+                logger.info(f"[BotRunner:{session.venue_id}] No open positions")
+
+        return "ok"
+
+    except ccxt.NetworkError as e:
+        # Network dropped — recoverable, run_bot() decides the retry wait
+        logger.warning(f"[BotRunner:{session.venue_id}] Network error: {e}")
+        return "network_error"
+
+    except ccxt.RateLimitExceeded as e:
+        # Rate limited — run_bot() backs off hard
+        logger.warning(f"[BotRunner:{session.venue_id}] Rate limit hit: {e}")
+        return "rate_limited"
+
+    except Exception as e:
+        # Unexpected error for THIS venue only — never crash the process,
+        # never stop another venue's candle from being checked this pass
+        logger.error(
+            f"[BotRunner:{session.venue_id}] Unexpected error: "
+            f"{type(e).__name__}: {e}"
+        )
+        return "error"
+
+
+# ============================================================
 # MAIN BOT FUNCTION
 # ============================================================
 def run_bot():
     """
     Main entry point — initialises all components and runs the loop.
 
-    Flow every candle:
-    1. Fetch OHLCV candles from Binance
+    Flow every candle, per venue session (Binance always; Kraken too if
+    KRAKEN_ENABLED=true — see VenueSession/process_venue_candle):
+    1. Fetch OHLCV candles from that venue
     2. Build pandas DataFrame
-    3. RegimeDetector classifies the market
-    4. StrategyRouter selects correct strategy for that regime
+    3. RegimeDetector classifies the market (that venue's own instance)
+    4. StrategyRouter selects correct strategy for that regime (that
+       venue's own instance)
     5. Signal returned with regime context attached
-    6. If BUY/SELL → ExecutionEngine.execute_signal()
+    6. If BUY/SELL → ExecutionEngine.execute_signal() (that venue's own
+       engine)
     7. ExecutionEngine.manage_positions() checks all open trades
-    8. Sleep until next candle
-    9. Every 5 minutes → print heartbeat line
+    8. Sleep until next candle (shared cadence across every venue)
+    9. Every 5 minutes → print one heartbeat line per venue
     """
 
     # Set up logging before anything else
@@ -495,7 +740,7 @@ def run_bot():
     )
     logger.info("=" * 60)
 
-    # ── CONNECT TO EXCHANGE ───────────────────────────────────
+    # ── CONNECT TO BINANCE (primary venue) ────────────────────
     exchange = ccxt.binance({
         "apiKey":  API_KEY,
         "secret":  API_SECRET,
@@ -551,8 +796,90 @@ def run_bot():
     # fetch_ticker(), so no API keys are needed here.
     price_checker = PriceCrossChecker(secondary_exchange_id=SECONDARY_EXCHANGE)
 
-    # ── STARTUP COMPONENT CHECK ───────────────────────────────
-    all_ok = check_components(engine, detector, router, narrator, price_checker)
+    sessions = [
+        VenueSession(
+            venue_id = "binance",
+            exchange = exchange,
+            symbol   = SYMBOL,
+            engine   = engine,
+            detector = detector,
+            router   = router,
+            narrator = narrator,
+        )
+    ]
+
+    # ── OPTIONALLY CONNECT TO KRAKEN (second, independent venue) ──
+    # claude code changed: new. Kraken trades the SAME symbol as Binance
+    # (SYMBOL, confirmed directly listed on Kraken — Step 5), fully
+    # independently: its own candle fetch, its own RegimeDetector/
+    # StrategyRouter instance, its own ExecutionEngine (with its own
+    # PositionSizer/DrawdownGuard, confirmed independent in Step 12) —
+    # never Binance's regime or signal. Disabled by default
+    # (KRAKEN_ENABLED unset) — when disabled, `sessions` above is exactly
+    # today's single-item Binance-only list, so Binance-only operation is
+    # completely unaffected by this block existing.
+    kraken_adapter = build_kraken_adapter()
+
+    if kraken_adapter is not None:
+        try:
+            start = time.time()
+            kraken_adapter.exchange.load_markets()
+            latency_ms = int((time.time() - start) * 1000)
+            logger.info(
+                f"[BotRunner] Connected to Kraken "
+                f"(latency: {latency_ms}ms, dry_run={kraken_adapter.dry_run})"
+            )
+
+            kraken_engine = ExecutionEngine(
+                kraken_adapter.exchange,
+                dry_run = kraken_adapter.dry_run,
+                adapter = kraken_adapter,
+            )
+            kraken_detector = RegimeDetector()
+            kraken_router = StrategyRouter(
+                allow_longs             = True,
+                allow_shorts            = True,
+                require_high_confidence = False,
+                min_adx_for_trend       = 20,
+            )
+            kraken_narrator = TradeNarrativeGenerator()
+
+            sessions.append(VenueSession(
+                venue_id = "kraken",
+                exchange = kraken_adapter.exchange,
+                symbol   = SYMBOL,
+                engine   = kraken_engine,
+                detector = kraken_detector,
+                router   = kraken_router,
+                narrator = kraken_narrator,
+            ))
+            logger.info(
+                f"[BotRunner] Kraken session added — trading {SYMBOL} "
+                f"independently of Binance"
+            )
+
+        except Exception as e:
+            # A broken Kraken connection must never stop Binance from
+            # trading — log and continue with Binance only.
+            logger.error(
+                f"[BotRunner] Kraken connection FAILED — continuing with "
+                f"Binance only: {type(e).__name__}: {e}"
+            )
+    else:
+        logger.info(
+            "[BotRunner] Kraken not enabled (set KRAKEN_ENABLED=true to "
+            "also trade it) — Binance only"
+        )
+
+    # ── STARTUP COMPONENT CHECK (per session) ─────────────────
+    all_ok = True
+    for session in sessions:
+        session_price_checker = price_checker if session.venue_id == "binance" else None
+        ok = check_components(
+            session.engine, session.detector, session.router,
+            session.narrator, session_price_checker,
+        )
+        all_ok = all_ok and ok
 
     if not all_ok:
         logger.critical(
@@ -561,22 +888,21 @@ def run_bot():
         )
         return    # Do not start the loop with broken components
 
-    # ── POSITION RECONCILIATION ───────────────────────────────
+    # ── POSITION RECONCILIATION (per session) ─────────────────
     # Syncs with exchange to catch any positions open from before crash
     # Must complete before loop starts — never during it
     logger.info("[BotRunner] Reconciling positions with exchange...")
 
-    engine.position_tracker.reconcile_with_exchange(
-        exchange        = exchange,
-        tracked_symbols = TRACKED_SYMBOLS,
-    )
+    for session in sessions:
+        session.engine.position_tracker.reconcile_with_exchange(
+            exchange        = session.exchange,
+            tracked_symbols = [session.symbol],
+        )
 
     logger.info("[BotRunner] Reconciliation complete — starting main loop")
 
     # ── HEARTBEAT STATE ───────────────────────────────────────
     last_heartbeat_time = time.time()    # When we last printed heartbeat
-    last_regime         = "UNKNOWN"      # Last detected regime
-    last_signal         = "NONE"         # Last signal produced
     loop_count          = 0              # How many loops completed
 
     # ── MAIN LOOP ─────────────────────────────────────────────
@@ -586,160 +912,53 @@ def run_bot():
             loop_count += 1    # Increment loop counter
 
             logger.info(
-                f"[BotRunner] ── Loop {loop_count} | {SYMBOL} ──────────────"
+                f"[BotRunner] ══ Loop {loop_count} ══ "
+                f"({len(sessions)} venue{'s' if len(sessions) != 1 else ''}) ══"
             )
 
-            # ── FETCH OHLCV CANDLES ───────────────────────────
-            candles = exchange.fetch_ohlcv(
-                symbol    = SYMBOL,
-                timeframe = TIMEFRAME,
-                limit     = CANDLE_LIMIT,
-            )
-
-            # Guard: empty candle response
-            if not candles:
-                logger.warning(
-                    "[BotRunner] Empty candle response — skipping loop"
+            # claude code changed: new — processes every venue session in
+            # turn, each fully independent (own fetch/regime/signal/
+            # execute), each wrapped in its own error handling inside
+            # process_venue_candle() so one venue's failure this pass
+            # never stops another venue's candle from being checked.
+            statuses = [
+                process_venue_candle(
+                    session,
+                    price_checker if session.venue_id == "binance" else None,
                 )
-                time.sleep(60)    # Wait 1 minute before retrying
+                for session in sessions
+            ]
+
+            # claude code changed: new — aggregates retry timing across
+            # every venue processed this pass, reproducing this file's
+            # original single-venue retry semantics exactly (worst status
+            # wins) rather than letting one venue's transient error fall
+            # through to the full CANDLE_INTERVAL_SECONDS wait.
+            if "rate_limited" in statuses:
+                logger.info("[BotRunner] Backing off 120s for rate limit...")
+                time.sleep(120)
                 continue
 
-            # ── BUILD DATAFRAME ───────────────────────────────
-            df = build_dataframe(candles)
-
-            if df is None:
-                logger.warning(
-                    "[BotRunner] DataFrame build failed — skipping loop"
-                )
+            if "network_error" in statuses or "error" in statuses:
+                logger.info("[BotRunner] Waiting 60s before retrying...")
                 time.sleep(60)
                 continue
 
-            logger.info(f"[BotRunner] DataFrame ready — {len(df)} candles")
-
-            # ── CROSS-EXCHANGE PRICE SANITY CHECK ─────────────
-            # claude code changed: new — fixes architecture audit issue 6.
-            # Compares Binance's latest close against SECONDARY_EXCHANGE's
-            # live price for the same symbol. Binance stays the primary
-            # data source for regime detection and strategy signals below —
-            # this only blocks trading on this specific candle if the two
-            # disagree by more than PriceCrossChecker's threshold, on the
-            # theory that a real symbol-wide price move shows up on every
-            # exchange, while a bad tick/stale cache/thin book on just one
-            # exchange does not.
-            latest_close = float(df["close"].iloc[-1])
-            price_check = price_checker.check(SYMBOL, latest_close)
-
-            if price_check["suspicious"]:
-                logger.warning(
-                    f"[BotRunner] Skipping loop — suspicious price for {SYMBOL} | "
-                    f"Binance: {price_check['primary_price']} | "
-                    f"{price_check['secondary_exchange']}: {price_check['secondary_price']} | "
-                    f"Deviation: {price_check['deviation_pct']:.3f}%"
-                )
-                time.sleep(60)
-                continue
-
-            # ── DETECT MARKET REGIME ──────────────────────────
-            regime_result = detector.detect(df)
-            last_regime   = regime_result.regime    # Update heartbeat state
-
-            logger.info(
-                f"[BotRunner] Regime: {regime_result.regime} "
-                f"({regime_result.confidence}) | "
-                f"ADX: {regime_result.adx:.1f} | "
-                f"ATR ratio: {regime_result.atr_ratio:.2f}"
-            )
-
-            # ── ROUTE TO CORRECT STRATEGY ─────────────────────
-            signal      = router.route(df, regime_result)
-            last_signal = signal["signal"]    # Update heartbeat state
-
-            logger.info(
-                f"[BotRunner] Signal: {signal['signal']} | "
-                f"Strategy: {signal.get('strategy', 'none')} | "
-                f"Reason: {signal.get('reason', 'none')}"
-            )
-
-            # ── PROCESS VALID SIGNAL ──────────────────────────
-            if signal["signal"] in ("BUY", "SELL"):
-
-                # Inject symbol — strategies don't know which pair
-                signal["symbol"] = SYMBOL
-
-                if DRY_RUN:
-                    # Dry run — log signal before executing against paper money
-                    logger.info(
-                        f"[BotRunner] DRY RUN | "
-                        f"{signal['signal']} {SYMBOL} | "
-                        f"Entry: {signal['entry']} | "
-                        f"SL: {signal['sl']} | "
-                        f"TP: {signal['tp']} | "
-                        f"RSI: {signal['rsi']:.1f} | "
-                        f"Regime: {signal['regime']} ({signal['regime_confidence']})"
-                    )
-
-                    # Generate narrative even in dry run — useful for review
-                    narrative = narrator.generate_entry(signal, SYMBOL)
-                    logger.info(
-                        f"[BotRunner] DRY RUN NARRATIVE: "
-                        f"{narrative.entry_narrative[:150]}..."
-                    )
-
-                else:
-                    # Live mode — about to execute the signal
-                    logger.info(
-                        f"[BotRunner] Executing {signal['signal']} on {SYMBOL}"
-                    )
-
-                # claude code changed: now called unconditionally — fixes
-                # architecture audit finding C-2 (issue 2). This used to only
-                # run when not DRY_RUN, so dry run never sized a trade, never
-                # wrote a TradeRecord, and never opened a tracked position.
-                # ExecutionEngine was constructed with dry_run=DRY_RUN above,
-                # so its OrderManager/MarketData simulate fills and paper
-                # balance internally here instead of touching the exchange.
-                engine.execute_signal(signal)
-
-            # ── MANAGE OPEN POSITIONS ─────────────────────────
-            # claude code changed: now called unconditionally — fixes
-            # architecture audit finding C-2 (issue 2). Previously DRY_RUN
-            # only logged open positions and never checked/closed them, so a
-            # simulated trade could open but would never exit or log its
-            # exit TradeRecord. dry_run=True means sl_order_id is always None
-            # (see OrderManager.place_stop_loss()), so this always exercises
-            # the existing software-polled SL/TP fallback for paper trades.
-            engine.manage_positions()    # Executes exits when SL/TP hit (real or simulated)
-
-            if DRY_RUN:
-                # Dry run — log current paper positions after management ran
-                positions = engine.position_tracker.get_all_positions()
-
-                if positions:
-                    for sym, pos in positions.items():
-                        logger.info(
-                            f"[BotRunner] DRY RUN position | "
-                            f"{sym} | {pos['side']} | "
-                            f"Entry: {pos['entry_price']} | "
-                            f"SL: {pos['sl']} | "
-                            f"TP: {pos['tp']}"
-                        )
-                else:
-                    logger.info("[BotRunner] No open positions")
-
-            # ── HEARTBEAT CHECK ───────────────────────────────
+            # ── HEARTBEAT CHECK (per session) ─────────────────
             # Print heartbeat line if interval has elapsed
             now = time.time()
             if now - last_heartbeat_time >= HEARTBEAT_INTERVAL_SECONDS:
 
-                print_heartbeat(
-                    engine      = engine,
-                    detector    = detector,
-                    router      = router,
-                    exchange    = exchange,
-                    last_regime = last_regime,
-                    last_signal = last_signal,
-                    loop_count  = loop_count,
-                )
+                for session in sessions:
+                    print_heartbeat(
+                        engine      = session.engine,
+                        detector    = session.detector,
+                        router      = session.router,
+                        exchange    = session.exchange,
+                        last_regime = session.last_regime,
+                        last_signal = session.last_signal,
+                        loop_count  = loop_count,
+                    )
 
                 last_heartbeat_time = now    # Reset heartbeat timer
 
@@ -757,17 +976,23 @@ def run_bot():
                 "[BotRunner] Keyboard interrupt — shutting down cleanly"
             )
 
-            # Print final route stats before exiting
-            stats = router.get_route_stats()
-            logger.info(
-                f"[BotRunner] Session route stats: {stats['route_breakdown']}"
-            )
+            # Print final route stats before exiting — per session
+            for session in sessions:
+                stats = session.router.get_route_stats()
+                logger.info(
+                    f"[BotRunner:{session.venue_id}] Session route stats: "
+                    f"{stats['route_breakdown']}"
+                )
 
             break    # Exit the while loop
 
 
         except ccxt.NetworkError as e:
-            # Network dropped — recoverable, wait and retry
+            # claude code changed: kept as a top-level safety net — every
+            # venue's OWN NetworkError is already caught inside
+            # process_venue_candle() above, so this now only fires for
+            # something genuinely unexpected outside that function (e.g.
+            # the heartbeat/aggregation logic itself).
             logger.warning(f"[BotRunner] Network error: {e}")
             logger.info("[BotRunner] Waiting 60s before retrying...")
             time.sleep(60)

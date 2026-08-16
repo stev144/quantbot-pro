@@ -15,7 +15,7 @@
     ACTIVE SLUGS: dashboard, market_intelligence, research_lab, features,
     strategy_research, strategy_pipeline, pairs_performance, backtesting,
     robustness_analysis, rejected_research, research_archive, portfolio_risk,
-    execution_monitor, system_health
+    execution_monitor, venue_comparison, system_health
 {% endcomment %}
 <div class="term-topbar">
     <div class="term-brand">
@@ -49,11 +49,12 @@
             </div>
         </details>
 
-        <details class="term-nav-group" {% if active in "portfolio_risk,execution_monitor" %}open{% endif %}>
-            <summary class="term-nav-link {% if active in "portfolio_risk,execution_monitor" %}active{% endif %}">Risk &amp; Execution</summary>
+        <details class="term-nav-group" {% if active in "portfolio_risk,execution_monitor,venue_comparison" %}open{% endif %}>
+            <summary class="term-nav-link {% if active in "portfolio_risk,execution_monitor,venue_comparison" %}active{% endif %}">Risk &amp; Execution</summary>
             <div class="term-nav-dropdown">
                 <a class="{% if active == 'portfolio_risk' %}active{% endif %}" href="{% url 'portfolio_risk' %}">Portfolio &amp; Risk</a>
                 <a class="{% if active == 'execution_monitor' %}active{% endif %}" href="{% url 'execution_monitor' %}">Execution Monitor</a>
+                <a class="{% if active == 'venue_comparison' %}active{% endif %}" href="{% url 'venue_comparison' %}">Venue Comparison</a>
             </div>
         </details>
 

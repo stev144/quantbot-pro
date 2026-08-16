@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Venue Comparison. Real-time
+   Binance vs. Kraken execution comparison (bot/views/venue_comparison_data.py),
+   built entirely on already-tested capability: Step 11's compare_venues()
+   (real order-book-depth cost estimate) and Step 17's
+   assess_venue_readiness() (real dry-run/connectivity/auth classification).
+   This page deliberately makes live exchange calls and can take a few
+   real seconds to load — a documented, accepted trade-off for real
+   numbers on a comparison page, not something the rest of the dashboard
+   does (see terminal_data.py's own "no live calls in a page load" rule
+   for the fast, high-traffic pages).
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="venue_comparison" %}
+
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <form class="term-symbol-form" method="get" action=".">
+        <label class="text-dim mono" for="vc-symbol">Symbol:</label>
+        <input id="vc-symbol" type="text" name="symbol" class="term-input mono" value="{{ comparison.symbol }}" placeholder="SYMBOL">
+        <label class="text-dim mono" for="vc-quantity">Qty:</label>
+        <input id="vc-quantity" type="text" name="quantity" class="term-input mono" value="{{ comparison.quantity }}" placeholder="QTY" style="width:90px">
+        <button type="submit" class="term-btn">Compare</button>
+    </form>
+</div>
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Venue Comparison</span>
+            <span class="term-section-meta">source: execution_comparison.compare_venues() + venue_readiness.assess_venue_readiness() — real order book, real fees</span>
+        </div>
+        <div class="term-section-body">
+            {% if comparison.available %}
+            <div class="chart-caption" style="margin-bottom:10px">
+                Estimated cost to BUY {{ comparison.quantity }} {{ comparison.symbol }} on each venue right now — a real, quantity-weighted walk of each venue's live order book (Step 9/11), not a top-of-book price. Not a routing decision — comparison data only.
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead>
+                        <tr>
+                            <th>Venue</th>
+                            <th>Readiness</th>
+                            <th class="num">Best Bid</th>
+                            <th class="num">Best Ask</th>
+                            <th class="num">Spread %</th>
+                            <th class="num">Fee %</th>
+                            <th class="num">Est. Fill Price</th>
+                            <th class="num">Est. Slippage %</th>
+                            <th class="num">Est. Total Cost %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in comparison.rows %}
+                        <tr class="{% if row.venue_id == comparison.cheapest_venue %}row-win{% endif %}">
+                            <td class="label-cell">
+                                <span class="badge dim">{{ row.venue_id|upper }}</span>
+                                {% if row.venue_id == comparison.cheapest_venue %}<span class="badge pos">CHEAPEST</span>{% endif %}
+                            </td>
+                            {% if row.available %}
+                            <td><span class="badge {% if row.readiness == 'LIVE_READY' %}pos{% elif row.readiness == 'DRY_RUN_READY' %}neu{% else %}warn{% endif %}">{{ row.readiness }}</span></td>
+                            <td class="num">{{ row.best_bid }}</td>
+                            <td class="num">{{ row.best_ask }}</td>
+                            <td class="num">{{ row.spread_pct }}%</td>
+                            <td class="num">{{ row.fee_rate_pct }}%</td>
+                            <td class="num">{{ row.estimated_fill_price }}</td>
+                            <td class="num">{{ row.estimated_slippage_pct }}%</td>
+                            <td class="num">{{ row.estimated_total_cost_pct }}%</td>
+                            {% else %}
+                            <td colspan="7" class="unavailable-inline">{{ row.unavailable_reason }}</td>
+                            {% endif %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ comparison.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Venue Comparison" note="real order-book/fee data, live exchange calls — expect a few seconds to load" %}
+
+{% endblock %}

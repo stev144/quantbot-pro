@@ -16,6 +16,7 @@ from bot.views.robustness_analysis import robustness_analysis
 from bot.views.research_archive import rejected_research, research_archive
 from bot.views.portfolio_risk import portfolio_risk
 from bot.views.execution_monitor import execution_monitor
+from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
 from bot.views.system_health import system_health
 
 # claude code changed: regrouped into the RESEARCH -> MEASUREMENT ->
@@ -50,6 +51,7 @@ urlpatterns = [
     # ---- RISK & EXECUTION ----
     path('portfolio/', portfolio_risk, name='portfolio_risk'),
     path('execution/', execution_monitor, name='execution_monitor'),
+    path('execution/venues/', venue_comparison, name='venue_comparison'),   # claude code changed: new — Venue Comparison page
 
     # ---- SYSTEM ----
     path('system/health/', system_health, name='system_health'),
