@@ -1,0 +1,219 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Pairs Performance. Visualizes
+   bot/research/entry_exit_engine.py's Kalman/cointegration pairs-trading
+   output (equity curve, drawdown, trade log, permutation/walk-forward
+   verdicts) — the pairs-research equivalent of what dashboard.html does
+   for single-symbol technical strategies. Every number here is read
+   straight from research_data/*.csv by bot/views/pairs_performance_data.py
+   — nothing computed live.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="pairs_performance" %}
+
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <form method="get" action="." style="display:flex; align-items:center; gap:8px">
+        <label class="text-dim mono" for="pair-select">Pair:</label>
+        <select id="pair-select" name="pair" class="term-input mono" onchange="this.form.submit()">
+            {% for p in pairs %}
+            <option value="{{ p }}" {% if p == pair %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<div class="term-body">
+
+    {% if performance.available %}
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ performance.prefix }} — Kalman Pairs Strategy</span>
+            <span class="term-section-meta">source: research_data/{{ performance.prefix }}_*.csv — {{ performance.long_name }}</span>
+        </div>
+        <div class="term-section-body">
+
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Trades</div><div class="metric-value stat-number" data-target="{{ performance.summary.n_total_trades|default_if_none:0 }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Win Rate</div><div class="metric-value stat-number" data-target="{{ performance.summary.win_rate|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Sharpe</div><div class="metric-value stat-number {% if performance.summary.sharpe_ratio > 0 %}pos{% else %}neg{% endif %}" data-target="{{ performance.summary.sharpe_ratio|default_if_none:0 }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Profit Factor</div><div class="metric-value stat-number" data-target="{{ performance.summary.profit_factor|default_if_none:0 }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Max Drawdown</div><div class="metric-value stat-number neg" data-target="{{ performance.summary.max_drawdown_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Entry IC</div><div class="metric-value stat-number {% if performance.summary.entry_ic > 0 %}pos{% elif performance.summary.entry_ic < 0 %}neg{% endif %}" data-target="{{ performance.summary.entry_ic|default_if_none:0 }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Total P&amp;L</div><div class="metric-value stat-number {% if performance.summary.total_pnl_usdt > 0 %}pos{% elif performance.summary.total_pnl_usdt < 0 %}neg{% endif %}" data-target="{{ performance.summary.total_pnl_usdt|default_if_none:0 }}" data-decimals="2" data-suffix="$">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Half-life</div><div class="metric-value stat-number" data-target="{{ performance.summary.half_life_hours|default_if_none:0 }}" data-decimals="1" data-suffix="h">0h</div></div>
+            </div>
+
+            <!-- ================= VERDICT PANEL ================= -->
+            <div class="term-panel" style="margin-bottom:16px">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px">
+                    <span style="font-weight:600">Statistical Verdict</span>
+                    <span>
+                        {% if performance.permutation.edge_appears_real %}
+                        <span class="badge pos">EDGE APPEARS REAL</span>
+                        {% else %}
+                        <span class="badge neg">EDGE DOES NOT APPEAR REAL</span>
+                        {% endif %}
+                        {% if performance.walk_forward.passed %}
+                        <span class="badge pos" style="margin-left:6px">WALK-FORWARD PASSED</span>
+                        {% elif performance.walk_forward %}
+                        <span class="badge neg" style="margin-left:6px">WALK-FORWARD FAILED</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="chart-caption">
+                    100-shuffle permutation test (research_data/permutation_test/{{ performance.long_name }}/):
+                    win_rate percentile {{ performance.permutation.win_rate_percentile|default:"—" }},
+                    sharpe percentile {{ performance.permutation.sharpe_ratio_percentile|default:"—" }},
+                    profit_factor percentile {{ performance.permutation.profit_factor_percentile|default:"—" }},
+                    entry_ic {{ performance.permutation.real_entry_ic|default:"—" }}.
+                    Walk-forward OOS: {{ performance.walk_forward.oos_trades|default:"—" }} trades,
+                    win rate {{ performance.walk_forward.oos_win_rate|default:"—" }},
+                    Sharpe {{ performance.walk_forward.oos_sharpe|default:"—" }},
+                    efficiency {{ performance.walk_forward.walk_forward_efficiency|default:"—" }}.
+                    See research_data/model_governance_log.md for the full dated history behind this verdict.
+                </div>
+            </div>
+
+            <!-- ================= CHARTS ================= -->
+            <div class="two-col" style="margin-bottom:16px">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Equity Curve</div>
+                    <div class="chart-box"><canvas id="equityChart"></canvas></div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Drawdown</div>
+                    <div class="chart-box"><canvas id="drawdownChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- ================= TRADE LOG ================= -->
+            <div class="metric-label" style="margin-bottom:6px">Trade Log ({{ performance.trades|length }})</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>#</th><th>Entry</th><th>Exit</th><th>Dir</th><th class="num">Entry Z</th><th class="num">Exit Z</th><th class="num">Held (h)</th><th>Exit Reason</th><th class="num">Net P&amp;L</th></tr></thead>
+                    <tbody>
+                        {% for t in performance.trades|slice:":100" %}
+                        <tr class="{% if t.is_winner %}row-win{% elif t.is_winner == False %}row-loss{% endif %}">
+                            <td class="num text-dim">{{ t.trade_id }}</td>
+                            <td class="label-cell text-dim mono">{{ t.entry_timestamp }}</td>
+                            <td class="label-cell text-dim mono">{{ t.exit_timestamp }}</td>
+                            <td class="{% if t.direction == 'LONG_SPREAD' %}dir-long{% else %}dir-short{% endif %}">{{ t.direction }}</td>
+                            <td class="num stat-number" data-target="{{ t.entry_zscore|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ t.exit_zscore|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ t.hours_held|default_if_none:0 }}" data-decimals="1">0</td>
+                            <td class="label-cell text-dim">{{ t.exit_reason }}</td>
+                            <td class="num stat-number {% if t.net_pnl_usdt > 0 %}pos{% elif t.net_pnl_usdt < 0 %}neg{% endif %}" data-target="{{ t.net_pnl_usdt|default_if_none:0 }}" data-decimals="2">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+    </div>
+
+    {% else %}
+    <div class="term-panel">
+        <span class="badge neg">UNAVAILABLE</span>
+        <p class="text-dim">{{ performance.reason }}</p>
+    </div>
+    {% endif %}
+
+</div>
+
+{% include "partials/_footer.html" with label="Pairs Performance" note="Kalman/cointegration research output, read from disk" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>
+{% if performance.available %}
+<script>
+    window.equityData = {{ performance.equity_curve|safe }};
+    window.drawdownData = {{ performance.drawdown_curve|safe }};
+
+    var equityChartInstance = null;
+    var drawdownChartInstance = null;
+
+    function renderCharts() {
+        var lineColor = themeColor('--neutral');
+        var ddColor = themeColor('--negative');
+        var blueHex = themeColor('--neutral');
+        var scales = chartCommonScales({ xTitle: 'Trade #' });
+
+        equityChartInstance = destroyChart(equityChartInstance);
+        drawdownChartInstance = destroyChart(drawdownChartInstance);
+
+        var equityCtx = document.getElementById('equityChart');
+        if (equityCtx && window.equityData.length > 0) {
+            equityChartInstance = new Chart(equityCtx, {
+                type: 'line',
+                data: {
+                    labels: window.equityData.map(function (_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Cumulative P&L ($)',
+                        data: window.equityData,
+                        borderColor: lineColor,
+                        backgroundColor: chartAreaFill(blueHex),
+                        fill: true,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
+                    },
+                    scales: scales
+                }
+            });
+        }
+
+        var drawdownCtx = document.getElementById('drawdownChart');
+        if (drawdownCtx && window.drawdownData.length > 0) {
+            drawdownChartInstance = new Chart(drawdownCtx, {
+                type: 'line',
+                data: {
+                    labels: window.drawdownData.map(function (_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Drawdown (%)',
+                        data: window.drawdownData,
+                        borderColor: ddColor,
+                        backgroundColor: chartAreaFill(blueHex),
+                        fill: true,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
+                    },
+                    scales: scales
+                }
+            });
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        renderCharts();
+        onThemeChange(renderCharts);
+    });
+</script>
+{% endif %}
+{% endblock %}

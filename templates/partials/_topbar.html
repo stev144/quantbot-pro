@@ -1,0 +1,116 @@
+{% comment %}
+    claude code changed: new — shared topbar, extracted from the nearly-
+    identical hand-rolled markup that used to be copy-pasted into every
+    template (dashboard.html, research_lab.html, feature_leaderboard.html,
+    etc.), each with a slightly different link set. One partial now
+    carries the full navigation for all 12 sections, grouped into the
+    RESEARCH -> MEASUREMENT -> VALIDATION -> RISK -> EXECUTION clusters,
+    so a new section only ever needs one new <a> here instead of N
+    hand-edits across every existing template.
+
+    Usage: {% include "partials/_topbar.html" with active="dashboard" %}
+    `active` is a slug (see the ACTIVE SLUGS list below) used only to
+    highlight the current section — it does not affect routing.
+
+    ACTIVE SLUGS: dashboard, market_intelligence, research_lab, features,
+    strategy_research, strategy_pipeline, pairs_performance, backtesting,
+    robustness_analysis, rejected_research, research_archive, portfolio_risk,
+    execution_monitor, system_health
+{% endcomment %}
+<div class="term-topbar">
+    <div class="term-brand">
+        <a href="{% url 'dashboard' %}" class="term-brand-link">
+            <span class="term-brand-name">QUANT BOT PRO</span>
+            <span class="term-brand-sub">Research &amp; Systematic Trading</span>
+        </a>
+    </div>
+
+    <nav class="term-nav" aria-label="Primary">
+        <a class="term-nav-link {% if active == 'dashboard' %}active{% endif %}"
+           {% if active == 'dashboard' %}aria-current="page"{% endif %}
+           href="{% url 'dashboard' %}">Executive</a>
+
+        <a class="term-nav-link {% if active == 'market_intelligence' %}active{% endif %}"
+           {% if active == 'market_intelligence' %}aria-current="page"{% endif %}
+           href="{% url 'market_intelligence' %}">Market</a>
+
+        <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
+            <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>
+            <div class="term-nav-dropdown">
+                <a class="{% if active == 'research_lab' %}active{% endif %}" href="{% url 'research_lab' %}">Research Lab</a>
+                <a class="{% if active == 'features' %}active{% endif %}" href="{% url 'feature_leaderboard' %}">Feature Intelligence</a>
+                <a class="{% if active == 'strategy_research' %}active{% endif %}" href="{% url 'strategy_research' %}">Strategy Research</a>
+                <a class="{% if active == 'strategy_pipeline' %}active{% endif %}" href="{% url 'strategy_pipeline' %}">Strategy Pipeline</a>
+                <a class="{% if active == 'pairs_performance' %}active{% endif %}" href="{% url 'pairs_performance' %}">Pairs Performance</a>
+                <a class="{% if active == 'backtesting' %}active{% endif %}" href="{% url 'backtesting' %}">Backtesting</a>
+                <a class="{% if active == 'robustness_analysis' %}active{% endif %}" href="{% url 'robustness_analysis' %}">Robustness Analysis</a>
+                <a class="{% if active == 'rejected_research' %}active{% endif %}" href="{% url 'rejected_research' %}">Rejected Research</a>
+                <a class="{% if active == 'research_archive' %}active{% endif %}" href="{% url 'research_archive' %}">Research Archive</a>
+            </div>
+        </details>
+
+        <details class="term-nav-group" {% if active in "portfolio_risk,execution_monitor" %}open{% endif %}>
+            <summary class="term-nav-link {% if active in "portfolio_risk,execution_monitor" %}active{% endif %}">Risk &amp; Execution</summary>
+            <div class="term-nav-dropdown">
+                <a class="{% if active == 'portfolio_risk' %}active{% endif %}" href="{% url 'portfolio_risk' %}">Portfolio &amp; Risk</a>
+                <a class="{% if active == 'execution_monitor' %}active{% endif %}" href="{% url 'execution_monitor' %}">Execution Monitor</a>
+            </div>
+        </details>
+
+        <a class="term-nav-link {% if active == 'system_health' %}active{% endif %}"
+           {% if active == 'system_health' %}aria-current="page"{% endif %}
+           href="{% url 'system_health' %}">System</a>
+    </nav>
+
+    <div class="term-topbar-right">
+        {# claude code changed: {% block %} does not work inside an #}
+        {# {% include %}'d partial (blocks only override across #}
+        {# {% extends %} chains) — a page needing extra topbar controls #}
+        {# (e.g. dashboard.html's symbol search form) renders them itself #}
+        {# right after including this partial, rather than injecting here. #}
+        {# claude code changed: was a single "click to cycle" button — #}
+        {# with 5 themes now, cycling means up to 4 clicks to reach one; #}
+        {# a select lets a user land on any theme, including Navy, in one #}
+        {# choice. Persistence mechanism (localStorage key "term-theme") #}
+        {# and the data-theme attribute both unchanged — chart-theme.js's #}
+        {# and bubbles.js's MutationObservers don't care how data-theme #}
+        {# gets set. #}
+        <select id="theme-select" class="term-input mono" onchange="setTheme(this.value)" aria-label="Select theme">
+            <option value="dark">◐ Dark</option>
+            <option value="light">◐ Light</option>
+            <option value="navy">◐ Navy</option>
+            <option value="gold">◐ Gold</option>
+            <option value="midnight">◐ Midnight</option>
+        </select>
+
+        {# claude code changed: was an unconditional Logout button (correct #}
+        {# back when LoginRequiredMiddleware guaranteed every visitor was #}
+        {# authenticated). That middleware is gone — the dashboard is public #}
+        {# now, so request.user may be AnonymousUser here. Branches on #}
+        {# is_authenticated: signed-in visitors see who they are + Logout; #}
+        {# everyone else sees Sign In / Sign Up. POST-only logout per #}
+        {# Django's own LogoutView docs (GET logout is deprecated/insecure — #}
+        {# a GET request shouldn't have side effects). #}
+        {% if user.is_authenticated %}
+        <span class="term-topbar-user mono">{{ user.username }}</span>
+        <form method="post" action="{% url 'logout' %}" class="term-symbol-form">
+            {% csrf_token %}
+            <button type="submit" class="term-btn mono">Logout</button>
+        </form>
+        {% else %}
+        <a href="{% url 'login' %}" class="term-btn mono">Sign In</a>
+        <a href="{% url 'signup' %}" class="term-btn mono">Sign Up</a>
+        {% endif %}
+    </div>
+</div>
+
+{# claude code changed: was briefly inlined into .term-topbar-right #}
+{# (right-aligned, inside the navbar row) — follow-up correction: this #}
+{# needs to be its own centered strip below the topbar, not competing #}
+{# for navbar space, but still present on every page since it lives in #}
+{# this shared partial rather than a single template. #}
+{# claude code changed: added a static "We" prefix (white, never #}
+{# touched by typed.js's tick() — it only ever writes to #typed-text, #}
+{# so anything outside that span is inherently stationary) ahead of the #}
+{# animated gold message. #}
+<div class="term-typed-strip mono" id="typed-line"><span class="typed-static">We</span> <span id="typed-text"></span><span class="typed-cursor">▌</span></div>
