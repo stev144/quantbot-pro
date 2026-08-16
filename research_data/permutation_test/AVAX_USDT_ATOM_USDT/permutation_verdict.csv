@@ -1,0 +1,2 @@
+pair_name,n_trades,win_rate,sharpe_ratio,profit_factor,entry_ic,avg_hold_hours,win_rate_percentile,win_rate_p_value,sharpe_ratio_percentile,sharpe_ratio_p_value,profit_factor_percentile,profit_factor_p_value,real_entry_ic,real_entry_ic_meaningfully_positive,sharpe_significant,win_rate_significant,edge_appears_real
+AVAX_USDT_ATOM_USDT,481,0.896,9.4987,8.6388,0.2633,32.9,0.23,0.7821782178217822,0.02,0.9801980198019802,0.29,0.7128712871287128,0.2633,True,False,False,False

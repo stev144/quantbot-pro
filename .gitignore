@@ -17,9 +17,37 @@ trades.log
 trades.log.*
 
 # Research pipeline output (regenerable via fetch_all_symbols.py + run_research_all.py;
-# large — one observations.csv alone is ~224MB, plus 100-shuffle permutation-test folders)
+# large — one observations.csv alone is ~224MB, plus 100-shuffle permutation-test folders
+# (one pair's permutation_test/ subfolder alone is ~2.4GB, walk_forward/ ~116MB)
 data/
-research_data/
+
+# claude code changed: was a blanket `research_data/` exclusion. Carved out a
+# narrow exception for the small set of files bot/views/pairs_performance_data.py
+# and research_lab_data.py actually read (367KB total, vs. gigabytes for the rest)
+# — the Pairs Performance page was deployed to Railway with no data to show
+# because none of research_data/ ever reached git. Every un-ignored directory
+# below is immediately re-excluded one level down (`dir/*` after `!dir/`) so
+# only the named files escape — NOT the multi-GB shuffle folders / OOS trade
+# logs that live alongside them.
+research_data/*
+!research_data/model_governance_log.md
+!research_data/AVAX_ATOM_equity_curve.csv
+!research_data/AVAX_ATOM_trade_log.csv
+!research_data/AVAX_ATOM_strategy_summary.csv
+!research_data/DOT_LINK_equity_curve.csv
+!research_data/DOT_LINK_trade_log.csv
+!research_data/DOT_LINK_strategy_summary.csv
+!research_data/permutation_test/
+research_data/permutation_test/*
+!research_data/permutation_test/AVAX_USDT_ATOM_USDT/
+research_data/permutation_test/AVAX_USDT_ATOM_USDT/*
+!research_data/permutation_test/AVAX_USDT_ATOM_USDT/permutation_verdict.csv
+!research_data/permutation_test/DOT_USDT_LINK_USDT/
+research_data/permutation_test/DOT_USDT_LINK_USDT/*
+!research_data/permutation_test/DOT_USDT_LINK_USDT/permutation_verdict.csv
+!research_data/walk_forward/
+research_data/walk_forward/*
+!research_data/walk_forward/walk_forward_leaderboard.csv
 
 # Claude Code local/machine-specific state
 .claude/settings.local.json
