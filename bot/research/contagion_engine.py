@@ -128,12 +128,29 @@ if not logger.handlers:
 
 # BTC is the dominant asset — all divergence is measured relative to BTC
 # If you ever expand to equities, change this to the benchmark (SPX, QQQ)
-BTC_SYMBOL: str = "BTC_USDT"
+#
+# claude code changed: was "BTC_USDT" (underscore) — a real bug, found
+# during audit. This project's canonical in-memory symbol format is
+# "BASE/QUOTE" (slash) everywhere else — bot/fetch_all_symbols.py's own
+# SYMBOLS list, the live bot's signal dict contract, every ExchangeAdapter
+# — underscore format is ONLY ever a CSV *filename* convention
+# (data/BTC_USDT_1h.csv), never the in-memory symbol itself. Mixing the
+# two here (BTC in underscore, every altcoin below in slash) was the root
+# cause of run_contagion_research()'s file-loading bug: see
+# _symbol_to_csv_stem() below for the actual fix.
+BTC_SYMBOL: str = "BTC/USDT"
 
 # Altcoins — the assets we test the hypothesis on
 # BTC is excluded because you cannot diverge from yourself
+#
+# claude code changed: fixed a real typo found during audit — 'ETH/USDT]'
+# had a stray trailing ']' baked into the string itself, so it could never
+# match any real symbol. This list is otherwise verified identical to
+# bot/fetch_all_symbols.py's own SYMBOLS list (minus BTC/USDT, excluded
+# here since BTC is the reference asset, not an altcoin) — same 19 symbols,
+# same order, same canonical slash format.
 ALTCOIN_SYMBOLS: List[str] = [
-     'ETH/USDT]',
+    'ETH/USDT',
     'BNB/USDT',
     'SOL/USDT',
     'ADA/USDT',
@@ -182,7 +199,30 @@ DIVERGENCE_WINSOR_LOWER: float = 0.01   # Bottom 1%
 DIVERGENCE_WINSOR_UPPER: float = 0.99   # Top 99%
 
 # Minimum data required before the engine processes a symbol
-MIN_CANDLES: int = 500   # Need at least 500 candles for rolling features
+MIN_CANDLES: int = 500
+
+
+def _symbol_to_csv_stem(symbol: str) -> str:
+    """
+    claude code changed: new — the actual fix for the confirmed bug found
+    during audit. Every data/*.csv file on disk is named with underscores
+    (data/BNB_USDT_1h.csv), but this engine's canonical symbol format is
+    slash-based ("BNB/USDT", matching bot/fetch_all_symbols.py's own
+    SYMBOLS list and this project's in-memory convention everywhere else).
+    Building a path directly as f"{symbol}_{interval}.csv" without this
+    conversion turns the '/' into a path separator — Path("data") /
+    "BNB/USDT_1h.csv" silently resolves to "data/BNB/USDT_1h.csv" (a
+    nonexistent subdirectory) instead of "data/BNB_USDT_1h.csv". Confirmed
+    empirically: every altcoin failed to load via run_contagion_research()
+    before this fix existed.
+
+    Mirrors bot/fetch_all_symbols.py's symbol_to_filename() — same
+    slash-to-underscore conversion, kept as a small local function here
+    (not imported across research modules) since that one hardcodes its
+    own module-level INTERVAL rather than taking one as an argument, and
+    this project's research scripts are each meant to run standalone.
+    """
+    return symbol.replace("/", "_")   # Need at least 500 candles for rolling features
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1198,7 +1238,10 @@ def run_contagion_research(
 
     for symbol in all_symbols:
 
-        csv_path = Path(data_dir) / f"{symbol}_{interval}.csv"
+        # claude code changed: was f"{symbol}_{interval}.csv" directly on
+        # the slash-format symbol — see _symbol_to_csv_stem()'s docstring
+        # for the real bug this fixes.
+        csv_path = Path(data_dir) / f"{_symbol_to_csv_stem(symbol)}_{interval}.csv"
 
         if not csv_path.exists():
             logger.warning(f"  {symbol}: not found at {csv_path}")
@@ -1272,7 +1315,9 @@ def run_contagion_research(
     for symbol in ALTCOIN_SYMBOLS:
         if symbol not in enriched:
             continue
-        out = Path(output_dir) / f"{symbol}_contagion.csv"
+        # claude code changed: same fix as the input-loading path above —
+        # was f"{symbol}_contagion.csv" directly on the slash-format symbol.
+        out = Path(output_dir) / f"{_symbol_to_csv_stem(symbol)}_contagion.csv"
         enriched[symbol].reset_index().to_csv(out, index=False)
         logger.info(f"  Saved: {out}")
 
