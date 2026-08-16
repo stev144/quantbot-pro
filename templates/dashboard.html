@@ -1,0 +1,745 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{# claude code changed: new — the one real typed-tagline implementation, see static/js/typed.js header comment #}
+<script src="{% static 'js/typed.js' %}"></script>
+
+{% comment %}
+   claude code changed: full rewrite — institutional quant-terminal
+   redesign. Replaces the retail-styled single scroll (particle
+   background, emoji headers, pulsing gradient cards, animated gauges,
+   rotating hero text) with a dense, table-first layout organized into
+   six sections: Market State, Research State, Alpha Intelligence,
+   Portfolio Risk, Execution, System Health, followed by the existing
+   backtest-detail data (score, edge/risk metrics, equity curve,
+   regime/structure breakdown, rejections, trade log) restyled to match.
+
+   Every number below either comes straight from context (real,
+   computed by bot/views/dashboard.py + bot/views/terminal_data.py) or
+   is rendered as an explicit "unavailable" state — see
+   bot/views/terminal_data.py's module docstring. Nothing here is a
+   placeholder or invented figure.
+
+   claude code changed: every numeric value (metric tiles AND table
+   cells) carries data-target/data-decimals and the stat-number class,
+   animated by the count-up system at the bottom of this file — same
+   mechanism and same "repeat every 5s" behavior static/js/charts.js
+   used to apply to summary cards + table cells, generalized here to
+   cover every number on the page per explicit request, not just the
+   original summary cards.
+
+   Deliberately NOT carried over from the old template: the Live Regime
+   Monitor and Walk-Forward Validation AJAX widgets (both real,
+   functioning features) — out of scope for this pass, which targeted
+   the six requested sections specifically; they can be re-skinned into
+   this layout in a follow-up rather than rushed here.
+
+   claude code changed: was a hash-style multi-line comment tag, which
+   only matches on a single line and was leaking through as literal
+   page text instead of being stripped. This block-style comment tag is
+   the correct one for multi-line use.
+{% endcomment %}
+
+{% if error %}
+<div class="term-body">
+    <div class="term-panel">
+        <span class="badge neg">ERROR</span>
+        <span style="margin-left:8px">{{ error }}</span>
+    </div>
+</div>
+{% else %}
+
+<!-- ================= TOP BAR ================= -->
+<div class="term-topbar">
+    <div class="term-brand">
+        <span class="term-brand-name">QUANT BOT PRO</span>
+        <span class="term-brand-sub">Research Terminal</span>
+    </div>
+    <div class="term-topbar-right">
+        <a href="{% url 'research_lab' %}?symbol={{ symbol }}" class="term-btn">Research Lab →</a>
+        <form class="term-symbol-form" method="get" action=".">
+            <input type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
+            <button type="submit" class="term-btn">Load</button>
+        </form>
+        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
+    </div>
+</div>
+
+<div class="term-tagline-strip mono" id="typed-line">&gt; <span id="typed-text"></span><span class="typed-cursor">▌</span></div>
+
+<div class="term-body">
+
+    <!-- ================= 1. MARKET STATE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">1 · Market State</span>
+            <span class="term-section-meta">{{ symbol }} · 1H</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-6">
+                <div class="metric-tile">
+                    <div class="metric-label">Regime</div>
+                    <div class="metric-value small">{{ market_state.regime }}</div>
+                    <div class="metric-sub">{{ market_state.confidence }} confidence</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">ADX</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.adx|default_if_none:0 }}" data-decimals="1">0</div>
+                    <div class="metric-sub">trend strength</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">ATR Ratio</div>
+                    <div class="metric-value stat-number {% if market_state.volatility_extreme %}warn{% endif %}" data-target="{{ market_state.atr_ratio|default_if_none:0 }}" data-decimals="2">0</div>
+                    <div class="metric-sub">{% if market_state.volatility_extreme %}extreme volatility{% else %}normal range{% endif %}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">EMA Spread</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.ema_spread_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
+                    <div class="metric-sub">20/50 divergence</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">BB Width</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.bb_width_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
+                    <div class="metric-sub">compression</div>
+                </div>
+                {% if market_state.cross_section_dispersion.available %}
+                <div class="metric-tile">
+                    <div class="metric-label">Cross-Sect. Dispersion</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.cross_section_dispersion.dispersion_std }}" data-decimals="3">0</div>
+                    <div class="metric-sub">{{ market_state.cross_section_dispersion.n_symbols }} symbols, σ of z-score</div>
+                </div>
+                {% else %}
+                <div class="metric-tile">
+                    <div class="metric-label">Cross-Sect. Dispersion</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                    <div class="metric-sub">{{ market_state.cross_section_dispersion.reason }}</div>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="hairline"></div>
+
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Liquidity Conditions</div>
+                    <div class="unavailable">{{ market_state.liquidity.reason }}</div>
+                </div>
+                {% if market_state.cross_section_dispersion.available %}
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Extremes (latest, by |z-score|)</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Symbol</th><th class="num">Z-Score</th></tr></thead>
+                            <tbody>
+                                {% for row in market_state.cross_section_dispersion.top_extremes %}
+                                <tr>
+                                    <td class="label-cell">{{ row.symbol }}</td>
+                                    <td class="num stat-number {% if row.cs_zscore > 0 %}pos{% else %}neg{% endif %}" data-target="{{ row.cs_zscore }}" data-decimals="3">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 2. RESEARCH STATE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">2 · Research State</span>
+            <span class="term-section-meta">
+                {% if research_state.pipeline_health == "fresh" %}<span class="badge pos">FRESH</span>
+                {% elif research_state.pipeline_health == "stale" %}<span class="badge warn">STALE</span>
+                {% else %}<span class="badge dim">UNKNOWN</span>{% endif %}
+            </span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-6">
+                <div class="metric-tile">
+                    <div class="metric-label">Assets Under Analysis</div>
+                    <div class="metric-value stat-number" data-target="{{ research_state.asset_count }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Features Evaluated</div>
+                    <div class="metric-value stat-number" data-target="{{ research_state.features_evaluated }}" data-decimals="0">0</div>
+                    <div class="metric-sub">across {{ research_state.feature_files }} symbols</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Features Valid</div>
+                    <div class="metric-value stat-number {% if research_state.features_valid == 0 %}neg{% else %}pos{% endif %}" data-target="{{ research_state.features_valid }}" data-decimals="0">0</div>
+                    <div class="metric-sub">passed statistical validation</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Strategies Active</div>
+                    <div class="metric-value stat-number" data-target="{{ research_state.strategies_active }}" data-decimals="0">0</div>
+                    <div class="metric-sub">{{ research_state.strategies_unwired }} unwired (experimental)</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Latest Research Run</div>
+                    <div class="metric-value small">{% if research_state.latest_run %}{{ research_state.latest_run|date:"Y-m-d" }}{% else %}—{% endif %}</div>
+                    <div class="metric-sub">{% if research_state.age_days is not None %}{{ research_state.age_days }}d ago{% endif %}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Governance Log Entries</div>
+                    <div class="metric-value stat-number" data-target="{{ research_state.governance_entries|default_if_none:0 }}" data-decimals="0">0</div>
+                    <div class="metric-sub">pair go/no-go decisions</div>
+                </div>
+            </div>
+            {% if research_state.features_valid == 0 %}
+            <div class="hairline"></div>
+            <div class="unavailable">Zero features currently pass validation across all {{ research_state.feature_files }} symbols evaluated — this is the actual, current state of the feature research pipeline, not a display error.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 3. ALPHA INTELLIGENCE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">3 · Alpha Intelligence</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-2" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Strategy Expectancy (R)</div>
+                    <div class="metric-value stat-number {% if alpha_intelligence.strategy_expectancy_r > 0 %}pos{% elif alpha_intelligence.strategy_expectancy_r < 0 %}neg{% endif %}" data-target="{{ alpha_intelligence.strategy_expectancy_r|default_if_none:0 }}" data-decimals="4">0</div>
+                    <div class="metric-sub">avg R-multiple per trade, current backtest</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Strategy Expectancy ($)</div>
+                    <div class="metric-value stat-number {% if alpha_intelligence.strategy_expectancy_dollar > 0 %}pos{% elif alpha_intelligence.strategy_expectancy_dollar < 0 %}neg{% endif %}" data-target="{{ alpha_intelligence.strategy_expectancy_dollar|default_if_none:0 }}" data-decimals="2">0</div>
+                    <div class="metric-sub">avg $ per trade, current backtest</div>
+                </div>
+            </div>
+
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Feature Predictive Power &amp; Stability — Top |IC|</div>
+                    {% if alpha_intelligence.feature_power_available %}
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Symbol</th><th>Feature</th><th class="num">IC</th><th class="num">Stability σ</th><th>Status</th></tr></thead>
+                            <tbody>
+                                {% for f in alpha_intelligence.top_features %}
+                                <tr>
+                                    <td class="label-cell">{{ f.symbol }}</td>
+                                    <td class="label-cell">{{ f.feature }}</td>
+                                    <td class="num stat-number {% if f.ic_overall > 0 %}pos{% else %}neg{% endif %}" data-target="{{ f.ic_overall }}" data-decimals="4">0</td>
+                                    <td class="num {% if f.stability_std is not None %}stat-number{% endif %}" data-target="{{ f.stability_std|default_if_none:0 }}" data-decimals="4">{% if f.stability_std is None %}—{% else %}0{% endif %}</td>
+                                    <td>{% if f.valid %}<span class="badge pos">VALID</span>{% else %}<span class="badge dim">{{ f.recommendation }}</span>{% endif %}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="unavailable">No validated_features.csv files found in research_data/</div>
+                    {% endif %}
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Opportunities</div>
+                    {% if alpha_intelligence.cross_sectional_available %}
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Symbol</th><th class="num">Z-Score</th><th>Read</th></tr></thead>
+                            <tbody>
+                                {% for row in alpha_intelligence.cross_sectional_opportunities %}
+                                <tr>
+                                    <td class="label-cell">{{ row.symbol }}</td>
+                                    <td class="num stat-number {% if row.cs_zscore > 0 %}pos{% else %}neg{% endif %}" data-target="{{ row.cs_zscore }}" data-decimals="3">0</td>
+                                    <td class="text-dim">{% if row.cs_zscore > 0 %}rich vs. universe{% else %}cheap vs. universe{% endif %}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="chart-caption">Cross-sectional z-score of hourly return vs. the rest of the tracked universe — not a trade signal, a relative-value reading.</div>
+                    {% else %}
+                    <div class="unavailable">Cross-sectional data unavailable</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 4. PORTFOLIO RISK ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">4 · Portfolio Risk</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Max Drawdown</div>
+                    <div class="metric-value stat-number neg" data-target="{{ portfolio_risk.max_drawdown|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
+                    <div class="metric-sub">current backtest, {{ symbol }}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Current Exposure</div>
+                    <div class="metric-value stat-number" data-target="{{ execution_state.open_count|default_if_none:0 }}" data-decimals="0">0</div>
+                    <div class="metric-sub">open position(s), live DB</div>
+                </div>
+                {% if portfolio_risk.correlation.available %}
+                <div class="metric-tile">
+                    <div class="metric-label">Avg |Correlation|</div>
+                    <div class="metric-value stat-number {% if portfolio_risk.correlation.avg_abs_correlation > 0.6 %}warn{% endif %}" data-target="{{ portfolio_risk.correlation.avg_abs_correlation }}" data-decimals="3">0</div>
+                    <div class="metric-sub">{{ portfolio_risk.correlation.n_symbols }} symbols, {{ portfolio_risk.correlation.window_candles }}h window</div>
+                </div>
+                {% else %}
+                <div class="metric-tile">
+                    <div class="metric-label">Avg |Correlation|</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                </div>
+                {% endif %}
+                <div class="metric-tile">
+                    <div class="metric-label">Crash-Risk State</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                </div>
+            </div>
+
+            {% if portfolio_risk.correlation.available %}
+            <div class="metric-label" style="margin-bottom:6px">Highest-Correlated Pairs (historical, {{ portfolio_risk.correlation.window_candles }}h)</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair A</th><th>Pair B</th><th class="num">Correlation</th></tr></thead>
+                    <tbody>
+                        {% for p in portfolio_risk.correlation.top_pairs %}
+                        <tr>
+                            <td class="label-cell">{{ p.a }}</td>
+                            <td class="label-cell">{{ p.b }}</td>
+                            <td class="num stat-number" data-target="{{ p.corr }}" data-decimals="3">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <div class="hairline"></div>
+            <div class="unavailable">Concentration and crash-risk state require backend work not yet implemented: concentration needs live per-symbol exposure sizing (PositionTracker's in-memory state isn't reachable from a web request); crash-risk needs bot/research/contagion_engine.py wired to persist output, which it currently doesn't.</div>
+        </div>
+    </div>
+
+    <!-- ================= 5. EXECUTION ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">5 · Execution</span>
+            <span class="term-section-meta">source: TradeRecord (live DB)</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-6" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Open Positions</div>
+                    <div class="metric-value stat-number" data-target="{{ execution_state.open_count|default_if_none:0 }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Pending Orders</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Realized P&amp;L</div>
+                    <div class="metric-value stat-number {% if execution_state.realized_pnl > 0 %}pos{% elif execution_state.realized_pnl < 0 %}neg{% endif %}" data-target="{{ execution_state.realized_pnl|default_if_none:0 }}" data-decimals="2">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Unrealized P&amp;L</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Avg Slippage</div>
+                    <div class="metric-value stat-number small" data-target="{{ execution_state.avg_slippage_pct|default_if_none:0 }}" data-decimals="4" data-suffix="%">{% if execution_state.avg_slippage_pct is None %}—{% else %}0%{% endif %}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Total Fees Paid</div>
+                    <div class="metric-value stat-number small" data-target="{{ execution_state.total_fees|default_if_none:0 }}" data-decimals="2">0</div>
+                </div>
+            </div>
+
+            {% if execution_state.open_count > 0 %}
+            <div class="metric-label" style="margin-bottom:6px">Open Positions</div>
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Side</th><th class="num">Entry</th><th class="num">SL</th><th class="num">TP</th><th class="num">Qty</th><th>Opened</th></tr></thead>
+                    <tbody>
+                        {% for p in execution_state.open_positions %}
+                        <tr>
+                            <td class="label-cell">{{ p.symbol }}</td>
+                            <td class="{% if p.side == 'BUY' %}dir-long{% else %}dir-short{% endif %}">{{ p.side }}</td>
+                            <td class="num stat-number" data-target="{{ p.entry_price }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ p.sl }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ p.tp }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ p.quantity }}" data-decimals="4">0</td>
+                            <td>{{ p.created_at|date:"Y-m-d H:i" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable" style="margin-bottom:16px">No open positions — bot is not currently live-trading in this environment (DRY_RUN default, no BINANCE_API_KEY configured).</div>
+            {% endif %}
+
+            <div class="metric-label" style="margin-bottom:6px">Recent Closed Trades ({{ execution_state.total_closed|default:"0" }} total in DB)</div>
+            {% if execution_state.recent_closed %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th class="num">Net P&amp;L</th><th class="num">R</th><th>Closed</th></tr></thead>
+                    <tbody>
+                        {% for t in execution_state.recent_closed %}
+                        <tr>
+                            <td class="label-cell">{{ t.symbol }}</td>
+                            <td class="{% if t.side == 'BUY' %}dir-long{% else %}dir-short{% endif %}">{{ t.side }}</td>
+                            <td><span class="badge {% if t.status == 'WIN' %}pos{% else %}neg{% endif %}">{{ t.status }}</span></td>
+                            <td class="num stat-number {% if t.net_pnl > 0 %}pos{% elif t.net_pnl < 0 %}neg{% endif %}" data-target="{{ t.net_pnl|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num {% if t.r_multiple is not None %}stat-number{% endif %}" data-target="{{ t.r_multiple|default_if_none:0 }}" data-decimals="2">{% if t.r_multiple is None %}—{% else %}0{% endif %}</td>
+                            <td>{{ t.updated_at|date:"Y-m-d H:i" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No closed trades recorded in this environment's database yet.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 6. SYSTEM HEALTH ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">6 · System Health</span>
+            <span class="term-section-meta">
+                {% if system_health.overall == "ok" %}<span class="badge pos">ALL OK</span>
+                {% elif system_health.overall == "warn" %}<span class="badge warn">WARNINGS</span>
+                {% else %}<span class="badge neg">ERRORS</span>{% endif %}
+            </span>
+        </div>
+        <div class="term-section-body">
+            <div class="two-col">
+                <div>
+                    {% for c in system_health.checks|slice:":4" %}
+                    <div class="status-row">
+                        <span class="status-name"><span class="status-dot {{ c.status }}"></span>{{ c.name }}</span>
+                        <span class="status-detail">{{ c.detail }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div>
+                    {% for c in system_health.checks|slice:"4:" %}
+                    <div class="status-row">
+                        <span class="status-name"><span class="status-dot {{ c.status }}"></span>{{ c.name }}</span>
+                        <span class="status-detail">{{ c.detail }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="chart-caption" style="margin-top:10px">"Execution Engine (code)" reflects whether the module imports cleanly, not whether a live bot process is currently running — this web process has no visibility into a separately-running bot_runner.py.</div>
+        </div>
+    </div>
+
+    <!-- ================= BACKTEST DETAIL ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Backtest Detail — {{ symbol }}</span>
+            <span class="term-section-meta">grade {{ grade }} · score {{ total_score|floatformat:1 }}/100</span>
+        </div>
+        <div class="term-section-body">
+
+            <div class="term-grid term-grid-6" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Total Trades</div><div class="metric-value stat-number" data-target="{{ total_trades }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Win Rate</div><div class="metric-value stat-number" data-target="{{ win_rate }}" data-decimals="2" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Profit Factor</div><div class="metric-value stat-number {% if profit_factor >= 1 %}pos{% else %}neg{% endif %}" data-target="{{ profit_factor }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Expectancy (R)</div><div class="metric-value stat-number {% if expectancy_r > 0 %}pos{% elif expectancy_r < 0 %}neg{% endif %}" data-target="{{ expectancy_r }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Sharpe</div><div class="metric-value stat-number {% if sharpe > 0 %}pos{% elif sharpe < 0 %}neg{% endif %}" data-target="{{ sharpe }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Sortino</div><div class="metric-value stat-number {% if sortino > 0 %}pos{% elif sortino < 0 %}neg{% endif %}" data-target="{{ sortino }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Max Drawdown</div><div class="metric-value stat-number neg" data-target="{{ max_drawdown }}" data-decimals="2" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Loss Streak</div><div class="metric-value stat-number" data-target="{{ loss_streak }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Wins</div><div class="metric-value stat-number pos" data-target="{{ wins }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Losses</div><div class="metric-value stat-number neg" data-target="{{ losses }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Avg R</div><div class="metric-value stat-number {% if avg_r > 0 %}pos{% elif avg_r < 0 %}neg{% endif %}" data-target="{{ avg_r }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Validation Penalty</div><div class="metric-value stat-number {% if validation_penalty > 5 %}neg{% elif validation_penalty > 0 %}warn{% else %}pos{% endif %}" data-target="{{ validation_penalty }}" data-decimals="0">0</div></div>
+            </div>
+            <div class="metric-tile" style="margin-bottom:16px"><div class="metric-label">Verdict</div><div class="metric-value small">{{ verdict }}</div></div>
+
+            <div class="two-col" style="margin-bottom:16px">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Equity Curve</div>
+                    <div class="chart-box"><canvas id="equityChart"></canvas></div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Drawdown</div>
+                    <div class="chart-box"><canvas id="drawdownChart"></canvas></div>
+                </div>
+            </div>
+
+            <div class="two-col" style="margin-bottom:16px">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Regime Breakdown</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Regime</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
+                            <tbody>
+                                {% for regime, d in regime_breakdown.items %}
+                                <tr>
+                                    <td class="label-cell">{{ regime }}</td>
+                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Structure Breakdown</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Structure</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
+                            <tbody>
+                                {% for structure, d in structure_breakdown.items %}
+                                <tr>
+                                    <td class="label-cell">{{ structure }}</td>
+                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            {% if suggestions %}
+            <div class="metric-label" style="margin-bottom:6px">Scorer Notes</div>
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <tbody>
+                        {% for s in suggestions %}
+                        <tr><td class="label-cell">{{ s }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if rejection_table %}
+            <div class="metric-label" style="margin-bottom:6px">Rejection Analysis</div>
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <thead><tr><th>Reason</th><th class="num">Count</th><th class="num">%</th></tr></thead>
+                    <tbody>
+                        {% for reason, d in rejection_table.items %}
+                        {% if d.count > 0 %}
+                        <tr>
+                            <td class="label-cell">{{ reason }}</td>
+                            <td class="num stat-number" data-target="{{ d.count }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ d.percentage }}" data-decimals="2" data-suffix="%">0%</td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <div class="metric-label" style="margin-bottom:6px">Trade Log ({{ trades|length }})</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>#</th><th>Dir</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th class="num">R</th><th class="num">Held</th><th>Exit Reason</th></tr></thead>
+                    <tbody>
+                        {% for t in trades|slice:":100" %}
+                        <tr>
+                            <td class="num text-dim">{{ forloop.counter }}</td>
+                            <td class="{% if t.direction == 'LONG' %}dir-long{% else %}dir-short{% endif %}">{{ t.direction }}</td>
+                            <td class="num stat-number" data-target="{{ t.entry_price|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ t.exit_price|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td class="num stat-number {% if t.profit > 0 %}pos{% elif t.profit < 0 %}neg{% endif %}" data-target="{{ t.profit|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if t.r_multiple > 0 %}pos{% elif t.r_multiple < 0 %}neg{% endif %}" data-target="{{ t.r_multiple|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ t.holding_candles|default_if_none:0 }}" data-decimals="0">0</td>
+                            <td class="label-cell text-dim">{{ t.exit_reason }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if trades|length > 100 %}
+            <div class="chart-caption">Showing first 100 of {{ trades|length }} trades.</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<div class="term-footer">
+    <span>Quant Bot Pro — internal research terminal</span>
+    <span class="mono">{{ symbol }} · backtest cache: 1h</span>
+</div>
+
+<script>
+    window.equityData = {{ equity_curve|safe }};
+    window.drawdownData = {{ drawdown_curve|safe }};
+
+    // ============================================================
+    // COUNT-UP ANIMATION — every numeric value on the page
+    // claude code changed: generalized from static/js/charts.js's
+    // .stat-number system (which only covered summary cards) to cover
+    // every metric tile AND every numeric table cell rendered above,
+    // per explicit request to keep every number animating as before.
+    // Same mechanism: animate 0 -> data-target on load, then repeat
+    // every 5s. data-suffix (e.g. "%") is appended after the formatted
+    // number since Chart.js-style toFixed() can't include it directly.
+    // ============================================================
+    function formatNumber(num, decimals) {
+        if (!isFinite(num)) return "0";
+        return Number(num).toFixed(decimals);
+    }
+
+    function animateCounter(el) {
+        var target = parseFloat(el.getAttribute("data-target"));
+        if (isNaN(target)) return;   // non-numeric cells (e.g. "—" placeholders) are left untouched
+
+        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
+        var suffix = el.getAttribute("data-suffix") || "";
+        var duration = 900;
+        var startTime = performance.now();
+
+        function step(now) {
+            var progress = Math.min((now - startTime) / duration, 1);
+            var current = target * progress;
+            el.textContent = formatNumber(current, decimals) + suffix;
+            if (progress < 1) {
+                requestAnimationFrame(step);
+            } else {
+                el.textContent = formatNumber(target, decimals) + suffix;
+            }
+        }
+        requestAnimationFrame(step);
+    }
+
+    function animateAllCounters() {
+        document.querySelectorAll(".stat-number").forEach(animateCounter);
+    }
+
+    document.addEventListener("DOMContentLoaded", animateAllCounters);
+    setInterval(animateAllCounters, 5000);
+
+    // ============================================================
+    // CHARTS
+    // claude code changed: replaces static/js/charts.js's zero-config
+    // Chart.js calls (previously rendered with library defaults — no
+    // axis labels, no gridlines, no theme-aware colors, x-axis was raw
+    // trade-sequence index with no label). Reads the CSS custom
+    // properties so charts match whichever theme (dark/light) is
+    // active, and re-renders on theme toggle instead of going stale.
+    // ============================================================
+    var equityChartInstance = null;
+    var drawdownChartInstance = null;
+
+    function themeColor(varName) {
+        return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    }
+
+    function renderCharts() {
+        var gridColor = themeColor('--border');
+        var textColor = themeColor('--text-dim');
+        var lineColor = themeColor('--neutral');
+        var ddColor = themeColor('--negative');
+
+        var commonScales = {
+            x: {
+                ticks: { color: textColor, font: { size: 10 }, maxTicksLimit: 10 },
+                grid: { color: gridColor },
+                title: { display: true, text: 'Trade #', color: textColor, font: { size: 10 } }
+            },
+            y: {
+                ticks: { color: textColor, font: { size: 10 } },
+                grid: { color: gridColor }
+            }
+        };
+
+        if (equityChartInstance) equityChartInstance.destroy();
+        if (drawdownChartInstance) drawdownChartInstance.destroy();
+
+        var equityCtx = document.getElementById('equityChart');
+        if (equityCtx && window.equityData.length > 0) {
+            equityChartInstance = new Chart(equityCtx, {
+                type: 'line',
+                data: {
+                    labels: window.equityData.map(function (_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Cumulative P&L ($)',
+                        data: window.equityData,
+                        borderColor: lineColor,
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
+                    },
+                    scales: commonScales
+                }
+            });
+        }
+
+        var drawdownCtx = document.getElementById('drawdownChart');
+        if (drawdownCtx && window.drawdownData.length > 0) {
+            drawdownChartInstance = new Chart(drawdownCtx, {
+                type: 'line',
+                data: {
+                    labels: window.drawdownData.map(function (_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Drawdown (%)',
+                        data: window.drawdownData,
+                        borderColor: ddColor,
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
+                    },
+                    scales: commonScales
+                }
+            });
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        renderCharts();
+
+        // claude code changed: was shadowing base.html's toggleTheme() to
+        // re-render charts on flip, but base.html's own trailing script
+        // tag sits after this page's content in the rendered DOM, so it
+        // executes second and silently clobbers this redefinition — the
+        // shadow never actually ran (confirmed by inspecting the
+        // rendered page: two toggleTheme() declarations exist, and
+        // base.html's plain one, with no chart re-render, is the one
+        // left bound at click time). Watching data-theme directly
+        // sidesteps script order entirely.
+        new MutationObserver(renderCharts).observe(
+            document.documentElement,
+            { attributes: true, attributeFilter: ['data-theme'] }
+        );
+    });
+</script>
+
+{% endif %}
+{% endblock %}

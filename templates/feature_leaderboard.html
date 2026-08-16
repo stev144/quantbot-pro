@@ -1,0 +1,163 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load feature_intel_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Feature Intelligence Leaderboard.
+   Every feature in bot/research/*'s real output (single-asset indicators,
+   cross-sectional features, pair-spread Kalman features, and live-only
+   regime-detector features) in one ranked table. Status badges use the
+   seven-state taxonomy documented in bot/views/feature_intelligence_data.py
+   (UNTESTED/UNDER_RESEARCH/PROMISING/STABLE/UNSTABLE/REJECTED/
+   REQUIRES_VALIDATION) via the status_class filter — never a generic
+   score. Every number is read from real persisted CSV output; anything
+   not computed shows "Not calculated".
+{% endcomment %}
+
+<div class="term-topbar">
+    <div class="term-brand">
+        <span class="term-brand-name">QUANT BOT PRO</span>
+        <span class="term-brand-sub">Feature Intelligence</span>
+    </div>
+    <div class="term-topbar-right">
+        <a href="{% url 'research_lab' %}" class="term-btn">← Research Lab</a>
+        <a href="{% url 'feature_comparison' %}" class="term-btn">Compare</a>
+        <a href="{% url 'feature_correlation' %}" class="term-btn">Correlation Matrix</a>
+        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
+    </div>
+</div>
+
+<div class="term-body">
+
+    <!-- ================= RESEARCH DECISION / STATUS BOARD ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Status — {{ leaderboard.n_features }} Features Tracked</span>
+            <span class="term-section-meta">seven-state taxonomy, computed from real validator/decay/permutation output</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-6" style="margin-bottom:16px">
+                {% for status, count in status_board.status_counts.items %}
+                <div class="metric-tile">
+                    <div class="metric-label"><span class="badge {{ status|status_class }}">{{ status }}</span></div>
+                    <div class="metric-value stat-number" data-target="{{ count }}" data-decimals="0">0</div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="chart-caption">
+                UNTESTED = never run through any validator/analyzer &middot;
+                UNDER_RESEARCH = has output, no verdict yet &middot;
+                PROMISING = passed a weaker/earlier-stage test &middot;
+                STABLE = flat-or-improving trend and real signal, not rejected &middot;
+                UNSTABLE = decaying/volatile trend, or a downstream permutation test overrides an earlier pass &middot;
+                REJECTED = fails a significance test or filter &middot;
+                REQUIRES_VALIDATION = conflicting signal across symbols.
+            </div>
+            <div class="hairline"></div>
+            <div class="term-grid term-grid-4">
+                {% for family, count in leaderboard.family_counts.items %}
+                <div class="metric-tile">
+                    <div class="metric-label">{{ family }}</div>
+                    <div class="metric-value stat-number" data-target="{{ count }}" data-decimals="0">0</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= FEATURE LEADERBOARD ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Feature Leaderboard</span>
+            <span class="term-section-meta">ranked by mean |IC| across tested symbols</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>Family</th>
+                            <th>Coverage</th>
+                            <th class="num">Mean |IC|</th>
+                            <th class="num">Stability &sigma;</th>
+                            <th>Decay Trend</th>
+                            <th class="num">Sharpe Contrib.</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in leaderboard.rows %}
+                        <tr>
+                            <td class="label-cell"><a href="{% url 'feature_detail' r.feature %}">{{ r.feature }}</a></td>
+                            <td class="text-dim">{{ r.family }}</td>
+                            <td class="text-dim">
+                                {% if r.family == "SINGLE_ASSET_INDICATOR" %}{{ r.n_symbols_covered }}/{{ r.n_symbols_total }} symbols
+                                {% elif r.family == "CROSS_SECTIONAL" %}cross-sectional universe
+                                {% elif r.family == "PAIR_SPREAD" %}{{ r.pair_label }}
+                                {% else %}not persisted{% endif %}
+                            </td>
+                            {% if r.mean_abs_ic != None %}
+                            <td class="num stat-number" data-target="{{ r.mean_abs_ic }}" data-decimals="4">0</td>
+                            {% else %}
+                            <td class="num text-dim">Not calculated</td>
+                            {% endif %}
+                            {% if r.stability_std_mean != None %}
+                            <td class="num stat-number {% if r.stability_std_mean > 0.15 %}warn{% endif %}" data-target="{{ r.stability_std_mean }}" data-decimals="4">0</td>
+                            {% else %}
+                            <td class="num text-dim">Not calculated</td>
+                            {% endif %}
+                            <td class="text-dim">
+                                {% if r.trend %}{{ r.trend }}
+                                {% elif r.trend_counts %}{% for t, c in r.trend_counts.items %}{{ t }} ({{ c }}) {% endfor %}
+                                {% else %}Not calculated{% endif %}
+                            </td>
+                            {% if r.sharpe_contrib_mean != None %}
+                            <td class="num stat-number {% if r.sharpe_contrib_mean > 0 %}pos{% elif r.sharpe_contrib_mean < 0 %}neg{% endif %}" data-target="{{ r.sharpe_contrib_mean }}" data-decimals="2">0</td>
+                            {% else %}
+                            <td class="num text-dim">Not calculated</td>
+                            {% endif %}
+                            <td><span class="badge {{ r.status|status_class }}" title="{{ r.status_rationale }}">{{ r.status }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="term-footer">
+    <span>Quant Bot Pro — Feature Intelligence</span>
+    <span class="mono">reading research_data/ directly, offline pipeline</span>
+</div>
+
+<script>
+    function formatNumber(num, decimals) {
+        if (!isFinite(num)) return "0";
+        return Number(num).toFixed(decimals);
+    }
+    function animateCounter(el) {
+        var target = parseFloat(el.getAttribute("data-target"));
+        if (isNaN(target)) return;
+        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
+        var startTime = performance.now();
+        var duration = 900;
+        function step(now) {
+            var progress = Math.min((now - startTime) / duration, 1);
+            el.textContent = formatNumber(target * progress, decimals);
+            if (progress < 1) requestAnimationFrame(step);
+            else el.textContent = formatNumber(target, decimals);
+        }
+        requestAnimationFrame(step);
+    }
+    function animateAllCounters() {
+        document.querySelectorAll(".stat-number").forEach(animateCounter);
+    }
+    document.addEventListener("DOMContentLoaded", animateAllCounters);
+</script>
+
+{% endblock %}

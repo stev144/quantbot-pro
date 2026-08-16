@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load feature_intel_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Feature Correlation / Redundancy
+   Matrix. This is the one metric that does not exist anywhere in
+   bot/research/*'s persisted output — computed live here via
+   pandas .corr() over real per-candle feature columns in
+   {symbol}_observations.csv (see get_feature_correlation_matrix in
+   bot/views/feature_intelligence_data.py), cached per symbol. A real
+   derived statistic from real data, not a fabricated score.
+{% endcomment %}
+
+<div class="term-topbar">
+    <div class="term-brand">
+        <span class="term-brand-name">QUANT BOT PRO</span>
+        <span class="term-brand-sub">Feature Correlation Matrix</span>
+    </div>
+    <div class="term-topbar-right">
+        <a href="{% url 'feature_leaderboard' %}" class="term-btn">← Leaderboard</a>
+        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
+    </div>
+</div>
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Single-Asset Indicator Correlation — {{ symbol }}</span>
+            <span class="term-section-meta">Pearson correlation, computed live from {{ symbol }}_observations.csv</span>
+        </div>
+        <div class="term-section-body">
+            <form method="get" action="." style="margin-bottom:14px">
+                <label class="text-dim">Symbol:</label>
+                <select name="symbol" class="term-input mono" onchange="this.form.submit()">
+                    {% for s in symbols %}
+                    <option value="{{ s }}" {% if s == symbol %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+
+            {% if matrix.available %}
+            <div class="chart-caption" style="margin-bottom:10px">
+                {{ matrix.n_candles }} candles. Cells shaded by |correlation| using the theme's positive/negative colors.
+                |corr| &ge; {{ matrix.threshold }} is flagged a redundancy candidate below — this only means the two
+                columns move together on this symbol's history, not that either one is predictive (see each feature's
+                own detail page for that).
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table mono" style="font-size:11px">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            {% for f in matrix.features %}<th>{{ f }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in matrix.rows %}
+                        <tr>
+                            <td class="label-cell">{{ row.label }}</td>
+                            {% for v in row.values %}
+                            <td class="num" style="{{ v|corr_bg }}">{{ v|floatformat:2 }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="hairline"></div>
+            <div class="metric-label" style="margin-bottom:8px">Redundancy Candidates (|corr| &ge; {{ matrix.threshold }})</div>
+            {% if matrix.redundant_pairs %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Feature A</th><th>Feature B</th><th class="num">Correlation</th></tr></thead>
+                    <tbody>
+                        {% for p in matrix.redundant_pairs %}
+                        <tr>
+                            <td class="label-cell"><a href="{% url 'feature_detail' p.feature_a %}">{{ p.feature_a }}</a></td>
+                            <td class="label-cell"><a href="{% url 'feature_detail' p.feature_b %}">{{ p.feature_b }}</a></td>
+                            <td class="num stat-number {% if p.corr > 0 %}pos{% else %}neg{% endif %}" data-target="{{ p.corr }}" data-decimals="4">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No feature pairs at or above the {{ matrix.threshold }} threshold for {{ symbol }}.</div>
+            {% endif %}
+            {% else %}
+            <div class="unavailable">{{ matrix.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<div class="term-footer">
+    <span>Quant Bot Pro — Feature Intelligence</span>
+    <span class="mono">{{ symbol }} · correlation cached 1h</span>
+</div>
+
+<script>
+    function formatNumber(num, decimals) {
+        if (!isFinite(num)) return "0";
+        return Number(num).toFixed(decimals);
+    }
+    function animateCounter(el) {
+        var target = parseFloat(el.getAttribute("data-target"));
+        if (isNaN(target)) return;
+        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
+        var startTime = performance.now();
+        var duration = 900;
+        function step(now) {
+            var progress = Math.min((now - startTime) / duration, 1);
+            el.textContent = formatNumber(target * progress, decimals);
+            if (progress < 1) requestAnimationFrame(step);
+            else el.textContent = formatNumber(target, decimals);
+        }
+        requestAnimationFrame(step);
+    }
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll(".stat-number").forEach(animateCounter);
+    });
+</script>
+
+{% endblock %}

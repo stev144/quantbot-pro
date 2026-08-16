@@ -1,0 +1,509 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load research_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Research Lab, the central
+   interface for the offline research pipeline (bot/research/* —
+   Subsystem B in the architecture audit, previously 100% disconnected
+   from the Django app). Ten panels following the requested workflow:
+   Dataset -> Feature Engineering -> Feature Validation -> Statistical
+   Testing -> Regime Analysis -> Strategy Research -> Backtesting ->
+   Robustness -> Research Decision.
+
+   Every verdict badge uses the six-state vocabulary from
+   bot/views/research_lab_data.py (TESTED / STATISTICALLY SUPPORTED /
+   PROMISING / UNSTABLE / REJECTED / REQUIRES FURTHER RESEARCH) via the
+   verdict_class template filter — never a generic "AI score". Every
+   number is real, read from bot/research/*'s actual persisted CSV/MD
+   output; anything not yet computed shows an explicit unavailable state
+   naming what would need to run.
+{% endcomment %}
+
+<div class="term-topbar">
+    <div class="term-brand">
+        <span class="term-brand-name">QUANT BOT PRO</span>
+        <span class="term-brand-sub">Research Lab</span>
+    </div>
+    <div class="term-topbar-right">
+        <a href="{% url 'dashboard' %}?symbol={{ symbol }}" class="term-btn">← Terminal</a>
+        <a href="{% url 'feature_leaderboard' %}" class="term-btn">Feature Intelligence →</a>
+        <form class="term-symbol-form" method="get" action=".">
+            <input type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
+            <button type="submit" class="term-btn">Load</button>
+        </form>
+        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
+    </div>
+</div>
+
+<div class="term-body">
+
+    <!-- ================= 1. DATASET EXPLORER ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">1 · Dataset Explorer</span>
+            <span class="term-section-meta">data/*.csv + observations.csv</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Assets Tracked</div>
+                    <div class="metric-value stat-number" data-target="{{ dataset.n_assets }}" data-decimals="0">0</div>
+                </div>
+                {% if dataset.observations.available %}
+                <div class="metric-tile">
+                    <div class="metric-label">Observation Rows</div>
+                    <div class="metric-value stat-number" data-target="{{ dataset.observations.total_rows }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Symbols in Observations</div>
+                    <div class="metric-value stat-number" data-target="{{ dataset.observations.n_symbols }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Coverage</div>
+                    <div class="metric-value small">{{ dataset.observations.start|slice:":10" }} → {{ dataset.observations.end|slice:":10" }}</div>
+                </div>
+                {% else %}
+                <div class="metric-tile" style="grid-column: span 3">
+                    <div class="unavailable">observations.csv unavailable — run bot/research/build_observations.py</div>
+                </div>
+                {% endif %}
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th class="num">Candles</th><th>Start</th><th>End</th></tr></thead>
+                    <tbody>
+                        {% for a in dataset.assets %}
+                        <tr>
+                            <td class="label-cell">{{ a.symbol }}</td>
+                            <td class="num stat-number" data-target="{{ a.candles|default_if_none:0 }}" data-decimals="0">0</td>
+                            <td class="text-dim">{{ a.start|slice:":10"|default:"—" }}</td>
+                            <td class="text-dim">{{ a.end|slice:":10"|default:"—" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 2. FEATURE EXPLORER ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">2 · Feature Explorer</span>
+            <span class="term-section-meta">source: *_validated_features.csv</span>
+        </div>
+        <div class="term-section-body">
+            {% if features.available %}
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Feature × Symbol Rows</div><div class="metric-value stat-number" data-target="{{ features.n_rows }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Distinct Features</div><div class="metric-value stat-number" data-target="{{ features.n_features }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Symbols Covered</div><div class="metric-value stat-number" data-target="{{ features.n_symbols }}" data-decimals="0">0</div></div>
+                <div class="metric-tile">
+                    <div class="metric-label">Verdict Mix</div>
+                    <div class="metric-value small">
+                        {% for verdict, count in features.verdict_counts.items %}
+                        <span class="badge {{ verdict|verdict_class }}">{{ verdict }} {{ count }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Feature</th><th class="num">IC</th><th>Direction</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in features.rows|slice:":150" %}
+                        <tr>
+                            <td class="label-cell">{{ r.symbol }}</td>
+                            <td class="label-cell">{{ r.feature }}</td>
+                            <td class="num stat-number {% if r.ic_overall > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.ic_overall }}" data-decimals="4">0</td>
+                            <td class="text-dim">{{ r.direction }}</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if features.n_rows > 150 %}<div class="chart-caption">Showing 150 of {{ features.n_rows }} feature×symbol rows.</div>{% endif %}
+            {% else %}
+            <div class="unavailable">{{ features.reason }} — requires: {{ features.requires }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 3. FEATURE STABILITY ANALYSIS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">3 · Feature Stability Analysis</span>
+        </div>
+        <div class="term-section-body">
+            {% if stability.basic_available %}
+            <div class="chart-caption" style="margin-bottom:10px">stability_std = dispersion of a feature's IC across sub-periods (computed by feature_validator.py). Flagged UNSTABLE above |0.15| — the rest are ranked by validity only, not a stability score.</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Feature</th><th class="num">IC</th><th class="num">Stability σ</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in stability.rows|slice:":150" %}
+                        <tr>
+                            <td class="label-cell">{{ r.symbol }}</td>
+                            <td class="label-cell">{{ r.feature }}</td>
+                            <td class="num stat-number {% if r.ic_overall > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.ic_overall }}" data-decimals="4">0</td>
+                            <td class="num stat-number {% if r.stability_std > 0.15 %}warn{% endif %}" data-target="{{ r.stability_std|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No validated_features.csv found</div>
+            {% endif %}
+            <div class="hairline"></div>
+            <div class="unavailable">
+                Per-window / yearly stability breakdown: {% if stability.deep_available %}available ({{ stability.deep_files|join:", " }}){% else %}not yet computed — requires: {{ stability.deep_requires }}{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 4. PREDICTIVE POWER ANALYSIS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">4 · Predictive Power Analysis</span>
+            <span class="term-section-meta">statistical significance, not a score</span>
+        </div>
+        <div class="term-section-body">
+            {% if predictive_power.available %}
+            <div class="term-grid term-grid-3" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Features Evaluated</div><div class="metric-value stat-number" data-target="{{ predictive_power.n_total }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Economically Significant</div><div class="metric-value stat-number" data-target="{{ predictive_power.n_econ_significant }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Pass FDR Correction</div><div class="metric-value stat-number {% if predictive_power.n_passes_fdr == 0 %}neg{% endif %}" data-target="{{ predictive_power.n_passes_fdr }}" data-decimals="0">0</div></div>
+            </div>
+            <div class="chart-caption" style="margin-bottom:10px">Ranked by |IC| (Spearman information coefficient). p-values are Mann-Whitney with Bonferroni and Benjamini-Hochberg (FDR) multiple-testing correction already applied by feature_validator.py.</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Feature</th><th class="num">IC</th><th class="num">p (FDR)</th><th>Passes FDR</th><th>Passes Bonferroni</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in predictive_power.top_by_ic %}
+                        <tr>
+                            <td class="label-cell">{{ r.symbol }}</td>
+                            <td class="label-cell">{{ r.feature }}</td>
+                            <td class="num stat-number {% if r.ic_overall > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.ic_overall }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ r.p_fdr|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td>{% if r.passes_fdr %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td>{% if r.passes_bonferroni %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ predictive_power.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 5. CROSS-ASSET ANALYSIS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">5 · Cross-Asset Analysis</span>
+            <span class="term-section-meta">source: cointegration_pairs.csv</span>
+        </div>
+        <div class="term-section-body">
+            {% if cross_asset.cointegration.available %}
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Pairs Tested</div><div class="metric-value stat-number" data-target="{{ cross_asset.cointegration.n_pairs }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Cointegrated</div><div class="metric-value stat-number" data-target="{{ cross_asset.cointegration.n_cointegrated }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Pass All Filters</div><div class="metric-value stat-number {% if cross_asset.cointegration.n_passes_filters == 0 %}neg{% endif %}" data-target="{{ cross_asset.cointegration.n_passes_filters }}" data-decimals="0">0</div></div>
+                <div class="metric-tile">
+                    <div class="metric-label">Verdict Mix</div>
+                    <div class="metric-value small">
+                        {% for verdict, count in cross_asset.cointegration.verdict_counts.items %}
+                        <span class="badge {{ verdict|verdict_class }}">{{ verdict }} {{ count }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="chart-caption" style="margin-bottom:10px">Sorted by cointegration p-value (strongest statistical relationship first). UNSTABLE = cointegrated but fails the half-life/tradeability filter (spread reverts too slowly for this pipeline's timeframe).</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">Coint. p-value</th><th class="num">Half-life (h)</th><th class="num">Hedge Ratio</th><th>Verdict</th><th>Reason</th></tr></thead>
+                    <tbody>
+                        {% for r in cross_asset.cointegration.top_pairs %}
+                        <tr>
+                            <td class="label-cell">{{ r.pair_name }}</td>
+                            <td class="num stat-number" data-target="{{ r.coint_pvalue }}" data-decimals="5">0</td>
+                            <td class="num stat-number {% if r.half_life_hours > 120 %}warn{% endif %}" data-target="{{ r.half_life_hours }}" data-decimals="1">0</td>
+                            <td class="num stat-number" data-target="{{ r.hedge_ratio }}" data-decimals="3">0</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                            <td class="text-dim">{{ r.reject_reason|default:"—" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ cross_asset.cointegration.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 6. REGIME ANALYSIS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">6 · Regime Analysis</span>
+            <span class="term-section-meta">source: cached backtest, {{ symbol }}</span>
+        </div>
+        <div class="term-section-body">
+            {% if regime.available %}
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Performance by Regime</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Regime</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
+                            <tbody>
+                                {% for regime_name, d in regime.regime_breakdown.items %}
+                                <tr>
+                                    <td class="label-cell">{{ regime_name }}</td>
+                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Candle Classification Distribution</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Route</th><th class="num">Count</th><th class="num">%</th></tr></thead>
+                            <tbody>
+                                {% for route, d in regime.route_stats.route_breakdown.items %}
+                                <tr>
+                                    <td class="label-cell">{{ route }}</td>
+                                    <td class="num stat-number" data-target="{{ d.count }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ d.percentage }}" data-decimals="1" data-suffix="%">0%</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ regime.reason }} — load {{ symbol }} on the Terminal dashboard first, then return here.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 7. STRATEGY COMPARISON ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">7 · Strategy Comparison</span>
+            <span class="term-section-meta">source: walk_forward_leaderboard.csv</span>
+        </div>
+        <div class="term-section-body">
+            {% if strategy_comparison.leaderboard.available %}
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">OOS Trades</th><th class="num">OOS Win %</th><th class="num">OOS Sharpe</th><th class="num">OOS Profit Factor</th><th class="num">WF Efficiency</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in strategy_comparison.leaderboard.rows %}
+                        <tr>
+                            <td class="label-cell">{{ r.pair_name }}</td>
+                            <td class="num stat-number" data-target="{{ r.oos_trades }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ r.oos_win_rate }}" data-decimals="3">0</td>
+                            <td class="num stat-number {% if r.oos_sharpe > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.oos_sharpe }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ r.oos_profit_factor }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ r.walk_forward_efficiency }}" data-decimals="3">0</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">walk_forward_leaderboard.csv unavailable</div>
+            {% endif %}
+
+            {% if strategy_comparison.strategy_summaries %}
+            <div class="metric-label" style="margin-bottom:6px">Full-Period Strategy Summaries</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">Profit Factor</th><th class="num">Sharpe</th><th class="num">Entry IC</th><th class="num">Entry IC p-value</th></tr></thead>
+                    <tbody>
+                        {% for s in strategy_comparison.strategy_summaries %}
+                        <tr>
+                            <td class="label-cell">{{ s.pair }}</td>
+                            <td class="num stat-number" data-target="{{ s.n_total_trades|default_if_none:0 }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ s.win_rate|default_if_none:0 }}" data-decimals="3">0</td>
+                            <td class="num stat-number" data-target="{{ s.profit_factor|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if s.sharpe_ratio > 0 %}pos{% else %}neg{% endif %}" data-target="{{ s.sharpe_ratio|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if s.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ s.entry_ic|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ s.entry_ic_pvalue|default_if_none:0 }}" data-decimals="4">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 8. BACKTEST RESULTS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">8 · Backtest Results</span>
+        </div>
+        <div class="term-section-body">
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Live Backtest — {{ symbol }}</div>
+                    {% if backtest.live %}
+                    <div class="term-grid term-grid-2">
+                        <div class="metric-tile"><div class="metric-label">Total Trades</div><div class="metric-value stat-number" data-target="{{ backtest.live.total_trades }}" data-decimals="0">0</div></div>
+                        <div class="metric-tile"><div class="metric-label">Sharpe</div><div class="metric-value stat-number {% if backtest.live.sharpe_ratio > 0 %}pos{% else %}neg{% endif %}" data-target="{{ backtest.live.sharpe_ratio }}" data-decimals="2">0</div></div>
+                        <div class="metric-tile"><div class="metric-label">Profit Factor</div><div class="metric-value stat-number" data-target="{{ backtest.live.profit_factor }}" data-decimals="2">0</div></div>
+                        <div class="metric-tile"><div class="metric-label">Max Drawdown</div><div class="metric-value stat-number neg" data-target="{{ backtest.live.max_drawdown }}" data-decimals="2" data-suffix="%">0%</div></div>
+                    </div>
+                    {% else %}
+                    <div class="unavailable">No cached backtest for {{ symbol }} — load it on the Terminal dashboard first.</div>
+                    {% endif %}
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Walk-Forward OOS Simulations (research pairs)</div>
+                    {% if backtest.oos_pairs %}
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Pair</th><th class="num">OOS Trades</th><th class="num">Final Equity</th><th class="num">Max DD</th></tr></thead>
+                            <tbody>
+                                {% for p in backtest.oos_pairs %}
+                                <tr>
+                                    <td class="label-cell">{{ p.pair }}</td>
+                                    <td class="num stat-number" data-target="{{ p.n_oos_trades|default_if_none:0 }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ p.final_equity|default_if_none:0 }}" data-decimals="2">0</td>
+                                    <td class="num stat-number neg" data-target="{{ p.max_drawdown_pct|default_if_none:0 }}" data-decimals="3">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="unavailable">No walk-forward OOS output found</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 9. ROBUSTNESS TESTING ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">9 · Robustness Testing</span>
+            <span class="term-section-meta">source: permutation_test_engine.py, {{ robustness.n_shuffles_per_pair }} shuffles/pair</span>
+        </div>
+        <div class="term-section-body">
+            {% if robustness.available %}
+            <div class="chart-caption" style="margin-bottom:10px">The strictest test in the pipeline: the real (unshuffled) result must beat {{ robustness.n_shuffles_per_pair }} randomized re-simulations on win rate, Sharpe, and profit factor, AND show a meaningfully positive entry IC. This is the test that overrides an earlier PROMISING walk-forward pass if the edge doesn't hold up here.</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">Real Win %</th><th class="num">Win % Percentile</th><th class="num">Real Sharpe</th><th class="num">Sharpe Percentile</th><th class="num">Entry IC</th><th>IC Meaningfully +</th><th>Edge Appears Real</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in robustness.rows %}
+                        <tr>
+                            <td class="label-cell">{{ r.pair }}</td>
+                            <td class="num stat-number" data-target="{{ r.win_rate }}" data-decimals="3">0</td>
+                            <td class="num stat-number {% if r.win_rate_percentile <= 5 %}neg{% endif %}" data-target="{{ r.win_rate_percentile }}" data-decimals="1">0</td>
+                            <td class="num stat-number" data-target="{{ r.sharpe_ratio }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if r.sharpe_ratio_percentile <= 5 %}neg{% endif %}" data-target="{{ r.sharpe_ratio_percentile }}" data-decimals="1">0</td>
+                            <td class="num stat-number {% if r.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.entry_ic }}" data-decimals="4">0</td>
+                            <td>{% if r.real_entry_ic_meaningfully_positive %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td>{% if r.edge_appears_real %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No permutation_verdict.csv found under research_data/permutation_test/</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= 10. RESEARCH CONCLUSIONS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">10 · Research Conclusions</span>
+            <span class="term-section-meta">source: model_governance_log.md</span>
+        </div>
+        <div class="term-section-body">
+            {% if conclusions.available %}
+            <div class="chart-caption" style="margin-bottom:10px">The project's own written go/no-go decision log — {{ conclusions.n_entries }} entries. This is the authoritative verdict: it synthesizes cointegration, walk-forward, and permutation-test results (sections 5, 7, 9 above) into one accepted/rejected call, explaining WHY, not just what the numbers were.</div>
+            {% for e in conclusions.entries %}
+            <div class="term-panel" style="margin-bottom:10px">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                    <span style="font-weight:600">{{ e.title }}</span>
+                    <span><span class="badge {{ e.verdict_tag|verdict_class }}">{{ e.verdict_tag }}</span> <span class="text-dim mono" style="margin-left:8px">{{ e.date|default:"—" }}</span></span>
+                </div>
+                {% if e.verdict_text %}<div class="text-secondary" style="margin-bottom:6px"><strong>Verdict:</strong> {{ e.verdict_text }}</div>{% endif %}
+                <div class="text-dim" style="white-space:pre-line; font-size:12px">{{ e.excerpt }}</div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="unavailable">{{ conclusions.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<div class="term-footer">
+    <span>Quant Bot Pro — Research Lab</span>
+    <span class="mono">reading research_data/ + data/ directly, offline pipeline</span>
+</div>
+
+<script>
+    // claude code changed: same count-up animation system as the main
+    // dashboard (templates/dashboard.html) — kept consistent site-wide.
+    function formatNumber(num, decimals) {
+        if (!isFinite(num)) return "0";
+        return Number(num).toFixed(decimals);
+    }
+
+    function animateCounter(el) {
+        var target = parseFloat(el.getAttribute("data-target"));
+        if (isNaN(target)) return;
+
+        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
+        var suffix = el.getAttribute("data-suffix") || "";
+        var duration = 900;
+        var startTime = performance.now();
+
+        function step(now) {
+            var progress = Math.min((now - startTime) / duration, 1);
+            var current = target * progress;
+            el.textContent = formatNumber(current, decimals) + suffix;
+            if (progress < 1) {
+                requestAnimationFrame(step);
+            } else {
+                el.textContent = formatNumber(target, decimals) + suffix;
+            }
+        }
+        requestAnimationFrame(step);
+    }
+
+    function animateAllCounters() {
+        document.querySelectorAll(".stat-number").forEach(animateCounter);
+    }
+
+    document.addEventListener("DOMContentLoaded", animateAllCounters);
+    setInterval(animateAllCounters, 5000);
+</script>
+
+{% endblock %}

@@ -1,0 +1,175 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load feature_intel_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Feature Comparison interface.
+   Pick 2-6 features from the real registry (bot/views/feature_intelligence_data.py)
+   and see their real metrics side by side, plus an overlaid mean-yearly-IC
+   chart. Nothing here is a fabricated composite score — every row is a
+   real field, or "Not calculated" if the backend never computed it for
+   that feature's family.
+{% endcomment %}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<div class="term-topbar">
+    <div class="term-brand">
+        <span class="term-brand-name">QUANT BOT PRO</span>
+        <span class="term-brand-sub">Feature Comparison</span>
+    </div>
+    <div class="term-topbar-right">
+        <a href="{% url 'feature_leaderboard' %}" class="term-btn">← Leaderboard</a>
+        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
+    </div>
+</div>
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Select Features to Compare</span>
+        </div>
+        <div class="term-section-body">
+            <form method="get" action=".">
+                <div class="term-grid term-grid-6" style="margin-bottom:14px">
+                    {% for name in comparison.all_feature_names %}
+                    <label class="text-dim" style="display:flex; align-items:center; gap:6px; font-size:12px">
+                        <input type="checkbox" name="f" value="{{ name }}" {% if name in selected %}checked{% endif %}>
+                        {{ name }}
+                    </label>
+                    {% endfor %}
+                </div>
+                <button type="submit" class="term-btn">Compare Selected</button>
+            </form>
+            {% if comparison.missing %}
+            <div class="unavailable" style="margin-top:10px">Not found in registry: {{ comparison.missing|join:", " }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if comparison.rows %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Side-by-Side</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead>
+                        <tr>
+                            <th>Metric</th>
+                            {% for r in comparison.rows %}<th>{{ r.feature }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td class="label-cell">Family</td>{% for r in comparison.rows %}<td class="text-dim">{{ r.family }}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Status</td>{% for r in comparison.rows %}<td><span class="badge {{ r.status|status_class }}">{{ r.status }}</span></td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Coverage</td>{% for r in comparison.rows %}<td class="text-dim">{{ r.n_symbols_covered }}/{{ r.n_symbols_total }}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Mean |IC|</td>{% for r in comparison.rows %}<td class="num">{% if r.mean_abs_ic != None %}{{ r.mean_abs_ic|floatformat:4 }}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Stability &sigma;</td>{% for r in comparison.rows %}<td class="num">{% if r.stability_std_mean != None %}{{ r.stability_std_mean|floatformat:4 }}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Sharpe Contribution</td>{% for r in comparison.rows %}<td class="num">{% if r.sharpe_contrib_mean != None %}{{ r.sharpe_contrib_mean|floatformat:2 }}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Decay Trend</td>{% for r in comparison.rows %}<td class="text-dim">{% if r.trend %}{{ r.trend }}{% elif r.trend_counts %}{% for t,c in r.trend_counts.items %}{{ t }}({{ c }}) {% endfor %}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Passes FDR</td>{% for r in comparison.rows %}<td class="num">{{ r.n_passes_fdr }}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Correlation Available</td>{% for r in comparison.rows %}<td>{% if r.correlation_available %}<span class="badge pos">YES</span>{% else %}<span class="badge dim">no</span>{% endif %}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Detail</td>{% for r in comparison.rows %}<td><a href="{% url 'feature_detail' r.feature %}">view →</a></td>{% endfor %}</tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Stability Overlay — Mean Yearly IC</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-box" style="height:260px"><canvas id="comparisonChart"></canvas></div>
+        </div>
+    </div>
+    {% else %}
+    <div class="unavailable">Select at least one feature above and click Compare.</div>
+    {% endif %}
+
+</div>
+
+<div class="term-footer">
+    <span>Quant Bot Pro — Feature Intelligence</span>
+    <span class="mono">comparing {{ comparison.rows|length }} feature(s)</span>
+</div>
+
+<script>
+// claude code changed: chart colors are baked in at creation time via
+// getComputedStyle, so a bare theme flip left this stuck on the old
+// palette. renderComparisonChart() destroys and recreates it reading
+// fresh CSS variables. Re-render is triggered by a MutationObserver on
+// data-theme rather than shadowing toggleTheme() — base.html's own
+// trailing script tag sits after this page's content in the rendered
+// DOM and executes second, so any redefinition of toggleTheme() made
+// here would silently get clobbered and never run (confirmed:
+// dashboard.html's existing shadow has this same problem). Watching the
+// attribute directly works no matter which toggleTheme ends up bound.
+var comparisonChartInstance = null;
+
+function renderComparisonChart() {
+    var chartCtx = document.getElementById("comparisonChart");
+    if (!chartCtx) return;
+
+    if (comparisonChartInstance) {
+        comparisonChartInstance.destroy();
+        comparisonChartInstance = null;
+    }
+
+    var series = {{ series_json|safe }};
+    var style = getComputedStyle(document.documentElement);
+    var palette = [
+        style.getPropertyValue("--neutral").trim(),
+        style.getPropertyValue("--positive").trim(),
+        style.getPropertyValue("--negative").trim(),
+        style.getPropertyValue("--warning").trim(),
+        style.getPropertyValue("--text-dim").trim(),
+        style.getPropertyValue("--border-strong").trim(),
+    ];
+    var allYears = new Set();
+    series.forEach(function (s) { Object.keys(s.data).forEach(function (y) { allYears.add(y); }); });
+    var years = Array.from(allYears).sort();
+    comparisonChartInstance = new Chart(chartCtx, {
+        type: "line",
+        data: {
+            labels: years,
+            datasets: series.map(function (s, i) {
+                return {
+                    label: s.feature,
+                    data: years.map(function (y) { return s.data[y] !== undefined ? s.data[y] : null; }),
+                    borderColor: palette[i % palette.length],
+                    backgroundColor: "transparent",
+                    borderWidth: 1.5,
+                    pointRadius: 2,
+                    spanGaps: true,
+                };
+            })
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: true, labels: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } } } },
+            scales: {
+                x: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } },
+                y: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } }
+            }
+        }
+    });
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    renderComparisonChart();
+    new MutationObserver(renderComparisonChart).observe(
+        document.documentElement,
+        { attributes: true, attributeFilter: ["data-theme"] }
+    );
+});
+</script>
+
+{% endblock %}

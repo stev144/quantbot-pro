@@ -1,0 +1,45 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Quant Bot Pro — Research Terminal{% endblock %}</title>
+
+    {# claude code changed: full rewrite — this used to load Bootstrap, FontAwesome, #}
+    {# Google Fonts (Poppins), and AOS from four separate CDNs, plus contained a #}
+    {# particle-effect canvas, rotating typed-text hero, glassmorphism navbar with #}
+    {# dead links (Login/Create Account/Referrals/Social — none ever routed anywhere), #}
+    {# and an inline score-meter animation script. All removed per the institutional- #}
+    {# terminal redesign: no decorative elements, no fake navigation. The only asset #}
+    {# this page needs is its own stylesheet. #}
+    <link rel="stylesheet" href="{% static 'css/terminal.css' %}">
+</head>
+
+<body class="term">
+    {% block content %}{% endblock %}
+
+    <script>
+        // claude code changed: new — functional theme toggle (persisted via
+        // localStorage), replacing the removed decorative scripts. This is
+        // the only JS base.html carries; page-specific behavior lives in
+        // each template's own script block.
+        (function () {
+            var stored = localStorage.getItem("term-theme");
+            if (stored) {
+                document.documentElement.setAttribute("data-theme", stored);
+            }
+        })();
+
+        function toggleTheme() {
+            var root = document.documentElement;
+            var current = root.getAttribute("data-theme");
+            var next = current === "light" ? "dark" : "light";
+            root.setAttribute("data-theme", next);
+            localStorage.setItem("term-theme", next);
+        }
+    </script>
+</body>
+
+</html>

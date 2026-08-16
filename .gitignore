@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment (see CLAUDE.md: deps live only in venv/, no requirements.txt)
+venv/
+
+# Django
+db.sqlite3
+
+# Bot runtime output (regenerable)
+bot/cache/*.pkl
+logs/
+trades.log
+
+# Research pipeline output (regenerable via fetch_all_symbols.py + run_research_all.py;
+# large — one observations.csv alone is ~224MB, plus 100-shuffle permutation-test folders)
+data/
+research_data/
+
+# Claude Code local/machine-specific state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Stray empty debug artifacts (see CLAUDE.md "Notable repo quirks" — leftover
+# shell-redirection mistakes, not part of the app)
+/0
+/0)
+/5
+/50
+/dict
+/float
+/str
+/tp
+/latest_ema50
+/prev_ema50
+/pd.DataFrame

@@ -1,0 +1,306 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load feature_intel_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Feature Intelligence detail page.
+   One feature, every real metric bot/research/* has computed for it:
+   predictive power (per-symbol IC/significance), stability visualization
+   (mean yearly IC trend — feature_decay_analyzer.py / feature_stability_
+   analyzer.py), regime dependency (feature_decay_analyzer.py's real
+   historical-regime breakdown), decay trend, correlation/redundancy
+   (computed live from {symbol}_observations.csv), asset coverage, and
+   research status with its exact rationale. Anything not computed for
+   this feature's family shows "Not calculated" — never a placeholder
+   number.
+{% endcomment %}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<div class="term-topbar">
+    <div class="term-brand">
+        <span class="term-brand-name">QUANT BOT PRO</span>
+        <span class="term-brand-sub">Feature Intelligence — {{ feature_name }}</span>
+    </div>
+    <div class="term-topbar-right">
+        <a href="{% url 'feature_leaderboard' %}" class="term-btn">← Leaderboard</a>
+        <a href="{% url 'feature_comparison' %}?f={{ feature_name }}" class="term-btn">Compare</a>
+        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
+    </div>
+</div>
+
+<div class="term-body">
+
+    <!-- ================= HEADER / STATUS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ feature_name }}</span>
+            <span class="term-section-meta">family: {{ detail.family }}</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Research Status</div>
+                    <div class="metric-value small"><span class="badge {{ detail.status|status_class }}">{{ detail.status }}</span></div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Asset Coverage</div>
+                    <div class="metric-value small">{{ detail.n_symbols_covered }}/{{ detail.n_symbols_total }}</div>
+                </div>
+                {% if detail.mean_abs_ic != None %}
+                <div class="metric-tile">
+                    <div class="metric-label">Mean |IC|</div>
+                    <div class="metric-value stat-number" data-target="{{ detail.mean_abs_ic }}" data-decimals="4">0</div>
+                </div>
+                {% else %}
+                <div class="metric-tile"><div class="metric-label">Mean |IC|</div><div class="metric-value small text-dim">Not calculated</div></div>
+                {% endif %}
+                {% if detail.sharpe_contrib_mean != None %}
+                <div class="metric-tile">
+                    <div class="metric-label">Historical Performance (Sharpe)</div>
+                    <div class="metric-value stat-number {% if detail.sharpe_contrib_mean > 0 %}pos{% elif detail.sharpe_contrib_mean < 0 %}neg{% endif %}" data-target="{{ detail.sharpe_contrib_mean }}" data-decimals="2">0</div>
+                </div>
+                {% else %}
+                <div class="metric-tile"><div class="metric-label">Historical Performance (Sharpe)</div><div class="metric-value small text-dim">Not calculated</div></div>
+                {% endif %}
+            </div>
+            <div class="chart-caption"><strong>Why this status:</strong> {{ detail.status_rationale }}</div>
+        </div>
+    </div>
+
+    <!-- ================= PREDICTIVE POWER ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Predictive Power</span>
+            <span class="term-section-meta">source: feature_validator.py</span>
+        </div>
+        <div class="term-section-body">
+            {% if detail.validator_rows %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th class="num">IC</th><th>IC Rank</th><th class="num">p (FDR)</th><th>Passes FDR</th><th>Passes Bonferroni</th><th>Recommendation</th><th>Direction</th></tr></thead>
+                    <tbody>
+                        {% for r in detail.validator_rows %}
+                        <tr>
+                            <td class="label-cell">{{ r.symbol|default:"cross-sectional universe" }}</td>
+                            <td class="num stat-number {% if r.ic_overall > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.ic_overall }}" data-decimals="4">0</td>
+                            <td class="text-dim">{{ r.ic_rank }}</td>
+                            <td class="num stat-number" data-target="{{ r.p_fdr|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td>{% if r.passes_fdr %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td>{% if r.passes_bonferroni %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td class="text-dim">{{ r.recommendation }}</td>
+                            <td class="text-dim">{{ r.direction }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">Not calculated — no feature_validator.py output for this feature.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="two-col">
+        <!-- ================= STABILITY VISUALIZATION ================= -->
+        <div class="term-section">
+            <div class="term-section-head">
+                <span class="term-section-title">Feature Stability — Yearly IC</span>
+            </div>
+            <div class="term-section-body">
+                {% if detail.mean_yearly_ic %}
+                <div class="chart-caption" style="margin-bottom:8px">
+                    Mean Spearman IC per calendar year, averaged across {{ detail.n_symbols_covered }} covered symbol(s).
+                    Source: {% if detail.family == "PAIR_SPREAD" %}feature_stability_analyzer.py{% else %}feature_decay_analyzer.py{% endif %}.
+                </div>
+                <div class="chart-box" style="height:220px"><canvas id="stabilityChart"></canvas></div>
+                {% else %}
+                <div class="unavailable">Not calculated — requires a feature_decay_analyzer.py or feature_stability_analyzer.py run for this feature.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- ================= FEATURE DECAY ================= -->
+        <div class="term-section">
+            <div class="term-section-head">
+                <span class="term-section-title">Feature Decay</span>
+            </div>
+            <div class="term-section-body">
+                {% if detail.trend_counts or detail.trend %}
+                <div class="metric-label" style="margin-bottom:6px">Trend Classification (per symbol)</div>
+                <div style="margin-bottom:10px">
+                    {% if detail.trend %}<span class="badge dim">{{ detail.trend }}</span>{% endif %}
+                    {% for t, c in detail.trend_counts.items %}<span class="badge dim">{{ t }} &times;{{ c }}</span> {% endfor %}
+                </div>
+                <div class="metric-label" style="margin-bottom:6px">Most Recent Year Grade</div>
+                <div>{% for g, c in detail.latest_year_grades.items %}<span class="badge dim">{{ g }} &times;{{ c }}</span> {% endfor %}</div>
+                {% else %}
+                <div class="unavailable">Not calculated — requires bot/research/feature_decay_analyzer.py for this feature.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= REGIME DEPENDENCY ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Performance by Regime</span>
+            <span class="term-section-meta">source: feature_decay_analyzer.py real historical-regime breakdown</span>
+        </div>
+        <div class="term-section-body">
+            {% if detail.regime_ic %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Regime</th><th>Context</th><th class="num">Mean IC</th><th class="num">Symbols</th><th class="num">% Significant</th></tr></thead>
+                    <tbody>
+                        {% for regime_name, d in detail.regime_ic.items %}
+                        <tr>
+                            <td class="label-cell">{{ regime_name }}</td>
+                            <td class="text-dim">{{ d.context }}</td>
+                            <td class="num stat-number {% if d.mean_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ d.mean_ic }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ d.n_symbols }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ d.pct_significant }}" data-decimals="1" data-suffix="%">0%</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">Not calculated — regime dependency is only available for SINGLE_ASSET_INDICATOR features run through feature_decay_analyzer.py.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= CORRELATION / REDUNDANCY ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Correlation / Redundancy</span>
+            <span class="term-section-meta">computed live from real candle data — not a backend file</span>
+        </div>
+        <div class="term-section-body">
+            {% if detail.correlation.available %}
+            <form method="get" action="." style="margin-bottom:10px">
+                <label class="text-dim">Reference symbol:</label>
+                <select name="symbol" class="term-input mono" onchange="this.form.submit()">
+                    {% for s in symbols %}
+                    <option value="{{ s }}" {% if s == correlation_symbol %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            <div class="chart-caption" style="margin-bottom:8px">Pearson correlation against every other single-asset indicator, computed from {{ correlation_symbol }}_observations.csv. |corr| &ge; 0.8 is flagged as a redundancy candidate.</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Feature</th><th class="num">Correlation</th><th>Redundant?</th></tr></thead>
+                    <tbody>
+                        {% for p in detail.correlation.top %}
+                        <tr>
+                            <td class="label-cell"><a href="{% url 'feature_detail' p.feature %}">{{ p.feature }}</a></td>
+                            <td class="num stat-number {% if p.corr > 0 %}pos{% else %}neg{% endif %}" data-target="{{ p.corr }}" data-decimals="4">0</td>
+                            <td>{% if p.corr >= 0.8 or p.corr <= -0.8 %}<span class="badge warn">YES</span>{% else %}<span class="badge dim">no</span>{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="chart-caption" style="margin-top:8px"><a href="{% url 'feature_correlation' %}?symbol={{ correlation_symbol }}">View full correlation matrix →</a></div>
+            {% else %}
+            <div class="unavailable">Not calculated — correlation is only computed for SINGLE_ASSET_INDICATOR features (requires a real {{ feature_name }}_observations.csv column).</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<div class="term-footer">
+    <span>Quant Bot Pro — Feature Intelligence</span>
+    <span class="mono">{{ feature_name }}</span>
+</div>
+
+<script>
+    function formatNumber(num, decimals) {
+        if (!isFinite(num)) return "0";
+        return Number(num).toFixed(decimals);
+    }
+    function animateCounter(el) {
+        var target = parseFloat(el.getAttribute("data-target"));
+        if (isNaN(target)) return;
+        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
+        var suffix = el.getAttribute("data-suffix") || "";
+        var startTime = performance.now();
+        var duration = 900;
+        function step(now) {
+            var progress = Math.min((now - startTime) / duration, 1);
+            el.textContent = formatNumber(target * progress, decimals) + suffix;
+            if (progress < 1) requestAnimationFrame(step);
+            else el.textContent = formatNumber(target, decimals) + suffix;
+        }
+        requestAnimationFrame(step);
+    }
+    // claude code changed: chart colors are baked in at creation time via
+    // getComputedStyle, so a bare theme flip left this chart stuck on the
+    // old palette (same issue dashboard.html already solved for its
+    // equity/drawdown charts). renderStabilityChart() destroys and
+    // recreates the chart reading fresh CSS variables; toggleTheme() below
+    // shadows base.html's version so the flip actually triggers a redraw.
+    var stabilityChartInstance = null;
+
+    function renderStabilityChart() {
+        var stabilityCtx = document.getElementById("stabilityChart");
+        if (!stabilityCtx) return;
+
+        if (stabilityChartInstance) {
+            stabilityChartInstance.destroy();
+            stabilityChartInstance = null;
+        }
+
+        var yearlyIc = {{ detail.mean_yearly_ic|safe|default:"{}" }};
+        var years = Object.keys(yearlyIc);
+        var values = years.map(function (y) { return yearlyIc[y]; });
+        var style = getComputedStyle(document.documentElement);
+        stabilityChartInstance = new Chart(stabilityCtx, {
+            type: "line",
+            data: {
+                labels: years,
+                datasets: [{
+                    label: "Mean IC",
+                    data: values,
+                    borderColor: style.getPropertyValue("--neutral").trim(),
+                    backgroundColor: "transparent",
+                    borderWidth: 1.5,
+                    pointRadius: 3,
+                    tension: 0,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } },
+                    y: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } }
+                }
+            }
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll(".stat-number").forEach(animateCounter);
+        renderStabilityChart();
+
+        // claude code changed: was going to shadow base.html's global
+        // toggleTheme() (like dashboard.html does), but base.html's own
+        // trailing script tag sits after this page's content in the
+        // rendered DOM, so it executes second and silently clobbers any
+        // redefinition made here — the shadow never actually runs.
+        // Watching the attribute directly sidesteps script-order
+        // entirely and works no matter which toggleTheme ends up bound.
+        new MutationObserver(renderStabilityChart).observe(
+            document.documentElement,
+            { attributes: true, attributeFilter: ["data-theme"] }
+        );
+    });
+</script>
+
+{% endblock %}
