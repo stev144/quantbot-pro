@@ -21,6 +21,13 @@ import logging    # Structured logging — consistent with rest of system
 # NOT Trade — that is the backtester's in-memory object
 from bot.journal.models import TradeRecord
 
+# claude code changed: new import — Phase 4 (DB persistence of trade
+# provenance). Needed because generate_exit() requires net_pnl/r_multiple/
+# holding_candles, which this class computes internally in log_exit() —
+# those values don't exist yet at ExecutionEngine's call site, so
+# generate_exit() must be invoked from here, after that computation.
+from bot.engines.trade_narrative import TradeNarrativeGenerator
+
 # Create logger specific to this module
 logger = logging.getLogger(__name__)
 
@@ -36,18 +43,33 @@ class TradeLogger:
     The dashboard and analytics views read from these records.
     """
 
+    def __init__(self):
+        # claude code changed: new — Phase 4 (DB persistence of trade
+        # provenance). See log_exit()'s docstring for why generate_exit()
+        # is called from inside this class rather than by ExecutionEngine.
+        self.narrator = TradeNarrativeGenerator()
+
     # ============================================================
     # LOG ENTRY
     # Called by ExecutionEngine after a confirmed entry fill.
     # Creates a new TradeRecord row in the database.
     # ============================================================
-    def log_entry(self, signal, fill_result, risk_amount):
+    def log_entry(self, signal, fill_result, risk_amount, narrative=None):
         """
         Records the opening of a live trade to the database.
 
         signal:      the signal dict from MovingAverageStrategy
         fill_result: the result dict returned by OrderManager
         risk_amount: dollar amount at risk — calculated by ExecutionEngine
+        narrative:   claude code changed: new — Optional[TradeNarrative],
+                     the entry-time narrative from
+                     TradeNarrativeGenerator.generate_entry(). When given,
+                     its research_verdict/production_eligible/
+                     verdict_rejection_reason/entry_narrative fields are
+                     persisted onto the new row. None keeps every new
+                     field at its model default — kept optional so this
+                     signature stays backward-compatible rather than a
+                     hard requirement.
         """
 
         try:
@@ -76,6 +98,12 @@ class TradeLogger:
                 order_id     = fill_result["order_id"],         # exchange order ID
                 rsi_at_entry = signal.get("rsi", 0.0),         # RSI at signal time
                 risk_amount  = risk_amount,                     # dollar risk for R calc
+
+                # ---- Provenance ---- claude code changed: new block — Phase 4
+                research_verdict          = narrative.research_verdict if narrative else "",
+                production_eligible       = narrative.production_eligible if narrative else False,
+                verdict_rejection_reason  = narrative.verdict_rejection_reason if narrative else "",
+                entry_narrative           = narrative.entry_narrative if narrative else "",
 
                 # ---- Status ----
                 # Trade is now live — exit fields are all null at this point
@@ -107,7 +135,7 @@ class TradeLogger:
     # Called by ExecutionEngine after a confirmed exit fill.
     # Finds the open TradeRecord and updates it with exit data.
     # ============================================================
-    def log_exit(self, symbol, exit_result, risk_amount, reason="unknown"):
+    def log_exit(self, symbol, exit_result, risk_amount, reason="unknown", narrative=None):
         """
         Updates the open TradeRecord with exit data and calculated P&L.
 
@@ -115,15 +143,50 @@ class TradeLogger:
         exit_result: result dict returned by OrderManager on exit
         risk_amount: original dollar risk — used to calculate R-Multiple
         reason:      "stop_loss", "take_profit", or "manual"
+        narrative:   claude code changed: new — Optional[TradeNarrative],
+                     the SAME entry-time narrative object log_entry() was
+                     given for this trade. generate_exit() is called here,
+                     not by ExecutionEngine, because it needs net_pnl/
+                     r_multiple/holding_candles — computed below, not yet
+                     available at ExecutionEngine's call site. None skips
+                     exit-narrative completion (record.exit_narrative stays
+                     at its model default).
         """
 
         try:
-            # Find the open TradeRecord for this symbol
-            # .get() raises DoesNotExist if no matching record found
-            record = TradeRecord.objects.get(
-                symbol=symbol,      # match the trading pair
-                status="OPEN"       # only look for open trades
+            # claude code changed: was TradeRecord.objects.get(...), which
+            # raises MultipleObjectsReturned if more than one OPEN row
+            # exists for this symbol — that's now prevented going forward
+            # by the DB-level unique constraint on TradeRecord (see
+            # bot/journal/models.py's Meta.constraints), but this stays
+            # defensive against any row that predates that constraint, or
+            # any other future gap that lets one through. Picks the most
+            # recently created OPEN row as the one actually being closed —
+            # the exit came from ExecutionEngine acting on a real, single
+            # position, so the newest OPEN record is the correct match —
+            # and logs critically so the operator knows duplicate OPEN
+            # rows existed for this symbol and should investigate.
+            candidates = list(
+                TradeRecord.objects.filter(symbol=symbol, status="OPEN").order_by("-id")
             )
+
+            if not candidates:
+                logger.error(
+                    f"[TradeLogger] No OPEN TradeRecord found for {symbol}. "
+                    f"Cannot log exit. Entry may have failed to record. "
+                    f"Check database manually."
+                )
+                return
+
+            if len(candidates) > 1:
+                logger.critical(
+                    f"[TradeLogger] {len(candidates)} OPEN TradeRecords found for "
+                    f"{symbol} (IDs: {[r.id for r in candidates]}) — expected at most "
+                    f"one. Closing the most recent (ID {candidates[0].id}); the "
+                    f"others are left OPEN and need manual investigation."
+                )
+
+            record = candidates[0]
 
             # ---- Calculate Gross P&L ----
             # Gross = before fees are subtracted
@@ -191,6 +254,23 @@ class TradeLogger:
             record.holding_candles = holding_candles                   # duration
             record.status         = outcome                            # WIN or LOSS
 
+            # claude code changed: new block — Phase 4 (DB persistence of
+            # trade provenance). Completes the entry-time narrative with
+            # outcome text now that net_pnl/r_multiple/holding_candles are
+            # known, and persists it. narrative already carries
+            # research_verdict/production_eligible/verdict_rejection_reason
+            # from entry time (set by log_entry() above), so only
+            # exit_narrative needs updating here.
+            if narrative is not None:
+                record.exit_narrative = self.narrator.generate_exit(
+                    narrative,
+                    exit_result["fill_price"],
+                    reason,
+                    net_pnl,
+                    r_multiple,
+                    holding_candles=holding_candles,
+                )
+
             # Save all changes to database in a single operation
             record.save()
 
@@ -203,15 +283,6 @@ class TradeLogger:
                 f"Net: ${net_pnl:.2f} | "
                 f"R: {r_multiple:.2f}R | "
                 f"Reason: {reason}"
-            )
-
-        except TradeRecord.DoesNotExist:
-            # No open TradeRecord found for this symbol
-            # This means log_entry() either failed or was never called
-            logger.error(
-                f"[TradeLogger] No OPEN TradeRecord found for {symbol}. "
-                f"Cannot log exit. Entry may have failed to record. "
-                f"Check database manually."
             )
 
         except Exception as e:

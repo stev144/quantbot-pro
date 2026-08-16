@@ -29,9 +29,10 @@ def research_lab(request):
         "predictive_power": rl.get_predictive_power(),
         "cross_asset": rl.get_cross_asset_analysis(),
         "regime": rl.get_regime_analysis(backtest_results),
-        "strategy_comparison": rl.get_strategy_comparison(),
+        # claude code changed: get_strategy_comparison()/get_robustness_testing()
+        # moved to their own Robustness Analysis page (bot/views/robustness_analysis.py) —
+        # no longer computed here since research_lab.html only links out now.
         "backtest": rl.get_backtest_results(symbol, backtest_results),
-        "robustness": rl.get_robustness_testing(),
         "conclusions": rl.get_research_conclusions(),
     }
 

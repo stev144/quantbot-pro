@@ -315,6 +315,15 @@ def get_strategy_comparison():
     if os.path.exists(leaderboard_path):
         try:
             df = pd.read_csv(leaderboard_path)
+            # claude code changed: walk_forward_engine.py writes oos_win_rate
+            # as a 0-1 fraction (n_winners/n_total), but every other win-rate
+            # field in this app (bot/backtesting/backtester.py's own
+            # win_rate) is 0-100 — the templates all assume 0-100 and append
+            # "%", so a real 69% win rate was rendering as "0.690%". Rescale
+            # here, once, at the data layer, rather than special-casing the
+            # template.
+            if "oos_win_rate" in df.columns:
+                df["oos_win_rate"] = (df["oos_win_rate"] * 100).round(4)
             df["verdict"] = df.apply(classify_walk_forward, axis=1)
             leaderboard = {"available": True, "rows": df.to_dict("records")}
         except Exception as e:
@@ -326,6 +335,11 @@ def get_strategy_comparison():
     for path in summary_files:
         try:
             df = pd.read_csv(path)
+            # claude code changed: same 0-1-vs-0-100 win_rate inconsistency
+            # as oos_win_rate above — entry_exit_engine.py writes win_rate
+            # as a 0-1 fraction here.
+            if "win_rate" in df.columns:
+                df["win_rate"] = (df["win_rate"] * 100).round(4)
             for _, row in df.iterrows():
                 pair = row.get("pair")
                 if pair in seen_pairs:
@@ -418,6 +432,15 @@ def get_robustness_testing():
             df = pd.read_csv(path)
             if len(df):
                 row = df.iloc[0].to_dict()
+                # claude code changed: same 0-1-vs-0-100 win_rate
+                # inconsistency as get_strategy_comparison() above —
+                # permutation_test_engine.py writes win_rate as a 0-1
+                # fraction (its own debug output formats it with ":.1%").
+                # win_rate_percentile is a genuinely different, already
+                # 0-100-scale field (percentile rank vs. the shuffle
+                # distribution) and is left untouched.
+                if "win_rate" in row and row["win_rate"] is not None:
+                    row["win_rate"] = round(row["win_rate"] * 100, 4)
                 row["pair"] = pair_name
                 row["verdict"] = classify_permutation(row)
                 rows.append(row)
@@ -450,13 +473,18 @@ def classify_permutation(row):
 # ============================================================
 # 10. RESEARCH CONCLUSIONS
 # ============================================================
-def get_research_conclusions():
+def get_research_conclusions(verdict_filter=None):
     """
     Real: parses research_data/model_governance_log.md — the project's
     actual, human-written go/no-go decision log (bot/research/* pairs
     trading track). Parsing is structural (splits on '## ' headers,
     extracts **Date:**/**Verdict:** lines) — the reasoning text itself
     is not re-derived or summarized by this function, just extracted.
+
+    claude code changed: added verdict_filter (e.g. "REJECTED") so the
+    Rejected Research page can call this exact function instead of a
+    second parser — Research Archive calls it unfiltered. One data
+    source, two views.
     """
     path = os.path.join(RESEARCH_DATA_DIR, "model_governance_log.md")
     if not os.path.exists(path):
@@ -502,5 +530,8 @@ def get_research_conclusions():
             "verdict_tag": verdict_tag,
             "excerpt": excerpt,
         })
+
+    if verdict_filter:
+        entries = [e for e in entries if e["verdict_tag"] == verdict_filter]
 
     return {"available": True, "entries": entries, "n_entries": len(entries)}

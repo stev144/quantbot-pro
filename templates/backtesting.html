@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load status_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Backtesting. Real in/out-of-sample
+   walk-forward split (bot/views/dashboard.py::run_walk_forward_validation,
+   extracted from the existing walk_forward_view JSON endpoint) plus a
+   per-symbol full-period summary table (backtest() + StrategyScorer,
+   the same classes the Executive Dashboard uses). Verdict rendered
+   through .badge/health_class — the underlying dict's emoji/hex-color
+   fields are not used here.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="backtesting" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Walk-Forward Validation</span>
+            <span class="term-section-meta">60 days, in/out-of-sample split</span>
+        </div>
+        <div class="term-section-body">
+            <form method="get" action="." style="margin-bottom:10px">
+                <label class="text-dim">Symbol:</label>
+                <input type="text" name="symbol" class="term-input mono" value="{{ symbol }}">
+                <label class="text-dim">In-sample split:</label>
+                <input type="text" name="split" class="term-input mono" style="width:70px" value="{{ split }}">
+                <button type="submit" class="term-btn">Run</button>
+            </form>
+
+            {% if walk_forward.success %}
+            <div class="term-grid term-grid-2" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Verdict</div>
+                    <div class="metric-value small"><span class="badge {{ walk_forward.verdict.status|health_class }}">{{ walk_forward.verdict.status }}</span> <span class="text-dim">grade {{ walk_forward.verdict.grade }}</span></div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Split</div>
+                    <div class="metric-value small">{{ walk_forward.split_pct }}% in-sample / {{ walk_forward.in_sample.days }}d in, {{ walk_forward.out_sample.days }}d out</div>
+                </div>
+            </div>
+            <div class="chart-caption" style="margin-bottom:12px">{{ walk_forward.verdict.message }}</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Metric</th><th class="num">In-Sample</th><th class="num">Out-of-Sample</th><th class="num">Degradation</th></tr></thead>
+                    <tbody>
+                        <tr><td class="label-cell">Trades</td><td class="num">{{ walk_forward.in_sample.metrics.total_trades }}</td><td class="num">{{ walk_forward.out_sample.metrics.total_trades }}</td><td class="num text-dim">—</td></tr>
+                        <tr><td class="label-cell">Win Rate</td><td class="num">{{ walk_forward.in_sample.metrics.win_rate }}%</td><td class="num">{{ walk_forward.out_sample.metrics.win_rate }}%</td><td class="num {% if walk_forward.degradations.win_rate < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.win_rate }}%</td></tr>
+                        <tr><td class="label-cell">Profit Factor</td><td class="num">{{ walk_forward.in_sample.metrics.profit_factor }}</td><td class="num">{{ walk_forward.out_sample.metrics.profit_factor }}</td><td class="num {% if walk_forward.degradations.profit_factor < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.profit_factor }}%</td></tr>
+                        <tr><td class="label-cell">Expectancy (R)</td><td class="num">{{ walk_forward.in_sample.metrics.expectancy_r }}</td><td class="num">{{ walk_forward.out_sample.metrics.expectancy_r }}</td><td class="num {% if walk_forward.degradations.expectancy_r < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.expectancy_r }}%</td></tr>
+                        <tr><td class="label-cell">Max Drawdown</td><td class="num">{{ walk_forward.in_sample.metrics.max_drawdown }}%</td><td class="num">{{ walk_forward.out_sample.metrics.max_drawdown }}%</td><td class="num {% if walk_forward.degradations.max_drawdown < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.max_drawdown }}%</td></tr>
+                        <tr><td class="label-cell">Sharpe</td><td class="num">{{ walk_forward.in_sample.metrics.sharpe }}</td><td class="num">{{ walk_forward.out_sample.metrics.sharpe }}</td><td class="num {% if walk_forward.degradations.sharpe < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.sharpe }}%</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ walk_forward.error }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Full-Period Backtest Summaries</span>
+            <span class="term-section-meta">source: backtester.py + StrategyScorer</span>
+        </div>
+        <div class="term-section-body">
+            {% if summaries.available %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">Profit Factor</th><th class="num">Expectancy (R)</th><th class="num">Sharpe</th><th class="num">Max DD</th><th class="num">Score</th><th>Grade</th></tr></thead>
+                    <tbody>
+                        {% for r in summaries.rows %}
+                        <tr>
+                            <td class="label-cell"><a href="{% url 'dashboard' %}?symbol={{ r.symbol }}">{{ r.symbol }}</a></td>
+                            <td class="num">{{ r.total_trades }}</td>
+                            <td class="num">{{ r.win_rate }}%</td>
+                            <td class="num">{{ r.profit_factor }}</td>
+                            <td class="num {% if r.expectancy_r > 0 %}pos{% elif r.expectancy_r < 0 %}neg{% endif %}">{{ r.expectancy_r }}</td>
+                            <td class="num {% if r.sharpe > 0 %}pos{% elif r.sharpe < 0 %}neg{% endif %}">{{ r.sharpe }}</td>
+                            <td class="num neg">{{ r.max_drawdown }}%</td>
+                            <td class="num">{{ r.total_score }}</td>
+                            <td><span class="badge {% if r.grade|slice:':1' == 'A' %}pos{% elif r.grade|slice:':1' == 'B' %}neu{% elif r.grade|slice:':1' == 'C' %}warn{% else %}neg{% endif %}">{{ r.grade }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if summaries.errors %}
+            <div class="chart-caption" style="margin-top:8px">Failed: {% for sym, err in summaries.errors.items %}{{ sym }} ({{ err|truncatechars:60 }}) {% endfor %}</div>
+            {% endif %}
+            {% else %}
+            <div class="unavailable">No backtest summaries available.</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Backtesting" note="real in/out-of-sample split + full-period summaries" %}
+
+{% endblock %}

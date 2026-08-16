@@ -374,6 +374,14 @@ def build_feature_registry(use_cache=True):
     # ---- PAIR_SPREAD ----
     for _, row in pair_stability.iterrows():
         pair_label = row["symbol"]  # e.g. "AVAX_ATOM_KALMAN"
+        # claude code changed: new guard — some rows have a NaN "symbol"
+        # (pandas reads a blank CSV cell as float('nan'), not ""), which
+        # crashed .replace() below with AttributeError: 'float' object has
+        # no attribute 'replace'. A row with no pair label isn't usable in
+        # this registry anyway, so skip it instead of crashing the whole
+        # feature-intelligence page.
+        if not isinstance(pair_label, str):
+            continue
         underlying_pair = pair_label.replace("_KALMAN", "").split("_")
         pair_folder_guess = None
         for folder in permutation_verdicts:

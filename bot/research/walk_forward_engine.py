@@ -468,6 +468,7 @@ class WalkForwardEngine:
         capital_usdt:        float = STRATEGY_CAPITAL_USDT,
         kelly_safety:         float = KELLY_SAFETY_FRACTION,
         output_dir:           str   = WALK_FORWARD_OUTPUT_DIR,
+        resample_hours:        Optional[int] = None,   # claude code changed: new — threaded into the full-history loader; folds are then sliced from already-resampled data
     ) -> None:
         """
         Initialise the walk-forward engine with fold-construction and
@@ -478,7 +479,16 @@ class WalkForwardEngine:
         self.min_train_years   = min_train_years        # Years reserved for the first anchor train window
         self.test_window_years = test_window_years       # Years per out-of-sample test window
         self.min_train_trades  = min_train_trades         # Trades required before trusting a fold's train stats
-        self.min_test_candles  = min_test_candles          # Candles required before a test window is worth scoring
+        self.resample_hours    = resample_hours              # claude code changed: new
+        # claude code changed: was `min_test_candles` used unscaled — MIN_TEST_CANDLES
+        # (24*30, its own comment says "~30 days of hourly candles") is fundamentally
+        # an HOURS threshold expressed as a 1h-candle count. If resample_hours widens
+        # each candle, the same default would silently demand 4x too many real days
+        # of test data, skipping every fold. Scale it down by the same factor so
+        # "~30 real days" stays the actual requirement regardless of candle width.
+        self.min_test_candles  = (                          # Candles required before a test window is worth scoring
+            max(1, min_test_candles // resample_hours) if resample_hours else min_test_candles
+        )
         self.capital_usdt      = capital_usdt               # Capital used for every fold's simulation
         self.kelly_safety      = kelly_safety                # Quarter-Kelly safety factor, passed straight through
         self.output_dir        = Path(output_dir)             # Root directory for this engine's outputs
@@ -536,7 +546,10 @@ class WalkForwardEngine:
         # Piece 4 already relies on, so walk-forward and the full-sample run
         # are always looking at identically cleaned data.
         scratch_dir = pair_output_dir / "_loader_scratch"            # Disposable dir, only used to init the loader
-        loader = EntryExitEngine(capital_usdt=self.capital_usdt, output_dir=str(scratch_dir))
+        loader = EntryExitEngine(                                     # claude code changed: added resample_hours=
+            capital_usdt=self.capital_usdt, output_dir=str(scratch_dir),
+            resample_hours=self.resample_hours,                       # claude code changed: new — df_full (and every fold sliced from it) comes out already at this candle width
+        )
         df_full = loader._load_kalman_data(kalman_csv)               # Load + clean the full history
         loader._validate_columns(df_full)                            # Confirm all required Kalman columns exist
         shutil.rmtree(scratch_dir, ignore_errors=True)                # Clean up the throwaway scratch directory
@@ -834,8 +847,15 @@ class WalkForwardEngine:
         if b_coefficient >= 0 or p_value > 0.05:                            # Not mean-reverting, or not significantly so
             return np.nan                                                   # Caller falls back to a safe default
 
+        # claude code changed: was `half_life_candles * CANDLE_HOURS` (CANDLE_HOURS
+        # hardcoded 1.0, assuming native 1h candles). train_df's candles are now
+        # self.resample_hours wide when resampling is active (see
+        # WalkForwardEngine.__init__) — using the fixed 1.0 here would silently
+        # understate the recalibrated half-life by that same factor, badly
+        # distorting the derived time-stop (2 x half-life) for every fold.
         half_life_candles = -np.log(2) / b_coefficient                      # Standard OU half-life formula
-        half_life_hours    = half_life_candles * CANDLE_HOURS                # Convert candles → hours
+        candle_hours       = self.resample_hours if self.resample_hours else CANDLE_HOURS
+        half_life_hours    = half_life_candles * candle_hours                # Convert candles → hours
 
         # ── Sanity band ────────────────────────────────────────────────────────
         # A statistically significant, negative b_coefficient is NOT the same
@@ -1146,6 +1166,7 @@ def run_walk_forward_for_pair(
     pair_name:    str,
     output_dir:    str   = WALK_FORWARD_OUTPUT_DIR,
     capital:        float = STRATEGY_CAPITAL_USDT,
+    resample_hours:  Optional[int] = None,   # claude code changed: new — see WalkForwardEngine.__init__
 ) -> Dict:
     """
     Run walk-forward validation for exactly one pair.
@@ -1161,7 +1182,10 @@ def run_walk_forward_for_pair(
         The pair's verdict summary, suitable for aggregation into a leaderboard.
     """
 
-    engine = WalkForwardEngine(capital_usdt=capital, output_dir=output_dir)  # Build the engine with project defaults
+    engine = WalkForwardEngine(                                             # Build the engine with project defaults
+        capital_usdt=capital, output_dir=output_dir,
+        resample_hours=resample_hours,                                     # claude code changed: new
+    )
     # engine.run() already prints the verdict once internally (Step 8) and
     # returns it as the 4th value — calling _print_verdict() again here
     # would print the exact same report a second time, so we don't.

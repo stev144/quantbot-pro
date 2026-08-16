@@ -93,6 +93,10 @@ from bot.engines.trade_narrative import TradeNarrativeGenerator
 # Execution engine — handles entry, exit, position management
 from bot.engines.execution_engine import ExecutionEngine
 
+# claude code changed: new import — fixes architecture audit issue 6.
+# Cross-checks Binance's price against a second exchange before trading on it.
+from bot.engines.price_validator import PriceCrossChecker
+
 # Position tracker — live memory of open positions
 # Accessed via engine.position_tracker
 
@@ -168,7 +172,20 @@ HEARTBEAT_INTERVAL_SECONDS =  300
 # ── SYMBOLS TO RECONCILE ─────────────────────────────────────
 # All pairs the bot might have open positions on
 # Add more here as you expand to multiple pairs
-TRACKED_SYMBOLS = []
+# claude code changed: was [] — meant reconcile_with_exchange()'s loop body
+# never ran for ANY symbol, including the one this bot actually trades
+# (SYMBOL below), so a crash/restart never actually reconciled against the
+# exchange despite that being reconcile's whole purpose. Found while fixing
+# the TradeLogger.MultipleObjectsReturned fragility — this was one of the
+# contributing gaps (see bot/journal/models.py's new unique constraint and
+# execution_engine.py's new DB-backed duplicate guard for the rest).
+TRACKED_SYMBOLS = [SYMBOL]
+
+# ── SECONDARY PRICE SOURCE ───────────────────────────────────
+# claude code changed: new — fixes architecture audit issue 6. Independent
+# exchange used to sanity-check Binance's price every candle before trading
+# on it. Does not replace Binance as the primary data source.
+SECONDARY_EXCHANGE = "kraken"
 
 # ── API CREDENTIALS ──────────────────────────────────────────
 # Read from environment variables — NEVER hardcode in source code
@@ -306,12 +323,31 @@ def print_heartbeat(
     else:
         latency_str = f"{latency_ms}ms"       # Normal latency
 
+    # claude code changed: new — surface DrawdownGuard's state in the
+    # heartbeat. A kill switch nobody can see the status of isn't a
+    # usable safety feature — this is the only place an operator
+    # watching the console/log would otherwise notice it tripped.
+    # Reports peak balance and tripped/OK only — deliberately does not
+    # fetch a fresh balance here just to compute a live drawdown number,
+    # to avoid spending an extra API call every heartbeat on top of the
+    # one execute_signal() already makes before every entry decision.
+    try:
+        guard = engine.drawdown_guard
+        drawdown_status = (
+            f"TRIPPED ⚠ (peak: ${guard.peak_balance:.2f})"
+            if guard.tripped
+            else f"OK (peak: ${guard.peak_balance:.2f})"
+        )
+    except Exception:
+        drawdown_status = "ERROR"
+
     # ── BUILD HEARTBEAT LINE ──────────────────────────────────
     heartbeat = (
         f"[HEARTBEAT] "
         f"Engines: {engines_status} | "
         f"Risk: {risk_status} | "
         f"Regime detector: {regime_status} | "
+        f"Drawdown guard: {drawdown_status} | "
         f"API latency: {latency_str} | "
         f"Last regime: {last_regime} | "
         f"Last signal: {last_signal} | "
@@ -341,7 +377,7 @@ def print_heartbeat(
 # STARTUP COMPONENT CHECK
 # Verifies all components initialise before the loop starts
 # ============================================================
-def check_components(engine, detector, router, narrator) -> bool:
+def check_components(engine, detector, router, narrator, price_checker) -> bool:
     """
     Verifies all key components are available and functional.
     Called once on startup — returns True if all OK, False if not.
@@ -395,6 +431,21 @@ def check_components(engine, detector, router, narrator) -> bool:
         )
     except Exception as e:
         logger.error(f"[BotRunner] ✗ PositionSizer — FAILED: {e}")
+        all_ok = False
+
+    # claude code changed: new — check the cross-exchange price validator,
+    # consistent with every other component check here (fixes architecture
+    # audit issue 6). Only checks the object is constructed, same as the
+    # other checks — a live secondary-exchange fetch failure at runtime is
+    # already handled per-candle inside PriceCrossChecker.check() itself.
+    try:
+        _ = price_checker.secondary_exchange_id
+        logger.info(
+            f"[BotRunner] ✓ PriceCrossChecker — OK "
+            f"(secondary: {price_checker.secondary_exchange_id})"
+        )
+    except Exception as e:
+        logger.error(f"[BotRunner] ✗ PriceCrossChecker — FAILED: {e}")
         all_ok = False
 
     if all_ok:
@@ -474,7 +525,12 @@ def run_bot():
     logger.info("[BotRunner] Initialising system components...")
 
     # ExecutionEngine — central coordinator (contains all sub-components)
-    engine = ExecutionEngine(exchange)
+    # claude code changed: pass DRY_RUN through — fixes architecture audit
+    # finding C-2 (issue 2). ExecutionEngine's OrderManager/MarketData now
+    # simulate fills and paper balance internally when dry_run=True, so the
+    # signal-handling block below can call execute_signal()/manage_positions()
+    # unconditionally instead of skipping them in dry run.
+    engine = ExecutionEngine(exchange, dry_run=DRY_RUN)
 
     # RegimeDetector — classifies market regime every candle
     detector = RegimeDetector()
@@ -490,8 +546,13 @@ def run_bot():
     # TradeNarrativeGenerator — documents every trade in plain English
     narrator = TradeNarrativeGenerator()
 
+    # claude code changed: new — fixes architecture audit issue 6.
+    # PriceCrossChecker only calls the secondary exchange's public
+    # fetch_ticker(), so no API keys are needed here.
+    price_checker = PriceCrossChecker(secondary_exchange_id=SECONDARY_EXCHANGE)
+
     # ── STARTUP COMPONENT CHECK ───────────────────────────────
-    all_ok = check_components(engine, detector, router, narrator)
+    all_ok = check_components(engine, detector, router, narrator, price_checker)
 
     if not all_ok:
         logger.critical(
@@ -555,6 +616,29 @@ def run_bot():
 
             logger.info(f"[BotRunner] DataFrame ready — {len(df)} candles")
 
+            # ── CROSS-EXCHANGE PRICE SANITY CHECK ─────────────
+            # claude code changed: new — fixes architecture audit issue 6.
+            # Compares Binance's latest close against SECONDARY_EXCHANGE's
+            # live price for the same symbol. Binance stays the primary
+            # data source for regime detection and strategy signals below —
+            # this only blocks trading on this specific candle if the two
+            # disagree by more than PriceCrossChecker's threshold, on the
+            # theory that a real symbol-wide price move shows up on every
+            # exchange, while a bad tick/stale cache/thin book on just one
+            # exchange does not.
+            latest_close = float(df["close"].iloc[-1])
+            price_check = price_checker.check(SYMBOL, latest_close)
+
+            if price_check["suspicious"]:
+                logger.warning(
+                    f"[BotRunner] Skipping loop — suspicious price for {SYMBOL} | "
+                    f"Binance: {price_check['primary_price']} | "
+                    f"{price_check['secondary_exchange']}: {price_check['secondary_price']} | "
+                    f"Deviation: {price_check['deviation_pct']:.3f}%"
+                )
+                time.sleep(60)
+                continue
+
             # ── DETECT MARKET REGIME ──────────────────────────
             regime_result = detector.detect(df)
             last_regime   = regime_result.regime    # Update heartbeat state
@@ -583,7 +667,7 @@ def run_bot():
                 signal["symbol"] = SYMBOL
 
                 if DRY_RUN:
-                    # Dry run — log signal without placing any order
+                    # Dry run — log signal before executing against paper money
                     logger.info(
                         f"[BotRunner] DRY RUN | "
                         f"{signal['signal']} {SYMBOL} | "
@@ -602,19 +686,32 @@ def run_bot():
                     )
 
                 else:
-                    # Live mode — execute the signal
+                    # Live mode — about to execute the signal
                     logger.info(
                         f"[BotRunner] Executing {signal['signal']} on {SYMBOL}"
                     )
-                    engine.execute_signal(signal)
+
+                # claude code changed: now called unconditionally — fixes
+                # architecture audit finding C-2 (issue 2). This used to only
+                # run when not DRY_RUN, so dry run never sized a trade, never
+                # wrote a TradeRecord, and never opened a tracked position.
+                # ExecutionEngine was constructed with dry_run=DRY_RUN above,
+                # so its OrderManager/MarketData simulate fills and paper
+                # balance internally here instead of touching the exchange.
+                engine.execute_signal(signal)
 
             # ── MANAGE OPEN POSITIONS ─────────────────────────
-            # Always runs — checks stops and TPs regardless of new signals
-            if not DRY_RUN:
-                engine.manage_positions()    # Executes exits when SL/TP hit
+            # claude code changed: now called unconditionally — fixes
+            # architecture audit finding C-2 (issue 2). Previously DRY_RUN
+            # only logged open positions and never checked/closed them, so a
+            # simulated trade could open but would never exit or log its
+            # exit TradeRecord. dry_run=True means sl_order_id is always None
+            # (see OrderManager.place_stop_loss()), so this always exercises
+            # the existing software-polled SL/TP fallback for paper trades.
+            engine.manage_positions()    # Executes exits when SL/TP hit (real or simulated)
 
-            else:
-                # Dry run — log positions without acting on them
+            if DRY_RUN:
+                # Dry run — log current paper positions after management ran
                 positions = engine.position_tracker.get_all_positions()
 
                 if positions:

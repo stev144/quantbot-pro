@@ -77,6 +77,7 @@ import inspect                              # introspect classes and methods
 import json                                 # JSON report serialisation
 import logging                              # structured logging
 import os                                   # file path operations
+import sys                                  # stdout/stderr encoding fix below
 import time                                 # elapsed time measurement
 import traceback                            # full stack trace on failures
 from dataclasses import dataclass, field    # clean result containers
@@ -90,6 +91,16 @@ import pandas as pd                         # DataFrame for test inputs
 
 # ── Django ────────────────────────────────────────────────────────────────
 from django.core.management.base import BaseCommand  # management command base
+
+# claude code changed: new — same fix bot_runner.py and health_check.py
+# have (see bot_runner.py's header comment for the full rationale). This
+# command's summary banner uses box-drawing characters (═) and status
+# glyphs, which Windows' default console codepage (cp1252) can't encode —
+# without this, `python manage.py deep_health_check` crashes with
+# UnicodeEncodeError before printing any results.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 logger = logging.getLogger(__name__)        # module-level named logger
 

@@ -8,6 +8,9 @@ import time
 import ccxt
 
 from bot.config.execution_costs import CANDLE_CACHE_TTL
+# claude code changed: new import — fixes architecture audit finding C-2
+# (issue 2), see DRY_RUN_PAPER_BALANCE's own comment in bot/config/risk.py
+from bot.config.risk import DRY_RUN_PAPER_BALANCE
 
 # Create a logger for this module
 logger = logging.getLogger(__name__)
@@ -19,12 +22,17 @@ class MarketData:
     Optimized for speed with minimal logging overhead.
     """
 
-    def __init__(self, exchange, cache_ttl=None):
+    def __init__(self, exchange, cache_ttl=None, dry_run=False):
         # Store the exchange instance passed in from bot_runner
         self.exchange = exchange
 
         # Use provided cache_ttl or fall back to config default
         self.cache_ttl = cache_ttl or CANDLE_CACHE_TTL
+
+        # claude code changed: new — when True, get_balance() returns a
+        # simulated paper balance instead of calling the authenticated
+        # fetch_balance() endpoint (architecture audit finding C-2 / issue 2)
+        self.dry_run = dry_run
 
         # Cache stores the last fetched candles per symbol+timeframe
         # Format: { "NEAR/USDT_1h": [ [timestamp, o, h, l, c, v], ... ] }
@@ -126,6 +134,15 @@ class MarketData:
         Returns the current free USDT balance from the exchange.
         Called before every new position.
         """
+
+        # claude code changed: new — dry run never calls the authenticated
+        # fetch_balance() endpoint (would raise AuthenticationError without
+        # real API keys, and would be wrong to call anyway — no real account
+        # is being risked). Returns the fixed paper balance from
+        # bot.config.risk instead. Fixes architecture audit finding C-2.
+        if self.dry_run:
+            logger.info(f"[MarketData] DRY RUN — paper balance: ${DRY_RUN_PAPER_BALANCE:.2f}")
+            return DRY_RUN_PAPER_BALANCE
 
         try:
             balances = self.exchange.fetch_balance()

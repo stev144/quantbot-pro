@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Create Account — Quant Bot Pro{% endblock %}
+
+{% block content %}
+<div class="term-login-wrap">
+    <div class="term-panel term-login-panel">
+        <div class="term-brand">
+            <span class="term-brand-name">QUANT BOT PRO</span>
+            <span class="term-brand-sub">Research &amp; Systematic Trading</span>
+        </div>
+
+        {% if form.non_field_errors %}
+        <div class="term-login-error mono">{{ form.non_field_errors|join:" " }}</div>
+        {% endif %}
+
+        <form method="post" action="{% url 'signup' %}" class="term-login-form">
+            {% csrf_token %}
+
+            <label class="term-login-label mono" for="id_username">Username</label>
+            <input type="text" name="username" id="id_username" class="term-input term-login-input mono" autocapitalize="none" autocomplete="username" required autofocus value="{{ form.username.value|default:'' }}">
+            {% if form.username.errors %}<div class="term-login-error mono">{{ form.username.errors|join:" " }}</div>{% endif %}
+
+            <label class="term-login-label mono" for="id_email">Email</label>
+            <input type="email" name="email" id="id_email" class="term-input term-login-input mono" autocomplete="email" required value="{{ form.email.value|default:'' }}">
+            {% if form.email.errors %}<div class="term-login-error mono">{{ form.email.errors|join:" " }}</div>{% endif %}
+
+            <label class="term-login-label mono" for="id_password1">Password</label>
+            <input type="password" name="password1" id="id_password1" class="term-input term-login-input mono" autocomplete="new-password" required>
+            {% if form.password1.errors %}<div class="term-login-error mono">{{ form.password1.errors|join:" " }}</div>{% endif %}
+
+            <label class="term-login-label mono" for="id_password2">Confirm Password</label>
+            <input type="password" name="password2" id="id_password2" class="term-input term-login-input mono" autocomplete="new-password" required>
+            {% if form.password2.errors %}<div class="term-login-error mono">{{ form.password2.errors|join:" " }}</div>{% endif %}
+
+            <button type="submit" class="term-btn term-login-submit mono">Create Account</button>
+        </form>
+
+        <div class="term-login-footer mono">
+            Already have an account? <a href="{% url 'login' %}">Sign in</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

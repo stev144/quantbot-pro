@@ -9,22 +9,48 @@
 // real implementation: self-contained, loaded explicitly by the
 // dashboard template.
 //
-// Content: real capability descriptions matching what this codebase
-// actually does (regime detection, structure analysis, Kalman-filtered
-// pairs research, feature validation, walk-forward testing) — not
-// marketing copy.
+// Content: claude code changed — replaced with the tagline set supplied
+// directly by the user. Most lines describe real, wired capabilities
+// (regime detection, Kalman-filtered pairs, feature stability testing,
+// rejection tracking, backtesting cost modeling); a couple lean more
+// aspirational/marketing than the previous strictly-literal set (e.g.
+// "200+ crypto pairs" — the real universe is 20 symbols / 190 pairs;
+// "monitor crash and liquidation risk" — contagion_engine.py exists but
+// has no persisted output and isn't wired into anything yet, per the
+// architecture audit). Flagged to the user, not altered — this is
+// display copy, not a computed metric, so the "never fabricate
+// metrics" rule doesn't block it, but worth knowing.
 // ============================================================
 
 (function () {
     var messages = [
-        "Detecting market regimes via ADX / ATR / EMA spread / Bollinger width.",
-        "Routing signals by regime: trend-following vs. mean-reversion.",
-        "Backtesting with modeled slippage, fees, and fixed-fractional risk sizing.",
-        "Scoring strategies across profitability, consistency, risk, and cost efficiency.",
-        "Validating features for predictive power (IC) and cross-regime stability.",
-        "Testing cointegration and Kalman-filtered spreads across pairs.",
-        "Running walk-forward splits to check for in-sample overfitting.",
-        "Tracking why signals were rejected, not just why trades were taken.",
+        "Analyze market structure in real-time.",
+        "Detect market regimes before they shift.",
+        "Measure trading edge, not emotions.",
+
+        "Research 200+ crypto pairs simultaneously.",
+        "Analyze cross-sectional opportunities across the market.",
+        "Use our Cross-Section Engine to identify relative-value opportunities.",
+        "Model dynamic relationships between assets with Kalman Filters.",
+        "Measure cross-asset contagion and systemic market risk.",
+
+        "Test features for stability across market regimes.",
+        "Separate genuine alpha from noise and overfitting.",
+        "Prove whether indicators contain predictive information.",
+        "Challenge trading ideas with statistics, mathematics and data science.",
+
+        "Track why trades were rejected.",
+        "Turn rejected trades into intelligence.",
+        "Optimize strategies with evidence, not assumptions.",
+
+        "Backtest with realistic fees, slippage and risk constraints.",
+        "Measure expectancy, drawdown, profit factor and R-multiples.",
+        "Monitor crypto-wide crash and liquidation risk.",
+        "Adapt exposure when market conditions become dangerous.",
+
+        "Research first.",
+        "Validate second.",
+        "Deploy last.",
     ];
 
     var typedIndex = 0;

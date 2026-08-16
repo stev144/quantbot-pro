@@ -127,6 +127,7 @@
 
 from __future__ import annotations              # Modern type hints in Python 3.8+
 
+import sys                                      # claude code changed: new import — needed for the stdout encoding fix below
 import logging                                  # Structured logging — same as all modules
 import re                                       # claude code changed: new import — needed for _parse_pair_from_kalman_filename()
 import warnings                                 # Suppress pandas non-critical warnings
@@ -144,6 +145,18 @@ from scipy import stats                         # IC calculation for strategy va
 from bot.research.kalman_filter_engine import ZSCORE_WINSOR_LIMIT
 
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings
+
+# claude code changed: new — same fix bot_runner.py/health_check.py/
+# deep_health_check.py already have. _print_performance_report() uses plain
+# print() with a "→" arrow character, which Windows' default console
+# codepage (cp1252) can't encode — without this, a run crashes with
+# UnicodeEncodeError immediately after all outputs (trade log, summary,
+# equity curve) are already saved, so the data survives but the report
+# itself never displays. Found while re-running this engine after the P&L
+# formula fix.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -212,7 +225,115 @@ PRED_ERROR_NORMAL: float = 0.02  # Standard deviation of prediction_error = 0.01
 # Profit target: exit when z-score reverts to near zero
 # Derived from: spread mean-reverts to zero by Kalman construction
 # Taking profit at ±0.3 captures most of the reversion without chasing the last bit
+# claude code changed: kept for backward-compat display/logging only — no
+# longer triggers exits, see EXIT_TARGET_OVERSHOOT_FRACTION below for what
+# replaced it (same "kept for display, replaced by a per-trade value"
+# pattern already used for EXIT_ZSCORE_STOPLOSS just below).
 EXIT_ZSCORE_TARGET: float = 0.3
+
+# claude code changed: new — entry-depth-scaled exit target, replacing the
+# fixed EXIT_ZSCORE_TARGET above as what actually triggers a TARGET exit.
+#
+# Why the fixed target was a problem (research_data/model_governance_log.md,
+# "Why entry_ic won't move" + "P&L normalisation bug" entries): |z| <= 0.3
+# is a wide neighbourhood any mean-reverting z-score wanders into ~30% of
+# unconditional time, REGARDLESS of whether the entry that preceded it had
+# any real predictive skill — block-shuffling the z-series (which destroys
+# genuine temporal/causal structure but preserves this marginal-distribution
+# property) still produces win rates/Sharpes this high, which is exactly why
+# the permutation test's win_rate_significant/sharpe_significant checks kept
+# failing even after fixing the P&L formula and confirming entry_ic is
+# genuinely, significantly positive on both tested pairs (0.35 AVAX/ATOM,
+# 0.44 DOT/LINK).
+#
+# This target instead requires the spread to actually CROSS THROUGH
+# equilibrium to the OPPOSITE side by an amount scaled to how extreme the
+# entry was (target_zscore = -sign(entry_z) * this * |entry_z|, computed
+# once per trade at entry — see TradeRecord.target_zscore below, same
+# per-trade pattern stop_zscore already uses). Whether a series actually
+# completes a full reversion (vs. approaching and reversing back out) is a
+# much more temporally/causally dependent event than "wandered near its own
+# mean" — the property block-shuffling destroys, not the one it preserves —
+# so this is a directed bet that TARGET becomes a rarer, more genuinely
+# skill-dependent outcome, converting some of the current ~93-96% win rate
+# into STOPLOSS/TIMESTOP exits instead of an near-universal, uninformative
+# TARGET hit. 0.10 means a threshold-level entry (|z|=2.0) requires only a
+# small confirmed overshoot (0.2) while a deep entry (|z|=4.0) requires
+# proportionally more (0.4) — calibrating the confirmation bar to the size
+# of the claimed edge, not a fixed absolute distance for every entry.
+#
+# This is a first design iteration, not a validated result — it needs the
+# same full audit (entry/exit sim -> walk-forward -> permutation test) any
+# other pair/rule change in this log gets before being trusted.
+EXIT_TARGET_OVERSHOOT_FRACTION: float = 0.10
+
+# claude code changed: new — second design iteration
+# (research_data/model_governance_log.md, "First entry-depth-scaled exit
+# design attempt"). The sign-crossing overshoot above did not fix
+# win_rate/sharpe significance: empirically, win rate and Sharpe went UP
+# (not down) under it, and 0 trades hit the 240h time-stop, both pointing
+# to the same cause — this z-series crosses back through its own rolling
+# mean so often (median hold 2-9h vs. a 120h half-life) that most "TARGET"
+# exits are near-instant whipsaws, not resolved reversion. This constant
+# blocks TARGET from firing until a trade has been held at least this many
+# hours — STOPLOSS and TIMESTOP are NOT gated by this (real risk should
+# never be suppressed while "waiting"; only the profit-taking exit is
+# delayed). The bet: forcing genuinely fast whipsaws to stay exposed to
+# stop risk for longer, instead of banking them as instant wins, should
+# pull win_rate/Sharpe away from "how often does this series wander near
+# its mean in the first few hours" (preserved by block-shuffling) and
+# toward "did the position survive long enough to reflect real,
+# sustained reversion" (destroyed by block-shuffling, closer to what
+# entry_ic already measures). 24h is a first value: long enough that most
+# of the current 2-9h median-hold trades would be forced past it, short
+# enough to remain a small fraction of the 120h half-life / 240h
+# time-stop. Needs the same full audit as every other change in this log.
+EXIT_MIN_HOLD_HOURS: float = 24.0
+
+# claude code changed: new — third design iteration
+# (research_data/model_governance_log.md, "Second exit design attempt —
+# minimum holding period"). Both prior levers changed WHEN a trade could
+# exit while still scanning the z-score candle-by-candle at its native 1h
+# resolution. This instead changes the RESOLUTION the entry/exit rules
+# observe: resample the already-validated 1h kalman_zscore series to a
+# lower frequency (taking the last 1h reading in each window) BEFORE
+# scanning for entries/exits at all, so a decision only sees a fresh
+# reading every N hours instead of every 1h tick. Tests whether
+# microstructure noise the original half-life estimate (~120-197h) never
+# assumed the rules would react to candle-by-candle is inflating trade
+# count/whipsaw, as distinct from the target/stop zone occupancy asymmetry
+# (already diagnosed and separately confirmed not fixable via exit-rule
+# tweaks alone). None = no resampling (default, fully backward compatible).
+# Not yet validated — needs the same full audit as every other change here.
+CANDLE_RESAMPLE_HOURS: Optional[int] = None
+
+# claude code changed: new — fourth design iteration (research_data/model_governance_log.md,
+# "Third design attempt — lower candle resolution"). Three independent levers (a
+# distance-based confirmation, a fixed 24h time-based confirmation, and an
+# observation-frequency change) each produced only noise-level movement in the
+# permutation test, never replicating across both pairs. What none of them did:
+# scale the CONFIRMATION BAR ITSELF continuously with how extreme the entry was.
+# EXIT_MIN_HOLD_HOURS=24.0 (design 2) applied the SAME 24h floor to a
+# threshold-level entry (|z|=2.0) and a near-winsor entry (|z|=5.0) alike, even
+# though entry_ic's own evidence is that deeper entries carry more claimed edge
+# and (per the "Why entry_ic won't move" investigation) travel further in real
+# terms — a fixed time bar lets a deep entry's bigger target get satisfied by an
+# equally-fast random swing as a shallow entry's smaller one. This ties the
+# MINIMUM HOLD directly to entry depth (the same |entry_z| that drives
+# entry_ic), so confirmation difficulty scales with the size of the claimed
+# edge: EXIT_MIN_HOLD_BASE_HOURS at the entry threshold itself
+# (|z|=ENTRY_ZSCORE_THRESHOLD=2.0), growing linearly for deeper entries
+# (min_hold_hours = this * |entry_z| / ENTRY_ZSCORE_THRESHOLD — e.g. |z|=3.0 ->
+# 36h, |z|=5.0 -> 60h at the default below). Combined with the existing
+# entry-depth-scaled sign-crossing TARGET (design 1, unchanged) — both the
+# distance AND the time required to claim a win now scale with entry depth,
+# not just one of the two. 24.0 keeps the threshold-entry bar identical to
+# design 2's flat value, isolating "does scaling by depth help" from "is a
+# lower average bar the real driver." Supersedes EXIT_MIN_HOLD_HOURS as what
+# actually triggers TARGET — that constant is kept for backward-compat display
+# only, same pattern as EXIT_ZSCORE_TARGET/EXIT_ZSCORE_STOPLOSS below. Not yet
+# validated — needs the same full audit as every other change in this log.
+EXIT_MIN_HOLD_BASE_HOURS: float = 24.0
 
 # claude code changed: EXIT_ZSCORE_STOPLOSS kept for backward-compat display only
 # (constructor param / summary dict) — it no longer triggers exits. A FIXED
@@ -359,6 +480,23 @@ class TradeRecord:
     # same fixed EXIT_ZSCORE_STOPLOSS regardless of how extreme its entry was.
     stop_zscore:       float = 0.0
 
+    # claude code changed: new field — the signed z-score level THIS trade's
+    # profit target requires crossing to, computed once at entry as
+    # -sign(entry_zscore) * EXIT_TARGET_OVERSHOOT_FRACTION * |entry_zscore|
+    # (see that constant's comment for the full rationale). Replaces checking
+    # every trade against the same fixed |z| <= EXIT_ZSCORE_TARGET regardless
+    # of how extreme its entry was — same per-trade pattern stop_zscore uses.
+    target_zscore:     float = 0.0
+
+    # claude code changed: new field — the number of hours THIS trade must be
+    # held before TARGET is allowed to fire, computed once at entry as
+    # EXIT_MIN_HOLD_BASE_HOURS * |entry_zscore| / ENTRY_ZSCORE_THRESHOLD (see
+    # that constant's module comment for the full rationale). Replaces
+    # checking every trade against the same fixed EXIT_MIN_HOLD_HOURS
+    # regardless of how extreme its entry was — same per-trade pattern
+    # stop_zscore/target_zscore already use.
+    min_hold_hours:    float = 0.0
+
     # ── Exit state ────────────────────────────────────────────────────────────
     exit_zscore:       float = 0.0      # Kalman z-score at exit
     exit_reason:       str   = ""       # "TARGET", "STOPLOSS", "TIMESTOP", "PARTIAL"
@@ -401,6 +539,8 @@ class TradeRecord:
             "kelly_fraction":              round(self.kelly_fraction, 4),
             "signal_strength":             self.signal_strength,
             "stop_zscore":                 round(self.stop_zscore, 4),   # claude code changed: new
+            "target_zscore":               round(self.target_zscore, 4),   # claude code changed: new
+            "min_hold_hours":              round(self.min_hold_hours, 2),   # claude code changed: new
             "exit_zscore":                 round(self.exit_zscore, 4),
             "exit_reason":                 self.exit_reason,
             "hours_held":                  round(self.hours_held, 1),
@@ -692,7 +832,11 @@ class EntryExitEngine:
         self,
         entry_threshold:       float = ENTRY_ZSCORE_THRESHOLD,
         entry_strong:          float = ENTRY_ZSCORE_STRONG,
-        exit_target:           float = EXIT_ZSCORE_TARGET,
+        exit_target:           float = EXIT_ZSCORE_TARGET,           # claude code changed: kept for backward-compat display only, see module constant comment
+        exit_target_overshoot: float = EXIT_TARGET_OVERSHOOT_FRACTION,   # claude code changed: new param — this is what actually triggers a TARGET exit now
+        exit_min_hold_hours:   float = EXIT_MIN_HOLD_HOURS,          # claude code changed: kept for backward-compat display only — see EXIT_MIN_HOLD_BASE_HOURS module comment
+        exit_min_hold_base_hours: float = EXIT_MIN_HOLD_BASE_HOURS,  # claude code changed: new param — this is what actually gates TARGET now, scaled per-trade by entry depth
+        resample_hours:        Optional[int] = CANDLE_RESAMPLE_HOURS,   # claude code changed: new param — resample the kalman series to this candle width before scanning; None = no resampling
         exit_stoploss:         float = EXIT_ZSCORE_STOPLOSS,        # claude code changed: kept for backward-compat display only, see module constant comment
         exit_stop_distance:    float = EXIT_ZSCORE_STOP_DISTANCE,   # claude code changed: new param — this is what actually triggers a stop now
         exit_time_stop_hours:  int   = EXIT_TIME_STOP_HOURS,
@@ -738,9 +882,13 @@ class EntryExitEngine:
         # Store all strategy parameters
         self.entry_threshold   = entry_threshold       # |z| must exceed this to enter
         self.entry_strong      = entry_strong           # |z| for strong signal classification
-        self.exit_target       = exit_target            # z-score target for profit exit
+        self.exit_target       = exit_target            # claude code changed: no longer used to trigger exits — kept for backward-compat display (summary dict, logging) only
+        self.exit_target_overshoot = exit_target_overshoot   # claude code changed: new — actual per-trade target is -sign(entry_z) * this * |entry_z|, see TradeRecord.target_zscore
         self.exit_stoploss     = exit_stoploss          # claude code changed: no longer used to trigger exits — kept for backward-compat display (summary dict, logging) only
         self.exit_stop_distance = exit_stop_distance    # claude code changed: new — actual per-trade stop is |entry_z| + this, see TradeRecord.stop_zscore
+        self.exit_min_hold_hours = exit_min_hold_hours  # claude code changed: no longer used to trigger exits — kept for backward-compat display only, see EXIT_MIN_HOLD_BASE_HOURS module comment
+        self.exit_min_hold_base_hours = exit_min_hold_base_hours  # claude code changed: new — actual per-trade min hold is this * |entry_z| / entry_threshold, see TradeRecord.min_hold_hours
+        self.resample_hours    = resample_hours         # claude code changed: new — see CANDLE_RESAMPLE_HOURS module comment; applied once in _load_kalman_data()
         self.exit_time_stop    = exit_time_stop_hours   # Maximum hours to hold position
         self.exit_partial_z    = exit_partial_zscore    # z-score for partial exit
         self.exit_partial_frac = exit_partial_fraction  # Fraction to close at partial exit
@@ -778,7 +926,9 @@ class EntryExitEngine:
         logger.info(f"  Pair              : {self.pair_name or '(resolved from kalman CSV filename at run())'}")  # claude code changed: was hardcoded f"{PAIR_NAME}"
         logger.info(f"  Entry threshold   : |z| > {entry_threshold}")
         logger.info(f"  Strong threshold  : |z| > {entry_strong}")
-        logger.info(f"  Exit target       : |z| < {exit_target}")
+        logger.info(f"  Exit target       : cross to -sign(entry_z) * {exit_target_overshoot} * |entry_z| (per-trade, entry-depth-scaled)")
+        logger.info(f"  Min hold for target: {exit_min_hold_base_hours}h at |z|={entry_threshold} threshold, scaling linearly with entry depth (STOPLOSS/TIMESTOP unaffected)")   # claude code changed: was a flat exit_min_hold_hours value
+        logger.info(f"  Candle resolution : {resample_hours}h (resampled)" if resample_hours else "  Candle resolution : native (no resampling)")   # claude code changed: new
         logger.info(f"  Stop loss         : |entry_z| + {exit_stop_distance} (per-trade, capped at ±{ZSCORE_WINSOR_LIMIT})")   # claude code changed: was f"|z| > {exit_stoploss}"
         logger.info(f"  Time stop         : {exit_time_stop_hours}h "                   # claude code changed: message reworded around half_life_note
                     f"(reference half-life: {half_life_note})")                          # claude code changed: was f"(2 x half-life {VALIDATED_HALF_LIFE}h)"
@@ -940,6 +1090,25 @@ class EntryExitEngine:
             logger.warning(
                 f"  Dropped {dropped_rows} row(s) with NaN/inf in Kalman "
                 f"columns before simulation (likely rolling-window edge rows)"
+            )
+
+        # claude code changed: new block — candle resampling (CANDLE_RESAMPLE_HOURS
+        # module comment / third design iteration). Takes the LAST 1h reading in
+        # each N-hour window, so entry/exit decisions only see a fresh z-score
+        # every N hours instead of every 1h tick. kalman_zscore_lag1 is recomputed
+        # from the resampled series — the original column was a 1h lag, which is
+        # meaningless once each row represents N hours. Every other exit rule
+        # (hours_held, time-stop) is driven by real pd.Timestamp arithmetic, not
+        # row counts, so it needs no changes to work correctly post-resample.
+        if self.resample_hours and self.resample_hours > 1:
+            before_resample = len(df)
+            df = df.resample(f"{self.resample_hours}h").last()
+            df = df.dropna(subset=present)
+            if "kalman_zscore" in df.columns:
+                df["kalman_zscore_lag1"] = df["kalman_zscore"].shift(1).bfill()
+            logger.info(
+                f"  Resampled to {self.resample_hours}h candles: "
+                f"{before_resample:,} -> {len(df):,} candles"
             )
 
         logger.info(
@@ -1141,6 +1310,28 @@ class EntryExitEngine:
                         ZSCORE_WINSOR_LIMIT,
                     )
 
+                    # claude code changed: new — per-trade, entry-depth-scaled
+                    # profit target. Signed so it sits on the OPPOSITE side of
+                    # zero from the entry (e.g. entry z=+3.0 -> target=-0.3):
+                    # the exit condition checks for an actual crossing through
+                    # equilibrium, not just approaching it. See
+                    # EXIT_TARGET_OVERSHOOT_FRACTION's module comment for the
+                    # full rationale.
+                    target_zscore = (
+                        -np.sign(zscore) * self.exit_target_overshoot * abs(zscore)
+                    )
+
+                    # claude code changed: new — per-trade, entry-depth-scaled
+                    # minimum hold before TARGET can fire. See
+                    # EXIT_MIN_HOLD_BASE_HOURS's module comment: a threshold-
+                    # level entry (|z|=entry_threshold) gets the base value;
+                    # deeper entries get proportionally longer, since a bigger
+                    # claimed edge should take proportionally longer to
+                    # genuinely resolve, not just travel further.
+                    min_hold_hours = (
+                        self.exit_min_hold_base_hours * abs(zscore) / self.entry_threshold
+                    )
+
                     # Open new trade record
                     self.trade_id_counter += 1
                     self.current_trade = TradeRecord(
@@ -1157,6 +1348,8 @@ class EntryExitEngine:
                         kelly_fraction            = self.sizer.safe_kelly,
                         signal_strength           = strength,
                         stop_zscore               = stop_zscore,   # claude code changed: new
+                        target_zscore             = target_zscore,   # claude code changed: new
+                        min_hold_hours            = min_hold_hours,   # claude code changed: new
                         max_adverse_zscore        = zscore,    # Initialise to entry
                         max_favorable_zscore      = zscore,    # Initialise to entry
                         prediction_error_at_entry = pred_error,
@@ -1305,10 +1498,21 @@ class EntryExitEngine:
         The exit reason is recorded in the trade log for analysis.
 
         Exit 1 — TARGET (profit exit):
-            |z-score| has reverted below EXIT_ZSCORE_TARGET (0.3)
-            The spread has mean-reverted as predicted
-            This is the desired outcome — capture the full reversion move
-            Expected: ~68-71% of trades exit via TARGET (matches win rate)
+            claude code changed: was `abs(zscore) <= EXIT_ZSCORE_TARGET` (0.3)
+            for every trade — see EXIT_TARGET_OVERSHOOT_FRACTION's module
+            comment for why that made TARGET a near-universal, uninformative
+            outcome (research_data/model_governance_log.md). Now checks
+            whether the spread has crossed THROUGH equilibrium to THIS
+            TRADE'S OWN target_zscore, on the opposite side from entry,
+            computed once at entry as -sign(entry_z) * overshoot * |entry_z|
+            — same per-trade pattern stop_zscore already uses. claude code
+            changed: additionally gated on hours_held >= THIS TRADE'S OWN
+            min_hold_hours, computed once at entry as EXIT_MIN_HOLD_BASE_HOURS
+            * |entry_z| / entry_threshold — see that constant's module
+            comment for why the bar now scales with entry depth instead of a
+            flat 24h for every trade. This gate applies to TARGET only —
+            Exit 2/3 below are never delayed by it. This is the desired
+            outcome — capture a confirmed reversion move
 
         Exit 2 — STOPLOSS:
             |z-score| has exceeded THIS TRADE'S OWN stop_zscore, computed at
@@ -1336,12 +1540,32 @@ class EntryExitEngine:
         # Using pd.Timestamp arithmetic — handles timezone correctly
         hours_held = (ts - trade.entry_timestamp).total_seconds() / 3600.0
 
-        # ── Exit 1: Target hit — z-score returned to near zero ────────────────
-        # Check that z-score has crossed through the target level
-        # For LONG_SPREAD: we entered when z was very negative, want z to rise to 0
-        # For SHORT_SPREAD: we entered when z was very positive, want z to fall to 0
-        if abs(zscore) <= self.exit_target:
-            return "TARGET"    # Spread has mean-reverted — take profit
+        # ── Exit 1: Target hit — z-score crossed through equilibrium ─────────
+        # claude code changed: was `abs(zscore) <= self.exit_target` — see
+        # docstring above and EXIT_TARGET_OVERSHOOT_FRACTION's module comment.
+        # trade.target_zscore is signed opposite to the entry direction, so
+        # "crossed the target" means zscore has moved PAST it, not just
+        # approached zero from the entry side.
+        # For LONG_SPREAD: entered when z was very negative; target_zscore is
+        # positive — exit once z has risen AT LEAST that far past zero.
+        # For SHORT_SPREAD: entered when z was very positive; target_zscore is
+        # negative — exit once z has fallen AT LEAST that far past zero.
+        #
+        # claude code changed: new — gated on hours_held >= exit_min_hold_hours.
+        # See EXIT_MIN_HOLD_HOURS's module comment for the full rationale:
+        # median hold time (2-9h) is far below the half-life (120h), so most
+        # TARGET exits were near-instant whipsaws rather than resolved
+        # reversion. This gate does NOT apply to STOPLOSS/TIMESTOP below —
+        # real risk is never suppressed while a trade waits out this window,
+        # only profit-taking is delayed.
+        # claude code changed: was `self.exit_min_hold_hours` (flat 24h for
+        # every trade) — now checks THIS trade's own min_hold_hours, scaled
+        # to its entry depth (see EXIT_MIN_HOLD_BASE_HOURS module comment).
+        if hours_held >= trade.min_hold_hours:
+            if trade.direction == "LONG_SPREAD" and zscore >= trade.target_zscore:
+                return "TARGET"    # Spread has crossed through equilibrium — take profit
+            if trade.direction == "SHORT_SPREAD" and zscore <= trade.target_zscore:
+                return "TARGET"    # Spread has crossed through equilibrium — take profit
 
         # ── Exit 2: Stop loss — z-score moved further against us ─────────────
         # claude code changed: checks trade.stop_zscore (this trade's own, entry-
@@ -1393,7 +1617,8 @@ class EntryExitEngine:
         P&L for the partial exit:
             spread_move = entry_spread - current_spread  (for SHORT_SPREAD)
             spread_move = current_spread - entry_spread  (for LONG_SPREAD)
-            gross_pnl_pct = spread_move / |entry_spread|
+            gross_pnl_pct = expm1(spread_move)   — see _execute_full_exit()'s
+                docstring for the full rationale (same fix, same reasoning).
             net_pnl_pct = gross_pnl_pct - transaction_cost_on_partial
         """
 
@@ -1407,12 +1632,10 @@ class EntryExitEngine:
             # We are short spread — profit when spread decreases
             spread_move = trade.entry_spread - spread
 
-        # P&L as percentage of entry spread
-        # Using absolute entry spread to normalise
-        if abs(trade.entry_spread) > 1e-10:
-            gross_pnl = spread_move / abs(trade.entry_spread)
-        else:
-            gross_pnl = 0.0
+        # claude code changed: was `spread_move / abs(trade.entry_spread)` — see
+        # _execute_full_exit()'s docstring/comment for the full rationale (same
+        # bug, same fix, fixed in both places since they duplicated the formula).
+        gross_pnl = np.expm1(spread_move)
 
         # Transaction cost on the partial close (50% of position × round-trip cost)
         partial_cost  = TOTAL_TRANSACTION_COST * self.exit_partial_frac
@@ -1460,16 +1683,44 @@ class EntryExitEngine:
         trade record in self.completed_trades for analysis.
 
         P&L calculation:
-            The spread is measured in log-price units.
-            A spread change of 0.10 in log-space ≈ 10% price move.
+            The spread is measured in log-price units:
+                spread_t = log(AVAX_t) - α_t - β_t × log(ATOM_t)
+            which is already a log-return-equivalent linear combination of the
+            two legs' prices — a raw CHANGE in spread of 0.02 corresponds
+            directly to a ~2% return on the (dollar-neutral) combined
+            position, the same way a change in log-price corresponds to a
+            simple-return via expm1(). No further normalisation is needed —
+            or economically justified.
+
+            claude code changed: was `spread_move / abs(entry_spread)` —
+            entry_spread is itself a mean-reverting quantity that sits near
+            zero by construction (the strategy only enters when it's several
+            std-devs from ITS OWN rolling mean, but the raw level is
+            unrelated to trade risk or size), so using it as a percentage-of-
+            price denominator was a category error — like computing a
+            stock's return as (price_change / distance-from-its-own-moving-
+            average) instead of (price_change / price). Empirically this
+            produced 83-97% average "returns" per trade for a market-neutral
+            pairs strategy, which is not economically plausible. Confirmed
+            by checking raw spread_move directly: it already averages ~2.7%
+            in magnitude — exactly the range expected for this kind of
+            trade — so it needed no division at all, just the log-return ->
+            simple-return conversion (expm1), included for precision though
+            negligible at these magnitudes. See
+            research_data/model_governance_log.md's "P&L normalisation bug"
+            entry for the full investigation, including why this was missed
+            by every downstream check (win_rate/Sharpe/entry_ic) despite
+            being wrong — they're all internally consistent under either
+            formula, so nothing failed loudly; only comparing the resulting
+            P&L magnitude against economic plausibility caught it.
 
             For SHORT_SPREAD (entered when spread was too high):
                 We profit when spread falls back to equilibrium
-                gross_pnl = (entry_spread - exit_spread) / |entry_spread|
+                gross_pnl_pct = expm1(entry_spread - exit_spread)
 
             For LONG_SPREAD (entered when spread was too low):
                 We profit when spread rises back to equilibrium
-                gross_pnl = (exit_spread - entry_spread) / |entry_spread|
+                gross_pnl_pct = expm1(exit_spread - entry_spread)
 
             Transaction costs (fee + slippage, both legs, both entry and exit):
                 total_cost = TOTAL_TRANSACTION_COST = 0.3% round trip
@@ -1491,11 +1742,12 @@ class EntryExitEngine:
             # Short spread: we profit when spread falls
             spread_move = trade.entry_spread - spread
 
-        # Convert to percentage using entry spread as denominator
-        if abs(trade.entry_spread) > 1e-10:
-            gross_pnl_pct = spread_move / abs(trade.entry_spread)
-        else:
-            gross_pnl_pct = 0.0
+        # claude code changed: was `spread_move / abs(trade.entry_spread)` —
+        # see the docstring above for the full rationale. expm1 converts the
+        # log-return (spread_move) to a simple return; identical to
+        # spread_move itself to ~4 decimal places at these magnitudes, kept
+        # for correctness rather than because it changes the numbers here.
+        gross_pnl_pct = np.expm1(spread_move)
 
         # ── Apply transaction costs ───────────────────────────────────────────
         # Full round-trip cost: fee + slippage on both legs, entry + exit
@@ -2014,6 +2266,7 @@ def run_entry_exit_simulation(
     output_dir:              str   = "research_data",
     capital:                 float = STRATEGY_CAPITAL_USDT,
     require_passes_filters:  bool  = True,   # claude code changed: new param — see docstring
+    resample_hours:          Optional[int] = None,   # claude code changed: new param — see CANDLE_RESAMPLE_HOURS module comment
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Standalone entry point for the entry/exit simulation.
@@ -2140,6 +2393,7 @@ def run_entry_exit_simulation(
         symbol_b=symbol_b,                               # claude code changed: new arg
         validated_half_life=validated_half_life,        # claude code changed: new arg
         exit_time_stop_hours=exit_time_stop_hours,      # claude code changed: new arg — was implicitly EXIT_TIME_STOP_HOURS=240 for every pair
+        resample_hours=resample_hours,                   # claude code changed: new arg
         capital_usdt=capital,
         output_dir=output_dir,
     )
@@ -2221,6 +2475,16 @@ if __name__ == "__main__":
             "pair like DOT_USDT/LINK_USDT (196.8h)."                           # claude code changed: new
         ),                                                                       # claude code changed: new
     )                                                                            # claude code changed: new
+    parser.add_argument(                                                        # claude code changed: new
+        "--resample-hours",                                                    # claude code changed: new
+        type=int,                                                               # claude code changed: new
+        default=None,                                                          # claude code changed: new
+        help=(                                                                  # claude code changed: new
+            "Resample the kalman series to this candle width (in hours) "      # claude code changed: new
+            "before scanning for entries/exits, e.g. 4. Default: no "          # claude code changed: new
+            "resampling (native 1h candles)."                                   # claude code changed: new
+        ),                                                                       # claude code changed: new
+    )                                                                            # claude code changed: new
     args = parser.parse_args()                                                  # claude code changed: new
 
     run_entry_exit_simulation(                                                  # claude code changed: was called with hardcoded kalman_csv/output_dir/capital values
@@ -2228,4 +2492,5 @@ if __name__ == "__main__":
         output_dir=args.output_dir,                                            # claude code changed: was "research_data"
         capital=args.capital,                                                   # claude code changed: was STRATEGY_CAPITAL_USDT
         require_passes_filters=not args.allow_filtered_pair,                   # claude code changed: new
+        resample_hours=args.resample_hours,                                    # claude code changed: new
     )

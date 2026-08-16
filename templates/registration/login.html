@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Sign In — Quant Bot Pro{% endblock %}
+
+{% block content %}
+<div class="term-login-wrap">
+    <div class="term-panel term-login-panel">
+        <div class="term-brand">
+            <span class="term-brand-name">QUANT BOT PRO</span>
+            <span class="term-brand-sub">Research &amp; Systematic Trading</span>
+        </div>
+
+        {% if form.errors %}
+        <div class="term-login-error mono">Incorrect username or password.</div>
+        {% endif %}
+
+        <form method="post" action="{% url 'login' %}" class="term-login-form">
+            {% csrf_token %}
+            <label class="term-login-label mono" for="id_username">Username</label>
+            <input type="text" name="username" id="id_username" class="term-input term-login-input mono" autocapitalize="none" autocomplete="username" required autofocus>
+
+            <label class="term-login-label mono" for="id_password">Password</label>
+            <input type="password" name="password" id="id_password" class="term-input term-login-input mono" autocomplete="current-password" required>
+
+            <input type="hidden" name="next" value="{{ next }}">
+
+            <button type="submit" class="term-btn term-login-submit mono">Sign In</button>
+        </form>
+
+        {# claude code changed: new — link to the new self-service signup #}
+        {# flow, per "sign in option for unlogged in users" request. #}
+        <div class="term-login-footer mono">
+            No account? <a href="{% url 'signup' %}">Create one</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

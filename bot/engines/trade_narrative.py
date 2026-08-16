@@ -37,6 +37,10 @@ from dataclasses import dataclass, field   # Clean structured objects
 from typing import Dict, Any          # Type hints for clarity
 from datetime import datetime         # Timestamp for each narrative
 
+# claude code changed: new import — Phase 2 (trade provenance): attaches
+# research-verdict info to every trade narrative
+from bot.research.validated_feature_registry import get_strategy_verdict
+
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,15 @@ class TradeNarrative:
 
     # ── RSI ZONE ─────────────────────────────────────────────
     rsi_zone: str = ""       # e.g. "MOMENTUM_ZONE", "OVERBOUGHT", "OVERSOLD"
+
+    # claude code changed: new fields — Phase 2 (trade provenance). Distinct
+    # from strategy_reason above (that's the strategy's own internal
+    # rationale code, not a research-validation verdict) — see
+    # bot/research/validated_feature_registry.py. Populated by
+    # generate_entry() below via get_strategy_verdict(strategy_name).
+    research_verdict: str = ""          # SUPPORTED / CONDITIONAL / WEAK / REJECTED / UNTESTED
+    production_eligible: bool = False   # True only for a SUPPORTED verdict
+    verdict_rejection_reason: str = ""  # Evidence cited for the verdict above
 
 
 # ============================================================
@@ -200,6 +213,13 @@ class TradeNarrativeGenerator:
                 signal, direction, adx, rsi, rsi_zone, regime, confidence
             )
 
+            # claude code changed: new — Phase 2 (trade provenance). Looks up
+            # whether the strategy that produced this trade has cleared
+            # research validation, so the narrative can say WHICH verdict
+            # justified it, not just which strategy fired. See
+            # bot/research/validated_feature_registry.py.
+            verdict = get_strategy_verdict(strategy)
+
             # ── GENERATE NARRATIVE TEXT ───────────────────────
             entry_text = self._write_entry_narrative(
                 direction   = direction,
@@ -246,6 +266,9 @@ class TradeNarrativeGenerator:
                 sl_distance       = round(sl_distance, 6),
                 tp_distance       = round(tp_distance, 6),
                 rsi_zone          = rsi_zone,
+                research_verdict           = verdict.research_verdict,       # claude code changed: new
+                production_eligible        = verdict.production_eligible,    # claude code changed: new
+                verdict_rejection_reason   = verdict.rejection_reason,       # claude code changed: new
             )
 
             # Log confirmation that narrative was generated
@@ -562,6 +585,9 @@ class TradeNarrativeGenerator:
             # Strategy
             "strategy_name":      narrative.strategy_name,
             "strategy_reason":    narrative.strategy_reason,
+            "research_verdict":         narrative.research_verdict,        # claude code changed: new
+            "production_eligible":      narrative.production_eligible,     # claude code changed: new
+            "verdict_rejection_reason": narrative.verdict_rejection_reason, # claude code changed: new
 
             # Regime
             "regime":             narrative.regime,

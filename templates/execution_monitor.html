@@ -1,0 +1,126 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Execution Monitor. Real
+   TradeRecord query (bot/views/terminal_data.py::get_execution_state()) —
+   open/closed positions, realized P&L, fees, slippage. TradeRecord has
+   zero rows today (DRY_RUN=True, no live trades have executed yet), so
+   this correctly renders an honest empty state, not an error or a
+   placeholder number. Unrealized P&L and pending orders stay explicitly
+   unavailable with their documented reasons — not approximated.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="execution_monitor" %}
+
+<div class="term-body">
+
+    {% if execution.available %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Execution Summary</span>
+            <span class="term-section-meta">source: TradeRecord (bot/journal/models.py)</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Open Positions</div><div class="metric-value stat-number" data-target="{{ execution.open_count }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Closed Trades</div><div class="metric-value stat-number" data-target="{{ execution.total_closed }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Realized P&amp;L</div><div class="metric-value stat-number {% if execution.realized_pnl > 0 %}pos{% elif execution.realized_pnl < 0 %}neg{% endif %}" data-target="{{ execution.realized_pnl }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Total Fees</div><div class="metric-value stat-number" data-target="{{ execution.total_fees }}" data-decimals="2">0</div></div>
+            </div>
+            <div class="term-grid term-grid-3">
+                <div class="metric-tile">
+                    <div class="metric-label">Avg Slippage %</div>
+                    {% if execution.avg_slippage_pct != None %}
+                    <div class="metric-value stat-number" data-target="{{ execution.avg_slippage_pct }}" data-decimals="4">0</div>
+                    {% else %}
+                    <div class="metric-value small text-dim">Not calculated</div>
+                    {% endif %}
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Unrealized P&amp;L</div>
+                    <div class="metric-value small text-dim">Not calculated</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Pending Orders</div>
+                    <div class="metric-value small text-dim">Not calculated</div>
+                </div>
+            </div>
+            <div class="hairline"></div>
+            <div class="unavailable-inline">Unrealized P&amp;L: {{ execution.unrealized_pnl.reason }}</div><br>
+            <div class="unavailable-inline">Pending orders: {{ execution.pending_orders.reason }}</div>
+        </div>
+    </div>
+
+    <div class="two-col">
+        <div class="term-section">
+            <div class="term-section-head"><span class="term-section-title">Open Positions</span></div>
+            <div class="term-section-body">
+                {% if execution.open_positions %}
+                <div class="term-table-wrap">
+                    <table class="term-table">
+                        <thead><tr><th>Symbol</th><th>Side</th><th class="num">Entry</th><th class="num">Qty</th><th>Opened</th></tr></thead>
+                        <tbody>
+                            {% for p in execution.open_positions %}
+                            <tr>
+                                <td class="label-cell">{{ p.symbol }}</td>
+                                <td class="{% if p.side == 'buy' %}dir-long{% else %}dir-short{% endif %}">{{ p.side|upper }}</td>
+                                <td class="num">{{ p.entry_price }}</td>
+                                <td class="num">{{ p.quantity }}</td>
+                                <td class="text-dim mono">{{ p.created_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="unavailable">No open positions — 0 rows with status=OPEN in TradeRecord right now.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="term-section">
+            <div class="term-section-head"><span class="term-section-title">Recently Closed</span></div>
+            <div class="term-section-body">
+                {% if execution.recent_closed %}
+                <div class="term-table-wrap">
+                    <table class="term-table">
+                        <thead><tr><th>Symbol</th><th>Result</th><th class="num">Net P&amp;L</th><th class="num">R</th><th>Closed</th></tr></thead>
+                        <tbody>
+                            {% for t in execution.recent_closed %}
+                            <tr class="{% if t.status == 'WIN' %}row-win{% elif t.status == 'LOSS' %}row-loss{% endif %}">
+                                <td class="label-cell">{{ t.symbol }}</td>
+                                <td><span class="badge {% if t.status == 'WIN' %}pos{% else %}neg{% endif %}">{{ t.status }}</span></td>
+                                <td class="num {% if t.net_pnl > 0 %}pos{% elif t.net_pnl < 0 %}neg{% endif %}">{{ t.net_pnl }}</td>
+                                <td class="num">{{ t.r_multiple }}</td>
+                                <td class="text-dim mono">{{ t.updated_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="unavailable">No closed trades yet — 0 rows in TradeRecord with status != OPEN right now.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="term-section">
+        <div class="term-section-body">
+            <div class="unavailable">{{ execution.reason }}</div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+{% include "partials/_footer.html" with label="Execution Monitor" note="real TradeRecord query — DRY_RUN=True, expect zero rows until live trading starts" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Market Intelligence. Loops the
+   same RegimeDetector class the live bot/backtester/live_regime_monitor
+   already use across the real symbol universe (data/*.csv), for the
+   current market state of every tracked asset in one view. Plus real
+   cross-sectional dispersion (research_data/*_cross_section.csv). No
+   fabricated confidence scores — "confidence" here is RegimeDetector's
+   own HIGH/MEDIUM/LOW field, computed from how many of its 4 indicators
+   agree, not an invented probability.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="market_intelligence" %}
+
+<div class="term-body">
+
+    <!-- ================= REGIME OVERVIEW ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Market Regime Overview</span>
+            <span class="term-section-meta">RegimeDetector.detect(), last {{ regime_overview.candles_per_symbol }} candles per symbol</span>
+        </div>
+        <div class="term-section-body">
+            {% if regime_overview.available %}
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Symbols Classified</div><div class="metric-value stat-number" data-target="{{ regime_overview.n_symbols }}" data-decimals="0">0</div></div>
+                {% for regime, count in regime_overview.regime_counts.items %}
+                <div class="metric-tile">
+                    <div class="metric-label">{{ regime }}</div>
+                    <div class="metric-value stat-number {% if regime == 'TRENDING_UP' %}pos{% elif regime == 'TRENDING_DOWN' %}neg{% elif regime == 'HIGH_VOLATILITY' %}warn{% endif %}" data-target="{{ count }}" data-decimals="0">0</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% if regime_overview.n_errors %}
+            <div class="chart-caption" style="margin-bottom:10px">{{ regime_overview.n_errors }} symbol(s) failed to fetch/classify and are omitted below.</div>
+            {% endif %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Regime</th><th>Confidence</th><th class="num">ADX</th><th class="num">ATR Ratio</th><th class="num">EMA Spread %</th><th class="num">BB Width %</th><th>Vol. Extreme</th></tr></thead>
+                    <tbody>
+                        {% for r in regime_overview.rows %}
+                        <tr>
+                            <td class="label-cell"><a href="{% url 'dashboard' %}?symbol={{ r.symbol|cut:'_' }}">{{ r.symbol }}</a></td>
+                            <td><span class="badge {% if r.regime == 'TRENDING_UP' %}pos{% elif r.regime == 'TRENDING_DOWN' %}neg{% elif r.regime == 'HIGH_VOLATILITY' %}warn{% else %}neu{% endif %}">{{ r.regime }}</span></td>
+                            <td class="text-dim">{{ r.confidence }}</td>
+                            <td class="num stat-number" data-target="{{ r.adx }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if r.atr_ratio > 1.7 %}warn{% endif %}" data-target="{{ r.atr_ratio }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ r.ema_spread_pct }}" data-decimals="3">0</td>
+                            <td class="num stat-number" data-target="{{ r.bb_width_pct }}" data-decimals="3">0</td>
+                            <td>{% if r.volatility_extreme %}<span class="badge warn">YES</span>{% else %}<span class="badge dim">no</span>{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ regime_overview.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= CROSS-SECTIONAL DISPERSION ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Cross-Sectional Dispersion</span>
+            <span class="term-section-meta">source: research_data/*_cross_section.csv, cs_zscore</span>
+        </div>
+        <div class="term-section-body">
+            {% if cross_section.available %}
+            <div class="term-grid term-grid-2" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Dispersion (std of z-scores)</div><div class="metric-value stat-number" data-target="{{ cross_section.dispersion_std }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Symbols in Universe</div><div class="metric-value stat-number" data-target="{{ cross_section.n_symbols }}" data-decimals="0">0</div></div>
+            </div>
+            <div class="chart-caption" style="margin-bottom:8px">Highest |z-score| symbols — furthest from the cross-sectional mean return right now.</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th class="num">Cross-Sectional Z-Score</th></tr></thead>
+                    <tbody>
+                        {% for e in cross_section.top_extremes %}
+                        <tr>
+                            <td class="label-cell">{{ e.symbol }}</td>
+                            <td class="num stat-number {% if e.cs_zscore > 0 %}pos{% else %}neg{% endif %}" data-target="{{ e.cs_zscore }}" data-decimals="3">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ cross_section.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Market Intelligence" note="RegimeDetector across the real symbol universe, computed fresh per request" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
+{% endblock %}

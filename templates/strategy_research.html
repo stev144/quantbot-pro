@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Strategy Research. Wraps
+   bot/backtesting/portfolio_backtester.py::PortfolioBacktester.run()
+   (the exact same real, already-wired computation bot/views/dashboard.py's
+   portfolio_backtest_view JSON endpoint uses) into a ranked leaderboard:
+   real backtest + StrategyScorer.evaluate() per symbol, live OHLCV via
+   ccxt.binance (public endpoints, no API key required). Grades/verdicts
+   are StrategyScorer's own six-dimension scoring, not an invented score.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="strategy_research" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Strategy Research</span>
+            <span class="term-section-meta">source: PortfolioBacktester.run() — live OHLCV, real backtest + StrategyScorer per symbol</span>
+        </div>
+        <div class="term-section-body">
+            <form method="get" action="." style="margin-bottom:10px">
+                <label class="text-dim">Symbols (comma-separated, e.g. BTCUSDT,ETHUSDT — blank for defaults):</label>
+                <input type="text" name="pairs" class="term-input mono" style="width:260px" value="{{ pairs_param }}">
+                <button type="submit" class="term-btn">Run</button>
+            </form>
+            {% if not leaderboard.available %}
+            <div class="unavailable">{{ leaderboard.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if leaderboard.available %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Summary</span>
+        </div>
+        <div class="term-section-body">
+            {% if leaderboard.summary.available %}
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Coins Tested</div><div class="metric-value stat-number" data-target="{{ leaderboard.summary.total_coins_tested }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Total Trades</div><div class="metric-value stat-number" data-target="{{ leaderboard.summary.total_trades }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Total Net Profit</div><div class="metric-value stat-number {% if leaderboard.summary.total_net_profit > 0 %}pos{% elif leaderboard.summary.total_net_profit < 0 %}neg{% endif %}" data-target="{{ leaderboard.summary.total_net_profit }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Weighted Avg Score</div><div class="metric-value stat-number" data-target="{{ leaderboard.summary.weighted_avg_score }}" data-decimals="1">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Avg Win Rate</div><div class="metric-value stat-number" data-target="{{ leaderboard.summary.avg_win_rate }}" data-decimals="1" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Avg R</div><div class="metric-value stat-number" data-target="{{ leaderboard.summary.avg_r }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Profitable Coins</div><div class="metric-value stat-number pos" data-target="{{ leaderboard.summary.profitable_coins }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Losing Coins</div><div class="metric-value stat-number neg" data-target="{{ leaderboard.summary.losing_coins }}" data-decimals="0">0</div></div>
+            </div>
+            <div class="chart-caption">Best: {{ leaderboard.summary.best_coin }} ({{ leaderboard.summary.best_score }}) &middot; Worst: {{ leaderboard.summary.worst_coin }} ({{ leaderboard.summary.worst_score }})</div>
+            <div class="hairline"></div>
+            <div class="term-grid term-grid-6">
+                {% for grade, count in leaderboard.summary.grade_distribution.items %}
+                <div class="metric-tile"><div class="metric-label">Grade {{ grade }}</div><div class="metric-value stat-number" data-target="{{ count }}" data-decimals="0">0</div></div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="unavailable">{{ leaderboard.summary.message }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Leaderboard</span>
+            <span class="term-section-meta">ranked by total_score (StrategyScorer.evaluate())</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th class="num">Score</th><th>Grade</th><th>Verdict</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">Profit Factor</th><th class="num">Avg R</th><th class="num">Max DD</th><th class="num">Net Profit</th></tr></thead>
+                    <tbody>
+                        {% for r in leaderboard.ranked %}
+                        <tr>
+                            <td class="label-cell">{{ r.symbol }}</td>
+                            <td class="num stat-number" data-target="{{ r.total_score }}" data-decimals="1">0</td>
+                            <td><span class="badge {% if r.grade|slice:':1' == 'A' %}pos{% elif r.grade|slice:':1' == 'B' %}neu{% elif r.grade|slice:':1' == 'C' %}warn{% else %}neg{% endif %}">{{ r.grade }}</span></td>
+                            <td class="text-dim">{{ r.verdict }}</td>
+                            <td class="num stat-number" data-target="{{ r.total_trades }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ r.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ r.profit_factor }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if r.avg_r > 0 %}pos{% elif r.avg_r < 0 %}neg{% endif %}" data-target="{{ r.avg_r }}" data-decimals="2">0</td>
+                            <td class="num stat-number neg" data-target="{{ r.max_drawdown }}" data-decimals="2" data-suffix="%">0%</td>
+                            <td class="num stat-number {% if r.net_profit > 0 %}pos{% elif r.net_profit < 0 %}neg{% endif %}" data-target="{{ r.net_profit }}" data-decimals="2">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if leaderboard.errors %}
+            <div class="chart-caption" style="margin-top:8px">Failed to test: {% for sym, err in leaderboard.errors.items %}{{ sym }} ({{ err|truncatechars:60 }}) {% endfor %}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="two-col">
+        <div class="term-section">
+            <div class="term-section-head"><span class="term-section-title">Coins to Trade</span><span class="term-section-meta">score &ge; 70</span></div>
+            <div class="term-section-body">
+                {% if leaderboard.coins_to_trade %}
+                <div>{% for s in leaderboard.coins_to_trade %}<span class="badge pos">{{ s }}</span> {% endfor %}</div>
+                {% else %}
+                <div class="unavailable">No symbols cleared the 70-score threshold this run.</div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="term-section">
+            <div class="term-section-head"><span class="term-section-title">Coins to Avoid</span><span class="term-section-meta">score &lt; 50</span></div>
+            <div class="term-section-body">
+                {% if leaderboard.coins_to_avoid %}
+                <div>{% for s in leaderboard.coins_to_avoid %}<span class="badge neg">{{ s }}</span> {% endfor %}</div>
+                {% else %}
+                <div class="unavailable">No symbols fell below the 50-score threshold this run.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+{% include "partials/_footer.html" with label="Strategy Research" note="live OHLCV via ccxt.binance, real backtest + StrategyScorer per symbol" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
+{% endblock %}

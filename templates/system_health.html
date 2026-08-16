@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load status_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — System Health. Real checks only:
+   DB connectivity, per-module import checks (bot/views/terminal_data.py
+   ::get_system_health()), research-data freshness, exchange API key
+   presence. "Execution Engine: OK" means the module imports cleanly, NOT
+   that bot_runner.py is currently running — that is a separate process
+   this web request has no visibility into, and this page does not
+   pretend otherwise. deep_health_check.py's full 5-layer audit stays
+   CLI-only (python manage.py deep_health_check) — it is not triggered
+   from here since it is slow and built for a CLI run, not a page load.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="system_health" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">System Health</span>
+            <span class="term-section-meta">source: terminal_data.get_system_health()</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-3" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Overall</div>
+                    <div class="metric-value small"><span class="status-dot {% if health.overall == 'ok' %}ok{% elif health.overall == 'warn' %}warn{% else %}err{% endif %}"></span><span class="badge {{ health.overall|health_class }}">{{ health.overall|upper }}</span></div>
+                </div>
+            </div>
+            <div class="chart-caption" style="margin-bottom:10px">"OK" on an engine check means its module imports cleanly and required dependencies resolve — it does NOT mean bot_runner.py (the live trading loop) is currently running. That process is separate and has no status this web request can observe.</div>
+            <div>
+                {% for c in health.checks %}
+                <div class="status-row">
+                    <span class="status-name"><span class="status-dot {% if c.status == 'ok' %}ok{% elif c.status == 'warn' %}warn{% else %}err{% endif %}"></span>{{ c.name }}</span>
+                    <span class="status-detail">{{ c.detail }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Deep Structural Audit</span>
+        </div>
+        <div class="term-section-body">
+            <div class="unavailable">Not run from the web — deep_health_check.py's 5-layer (structural/functional/behavioural/integration/drift) audit runs against synthetic test data and takes real time across the whole bot/ package. Run it from the CLI: <code class="mono">python manage.py deep_health_check --mode standard</code></div>
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="System Health" note="import checks + DB + research freshness, not a live process monitor" %}
+
+{% endblock %}

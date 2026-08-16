@@ -13,18 +13,7 @@
    that feature's family.
 {% endcomment %}
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-<div class="term-topbar">
-    <div class="term-brand">
-        <span class="term-brand-name">QUANT BOT PRO</span>
-        <span class="term-brand-sub">Feature Comparison</span>
-    </div>
-    <div class="term-topbar-right">
-        <a href="{% url 'feature_leaderboard' %}" class="term-btn">← Leaderboard</a>
-        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
-    </div>
-</div>
+{% include "partials/_topbar.html" with active="features" %}
 
 <div class="term-body">
 
@@ -72,7 +61,7 @@
                         <tr><td class="label-cell">Stability &sigma;</td>{% for r in comparison.rows %}<td class="num">{% if r.stability_std_mean != None %}{{ r.stability_std_mean|floatformat:4 }}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
                         <tr><td class="label-cell">Sharpe Contribution</td>{% for r in comparison.rows %}<td class="num">{% if r.sharpe_contrib_mean != None %}{{ r.sharpe_contrib_mean|floatformat:2 }}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
                         <tr><td class="label-cell">Decay Trend</td>{% for r in comparison.rows %}<td class="text-dim">{% if r.trend %}{{ r.trend }}{% elif r.trend_counts %}{% for t,c in r.trend_counts.items %}{{ t }}({{ c }}) {% endfor %}{% else %}<span class="text-dim">Not calculated</span>{% endif %}</td>{% endfor %}</tr>
-                        <tr><td class="label-cell">Passes FDR</td>{% for r in comparison.rows %}<td class="num">{{ r.n_passes_fdr }}</td>{% endfor %}</tr>
+                        <tr><td class="label-cell">Symbols Passing FDR</td>{% for r in comparison.rows %}<td class="num">{{ r.n_passes_fdr }} / {{ r.n_symbols_covered }}</td>{% endfor %}</tr>
                         <tr><td class="label-cell">Correlation Available</td>{% for r in comparison.rows %}<td>{% if r.correlation_available %}<span class="badge pos">YES</span>{% else %}<span class="badge dim">no</span>{% endif %}</td>{% endfor %}</tr>
                         <tr><td class="label-cell">Detail</td>{% for r in comparison.rows %}<td><a href="{% url 'feature_detail' r.feature %}">view →</a></td>{% endfor %}</tr>
                     </tbody>
@@ -95,42 +84,31 @@
 
 </div>
 
-<div class="term-footer">
-    <span>Quant Bot Pro — Feature Intelligence</span>
-    <span class="mono">comparing {{ comparison.rows|length }} feature(s)</span>
-</div>
+{% include "partials/_footer.html" with label="Feature Intelligence" note="side-by-side feature comparison" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>
 <script>
-// claude code changed: chart colors are baked in at creation time via
-// getComputedStyle, so a bare theme flip left this stuck on the old
-// palette. renderComparisonChart() destroys and recreates it reading
-// fresh CSS variables. Re-render is triggered by a MutationObserver on
-// data-theme rather than shadowing toggleTheme() — base.html's own
-// trailing script tag sits after this page's content in the rendered
-// DOM and executes second, so any redefinition of toggleTheme() made
-// here would silently get clobbered and never run (confirmed:
-// dashboard.html's existing shadow has this same problem). Watching the
-// attribute directly works no matter which toggleTheme ends up bound.
 var comparisonChartInstance = null;
 
 function renderComparisonChart() {
     var chartCtx = document.getElementById("comparisonChart");
     if (!chartCtx) return;
 
-    if (comparisonChartInstance) {
-        comparisonChartInstance.destroy();
-        comparisonChartInstance = null;
-    }
+    comparisonChartInstance = destroyChart(comparisonChartInstance);
 
     var series = {{ series_json|safe }};
-    var style = getComputedStyle(document.documentElement);
     var palette = [
-        style.getPropertyValue("--neutral").trim(),
-        style.getPropertyValue("--positive").trim(),
-        style.getPropertyValue("--negative").trim(),
-        style.getPropertyValue("--warning").trim(),
-        style.getPropertyValue("--text-dim").trim(),
-        style.getPropertyValue("--border-strong").trim(),
+        themeColor("--neutral"),
+        themeColor("--positive"),
+        themeColor("--negative"),
+        themeColor("--warning"),
+        themeColor("--text-dim"),
+        themeColor("--border-strong"),
     ];
     var allYears = new Set();
     series.forEach(function (s) { Object.keys(s.data).forEach(function (y) { allYears.add(y); }); });
@@ -154,22 +132,15 @@ function renderComparisonChart() {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: { legend: { display: true, labels: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } } } },
-            scales: {
-                x: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } },
-                y: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } }
-            }
+            plugins: { legend: { display: true, labels: { color: themeColor("--text-dim"), font: { size: 10 } } } },
+            scales: chartCommonScales(),
         }
     });
 }
 
 document.addEventListener("DOMContentLoaded", function () {
     renderComparisonChart();
-    new MutationObserver(renderComparisonChart).observe(
-        document.documentElement,
-        { attributes: true, attributeFilter: ["data-theme"] }
-    );
+    onThemeChange(renderComparisonChart);
 });
 </script>
-
 {% endblock %}

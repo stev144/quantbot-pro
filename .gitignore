@@ -7,11 +7,14 @@ venv/
 
 # Django
 db.sqlite3
+# collectstatic output — regenerable, not source
+staticfiles/
 
 # Bot runtime output (regenerable)
 bot/cache/*.pkl
 logs/
 trades.log
+trades.log.*
 
 # Research pipeline output (regenerable via fetch_all_symbols.py + run_research_all.py;
 # large — one observations.csv alone is ~224MB, plus 100-shuffle permutation-test folders)
@@ -21,6 +24,10 @@ research_data/
 # Claude Code local/machine-specific state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Local secrets — read automatically by python-decouple (config/settings.py).
+# Never commit: contains the Postgres app password and Django SECRET_KEY.
+.env
 
 # Stray empty debug artifacts (see CLAUDE.md "Notable repo quirks" — leftover
 # shell-redirection mistakes, not part of the app)

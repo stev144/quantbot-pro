@@ -224,6 +224,33 @@ class TradeRecord(models.Model):
     holding_candles = models.IntegerField(null=True, blank=True)
 
 
+    # ---- Provenance Fields ----
+    # claude code changed: new — Phase 4 (DB persistence of trade
+    # provenance). Mirrors bot/engines/trade_narrative.py's TradeNarrative
+    # fields of the same name — see bot/research/validated_feature_registry.py
+    # for what research_verdict/production_eligible actually mean. All
+    # defaulted so this is a purely additive migration.
+
+    # SUPPORTED / CONDITIONAL / WEAK / REJECTED / UNTESTED at the time this
+    # trade was placed — the strategy's verdict can change over time as
+    # research evolves, so this is a point-in-time snapshot, not a live link.
+    research_verdict = models.CharField(max_length=20, default="", blank=True)
+
+    # Whether the strategy that produced this trade had a SUPPORTED verdict
+    # at entry time — should always be True for any trade that reaches this
+    # table once StrategyRouter's production-validation gate is in place,
+    # but recorded explicitly rather than assumed.
+    production_eligible = models.BooleanField(default=False)
+
+    # The evidence cited for research_verdict above, e.g. which validator/
+    # permutation-test results justified or blocked this strategy.
+    verdict_rejection_reason = models.TextField(default="", blank=True)
+
+    # Full human-readable narrative text — see TradeNarrativeGenerator.
+    entry_narrative = models.TextField(default="", blank=True)
+    exit_narrative = models.TextField(default="", blank=True)
+
+
     # ---- Status ----
 
     # "OPEN"  — trade is currently live on the exchange
@@ -255,3 +282,24 @@ class TradeRecord(models.Model):
         # Human readable labels in Django admin panel
         verbose_name = "Trade Record"
         verbose_name_plural = "Trade Records"
+
+        # claude code changed: new — fixes a real bug found during Issue 2
+        # testing: bot/journal/trade_logger.py's log_exit() does
+        # TradeRecord.objects.get(symbol=symbol, status="OPEN"), which
+        # raises MultipleObjectsReturned if more than one OPEN row exists
+        # for the same symbol. Nothing previously prevented that at the DB
+        # level — only an in-memory check in ExecutionEngine.execute_signal()
+        # (PositionTracker.has_position()), which resets to empty on every
+        # process restart. A crash/restart with a real position still open
+        # could let a fresh signal open a second position, writing a second
+        # OPEN TradeRecord for the same symbol. This partial unique index
+        # makes that structurally impossible at the database level — the
+        # INSERT itself fails — rather than relying solely on Python-level
+        # checks that a crash can bypass.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["symbol"],
+                condition=models.Q(status="OPEN"),
+                name="unique_open_trade_per_symbol",
+            )
+        ]

@@ -16,17 +16,11 @@
    not computed shows "Not calculated".
 {% endcomment %}
 
-<div class="term-topbar">
-    <div class="term-brand">
-        <span class="term-brand-name">QUANT BOT PRO</span>
-        <span class="term-brand-sub">Feature Intelligence</span>
-    </div>
-    <div class="term-topbar-right">
-        <a href="{% url 'research_lab' %}" class="term-btn">← Research Lab</a>
-        <a href="{% url 'feature_comparison' %}" class="term-btn">Compare</a>
-        <a href="{% url 'feature_correlation' %}" class="term-btn">Correlation Matrix</a>
-        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
-    </div>
+{% include "partials/_topbar.html" with active="features" %}
+
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end; gap:var(--sp-2)">
+    <a href="{% url 'feature_comparison' %}" class="term-btn">Compare</a>
+    <a href="{% url 'feature_correlation' %}" class="term-btn">Correlation Matrix</a>
 </div>
 
 <div class="term-body">
@@ -130,34 +124,10 @@
 
 </div>
 
-<div class="term-footer">
-    <span>Quant Bot Pro — Feature Intelligence</span>
-    <span class="mono">reading research_data/ directly, offline pipeline</span>
-</div>
+{% include "partials/_footer.html" with label="Feature Intelligence" note="reading research_data/ directly, offline pipeline" %}
 
-<script>
-    function formatNumber(num, decimals) {
-        if (!isFinite(num)) return "0";
-        return Number(num).toFixed(decimals);
-    }
-    function animateCounter(el) {
-        var target = parseFloat(el.getAttribute("data-target"));
-        if (isNaN(target)) return;
-        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
-        var startTime = performance.now();
-        var duration = 900;
-        function step(now) {
-            var progress = Math.min((now - startTime) / duration, 1);
-            el.textContent = formatNumber(target * progress, decimals);
-            if (progress < 1) requestAnimationFrame(step);
-            else el.textContent = formatNumber(target, decimals);
-        }
-        requestAnimationFrame(step);
-    }
-    function animateAllCounters() {
-        document.querySelectorAll(".stat-number").forEach(animateCounter);
-    }
-    document.addEventListener("DOMContentLoaded", animateAllCounters);
-</script>
+{% endblock %}
 
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

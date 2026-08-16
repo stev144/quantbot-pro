@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load research_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Robustness Analysis. Extracted
+   verbatim from Research Lab's panels 7 (Strategy Comparison) and 9
+   (Robustness Testing), which now live here instead, with a summary
+   card + link left behind in research_lab.html. Same six-state verdict
+   vocabulary (bot/templatetags/research_extras.py) — this is a
+   continuation of Research Lab's pipeline-stage governance, not a
+   different taxonomy.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="robustness_analysis" %}
+
+<div class="term-body">
+
+    <!-- ================= STRATEGY COMPARISON / WALK-FORWARD ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Strategy Comparison — Walk-Forward Leaderboard</span>
+            <span class="term-section-meta">source: walk_forward_leaderboard.csv</span>
+        </div>
+        <div class="term-section-body">
+            {% if strategy_comparison.leaderboard.available %}
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">OOS Trades</th><th class="num">OOS Win %</th><th class="num">OOS Sharpe</th><th class="num">OOS Profit Factor</th><th class="num">WF Efficiency</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in strategy_comparison.leaderboard.rows %}
+                        <tr>
+                            <td class="label-cell">{{ r.pair_name }}</td>
+                            <td class="num stat-number" data-target="{{ r.oos_trades }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ r.oos_win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                            <td class="num stat-number {% if r.oos_sharpe > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.oos_sharpe }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ r.oos_profit_factor }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ r.walk_forward_efficiency }}" data-decimals="3">0</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">walk_forward_leaderboard.csv unavailable</div>
+            {% endif %}
+
+            {% if strategy_comparison.strategy_summaries %}
+            <div class="metric-label" style="margin-bottom:6px">Full-Period Strategy Summaries</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">Profit Factor</th><th class="num">Sharpe</th><th class="num">Entry IC</th><th class="num">Entry IC p-value</th></tr></thead>
+                    <tbody>
+                        {% for s in strategy_comparison.strategy_summaries %}
+                        <tr>
+                            <td class="label-cell">{{ s.pair }}</td>
+                            <td class="num stat-number" data-target="{{ s.n_total_trades|default_if_none:0 }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ s.win_rate|default_if_none:0 }}" data-decimals="1" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ s.profit_factor|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if s.sharpe_ratio > 0 %}pos{% else %}neg{% endif %}" data-target="{{ s.sharpe_ratio|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if s.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ s.entry_ic|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ s.entry_ic_pvalue|default_if_none:0 }}" data-decimals="4">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= ROBUSTNESS TESTING / PERMUTATION ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Robustness Testing — Permutation Tests</span>
+            <span class="term-section-meta">source: permutation_test_engine.py, {{ robustness.n_shuffles_per_pair }} shuffles/pair</span>
+        </div>
+        <div class="term-section-body">
+            {% if robustness.available %}
+            <div class="chart-caption" style="margin-bottom:10px">The strictest test in the pipeline: the real (unshuffled) result must beat {{ robustness.n_shuffles_per_pair }} randomized re-simulations on win rate, Sharpe, and profit factor, AND show a meaningfully positive entry IC. This is the test that overrides an earlier PROMISING walk-forward pass if the edge doesn't hold up here.</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">Real Win %</th><th class="num">Win % Percentile</th><th class="num">Real Sharpe</th><th class="num">Sharpe Percentile</th><th class="num">Entry IC</th><th>IC Meaningfully +</th><th>Edge Appears Real</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for r in robustness.rows %}
+                        <tr>
+                            <td class="label-cell">{{ r.pair }}</td>
+                            <td class="num stat-number" data-target="{{ r.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                            <td class="num stat-number {% if r.win_rate_percentile <= 5 %}neg{% endif %}" data-target="{{ r.win_rate_percentile }}" data-decimals="1">0</td>
+                            <td class="num stat-number" data-target="{{ r.sharpe_ratio }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if r.sharpe_ratio_percentile <= 5 %}neg{% endif %}" data-target="{{ r.sharpe_ratio_percentile }}" data-decimals="1">0</td>
+                            <td class="num stat-number {% if r.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.entry_ic }}" data-decimals="4">0</td>
+                            <td>{% if r.real_entry_ic_meaningfully_positive %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td>{% if r.edge_appears_real %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
+                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No permutation_verdict.csv found under research_data/permutation_test/</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Robustness Analysis" note="walk-forward + permutation testing, extracted from Research Lab" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
+{% endblock %}

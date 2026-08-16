@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load research_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Strategy Production Pipeline.
+   Live production-gating state of every strategy StrategyRouter can
+   dispatch to, sourced directly from
+   bot/research/validated_feature_registry.py's STRATEGY_VERDICTS — NOT
+   the abstract research findings log (see Research Archive for that).
+   A strategy only becomes production_eligible with a SUPPORTED verdict
+   and cited evidence; nothing here is inferred or aspirational.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="strategy_pipeline" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Strategy Production Pipeline</span>
+            <span class="term-section-meta">source: bot/research/validated_feature_registry.py — live router-gating state</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption" style="margin-bottom:10px">
+                Which strategies StrategyRouter is currently allowed to trade with, and why. This is the LIVE
+                production-eligibility gate — not the research findings archive (see Research Archive/Rejected
+                Research for the abstract pairs/features research log). A strategy only appears here with a
+                SUPPORTED verdict is eligible to fire real trades; everything else is blocked at the router by
+                default until research validates it.
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Strategy</th><th>Verdict</th><th>Production Eligible</th><th>Rejection Reason</th></tr></thead>
+                    <tbody>
+                        {% for s in strategies %}
+                        <tr class="{% if not s.production_eligible %}row-loss{% endif %}">
+                            <td class="label-cell" style="font-weight:600">{{ s.strategy_name }}</td>
+                            <td><span class="badge {{ s.research_verdict|verdict_class }}">{{ s.research_verdict }}</span></td>
+                            <td><span class="badge {% if s.production_eligible %}pos{% else %}neg{% endif %}">{% if s.production_eligible %}YES{% else %}NO{% endif %}</span></td>
+                            <td class="text-dim" style="font-size:12px">{{ s.rejection_reason|default:"—" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Strategy Production Pipeline" note="live production-gating state, not research history" %}
+
+{% endblock %}

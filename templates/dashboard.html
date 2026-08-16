@@ -1,10 +1,8 @@
 {% extends 'base.html' %}
 {% load static %}
+{% load research_extras %}
 
 {% block content %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-{# claude code changed: new — the one real typed-tagline implementation, see static/js/typed.js header comment #}
-<script src="{% static 'js/typed.js' %}"></script>
 
 {% comment %}
    claude code changed: full rewrite — institutional quant-terminal
@@ -43,6 +41,7 @@
 {% endcomment %}
 
 {% if error %}
+{% include "partials/_topbar.html" with active="dashboard" %}
 <div class="term-body">
     <div class="term-panel">
         <span class="badge neg">ERROR</span>
@@ -51,23 +50,15 @@
 </div>
 {% else %}
 
-<!-- ================= TOP BAR ================= -->
-<div class="term-topbar">
-    <div class="term-brand">
-        <span class="term-brand-name">QUANT BOT PRO</span>
-        <span class="term-brand-sub">Research Terminal</span>
-    </div>
-    <div class="term-topbar-right">
-        <a href="{% url 'research_lab' %}?symbol={{ symbol }}" class="term-btn">Research Lab →</a>
-        <form class="term-symbol-form" method="get" action=".">
-            <input type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
-            <button type="submit" class="term-btn">Load</button>
-        </form>
-        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
-    </div>
-</div>
+{% include "partials/_topbar.html" with active="dashboard" %}
 
-<div class="term-tagline-strip mono" id="typed-line">&gt; <span id="typed-text"></span><span class="typed-cursor">▌</span></div>
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <form class="term-symbol-form" method="get" action=".">
+        <label class="text-dim mono" for="db-symbol">Symbol:</label>
+        <input id="db-symbol" type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
+        <button type="submit" class="term-btn">Load</button>
+    </form>
+</div>
 
 <div class="term-body">
 
@@ -389,7 +380,7 @@
                     <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th class="num">Net P&amp;L</th><th class="num">R</th><th>Closed</th></tr></thead>
                     <tbody>
                         {% for t in execution_state.recent_closed %}
-                        <tr>
+                        <tr class="{% if t.status == 'WIN' %}row-win{% elif t.status == 'LOSS' %}row-loss{% endif %}">
                             <td class="label-cell">{{ t.symbol }}</td>
                             <td class="{% if t.side == 'BUY' %}dir-long{% else %}dir-short{% endif %}">{{ t.side }}</td>
                             <td><span class="badge {% if t.status == 'WIN' %}pos{% else %}neg{% endif %}">{{ t.status }}</span></td>
@@ -531,7 +522,7 @@
             <div class="metric-label" style="margin-bottom:6px">Rejection Analysis</div>
             <div class="term-table-wrap" style="margin-bottom:16px">
                 <table class="term-table">
-                    <thead><tr><th>Reason</th><th class="num">Count</th><th class="num">%</th></tr></thead>
+                    <thead><tr><th>Reason</th><th class="num">Count</th><th class="num">%</th><th>Verdict</th></tr></thead>
                     <tbody>
                         {% for reason, d in rejection_table.items %}
                         {% if d.count > 0 %}
@@ -539,6 +530,7 @@
                             <td class="label-cell">{{ reason }}</td>
                             <td class="num stat-number" data-target="{{ d.count }}" data-decimals="0">0</td>
                             <td class="num stat-number" data-target="{{ d.percentage }}" data-decimals="2" data-suffix="%">0%</td>
+                            <td>{% if d.research_verdict %}<span class="badge {{ d.research_verdict|verdict_class }}">{{ d.research_verdict }}</span>{% endif %}</td>
                         </tr>
                         {% endif %}
                         {% endfor %}
@@ -550,10 +542,10 @@
             <div class="metric-label" style="margin-bottom:6px">Trade Log ({{ trades|length }})</div>
             <div class="term-table-wrap">
                 <table class="term-table">
-                    <thead><tr><th>#</th><th>Dir</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th class="num">R</th><th class="num">Held</th><th>Exit Reason</th></tr></thead>
+                    <thead><tr><th>#</th><th>Dir</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th class="num">R</th><th class="num">Held</th><th>Exit Reason</th><th>Verdict</th></tr></thead>
                     <tbody>
                         {% for t in trades|slice:":100" %}
-                        <tr>
+                        <tr class="{% if t.profit > 0 %}row-win{% elif t.profit < 0 %}row-loss{% endif %}" title="{{ t.entry_narrative }}">
                             <td class="num text-dim">{{ forloop.counter }}</td>
                             <td class="{% if t.direction == 'LONG' %}dir-long{% else %}dir-short{% endif %}">{{ t.direction }}</td>
                             <td class="num stat-number" data-target="{{ t.entry_price|default_if_none:0 }}" data-decimals="4">0</td>
@@ -562,6 +554,7 @@
                             <td class="num stat-number {% if t.r_multiple > 0 %}pos{% elif t.r_multiple < 0 %}neg{% endif %}" data-target="{{ t.r_multiple|default_if_none:0 }}" data-decimals="2">0</td>
                             <td class="num stat-number" data-target="{{ t.holding_candles|default_if_none:0 }}" data-decimals="0">0</td>
                             <td class="label-cell text-dim">{{ t.exit_reason }}</td>
+                            <td>{% if t.research_verdict %}<span class="badge {{ t.research_verdict|verdict_class }}">{{ t.research_verdict }}</span>{% else %}<span class="badge dim">&mdash;</span>{% endif %}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -575,95 +568,31 @@
 
 </div>
 
-<div class="term-footer">
-    <span>Quant Bot Pro — internal research terminal</span>
-    <span class="mono">{{ symbol }} · backtest cache: 1h</span>
-</div>
+{% include "partials/_footer.html" with label="Executive Dashboard" note=symbol|add:" · backtest cache: 1h" %}
 
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>
+{% if not error %}
 <script>
     window.equityData = {{ equity_curve|safe }};
     window.drawdownData = {{ drawdown_curve|safe }};
 
-    // ============================================================
-    // COUNT-UP ANIMATION — every numeric value on the page
-    // claude code changed: generalized from static/js/charts.js's
-    // .stat-number system (which only covered summary cards) to cover
-    // every metric tile AND every numeric table cell rendered above,
-    // per explicit request to keep every number animating as before.
-    // Same mechanism: animate 0 -> data-target on load, then repeat
-    // every 5s. data-suffix (e.g. "%") is appended after the formatted
-    // number since Chart.js-style toFixed() can't include it directly.
-    // ============================================================
-    function formatNumber(num, decimals) {
-        if (!isFinite(num)) return "0";
-        return Number(num).toFixed(decimals);
-    }
-
-    function animateCounter(el) {
-        var target = parseFloat(el.getAttribute("data-target"));
-        if (isNaN(target)) return;   // non-numeric cells (e.g. "—" placeholders) are left untouched
-
-        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
-        var suffix = el.getAttribute("data-suffix") || "";
-        var duration = 900;
-        var startTime = performance.now();
-
-        function step(now) {
-            var progress = Math.min((now - startTime) / duration, 1);
-            var current = target * progress;
-            el.textContent = formatNumber(current, decimals) + suffix;
-            if (progress < 1) {
-                requestAnimationFrame(step);
-            } else {
-                el.textContent = formatNumber(target, decimals) + suffix;
-            }
-        }
-        requestAnimationFrame(step);
-    }
-
-    function animateAllCounters() {
-        document.querySelectorAll(".stat-number").forEach(animateCounter);
-    }
-
-    document.addEventListener("DOMContentLoaded", animateAllCounters);
-    setInterval(animateAllCounters, 5000);
-
-    // ============================================================
-    // CHARTS
-    // claude code changed: replaces static/js/charts.js's zero-config
-    // Chart.js calls (previously rendered with library defaults — no
-    // axis labels, no gridlines, no theme-aware colors, x-axis was raw
-    // trade-sequence index with no label). Reads the CSS custom
-    // properties so charts match whichever theme (dark/light) is
-    // active, and re-renders on theme toggle instead of going stale.
-    // ============================================================
     var equityChartInstance = null;
     var drawdownChartInstance = null;
 
-    function themeColor(varName) {
-        return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-    }
-
     function renderCharts() {
-        var gridColor = themeColor('--border');
-        var textColor = themeColor('--text-dim');
         var lineColor = themeColor('--neutral');
         var ddColor = themeColor('--negative');
+        var blueHex = themeColor('--neutral');
+        var scales = chartCommonScales({ xTitle: 'Trade #' });
 
-        var commonScales = {
-            x: {
-                ticks: { color: textColor, font: { size: 10 }, maxTicksLimit: 10 },
-                grid: { color: gridColor },
-                title: { display: true, text: 'Trade #', color: textColor, font: { size: 10 } }
-            },
-            y: {
-                ticks: { color: textColor, font: { size: 10 } },
-                grid: { color: gridColor }
-            }
-        };
-
-        if (equityChartInstance) equityChartInstance.destroy();
-        if (drawdownChartInstance) drawdownChartInstance.destroy();
+        equityChartInstance = destroyChart(equityChartInstance);
+        drawdownChartInstance = destroyChart(drawdownChartInstance);
 
         var equityCtx = document.getElementById('equityChart');
         if (equityCtx && window.equityData.length > 0) {
@@ -675,7 +604,8 @@
                         label: 'Cumulative P&L ($)',
                         data: window.equityData,
                         borderColor: lineColor,
-                        backgroundColor: 'transparent',
+                        backgroundColor: chartAreaFill(blueHex),
+                        fill: true,
                         borderWidth: 1.5,
                         pointRadius: 0,
                         tension: 0,
@@ -688,7 +618,7 @@
                         legend: { display: false },
                         tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
                     },
-                    scales: commonScales
+                    scales: scales
                 }
             });
         }
@@ -703,7 +633,8 @@
                         label: 'Drawdown (%)',
                         data: window.drawdownData,
                         borderColor: ddColor,
-                        backgroundColor: 'transparent',
+                        backgroundColor: chartAreaFill(blueHex),
+                        fill: true,
                         borderWidth: 1.5,
                         pointRadius: 0,
                         tension: 0,
@@ -716,7 +647,7 @@
                         legend: { display: false },
                         tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
                     },
-                    scales: commonScales
+                    scales: scales
                 }
             });
         }
@@ -724,22 +655,8 @@
 
     document.addEventListener('DOMContentLoaded', function () {
         renderCharts();
-
-        // claude code changed: was shadowing base.html's toggleTheme() to
-        // re-render charts on flip, but base.html's own trailing script
-        // tag sits after this page's content in the rendered DOM, so it
-        // executes second and silently clobbers this redefinition — the
-        // shadow never actually ran (confirmed by inspecting the
-        // rendered page: two toggleTheme() declarations exist, and
-        // base.html's plain one, with no chart re-render, is the one
-        // left bound at click time). Watching data-theme directly
-        // sidesteps script order entirely.
-        new MutationObserver(renderCharts).observe(
-            document.documentElement,
-            { attributes: true, attributeFilter: ['data-theme'] }
-        );
+        onThemeChange(renderCharts);
     });
 </script>
-
 {% endif %}
 {% endblock %}

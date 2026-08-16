@@ -22,6 +22,12 @@ import logging     # Structured logging — never use print in production
 
 import ccxt        # Exchange library — provides typed exceptions per error class
 
+# claude code changed: new import — fixes architecture audit finding C-2
+# (issue 2). Reuses the exact same single-sourced cost constants the
+# backtester's bot/engines/simulation.py already uses, so dry-run fills and
+# backtest fills model execution cost identically.
+from bot.config.execution_costs import SLIPPAGE_RATE, FEE_RATE
+
 
 # ---------------------------------------------------------------
 # Module-level logger — writes to whatever handler you configure
@@ -85,10 +91,18 @@ class OrderManager:
         max_retries=3,
         retry_delay=2,
         confirm_timeout=30,
-        rate_limit_backoff=60
+        rate_limit_backoff=60,
+        dry_run=False
     ):
         # The ccxt exchange instance — already authenticated
         self.exchange = exchange
+
+        # claude code changed: new — when True, place_order()/place_stop_loss()
+        # never call the authenticated create_order() endpoint. Instead they
+        # synthesize a fill so the rest of the pipeline (TradeLogger, position
+        # tracking) still runs end-to-end. Fixes architecture audit finding
+        # C-2 (issue 2) — DRY_RUN previously skipped this whole class.
+        self.dry_run = dry_run
 
         # Max attempts before declaring an order as failed
         # 3 is sufficient — more than this suggests a systemic issue
@@ -138,6 +152,13 @@ class OrderManager:
             f"[OrderManager] {side.upper()} | {symbol} | "
             f"Qty: {quantity} | Price: {price or 'MARKET'}"
         )
+
+        # claude code changed: new — dry run never calls create_order(), which
+        # is a private authenticated endpoint that would either fail without
+        # real API keys or place a real order with them. Returns a simulated
+        # fill instead. Fixes architecture audit finding C-2 (issue 2).
+        if self.dry_run:
+            return self._simulate_fill(symbol, side, quantity, price)
 
         # Preserve intended price before any mutation
         # Used downstream for slippage calculation
@@ -464,6 +485,79 @@ class OrderManager:
         }
 
     # ============================================================
+    # SIMULATE FILL — INTERNAL
+    # claude code changed: new — fixes architecture audit finding C-2
+    # (issue 2). Only called when self.dry_run is True (see place_order()).
+    # Builds the same normalised result dict _build_result() returns, so
+    # every downstream consumer (ExecutionEngine, TradeLogger) treats a
+    # simulated fill identically to a real one. Reuses SLIPPAGE_RATE/
+    # FEE_RATE from bot.config.execution_costs — the same single-sourced
+    # constants the backtester uses, so dry-run cost modelling matches
+    # backtest cost modelling.
+    # ============================================================
+    def _simulate_fill(self, symbol, side, quantity, price):
+        """
+        Synthesizes an immediate full fill without touching the exchange.
+
+        price: the limit price for entries, or None for market exit orders —
+               when None, a live ticker price is fetched (fetch_ticker is a
+               public endpoint, safe to call without real API keys) so the
+               simulated fill still reflects real market conditions.
+        """
+
+        # Market order (exits use price=None) — use a real live reference
+        # price so the simulated fill isn't detached from actual market data
+        if price is None:
+            try:
+                price = self.exchange.fetch_ticker(symbol).get("last")
+            except Exception as e:
+                logger.warning(
+                    f"[OrderManager] DRY RUN — ticker fetch failed for {symbol}, "
+                    f"cannot simulate market fill: {e}"
+                )
+                price = None
+
+        if not price or price <= 0:
+            logger.error(
+                f"[OrderManager] DRY RUN — no valid reference price for {symbol}, "
+                f"cannot simulate fill"
+            )
+            raise Exception(f"DRY RUN fill simulation failed: no price for {symbol}")
+
+        # Adverse slippage: buys fill slightly above reference, sells slightly
+        # below — same direction real slippage always costs the trader
+        if side.lower() == "buy":
+            fill_price = round(price * (1 + SLIPPAGE_RATE), 8)
+        else:
+            fill_price = round(price * (1 - SLIPPAGE_RATE), 8)
+
+        fee_usdt = round(fill_price * quantity * FEE_RATE, 6)
+
+        slippage_pct = abs(fill_price - price) / price * 100
+
+        order_id = f"DRYRUN-{symbol.replace('/', '')}-{int(time.time() * 1000)}"
+
+        logger.info(
+            f"[OrderManager] DRY RUN fill simulated | {side.upper()} | {symbol} | "
+            f"Fill: {fill_price} | Qty: {quantity} | Fee: {fee_usdt} | ID: {order_id}"
+        )
+
+        return {
+            "order":          None,           # no raw exchange response — nothing was sent
+            "order_id":       order_id,
+            "fill_price":     fill_price,
+            "intended_price": price,
+            "slippage_pct":   slippage_pct,
+            "filled_qty":     quantity,        # dry run assumes full fill
+            "fee_usdt":       fee_usdt,
+            "fee_currency":   "USDT",
+            "symbol":         symbol,
+            "side":           side.lower(),
+            "timestamp":      int(time.time() * 1000),
+        }
+
+
+    # ============================================================
     # RECOVER ORDER — INTERNAL
     # Called when confirmation times out.
     # A quant's perspective: timeout recovery is not optional.
@@ -616,6 +710,27 @@ class OrderManager:
             f"[OrderManager] Placing STOP LOSS | {side.upper()} | {symbol} | "
             f"Qty: {quantity} | Stop: {stop_price}"
         )
+
+        # claude code changed: new — dry run never places a real resting
+        # order. Returns order_id=None (not an exception — nothing failed,
+        # this is expected dry-run behaviour), which ExecutionEngine stores
+        # as position["sl_order_id"] = None. That's the exact same value
+        # already used when a real place_stop_loss() call fails, so
+        # manage_positions()'s existing software-polled stop-loss fallback
+        # protects the simulated position with zero changes to that method.
+        # Fixes architecture audit finding C-2 (issue 2).
+        if self.dry_run:
+            logger.info(
+                f"[OrderManager] DRY RUN — no resting stop placed for {symbol}; "
+                f"software-polled fallback in manage_positions() will protect it"
+            )
+            return {
+                "order_id":   None,
+                "stop_price": stop_price,
+                "status":     "dry_run_skipped",
+                "symbol":     symbol,
+                "side":       side.lower(),
+            }
 
         try:
             # claude code changed: ccxt maps type="limit" + a stopLossPrice

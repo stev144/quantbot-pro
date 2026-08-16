@@ -17,18 +17,10 @@
    number.
 {% endcomment %}
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% include "partials/_topbar.html" with active="features" %}
 
-<div class="term-topbar">
-    <div class="term-brand">
-        <span class="term-brand-name">QUANT BOT PRO</span>
-        <span class="term-brand-sub">Feature Intelligence — {{ feature_name }}</span>
-    </div>
-    <div class="term-topbar-right">
-        <a href="{% url 'feature_leaderboard' %}" class="term-btn">← Leaderboard</a>
-        <a href="{% url 'feature_comparison' %}?f={{ feature_name }}" class="term-btn">Compare</a>
-        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
-    </div>
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <a href="{% url 'feature_comparison' %}?f={{ feature_name }}" class="term-btn">Compare {{ feature_name }}</a>
 </div>
 
 <div class="term-body">
@@ -213,52 +205,26 @@
 
 </div>
 
-<div class="term-footer">
-    <span>Quant Bot Pro — Feature Intelligence</span>
-    <span class="mono">{{ feature_name }}</span>
-</div>
+{% include "partials/_footer.html" with label="Feature Intelligence" note=feature_name %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>
 <script>
-    function formatNumber(num, decimals) {
-        if (!isFinite(num)) return "0";
-        return Number(num).toFixed(decimals);
-    }
-    function animateCounter(el) {
-        var target = parseFloat(el.getAttribute("data-target"));
-        if (isNaN(target)) return;
-        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
-        var suffix = el.getAttribute("data-suffix") || "";
-        var startTime = performance.now();
-        var duration = 900;
-        function step(now) {
-            var progress = Math.min((now - startTime) / duration, 1);
-            el.textContent = formatNumber(target * progress, decimals) + suffix;
-            if (progress < 1) requestAnimationFrame(step);
-            else el.textContent = formatNumber(target, decimals) + suffix;
-        }
-        requestAnimationFrame(step);
-    }
-    // claude code changed: chart colors are baked in at creation time via
-    // getComputedStyle, so a bare theme flip left this chart stuck on the
-    // old palette (same issue dashboard.html already solved for its
-    // equity/drawdown charts). renderStabilityChart() destroys and
-    // recreates the chart reading fresh CSS variables; toggleTheme() below
-    // shadows base.html's version so the flip actually triggers a redraw.
     var stabilityChartInstance = null;
 
     function renderStabilityChart() {
         var stabilityCtx = document.getElementById("stabilityChart");
         if (!stabilityCtx) return;
 
-        if (stabilityChartInstance) {
-            stabilityChartInstance.destroy();
-            stabilityChartInstance = null;
-        }
+        stabilityChartInstance = destroyChart(stabilityChartInstance);
 
         var yearlyIc = {{ detail.mean_yearly_ic|safe|default:"{}" }};
         var years = Object.keys(yearlyIc);
         var values = years.map(function (y) { return yearlyIc[y]; });
-        var style = getComputedStyle(document.documentElement);
         stabilityChartInstance = new Chart(stabilityCtx, {
             type: "line",
             data: {
@@ -266,7 +232,7 @@
                 datasets: [{
                     label: "Mean IC",
                     data: values,
-                    borderColor: style.getPropertyValue("--neutral").trim(),
+                    borderColor: themeColor("--neutral"),
                     backgroundColor: "transparent",
                     borderWidth: 1.5,
                     pointRadius: 3,
@@ -277,30 +243,14 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
-                scales: {
-                    x: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } },
-                    y: { ticks: { color: style.getPropertyValue("--text-dim").trim(), font: { size: 10 } }, grid: { color: style.getPropertyValue("--border").trim() } }
-                }
+                scales: chartCommonScales(),
             }
         });
     }
 
     document.addEventListener("DOMContentLoaded", function () {
-        document.querySelectorAll(".stat-number").forEach(animateCounter);
         renderStabilityChart();
-
-        // claude code changed: was going to shadow base.html's global
-        // toggleTheme() (like dashboard.html does), but base.html's own
-        // trailing script tag sits after this page's content in the
-        // rendered DOM, so it executes second and silently clobbers any
-        // redefinition made here — the shadow never actually runs.
-        // Watching the attribute directly sidesteps script-order
-        // entirely and works no matter which toggleTheme ends up bound.
-        new MutationObserver(renderStabilityChart).observe(
-            document.documentElement,
-            { attributes: true, attributeFilter: ["data-theme"] }
-        );
+        onThemeChange(renderStabilityChart);
     });
 </script>
-
 {% endblock %}

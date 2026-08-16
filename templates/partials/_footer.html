@@ -1,0 +1,9 @@
+{% comment %}
+    claude code changed: new — shared footer, extracted from the near-
+    identical markup previously copy-pasted into every template. Usage:
+    {% include "partials/_footer.html" with label="Feature Intelligence" note="reading research_data/ directly" %}
+{% endcomment %}
+<div class="term-footer">
+    <span>Quant Bot Pro{% if label %} — {{ label }}{% endif %}</span>
+    <span class="mono">{{ note|default:"" }}</span>
+</div>

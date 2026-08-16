@@ -1,9 +1,12 @@
+# claude code changed: moved verbatim from bot/tests.py — split into a
+# bot/tests/ package (see test_cache_and_scorer_bugs.py, test_terminal_data.py,
+# test_new_views.py) so each concern gets its own file instead of one
+# growing tests.py.
+
 import os
 
 import pandas as pd
 from django.test import TestCase
-
-# Create your tests here.
 
 
 # claude code changed: new — fixes architecture audit finding H3.
@@ -32,7 +35,7 @@ class RegimePrecomputerEquivalenceTest(TestCase):
 
         data_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "..", "data", "AAVE_USDT_1h.csv",
+            "..", "..", "data", "AAVE_USDT_1h.csv",
         )
         data_path = os.path.normpath(data_path)
 

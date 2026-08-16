@@ -39,7 +39,11 @@ from bot.engines.order_manager    import (
 from bot.engines.position_tracker import PositionTracker
 from bot.engines.market_data      import MarketData
 from bot.risk.position_sizer      import PositionSizer
+from bot.risk.drawdown_guard      import DrawdownGuard
 from bot.journal.trade_logger     import TradeLogger
+from bot.journal.models           import TradeRecord    # claude code changed: new import — DB-backed duplicate-position guard
+from bot.engines.trade_narrative  import TradeNarrativeGenerator, TradeNarrative   # claude code changed: new import — Phase 4 (DB persistence of trade provenance)
+from typing import Dict   # claude code changed: new import
 
 # Create logger specific to this module
 logger = logging.getLogger(__name__)
@@ -60,13 +64,20 @@ class ExecutionEngine:
     - TradeLogger:     database record keeping
     """
 
-    def __init__(self, exchange):
+    def __init__(self, exchange, dry_run=False):
         # Store exchange reference — passed to components that need it
         self.exchange = exchange
 
+        # claude code changed: new — fixes architecture audit finding C-2
+        # (issue 2). Threaded into OrderManager/MarketData below so DRY_RUN
+        # simulates fills and paper balance instead of bot_runner.py skipping
+        # execute_signal()/manage_positions() entirely, which previously
+        # meant DRY_RUN could never write a TradeRecord.
+        self.dry_run = dry_run
+
         # OrderManager — handles all order placement and confirmation safely
         # Contains retry logic, slippage capture, and typed exceptions
-        self.order_manager = OrderManager(exchange)
+        self.order_manager = OrderManager(exchange, dry_run=dry_run)    # claude code changed: pass through dry_run
 
         # PositionTracker — fast in-memory dict of all open positions
         # Checked every candle to decide if exits should fire
@@ -74,7 +85,7 @@ class ExecutionEngine:
 
         # MarketData — fetches live candles, price, and account balance
         # Balance is fetched fresh before every new entry
-        self.market_data = MarketData(exchange)
+        self.market_data = MarketData(exchange, dry_run=dry_run)    # claude code changed: pass through dry_run
 
         # PositionSizer — calculates trade quantity from account risk %
         # claude code changed: was PositionSizer(risk_pct=0.01) — a hardcoded
@@ -83,9 +94,32 @@ class ExecutionEngine:
         # default, which itself comes from the single-sourced bot.config.risk.
         self.position_sizer = PositionSizer()
 
+        # DrawdownGuard — claude code changed: new — portfolio-level kill
+        # switch. Blocks new entries once drawdown from peak balance
+        # breaches bot.config.risk.MAX_DRAWDOWN_PCT; see that module for
+        # the full rationale, including known scope limits.
+        self.drawdown_guard = DrawdownGuard()
+
         # TradeLogger — writes entries and exits to TradeRecord database table
         # Read by dashboard and analytics views
         self.trade_logger = TradeLogger()
+
+        # claude code changed: new — Phase 4 (DB persistence of trade
+        # provenance). Mirrors Backtester's own self.narrator pattern
+        # (backtester.py). Generates the entry-time TradeNarrative (which
+        # carries research_verdict/production_eligible from
+        # validated_feature_registry.py) so it can be persisted via
+        # TradeLogger instead of being computed-and-discarded, which is
+        # all bot_runner.py's own dry-run preview call did before this.
+        self.narrator = TradeNarrativeGenerator()
+
+        # claude code changed: new — per-symbol entry-time narrative,
+        # retrieved at exit so log_exit() can complete it with outcome
+        # text and persist both halves together. Kept as ExecutionEngine's
+        # own dict, separate from PositionTracker.open_positions, so
+        # PositionTracker's dict shape (relied on elsewhere) never has to
+        # carry a non-JSON-serializable dataclass object.
+        self._open_narratives: Dict[str, TradeNarrative] = {}
 
         # Slippage monitor — tracks execution quality over time
         # If average slippage climbs above threshold, log a warning
@@ -129,6 +163,25 @@ class ExecutionEngine:
             )
             return  # Exit method — do nothing
 
+        # claude code changed: new — GUARD 1 above only checks in-memory
+        # state, which resets to empty on every process restart. A crash
+        # with a real position still open would let this in-memory check
+        # pass even though a TradeRecord for it already exists — the DB is
+        # the durable source of truth PositionTracker's in-memory dict
+        # isn't. Checked here too so a restart can't place a second real
+        # order (and a second OPEN TradeRecord — see the unique constraint
+        # in bot/journal/models.py) on top of one the bot has simply
+        # forgotten about.
+        if TradeRecord.objects.filter(symbol=symbol, status="OPEN").exists():
+            logger.critical(
+                f"[ExecutionEngine] Signal ignored for {symbol} — an OPEN "
+                f"TradeRecord already exists in the database but "
+                f"PositionTracker has no record of it in memory (likely a "
+                f"restart after a crash). Reconcile manually before trading "
+                f"this symbol again."
+            )
+            return  # Exit method — do nothing
+
         # ----------------------------------------------------------
         # GUARD 2: Reconciliation must complete before trading
         # Ensures bot knows real exchange state before placing orders.
@@ -156,6 +209,28 @@ class ExecutionEngine:
                 f"— cannot size position for {symbol}. Skipping signal."
             )
             return  # Skip — cannot calculate correct size without balance
+
+        # ----------------------------------------------------------
+        # STEP 1B: Portfolio drawdown kill switch
+        # claude code changed: new — blocks NEW entries once drawdown from
+        # peak balance breaches the configured limit (see
+        # bot/risk/drawdown_guard.py for full rationale). Deliberately
+        # placed after the balance guard above (needs a valid balance to
+        # evaluate) and before sizing (no point sizing a trade that will
+        # be blocked). manage_positions() is untouched by this — open
+        # positions still close normally via stop-loss/take-profit even
+        # while this is tripped.
+        # ----------------------------------------------------------
+        if self.drawdown_guard.update(current_balance):
+            logger.critical(
+                f"[ExecutionEngine] Signal ignored for {symbol} — "
+                f"drawdown kill switch TRIPPED "
+                f"({self.drawdown_guard.current_drawdown_pct(current_balance) * 100:.2f}% "
+                f"from peak ${self.drawdown_guard.peak_balance:.2f}). "
+                f"No new entries until drawdown recovers below "
+                f"{self.drawdown_guard.max_drawdown_pct * 100:.1f}%."
+            )
+            return  # Skip — kill switch is active, no new risk allowed
 
         # ----------------------------------------------------------
         # STEP 2: Calculate position size
@@ -275,6 +350,13 @@ class ExecutionEngine:
                     f"Consider reducing size on illiquid pairs."
                 )
 
+        # claude code changed: new — Phase 4 (DB persistence of trade
+        # provenance). Generated here (not thrown away like bot_runner.py's
+        # dry-run preview) so it can be persisted by log_entry() below and
+        # completed by log_exit() when this position closes.
+        narrative = self.narrator.generate_entry(signal, symbol)
+        self._open_narratives[symbol] = narrative
+
         # ----------------------------------------------------------
         # STEP 7: Register position in tracker
         # Build position dict with all fields manage_positions() needs.
@@ -335,7 +417,7 @@ class ExecutionEngine:
         # Creates a new TradeRecord with status="OPEN".
         # Updated later by log_exit() when trade closes.
         # ----------------------------------------------------------
-        self.trade_logger.log_entry(signal, result, risk_amount)
+        self.trade_logger.log_entry(signal, result, risk_amount, narrative=narrative)   # claude code changed: new arg — Phase 4
 
         logger.info(
             f"[ExecutionEngine] Entry complete | {symbol} | "
@@ -564,11 +646,14 @@ class ExecutionEngine:
 
         # ---- Write exit to database ----
         # Updates the existing TradeRecord with exit price, P&L, R-Multiple
+        # claude code changed: new — Phase 4. Pops the entry-time narrative
+        # so log_exit() can complete it with outcome text and persist both.
         self.trade_logger.log_exit(
             symbol=symbol,
             exit_result=exit_result,
             risk_amount=position["risk_amount"],   # original dollar risk
-            reason=reason                           # "stop_loss" or "take_profit"
+            reason=reason,                           # "stop_loss" or "take_profit"
+            narrative=self._open_narratives.pop(symbol, None),   # claude code changed: new
         )
 
         logger.info(
@@ -608,6 +693,7 @@ class ExecutionEngine:
             exit_result=fill_result,
             risk_amount=position["risk_amount"],
             reason=reason,
+            narrative=self._open_narratives.pop(symbol, None),   # claude code changed: new — Phase 4
         )
 
         logger.info(

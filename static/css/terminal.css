@@ -22,10 +22,21 @@
   --border: #232833;
   --border-strong: #333a48;
 
-  /* ---- text ---- */
-  --text-primary: #e4e7ed;
-  --text-secondary: #98a1b3;
-  --text-dim: #5b6478;
+  /* ---- text ----
+   * claude code changed: was #e4e7ed/#98a1b3/#5b6478 — a near-neutral
+   * gray-white with almost no chroma, which read as "plain white" per
+   * direct request ("I don't want to see anything in plain white").
+   * Retuned to a cool blue-tinted ink (matching this theme's own
+   * --accent, #5b8dc9) instead of introducing an unrelated hue — same
+   * lightness tiers (primary brightest, dim most muted), each verified
+   * against --bg-1 (#10131a): primary 11.15:1, secondary 7.07:1 (both
+   * clear the WCAG 4.5:1 normal-text threshold), dim 3.60:1 (large-text
+   * tier only, consistent with the original's 3.13:1 — this tier was
+   * always meant to be the most muted, e.g. table headers/timestamps,
+   * not primary reading content). */
+  --text-primary: #b9c9ea;
+  --text-secondary: #8fa0c4;
+  --text-dim: #5f6d8f;
 
   /* ---- semantic (the only colors allowed to carry meaning) ---- */
   --positive: #3fb87f;
@@ -41,9 +52,30 @@
   --accent: #5b8dc9;
   --accent-hover: #7aa5d6;
 
+  /* ---- headings (brand name, section titles, table headers, tile
+   * labels) ----
+   * claude code changed: new — three tiers matching the three distinct
+   * heading weights already in use (brand name = text-primary-bright,
+   * section titles = text-secondary, table headers/tile labels =
+   * text-dim/most muted), split out so the gold theme can make all of
+   * them gold without recoloring every other use of text-primary/
+   * -secondary/-dim (body copy, captions, timestamps, etc.). Dark
+   * theme's defaults exactly match what these elements already used, so
+   * this is a no-op here and in light theme. */
+  --heading-color-strong: var(--text-primary);
+  --heading-color: var(--text-secondary);
+  --heading-color-dim: var(--text-dim);
+
   /* ---- type ---- */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "IBM Plex Mono", Consolas, monospace;
+  /* claude code changed: --font-display/--font-numbers tokens (Orbitron
+   * on headings, Bebas Neue on tile numbers) were added then reverted
+   * per follow-up feedback ("make all the changed fonts appear normal")
+   * — removed rather than left unused. Orbitron is still used directly
+   * on #typed-text (a literal font-family value there, not a token,
+   * since it's the one deliberate exception, not a design-system-wide
+   * font). */
 
   /* ---- spacing scale ---- */
   --sp-1: 4px;
@@ -54,49 +86,294 @@
   --sp-6: 32px;
 
   --radius: 3px;
+
+  /* ---- light-theme values, single source of truth ----
+   * claude code changed: was duplicated as literal hex/rgba values in
+   * both :root[data-theme="light"] and the @media(prefers-color-scheme)
+   * block below (identical numbers, two places) — a real drift risk if
+   * either block was ever retuned alone. Both blocks below now just
+   * reference these --light-* variables instead of repeating literals. */
+  --light-bg-0: #f4f5f7;
+  --light-bg-1: #ffffff;
+  --light-bg-2: #eceef2;
+  --light-border: #d8dce3;
+  --light-border-strong: #b7bec9;
+  --light-text-primary: #1a1d24;
+  --light-text-secondary: #565f70;
+  --light-text-dim: #8b93a3;
+  --light-positive: #1f8a5a;
+  --light-positive-dim: rgba(31, 138, 90, 0.10);
+  --light-negative: #c23b32;
+  --light-negative-dim: rgba(194, 59, 50, 0.10);
+  --light-warning: #a3781f;
+  --light-warning-dim: rgba(163, 120, 31, 0.10);
+  --light-neutral: #3a6ea5;
+  --light-neutral-dim: rgba(58, 110, 165, 0.10);
+  --light-accent: #3a6ea5;
+  --light-accent-hover: #2c5580;
+
+  /* ---- gold-theme values, single source of truth ----
+   * claude code changed: new — third theme option. Binance's own gold
+   * (#F0B90B) as the accent/heading color, with surfaces shifted warm
+   * (brown-black, not neutral gray-black) so the whole page reads as
+   * "golden," not just the accent color — per explicit follow-up
+   * request. --warning is kept a distinct orange (not gold) so warning
+   * badges stay visually different from the neutral/accent/heading gold
+   * used everywhere else. */
+  --gold-bg-0: #14100a;
+  --gold-bg-1: #1f1912;
+  --gold-bg-2: #2a2118;
+  --gold-border: #332a1c;
+  --gold-border-strong: #4d3f26;
+  /* claude code changed: was #f2ece1/#c9bc9e/#93876c — technically a warm
+   * off-white, but too subtle a tint to read as anything but "plain
+   * white" at a glance ("I don't want to see anything in plain white").
+   * Deepened the same warm-gold family (matching --gold-heading/-accent,
+   * #f0b90b) so body text/numbers are unmistakably tinted, not just
+   * barely-off-white. Verified against --bg-1 (#1f1912): primary
+   * 11.41:1, secondary 7.59:1 (both clear 4.5:1), dim 5.43:1 — this tier
+   * needed brightening from a first pass (4.21:1) specifically to not
+   * regress below the original's 4.91:1. */
+  --gold-text-primary: #e6cf9a;
+  --gold-text-secondary: #c2a875;
+  --gold-text-dim: #a08e64;
+  --gold-positive: #0ecb81;
+  --gold-positive-dim: rgba(14, 203, 129, 0.14);
+  --gold-negative: #f6465d;
+  --gold-negative-dim: rgba(246, 70, 93, 0.14);
+  --gold-warning: #ff9f1a;
+  --gold-warning-dim: rgba(255, 159, 26, 0.14);
+  --gold-neutral: #f0b90b;
+  --gold-neutral-dim: rgba(240, 185, 11, 0.14);
+  --gold-accent: #f0b90b;
+  --gold-accent-hover: #fcd535;
+  /* claude code changed: heading-specific token — see
+   * --heading-color/--heading-color-dim below. Only headings/labels/
+   * table headers go full gold; body text stays --gold-text-* so long
+   * blocks of numbers/prose remain readable against the warm dark
+   * background instead of everything competing for attention. */
+  --gold-heading: #f0b90b;
+
+  /* ---- midnight-theme values, single source of truth ----
+   * claude code changed: new — 4th theme, deep navy surfaces with gold
+   * (#F0B90B) headings/accent, plus a decorative falling-bubble canvas
+   * (see #bubble-canvas below and static/js/bubbles.js) — a deliberate,
+   * explicit exception to this app's otherwise no-decorative-animation
+   * convention, scoped to this one theme only, per direct user request.
+   * claude code changed: retuned surfaces after feedback that the first
+   * pass read as too black/indigo rather than a clean navy — this scale
+   * (#0a192f base) is a well-established "professional dark navy" (the
+   * same family used by several dark-navy corporate/portfolio themes),
+   * clearly blue-hued at every step rather than blue-tinted black. */
+  --midnight-bg-0: #0a192f;
+  --midnight-bg-1: #112240;
+  --midnight-bg-2: #1b3358;
+  --midnight-border: #23385c;
+  --midnight-border-strong: #375683;
+  /* claude code changed: was #e6eefc/#a8b8d8/#6e84ab — a light blue-white
+   * too close to plain white ("I don't want to see anything in plain
+   * white"). Deepened the blue tint — deliberately its own hue rather
+   * than the theme's gold heading color, so headings (already gold via
+   * --midnight-heading below) and body text/numbers stay visually
+   * distinct instead of the whole page reading as one monochrome gold.
+   * Verified against --bg-1 (#112240): primary 9.08:1, secondary 5.53:1
+   * (both clear 4.5:1), dim 4.94:1 — brightened from a first pass
+   * (3.15:1) to beat the original's 4.18:1, not regress it. */
+  --midnight-text-primary: #a9c6f2;
+  --midnight-text-secondary: #8199c9;
+  --midnight-text-dim: #7690c4;
+  --midnight-positive: #35d68a;
+  --midnight-positive-dim: rgba(53, 214, 138, 0.14);
+  --midnight-negative: #ff5c72;
+  --midnight-negative-dim: rgba(255, 92, 114, 0.14);
+  --midnight-warning: #ff9f1a;
+  --midnight-warning-dim: rgba(255, 159, 26, 0.14);
+  --midnight-neutral: #f0b90b;
+  --midnight-neutral-dim: rgba(240, 185, 11, 0.14);
+  --midnight-accent: #f0b90b;
+  --midnight-accent-hover: #fcd535;
+  --midnight-heading: #f0b90b;
+
+  /* ---- navy-theme values, single source of truth ----
+   * claude code changed: new — 5th theme, exact hex values supplied by
+   * the user. No dedicated --navy-warning was specified (the brief
+   * covers bg/card/border/text/accent/brand/muted/positive/negative
+   * only) — picked a distinct orange so warning badges don't collide
+   * visually with the amber "accent/numbers" gold used everywhere else.
+   * No special gold-heading override — headings use the standard
+   * text-primary/-secondary/-dim chain, matching the brief's "white for
+   * labels and body text." The falling-bubble canvas (static/js/bubbles.js)
+   * was originally Midnight-only but is now shared with Navy too, per
+   * follow-up request — bubbles.js reads --accent at start() so they
+   * render in this theme's cyan-green rather than Midnight's gold. */
+  /* claude code changed: several rounds of "darker, but keep it
+   * clearly blue" feedback — this scale keeps blue clearly dominant
+   * over red/green at every step (a real "deep navy," not near-black-
+   * with-a-hint-of-blue) while going noticeably darker again. */
+  --navy-bg-0: #00040c;
+  --navy-bg-1: #020a1c;
+  --navy-bg-2: #05132c;
+  --navy-border: #0a1f3d;
+  --navy-border-strong: #123058;
+  /* claude code changed: was literal #ffffff for text-primary — the most
+   * direct case of "plain white" text in the whole design system, per
+   * direct request to remove it everywhere. Retuned to a blue-white ink
+   * (matching this theme's deep-navy surface family) instead of pure
+   * white; --navy-text-secondary/-dim already had real chroma and only
+   * needed deepening slightly for consistency, not a hue change.
+   * Verified against --bg-1 (#020a1c): primary 13.44:1, secondary
+   * 8.34:1 (both clear 4.5:1 comfortably), dim 4.06:1 (large-text tier,
+   * matches the original's 3.91:1). */
+  --navy-text-primary: #c3d6f7;
+  --navy-text-secondary: #93a9d4;
+  --navy-text-dim: #5f719a;
+  --navy-positive: #00ff9f;
+  --navy-positive-dim: rgba(0, 255, 159, 0.14);
+  --navy-negative: #ff4444;
+  --navy-negative-dim: rgba(255, 68, 68, 0.14);
+  --navy-warning: #ff8a3d;
+  --navy-warning-dim: rgba(255, 138, 61, 0.14);
+  --navy-neutral: #f5c518;
+  --navy-neutral-dim: rgba(245, 197, 24, 0.14);
+  --navy-accent: #00ff9f;
+  --navy-accent-hover: #33ffb3;
 }
 
 :root[data-theme="light"] {
-  --bg-0: #f4f5f7;
-  --bg-1: #ffffff;
-  --bg-2: #eceef2;
-  --border: #d8dce3;
-  --border-strong: #b7bec9;
-  --text-primary: #1a1d24;
-  --text-secondary: #565f70;
-  --text-dim: #8b93a3;
-  --positive: #1f8a5a;
-  --positive-dim: rgba(31, 138, 90, 0.10);
-  --negative: #c23b32;
-  --negative-dim: rgba(194, 59, 50, 0.10);
-  --warning: #a3781f;
-  --warning-dim: rgba(163, 120, 31, 0.10);
-  --neutral: #3a6ea5;
-  --neutral-dim: rgba(58, 110, 165, 0.10);
-  --accent: #3a6ea5;
-  --accent-hover: #2c5580;
+  --bg-0: var(--light-bg-0);
+  --bg-1: var(--light-bg-1);
+  --bg-2: var(--light-bg-2);
+  --border: var(--light-border);
+  --border-strong: var(--light-border-strong);
+  --text-primary: var(--light-text-primary);
+  --text-secondary: var(--light-text-secondary);
+  --text-dim: var(--light-text-dim);
+  --positive: var(--light-positive);
+  --positive-dim: var(--light-positive-dim);
+  --negative: var(--light-negative);
+  --negative-dim: var(--light-negative-dim);
+  --warning: var(--light-warning);
+  --warning-dim: var(--light-warning-dim);
+  --neutral: var(--light-neutral);
+  --neutral-dim: var(--light-neutral-dim);
+  --accent: var(--light-accent);
+  --accent-hover: var(--light-accent-hover);
 }
 
+:root[data-theme="gold"] {
+  --bg-0: var(--gold-bg-0);
+  --bg-1: var(--gold-bg-1);
+  --bg-2: var(--gold-bg-2);
+  --border: var(--gold-border);
+  --border-strong: var(--gold-border-strong);
+  --text-primary: var(--gold-text-primary);
+  --text-secondary: var(--gold-text-secondary);
+  --text-dim: var(--gold-text-dim);
+  --positive: var(--gold-positive);
+  --positive-dim: var(--gold-positive-dim);
+  --negative: var(--gold-negative);
+  --negative-dim: var(--gold-negative-dim);
+  --warning: var(--gold-warning);
+  --warning-dim: var(--gold-warning-dim);
+  --neutral: var(--gold-neutral);
+  --neutral-dim: var(--gold-neutral-dim);
+  --accent: var(--gold-accent);
+  --accent-hover: var(--gold-accent-hover);
+  /* claude code changed: explicit override — without this, headings
+   * would inherit the text-primary/-secondary/-dim chain from :root and
+   * end up the warm off-white/tan body-text colors, not gold. Dark/light
+   * don't need this override since their headings are meant to stay on
+   * that scale. */
+  --heading-color-strong: var(--gold-heading);
+  --heading-color: var(--gold-heading);
+  --heading-color-dim: var(--gold-heading);
+}
+
+:root[data-theme="midnight"] {
+  --bg-0: var(--midnight-bg-0);
+  --bg-1: var(--midnight-bg-1);
+  --bg-2: var(--midnight-bg-2);
+  --border: var(--midnight-border);
+  --border-strong: var(--midnight-border-strong);
+  --text-primary: var(--midnight-text-primary);
+  --text-secondary: var(--midnight-text-secondary);
+  --text-dim: var(--midnight-text-dim);
+  --positive: var(--midnight-positive);
+  --positive-dim: var(--midnight-positive-dim);
+  --negative: var(--midnight-negative);
+  --negative-dim: var(--midnight-negative-dim);
+  --warning: var(--midnight-warning);
+  --warning-dim: var(--midnight-warning-dim);
+  --neutral: var(--midnight-neutral);
+  --neutral-dim: var(--midnight-neutral-dim);
+  --accent: var(--midnight-accent);
+  --accent-hover: var(--midnight-accent-hover);
+  --heading-color-strong: var(--midnight-heading);
+  --heading-color: var(--midnight-heading);
+  --heading-color-dim: var(--midnight-heading);
+}
+
+:root[data-theme="navy"] {
+  --bg-0: var(--navy-bg-0);
+  --bg-1: var(--navy-bg-1);
+  --bg-2: var(--navy-bg-2);
+  --border: var(--navy-border);
+  --border-strong: var(--navy-border-strong);
+  --text-primary: var(--navy-text-primary);
+  --text-secondary: var(--navy-text-secondary);
+  --text-dim: var(--navy-text-dim);
+  --positive: var(--navy-positive);
+  --positive-dim: var(--navy-positive-dim);
+  --negative: var(--navy-negative);
+  --negative-dim: var(--navy-negative-dim);
+  --warning: var(--navy-warning);
+  --warning-dim: var(--navy-warning-dim);
+  --neutral: var(--navy-neutral);
+  --neutral-dim: var(--navy-neutral-dim);
+  --accent: var(--navy-accent);
+  --accent-hover: var(--navy-accent-hover);
+  /* claude code changed: was gold on .term-brand-name only (headings
+   * outside cards) per an earlier, narrower request — follow-up dropped
+   * that qualifier, so all three heading tiers go gold now:
+   * .term-brand-name (--heading-color-strong), .term-section-title
+   * (--heading-color), and .term-table th/.metric-label
+   * (--heading-color-dim). Gold = --navy-neutral (#F5C518, the spec's
+   * "accent/numbers" amber), not --navy-accent (the cyan-green brand
+   * color) — body text/values stay on their normal white/muted-grey/
+   * positive-negative scale, only heading-weight text is gold. */
+  --heading-color-strong: var(--navy-neutral);
+  --heading-color: var(--navy-neutral);
+  --heading-color-dim: var(--navy-neutral);
+}
+
+/* claude code changed: was :root:not([data-theme="dark"]) — with only
+ * two themes, "not dark" and "explicitly light-or-unset" were the same
+ * set, so that worked. Now that "gold" is also a valid explicit choice,
+ * :not([data-theme="dark"]) would incorrectly also match
+ * [data-theme="gold"] and repaint it as light whenever the OS prefers
+ * light mode. This should only ever be a fallback for a first-time
+ * visitor who hasn't picked a theme yet — scope it to "no attribute at
+ * all" so any explicit choice (dark/light/gold) always wins. */
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg-0: #f4f5f7;
-    --bg-1: #ffffff;
-    --bg-2: #eceef2;
-    --border: #d8dce3;
-    --border-strong: #b7bec9;
-    --text-primary: #1a1d24;
-    --text-secondary: #565f70;
-    --text-dim: #8b93a3;
-    --positive: #1f8a5a;
-    --positive-dim: rgba(31, 138, 90, 0.10);
-    --negative: #c23b32;
-    --negative-dim: rgba(194, 59, 50, 0.10);
-    --warning: #a3781f;
-    --warning-dim: rgba(163, 120, 31, 0.10);
-    --neutral: #3a6ea5;
-    --neutral-dim: rgba(58, 110, 165, 0.10);
-    --accent: #3a6ea5;
-    --accent-hover: #2c5580;
+  :root:not([data-theme]) {
+    --bg-0: var(--light-bg-0);
+    --bg-1: var(--light-bg-1);
+    --bg-2: var(--light-bg-2);
+    --border: var(--light-border);
+    --border-strong: var(--light-border-strong);
+    --text-primary: var(--light-text-primary);
+    --text-secondary: var(--light-text-secondary);
+    --text-dim: var(--light-text-dim);
+    --positive: var(--light-positive);
+    --positive-dim: var(--light-positive-dim);
+    --negative: var(--light-negative);
+    --negative-dim: var(--light-negative-dim);
+    --warning: var(--light-warning);
+    --warning-dim: var(--light-warning-dim);
+    --neutral: var(--light-neutral);
+    --neutral-dim: var(--light-neutral-dim);
+    --accent: var(--light-accent);
+    --accent-hover: var(--light-accent-hover);
   }
 }
 
@@ -142,10 +419,20 @@
   gap: var(--sp-3);
 }
 
+.term-brand-link {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  color: inherit;
+}
+.term-brand-link:hover { color: inherit; }
+.term-brand-link:hover .term-brand-name { color: var(--accent); }
+
 .term-brand-name {
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.02em;
+  color: var(--heading-color-strong);
 }
 
 .term-brand-sub {
@@ -159,6 +446,15 @@
   display: flex;
   align-items: center;
   gap: var(--sp-4);
+}
+
+/* claude code changed: new — shows the signed-in username next to Logout,
+ * now that the topbar is visited by both authenticated and anonymous
+ * users (dashboard is public; see .term-topbar-right's {% if
+ * user.is_authenticated %} branch in partials/_topbar.html). */
+.term-topbar-user {
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 .term-symbol-form {
@@ -193,35 +489,159 @@
 
 .term-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-.theme-toggle {
-  background: none;
-  border: 1px solid var(--border-strong);
+
+/* ============================================================
+ * PRIMARY NAV — claude code changed: new. Shared across all sections
+ * via templates/partials/_topbar.html. Flat links for single-page
+ * clusters (Executive/Market/System), <details>/<summary> dropdowns
+ * (no JS required, keyboard-operable) for multi-page clusters
+ * (Research, Risk & Execution).
+ * ============================================================ */
+.term-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  justify-content: center;
+  position: relative;
+}
+
+.term-nav-link {
+  display: inline-block;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-secondary);
-  font-size: 11px;
-  padding: 5px 9px;
   border-radius: var(--radius);
   cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.term-nav-link::-webkit-details-marker { display: none; }
+.term-nav-link:hover { color: var(--accent); background: var(--bg-2); }
+.term-nav-link.active { color: var(--accent); background: var(--neutral-dim); }
+
+.term-nav-group { position: relative; }
+.term-nav-group[open] > .term-nav-link { color: var(--accent); }
+
+.term-nav-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 200px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-1) 0;
+}
+
+.term-nav-dropdown a {
+  display: block;
+  padding: 7px var(--sp-3);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.term-nav-dropdown a:hover { background: var(--bg-2); color: var(--accent); }
+.term-nav-dropdown a.active { color: var(--accent); font-weight: 600; }
+
+/* Close dropdowns when clicking elsewhere — handled by <details> native
+   toggle behavior; this just keeps two open dropdowns from both being
+   visible if a user tabs between summaries without a click. */
+.term-nav-group:not([open]) .term-nav-dropdown { display: none; }
+
+@media (max-width: 860px) {
+  .term-topbar {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+  .term-nav {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .term-nav-dropdown {
+    position: static;
+    box-shadow: none;
+    border: none;
+    padding-left: var(--sp-3);
+  }
 }
 
 /* ============================================================
- * TAGLINE STRIP — the one real typed-text feature (static/js/typed.js),
- * kept as a single subtle status line, not a decorative hero section.
+ * TYPED STRIP — the one real typed-text feature (static/js/typed.js).
+ * claude code changed: went through several placements/restyles this
+ * session — full-width strip on dashboard.html only, then briefly
+ * inline in the navbar, now a full-width CENTERED strip below the
+ * topbar on every page (lives in templates/partials/_topbar.html).
+ * Most recent pass: exact Orbitron/Bebas-Neue styling per direct
+ * request (fonts imported in templates/base.html's <head>) —
+ * #typed-text's color/size/weight/shadow below are all explicit spec
+ * values, not theme tokens, so they're identical on every theme.
+ * white-space/nowrap+ellipsis removed from the strip so the much
+ * larger typed text wraps instead of overflowing on narrow viewports.
  * ============================================================ */
-.term-tagline-strip {
-  padding: 6px var(--sp-5);
-  font-size: 11.5px;
+.term-typed-strip {
+  padding: 14px var(--sp-5);
+  font-size: 22px;
   color: var(--text-dim);
+  text-align: center;
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* claude code changed: was white, size unset (inherited the strip's
+ * 22px) — now green (#00FF9F, the same cyan-green used elsewhere in
+ * this app, e.g. the Navy theme's brand/positive color) and matched to
+ * #typed-text's size so "We" and the animating message read as one
+ * consistent line instead of two different scales.
+ * claude code changed: bumped clamp() up (1.1/2.4vw/1.75rem ->
+ * 1.6/3.4vw/2.5rem) per "make those letters large" — kept as clamp()
+ * rather than a fixed size so it still shrinks on narrow viewports
+ * instead of overflowing (.term-typed-strip already wraps/breaks long
+ * words as a second line of defense).
+ * claude code changed: font-weight 700 + clamp bumped again
+ * (1.6/3.4vw/2.5rem -> 1.8/3.8vw/2.75rem) per "more weight... larger
+ * fonts" request. Still --font-mono (JetBrains Mono/IBM Plex Mono/
+ * Consolas etc. all ship real bold faces, not faux-bold) — no new font
+ * import, so this doesn't reopen the earlier "remove font decoration"
+ * feedback (no letter-spacing/uppercase/glow/family change, just
+ * weight + size on the existing mono stack). */
+.typed-static {
+  color: #00FF9F;
+  font-size: clamp(1.8rem, 3.8vw, 2.75rem);
+  font-weight: 700;
+}
+
+/* claude code changed: size (clamp) and color (gold) were approved as-is
+ * — everything else ("font decoration": Orbitron, font-weight 900,
+ * letter-spacing, uppercase, glow text-shadow) removed per follow-up
+ * feedback. font-family/line-height still fall through to the parent
+ * .term-typed-strip.mono, i.e. the same --font-mono the rest of the
+ * app's status text uses — no new font import.
+ * claude code changed: font-weight 700 + clamp bumped (see .typed-static
+ * above for the full rationale) per "more weight... larger fonts"
+ * request — matched to .typed-static so "We" and the animating message
+ * still read as one consistent line. */
+#typed-text {
+  font-size: clamp(1.8rem, 3.8vw, 2.75rem);
+  font-weight: 700;
+  color: #F0B90B;
+  display: inline-block;
+  max-width: 100%;
 }
 
 .typed-cursor {
   display: inline-block;
   animation: blink-cursor 1s step-end infinite;
-  color: var(--accent);
+  color: #F5C518;
 }
 
 @keyframes blink-cursor {
@@ -239,6 +659,32 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-5);
+}
+
+/* claude code changed: new — fixes reported bug: on mobile, every panel/
+ * chart below the navbar showed visible side gaps while the navbar itself
+ * looked full-width. Root cause: .term-topbar and .term-body both use the
+ * same 24px horizontal padding (--sp-5) — but .term-topbar is one
+ * continuous background strip with no inner box, so the padding is
+ * invisible, while .term-panel/.metric-tile/.chart-box children of
+ * .term-body each paint their OWN border+background that stops 24px short
+ * of the viewport edge, which reads as "not full width" once the viewport
+ * itself is only a few hundred px wide. max-width: 1680px is not the
+ * cause (irrelevant at any mobile viewport) and is left untouched so
+ * desktop layout doesn't change. Removing only the horizontal padding
+ * here — not vertical, not touching .term-topbar's own padding — is
+ * enough: .term-panel/.metric-tile keep their own internal padding
+ * (bot/../terminal.css's .term-panel/.metric-tile rules), so text still
+ * has breathing room even though each card's border now runs edge-to-edge
+ * like the navbar's background already did. 768px matches the requested
+ * breakpoint (this repo's other mobile rules use 720/860/900px, all in
+ * the same range).
+ */
+@media (max-width: 768px) {
+  .term-body {
+    padding-left: 0;
+    padding-right: 0;
+  }
 }
 
 .term-grid {
@@ -280,7 +726,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.09em;
-  color: var(--text-secondary);
+  color: var(--heading-color);
 }
 
 .term-section-meta {
@@ -318,7 +764,7 @@
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--text-dim);
+  color: var(--heading-color-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -333,6 +779,12 @@
 }
 
 .metric-value.small { font-size: 15px; }
+
+/* claude code changed: the .metric-value.stat-number Bebas Neue rule
+ * that lived here was reverted per follow-up feedback ("make all the
+ * changed fonts appear normal") — removed rather than left as an empty
+ * rule, consistent with how dead CSS is handled elsewhere in this file.
+ * .metric-value's own base rule (--font-mono) applies again. */
 
 .metric-sub {
   font-size: 11px;
@@ -404,7 +856,7 @@
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-dim);
+  color: var(--heading-color-dim);
   font-weight: 600;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-strong);
@@ -461,10 +913,53 @@
 }
 
 /* ============================================================
- * SIGNAL/DIRECTION TEXT
+ * TRADE DIRECTION — claude code changed: was colored positive/negative
+ * (LONG=green, SHORT=red), which conflates trade DIRECTION with trade
+ * OUTCOME — a losing long trade showed green "LONG" text right next to
+ * red loss numbers, which reads as inconsistent/unprofessional and
+ * violates "restrained color usage." Direction is not inherently good
+ * or bad, so it no longer carries positive/negative color at all — a
+ * small muted arrow plus the existing LONG/SHORT or BUY/SELL text is
+ * unambiguous on its own. Red/green is reserved entirely for real P&L
+ * outcome (see .row-win/.row-loss below).
  * ============================================================ */
-.dir-long { color: var(--positive); }
-.dir-short { color: var(--negative); }
+.dir-long, .dir-short {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.dir-long::before { content: "▲"; margin-right: 4px; color: var(--text-dim); font-weight: 400; }
+.dir-short::before { content: "▼"; margin-right: 4px; color: var(--text-dim); font-weight: 400; }
+
+/* ============================================================
+ * TRADE OUTCOME ROW ACCENT — claude code changed: new. Applied only to
+ * CLOSED trades with a known real outcome (never to open positions,
+ * which have no realized P&L yet). A subtle full-row tint using the
+ * same --positive-dim/--negative-dim tokens already used for badges
+ * (10-12% opacity) makes a trade log scannable at a glance without the
+ * saturated red/green-everywhere look the redesign is explicitly
+ * moving away from.
+ * ============================================================ */
+.term-table tbody tr.row-win { background: var(--positive-dim); }
+.term-table tbody tr.row-loss { background: var(--negative-dim); }
+.term-table tbody tr.row-win:hover,
+.term-table tbody tr.row-loss:hover { background: var(--bg-2); }
+
+/* ============================================================
+ * MIDNIGHT THEME — decorative bubble canvas (see static/js/bubbles.js)
+ * claude code changed: new. z-index:-1 keeps it behind every panel's
+ * opaque background (all .term-section/.term-topbar/etc already paint
+ * solid --bg-1) — it only ever shows through in the page margins and
+ * gutters between panels. display:none by default; JS sets it to
+ * block only when data-theme="midnight" is active, so the other three
+ * themes never even start the animation loop.
+ * ============================================================ */
+#bubble-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  display: none;
+}
 
 /* ============================================================
  * MISC
@@ -485,3 +980,107 @@
 .text-secondary { color: var(--text-secondary); }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+/* ============================================================
+ * LOGIN — claude code changed: new. Real authentication system
+ * (LoginRequiredMiddleware, config/settings.py). Deliberately restrained,
+ * same design language as the rest of the app — a bordered .term-panel,
+ * no gradients/decoration, matching the "institutional terminal" intent
+ * stated at the top of this file, not a marketing-style login screen.
+ * ============================================================ */
+.term-login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+}
+
+.term-login-panel {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.term-login-panel .term-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: center;
+}
+
+.term-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.term-login-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: var(--sp-2);
+}
+
+.term-login-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.term-login-submit {
+  margin-top: var(--sp-3);
+  width: 100%;
+  padding: 8px 10px;
+}
+
+.term-login-error {
+  color: var(--negative);
+  background: var(--negative-dim);
+  border: 1px solid var(--negative);
+  border-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* claude code changed: new — signup/login cross-links ("No account?
+ * Create one" / "Already have an account? Sign in"). */
+.term-login-footer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.term-login-footer a { color: var(--accent); }
+.term-login-footer a:hover { color: var(--accent-hover); }
+
+/* ============================================================
+ * FLASH MESSAGES — claude code changed: new. django.contrib.messages was
+ * already fully wired (INSTALLED_APPS/MIDDLEWARE/context processors) but
+ * nothing ever rendered {% if messages %} until the signup welcome
+ * message needed somewhere to appear (templates/base.html). Reuses the
+ * same semantic tokens as everything else here (--positive/--negative/
+ * --warning) rather than inventing new colors — Django's message levels
+ * (success/error/warning/info) map directly onto this app's existing
+ * positive/negative/warning/neutral vocabulary.
+ * ============================================================ */
+.term-messages {
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: var(--sp-3) var(--sp-5) 0;
+}
+
+.term-message {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: 12px;
+  margin-bottom: var(--sp-2);
+}
+
+.term-message.success { color: var(--positive); background: var(--positive-dim); border-color: var(--positive); }
+.term-message.error   { color: var(--negative); background: var(--negative-dim); border-color: var(--negative); }
+.term-message.warning { color: var(--warning); background: var(--warning-dim); border-color: var(--warning); }
+.term-message.info     { color: var(--neutral); background: var(--neutral-dim); border-color: var(--neutral); }

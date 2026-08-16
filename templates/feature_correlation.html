@@ -14,16 +14,7 @@
    derived statistic from real data, not a fabricated score.
 {% endcomment %}
 
-<div class="term-topbar">
-    <div class="term-brand">
-        <span class="term-brand-name">QUANT BOT PRO</span>
-        <span class="term-brand-sub">Feature Correlation Matrix</span>
-    </div>
-    <div class="term-topbar-right">
-        <a href="{% url 'feature_leaderboard' %}" class="term-btn">← Leaderboard</a>
-        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
-    </div>
-</div>
+{% include "partials/_topbar.html" with active="features" %}
 
 <div class="term-body">
 
@@ -98,33 +89,10 @@
 
 </div>
 
-<div class="term-footer">
-    <span>Quant Bot Pro — Feature Intelligence</span>
-    <span class="mono">{{ symbol }} · correlation cached 1h</span>
-</div>
+{% include "partials/_footer.html" with label="Feature Intelligence" note=symbol|add:" · correlation cached 1h" %}
 
-<script>
-    function formatNumber(num, decimals) {
-        if (!isFinite(num)) return "0";
-        return Number(num).toFixed(decimals);
-    }
-    function animateCounter(el) {
-        var target = parseFloat(el.getAttribute("data-target"));
-        if (isNaN(target)) return;
-        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
-        var startTime = performance.now();
-        var duration = 900;
-        function step(now) {
-            var progress = Math.min((now - startTime) / duration, 1);
-            el.textContent = formatNumber(target * progress, decimals);
-            if (progress < 1) requestAnimationFrame(step);
-            else el.textContent = formatNumber(target, decimals);
-        }
-        requestAnimationFrame(step);
-    }
-    document.addEventListener("DOMContentLoaded", function () {
-        document.querySelectorAll(".stat-number").forEach(animateCounter);
-    });
-</script>
+{% endblock %}
 
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

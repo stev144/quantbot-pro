@@ -18,6 +18,15 @@ VERDICT_CLASS_MAP = {
     "UNSTABLE": "warn",
     "REQUIRES FURTHER RESEARCH": "warn",
     "REJECTED": "neg",
+    # claude code changed: new — bot/research/validated_feature_registry.py's
+    # own 5-state taxonomy (SUPPORTED/CONDITIONAL/WEAK/REJECTED/UNTESTED) is
+    # distinct from the markdown research log's 6-state vocabulary above.
+    # REJECTED already maps identically; the rest didn't exist as keys here
+    # and were silently falling through to "dim" (gray) regardless of verdict.
+    "SUPPORTED": "pos",
+    "CONDITIONAL": "neu",
+    "WEAK": "warn",
+    "UNTESTED": "dim",
 }
 
 

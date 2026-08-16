@@ -14,17 +14,84 @@
     {# and an inline score-meter animation script. All removed per the institutional- #}
     {# terminal redesign: no decorative elements, no fake navigation. The only asset #}
     {# this page needs is its own stylesheet. #}
+    {# claude code changed: one deliberate, explicit exception added back later — #}
+    {# a falling-bubble canvas (static/js/bubbles.js), scoped to fire only for the #}
+    {# "midnight" and "navy" themes (see BUBBLE_THEMES in that file). Not a #}
+    {# reversal of the above; dark/light/gold remain exactly as restrained as this #}
+    {# comment describes. #}
+    {# claude code changed: a Google Fonts import (Orbitron, then also Bebas #}
+    {# Neue) briefly lived here for typed.js/heading/number styling — all of it #}
+    {# was reverted per follow-up feedback ("remove any font decoration, make #}
+    {# the fonts normal"), and #typed-text no longer references Orbitron either, #}
+    {# so the import itself is removed too rather than left loading an unused #}
+    {# font. Back to zero external font dependencies, matching the paragraph #}
+    {# above. #}
     <link rel="stylesheet" href="{% static 'css/terminal.css' %}">
+    {% block head %}{% endblock %}
 </head>
 
 <body class="term">
+    <canvas id="bubble-canvas" aria-hidden="true"></canvas>
+
+    {# claude code changed: new — renders django.contrib.messages, which was #}
+    {# already fully wired (INSTALLED_APPS/MIDDLEWARE/context processors) #}
+    {# but never actually rendered anywhere. Needed for the signup welcome #}
+    {# message ("Welcome, {username}! Your account has been created.") to #}
+    {# show up after redirecting to the dashboard. Placed once here in #}
+    {# base.html, above {% block content %}, so it appears on every page — #}
+    {# not just the page a message happens to originate from. #}
+    {% if messages %}
+    <div class="term-messages">
+        {% for message in messages %}
+        <div class="term-message {{ message.tags }} mono">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     {% block content %}{% endblock %}
 
+    {# claude code changed: new — hook for page-specific <script> tags #}
+    {# (CDN libraries, chart/counter init) that previously had to live #}
+    {# inside {% block content %} since this was the only block that #}
+    {# existed. Rendered before base.html's own trailing script below, #}
+    {# same execution order pages already relied on. #}
+    {% block scripts %}{% endblock %}
+
+    {# claude code changed: was loaded only from dashboard.html's own #}
+    {# {% block scripts %}, with the typed-text markup living in a #}
+    {# standalone strip on that one page. Per request, the typed-text #}
+    {# element now lives in templates/partials/_topbar.html (every page #}
+    {# includes that partial), so the script needs to be loaded here in #}
+    {# base.html instead — tick() in typed.js already no-ops safely if #}
+    {# #typed-text isn't found, so this was already safe to load #}
+    {# everywhere even before the markup existed on every page. #}
+    <script src="{% static 'js/typed.js' %}"></script>
+    <script src="{% static 'js/bubbles.js' %}"></script>
     <script>
-        // claude code changed: new — functional theme toggle (persisted via
-        // localStorage), replacing the removed decorative scripts. This is
-        // the only JS base.html carries; page-specific behavior lives in
-        // each template's own script block.
+        // claude code changed: new — functional theme picker (persisted via
+        // localStorage under "term-theme", unchanged key across every
+        // revision of this mechanism), replacing the removed decorative
+        // scripts. Page-specific chart/counter re-render on theme change
+        // lives in each page's own scripts block, wired via a
+        // MutationObserver on data-theme (see static/js/chart-theme.js) —
+        // a direct redefinition of the setter here would be silently
+        // clobbered since this script tag always runs last.
+        // claude code changed: was a two-way light/dark toggle, then a
+        // click-to-cycle button across dark/light/gold/midnight; now a
+        // <select> (templates/partials/_topbar.html#theme-select) so a
+        // 5th theme (Navy) doesn't turn theme-switching into "click up to
+        // 4 times." setTheme() replaces toggleTheme(); data-theme
+        // attribute and localStorage key are exactly the same as before,
+        // so nothing downstream (CSS theme rules, chart re-render
+        // observers, bubbles.js) needed to change.
+        var VALID_THEMES = ["dark", "light", "navy", "gold", "midnight"];
+
+        function syncThemeSelect() {
+            var select = document.getElementById("theme-select");
+            if (!select) return;
+            select.value = document.documentElement.getAttribute("data-theme") || "dark";
+        }
+
         (function () {
             var stored = localStorage.getItem("term-theme");
             if (stored) {
@@ -32,13 +99,14 @@
             }
         })();
 
-        function toggleTheme() {
-            var root = document.documentElement;
-            var current = root.getAttribute("data-theme");
-            var next = current === "light" ? "dark" : "light";
-            root.setAttribute("data-theme", next);
-            localStorage.setItem("term-theme", next);
+        function setTheme(theme) {
+            if (VALID_THEMES.indexOf(theme) === -1) theme = "dark";
+            document.documentElement.setAttribute("data-theme", theme);
+            localStorage.setItem("term-theme", theme);
+            syncThemeSelect();
         }
+
+        document.addEventListener("DOMContentLoaded", syncThemeSelect);
     </script>
 </body>
 

@@ -70,23 +70,26 @@ def dashboard(request):
     raw_trades = results.get("trades", [])
     trades = []
 
-    equity_curve = []
-    drawdown_curve = []
-
-    running_balance = 0
-    peak = 0
+    # claude code changed: was recomputing equity/drawdown here from raw
+    # trade P&L with a peak starting at 0 — whenever cumulative P&L never
+    # went positive (or only briefly did, near the start), `peak` stayed
+    # at (or returned to) 0 and the `dd = 0 if peak == 0 else ...` guard
+    # silently reported 0% drawdown for that entire stretch, real losses
+    # or not. Confirmed on real symbols: DOGEUSDT's cumulative P&L never
+    # went positive across 318 trades (ended near -$3,499) and every
+    # single drawdown point rendered as exactly 0 — a flat line hiding
+    # the whole loss; BTCUSDT touched a small early peak around trade 4
+    # then declined for the rest of the run, producing a flat segment
+    # then a long, roughly-straight climb from that one peak — exactly
+    # the "straight line from the middle" shape being reported.
+    # bot/backtesting/backtester.py's Backtester already tracks a correct
+    # equity_curve/drawdown_curve internally, with peak_balance seeded at
+    # the real initial_balance (never 0, so no div-by-zero/masking edge
+    # case) — use that directly instead of re-deriving a buggier copy.
+    equity_curve = results.get("equity_curve", [])
+    drawdown_curve = results.get("drawdown_curve", [])
 
     for t in raw_trades:
-        profit = _safe_float(t.get("net_pnl") or t.get("profit"))
-
-        running_balance += profit
-        peak = max(peak, running_balance)
-
-        dd = 0 if peak == 0 else ((peak - running_balance) / peak) * 100
-
-        equity_curve.append(round(running_balance, 2))
-        drawdown_curve.append(round(dd, 2))
-
         trade = {
             "direction": t.get("direction", ""),
             "entry_price": _safe_float(t.get("entry_price")),
@@ -100,6 +103,8 @@ def dashboard(request):
             "reason": t.get("reason") or "No narrative",
             "entry_narrative": t.get("entry_narrative", ""),
             "exit_narrative": t.get("exit_narrative", ""),
+            "research_verdict": t.get("research_verdict", ""),        # claude code changed: new — Phase 3 (UI pipeline view)
+            "production_eligible": t.get("production_eligible", False),  # claude code changed: new
         }
         trades.append(trade)
 
@@ -243,19 +248,36 @@ def live_data(request):
     logger.info("=== LIVE DATA VIEW HIT ===")
 
     try:
-        symbol    = request.GET.get("symbol", "BTCUSDT").upper()
-        cache_key = f"backtest_results_{symbol}"
-        results    = cache.get(cache_key)
+        symbol = request.GET.get("symbol", "BTCUSDT").upper()
+        # claude code changed: was reusing dashboard()'s cache key
+        # (f"backtest_results_{symbol}") but writing a differently-shaped
+        # count-up-widget payload back into it below at a 60s TTL — for up
+        # to 60s after this view ran, dashboard()'s cache hit on the same
+        # symbol would silently get this shape instead of the raw
+        # backtest results dict, and results.get("trades", []) would
+        # return [] with no error. Distinct key so the two views stop
+        # colliding.
+        backtest_cache_key = f"backtest_results_{symbol}"
+        live_cache_key = f"live_data_{symbol}"
+        results = cache.get(backtest_cache_key)
 
         if results is None:
             df = get_klines(symbol, interval="1h", total_candles=10000)
             if df is None or df.empty:
                 return JsonResponse({"success": False, "summary": {}})
             results = backtest(df) or {}
-            cache.set(cache_key, results, 3600)
+            cache.set(backtest_cache_key, results, 3600)
 
         try:
-            from bot.analytics import StrategyScorer
+            # claude code changed: was `from bot.analytics import
+            # StrategyScorer` — bot/analytics.py only defines
+            # TradeAnalytics (an older, separate implementation from
+            # bot/engines/analytics_engine.py's), it has never defined
+            # StrategyScorer. That import always raised ImportError, was
+            # silently caught by the except below, and total_score/grade
+            # in every response from this view were permanently the
+            # fallback 0/"—" regardless of actual backtest performance.
+            from bot.engines.strategy_scorer import StrategyScorer
             score_result = StrategyScorer(results).evaluate()
             total_score  = round(score_result.get("total_score", 0), 1)
             grade        = score_result.get("grade", "—")
@@ -340,7 +362,7 @@ def live_data(request):
         }
 
 
-        cache.set(cache_key, payload, 60)
+        cache.set(live_cache_key, payload, 60)
         logger.info(f"=== LIVE DATA SUCCESS for {symbol} ===")
         return JsonResponse(payload)
 
@@ -622,31 +644,41 @@ def walk_forward_view(request):
     Splits data into in-sample (70%) and out-of-sample (30%)
     and runs backtest on both. Returns comparison metrics.
     """
+    symbol = request.GET.get("symbol", "BTCUSDT").upper()
+    split = float(request.GET.get("split", 0.7))  # default 70/30
+    split = max(0.5, min(0.85, split))  # clamp between 0.5 and 0.85
+
+    result = run_walk_forward_validation(symbol, split)
+    return JsonResponse(result)
+
+
+def run_walk_forward_validation(symbol, split):
+    """
+    claude code changed: extracted from walk_forward_view's body so
+    bot/views/backtesting_data.py (Backtesting section) can call the same
+    real, already-proven computation directly instead of duplicating it
+    or reaching into another view function. walk_forward_view above is
+    now a thin request-parsing wrapper around this.
+    """
     import traceback
     from bot.data_fetcher import get_klines
     from bot.backtesting.backtester import backtest
-
-    symbol = request.GET.get("symbol", "BTCUSDT").upper()
-    split  = float(request.GET.get("split", 0.7))  # default 70/30
-
-    # Clamp split between 0.5 and 0.85
-    split = max(0.5, min(0.85, split))
 
     try:
         # Fetch 1440 candles = 60 days on 1H
         df = get_klines(symbol, interval="1h", total_candles=1440)
 
         if df is None or df.empty:
-            return JsonResponse({
+            return {
                 "success": False,
                 "error": f"No data returned for {symbol}"
-            })
+            }
 
         if len(df) < 200:
-            return JsonResponse({
+            return {
                 "success": False,
                 "error": f"Insufficient data: {len(df)} candles. Need at least 200."
-            })
+            }
 
         # ── SPLIT ─────────────────────────────────────
         split_idx   = int(len(df) * split)
@@ -780,7 +812,7 @@ def walk_forward_view(request):
                 )
             }
 
-        return JsonResponse({
+        return {
             "success":     True,
             "symbol":      symbol,
             "split_pct":   round(split * 100),
@@ -796,13 +828,13 @@ def walk_forward_view(request):
             },
             "degradations": degradations,
             "verdict":      verdict,
-        })
+        }
 
     except Exception as e:
-        return JsonResponse({
+        return {
             "success": False,
             "error":   str(e),
             "trace":   traceback.format_exc()
-        })                     
-        
+        }
+
         

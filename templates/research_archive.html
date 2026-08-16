@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load research_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Research Archive, the full,
+   unfiltered go/no-go decision log (research_data/model_governance_log.md),
+   parsed by research_lab_data.py::get_research_conclusions(). The
+   complete audit trail — every verdict this project has ever recorded,
+   not just the rejections (see Rejected Research for that filtered view
+   of the same underlying data).
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="research_archive" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Archive</span>
+            <span class="term-section-meta">source: model_governance_log.md — full history</span>
+        </div>
+        <div class="term-section-body">
+            {% if conclusions.available %}
+            <div class="chart-caption" style="margin-bottom:10px">Every research verdict this project has recorded — {{ conclusions.n_entries }} entries. Synthesizes cointegration, walk-forward, and permutation-test results into one accepted/rejected call per line of research, explaining WHY, not just what the numbers were.</div>
+            {% for e in conclusions.entries %}
+            <div class="term-panel" style="margin-bottom:10px">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                    <span style="font-weight:600">{{ e.title }}</span>
+                    <span><span class="badge {{ e.verdict_tag|verdict_class }}">{{ e.verdict_tag }}</span> <span class="text-dim mono" style="margin-left:8px">{{ e.date|default:"—" }}</span></span>
+                </div>
+                {% if e.verdict_text %}<div class="text-secondary" style="margin-bottom:6px"><strong>Verdict:</strong> {{ e.verdict_text }}</div>{% endif %}
+                <div class="text-dim" style="white-space:pre-line; font-size:12px">{{ e.excerpt }}</div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="unavailable">{{ conclusions.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Research Archive" note="full go/no-go decision history" %}
+
+{% endblock %}

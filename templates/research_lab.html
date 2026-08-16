@@ -22,20 +22,14 @@
    naming what would need to run.
 {% endcomment %}
 
-<div class="term-topbar">
-    <div class="term-brand">
-        <span class="term-brand-name">QUANT BOT PRO</span>
-        <span class="term-brand-sub">Research Lab</span>
-    </div>
-    <div class="term-topbar-right">
-        <a href="{% url 'dashboard' %}?symbol={{ symbol }}" class="term-btn">← Terminal</a>
-        <a href="{% url 'feature_leaderboard' %}" class="term-btn">Feature Intelligence →</a>
-        <form class="term-symbol-form" method="get" action=".">
-            <input type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
-            <button type="submit" class="term-btn">Load</button>
-        </form>
-        <button class="theme-toggle" onclick="toggleTheme()">◐ Theme</button>
-    </div>
+{% include "partials/_topbar.html" with active="research_lab" %}
+
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <form class="term-symbol-form" method="get" action=".">
+        <label class="text-dim mono" for="rl-symbol">Symbol for cached-backtest panels:</label>
+        <input id="rl-symbol" type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
+        <button type="submit" class="term-btn">Load</button>
+    </form>
 </div>
 
 <div class="term-body">
@@ -301,57 +295,15 @@
         </div>
     </div>
 
-    <!-- ================= 7. STRATEGY COMPARISON ================= -->
+    <!-- ================= 7. ROBUSTNESS ANALYSIS (moved) ================= -->
     <div class="term-section">
         <div class="term-section-head">
-            <span class="term-section-title">7 · Strategy Comparison</span>
-            <span class="term-section-meta">source: walk_forward_leaderboard.csv</span>
+            <span class="term-section-title">7 · Robustness Analysis</span>
+            <span class="term-section-meta">walk-forward + permutation testing</span>
         </div>
         <div class="term-section-body">
-            {% if strategy_comparison.leaderboard.available %}
-            <div class="term-table-wrap" style="margin-bottom:16px">
-                <table class="term-table">
-                    <thead><tr><th>Pair</th><th class="num">OOS Trades</th><th class="num">OOS Win %</th><th class="num">OOS Sharpe</th><th class="num">OOS Profit Factor</th><th class="num">WF Efficiency</th><th>Verdict</th></tr></thead>
-                    <tbody>
-                        {% for r in strategy_comparison.leaderboard.rows %}
-                        <tr>
-                            <td class="label-cell">{{ r.pair_name }}</td>
-                            <td class="num stat-number" data-target="{{ r.oos_trades }}" data-decimals="0">0</td>
-                            <td class="num stat-number" data-target="{{ r.oos_win_rate }}" data-decimals="3">0</td>
-                            <td class="num stat-number {% if r.oos_sharpe > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.oos_sharpe }}" data-decimals="2">0</td>
-                            <td class="num stat-number" data-target="{{ r.oos_profit_factor }}" data-decimals="2">0</td>
-                            <td class="num stat-number" data-target="{{ r.walk_forward_efficiency }}" data-decimals="3">0</td>
-                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="unavailable">walk_forward_leaderboard.csv unavailable</div>
-            {% endif %}
-
-            {% if strategy_comparison.strategy_summaries %}
-            <div class="metric-label" style="margin-bottom:6px">Full-Period Strategy Summaries</div>
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Pair</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">Profit Factor</th><th class="num">Sharpe</th><th class="num">Entry IC</th><th class="num">Entry IC p-value</th></tr></thead>
-                    <tbody>
-                        {% for s in strategy_comparison.strategy_summaries %}
-                        <tr>
-                            <td class="label-cell">{{ s.pair }}</td>
-                            <td class="num stat-number" data-target="{{ s.n_total_trades|default_if_none:0 }}" data-decimals="0">0</td>
-                            <td class="num stat-number" data-target="{{ s.win_rate|default_if_none:0 }}" data-decimals="3">0</td>
-                            <td class="num stat-number" data-target="{{ s.profit_factor|default_if_none:0 }}" data-decimals="2">0</td>
-                            <td class="num stat-number {% if s.sharpe_ratio > 0 %}pos{% else %}neg{% endif %}" data-target="{{ s.sharpe_ratio|default_if_none:0 }}" data-decimals="2">0</td>
-                            <td class="num stat-number {% if s.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ s.entry_ic|default_if_none:0 }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ s.entry_ic_pvalue|default_if_none:0 }}" data-decimals="4">0</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
+            <div class="chart-caption" style="margin-bottom:10px">Strategy Comparison (walk-forward leaderboard) and Robustness Testing (permutation tests) now live on their own dedicated page, with room to grow independently of Research Lab's panel format.</div>
+            <a href="{% url 'robustness_analysis' %}" class="term-btn">View Robustness Analysis →</a>
         </div>
     </div>
 
@@ -401,50 +353,15 @@
         </div>
     </div>
 
-    <!-- ================= 9. ROBUSTNESS TESTING ================= -->
+    <!-- ================= 9. RESEARCH CONCLUSIONS ================= -->
     <div class="term-section">
         <div class="term-section-head">
-            <span class="term-section-title">9 · Robustness Testing</span>
-            <span class="term-section-meta">source: permutation_test_engine.py, {{ robustness.n_shuffles_per_pair }} shuffles/pair</span>
-        </div>
-        <div class="term-section-body">
-            {% if robustness.available %}
-            <div class="chart-caption" style="margin-bottom:10px">The strictest test in the pipeline: the real (unshuffled) result must beat {{ robustness.n_shuffles_per_pair }} randomized re-simulations on win rate, Sharpe, and profit factor, AND show a meaningfully positive entry IC. This is the test that overrides an earlier PROMISING walk-forward pass if the edge doesn't hold up here.</div>
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Pair</th><th class="num">Real Win %</th><th class="num">Win % Percentile</th><th class="num">Real Sharpe</th><th class="num">Sharpe Percentile</th><th class="num">Entry IC</th><th>IC Meaningfully +</th><th>Edge Appears Real</th><th>Verdict</th></tr></thead>
-                    <tbody>
-                        {% for r in robustness.rows %}
-                        <tr>
-                            <td class="label-cell">{{ r.pair }}</td>
-                            <td class="num stat-number" data-target="{{ r.win_rate }}" data-decimals="3">0</td>
-                            <td class="num stat-number {% if r.win_rate_percentile <= 5 %}neg{% endif %}" data-target="{{ r.win_rate_percentile }}" data-decimals="1">0</td>
-                            <td class="num stat-number" data-target="{{ r.sharpe_ratio }}" data-decimals="2">0</td>
-                            <td class="num stat-number {% if r.sharpe_ratio_percentile <= 5 %}neg{% endif %}" data-target="{{ r.sharpe_ratio_percentile }}" data-decimals="1">0</td>
-                            <td class="num stat-number {% if r.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.entry_ic }}" data-decimals="4">0</td>
-                            <td>{% if r.real_entry_ic_meaningfully_positive %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
-                            <td>{% if r.edge_appears_real %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
-                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="unavailable">No permutation_verdict.csv found under research_data/permutation_test/</div>
-            {% endif %}
-        </div>
-    </div>
-
-    <!-- ================= 10. RESEARCH CONCLUSIONS ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">10 · Research Conclusions</span>
+            <span class="term-section-title">9 · Research Conclusions</span>
             <span class="term-section-meta">source: model_governance_log.md</span>
         </div>
         <div class="term-section-body">
             {% if conclusions.available %}
-            <div class="chart-caption" style="margin-bottom:10px">The project's own written go/no-go decision log — {{ conclusions.n_entries }} entries. This is the authoritative verdict: it synthesizes cointegration, walk-forward, and permutation-test results (sections 5, 7, 9 above) into one accepted/rejected call, explaining WHY, not just what the numbers were.</div>
+            <div class="chart-caption" style="margin-bottom:10px">The project's own written go/no-go decision log — {{ conclusions.n_entries }} entries. This is the authoritative verdict: it synthesizes cointegration and robustness-testing results (see sections 5 and 7 above) into one accepted/rejected call, explaining WHY, not just what the numbers were. See also the dedicated <a href="{% url 'rejected_research' %}">Rejected Research</a> and <a href="{% url 'research_archive' %}">Research Archive</a> pages.</div>
             {% for e in conclusions.entries %}
             <div class="term-panel" style="margin-bottom:10px">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
@@ -463,47 +380,10 @@
 
 </div>
 
-<div class="term-footer">
-    <span>Quant Bot Pro — Research Lab</span>
-    <span class="mono">reading research_data/ + data/ directly, offline pipeline</span>
-</div>
+{% include "partials/_footer.html" with label="Research Lab" note="reading research_data/ + data/ directly, offline pipeline" %}
 
-<script>
-    // claude code changed: same count-up animation system as the main
-    // dashboard (templates/dashboard.html) — kept consistent site-wide.
-    function formatNumber(num, decimals) {
-        if (!isFinite(num)) return "0";
-        return Number(num).toFixed(decimals);
-    }
+{% endblock %}
 
-    function animateCounter(el) {
-        var target = parseFloat(el.getAttribute("data-target"));
-        if (isNaN(target)) return;
-
-        var decimals = parseInt(el.getAttribute("data-decimals") || "0", 10);
-        var suffix = el.getAttribute("data-suffix") || "";
-        var duration = 900;
-        var startTime = performance.now();
-
-        function step(now) {
-            var progress = Math.min((now - startTime) / duration, 1);
-            var current = target * progress;
-            el.textContent = formatNumber(current, decimals) + suffix;
-            if (progress < 1) {
-                requestAnimationFrame(step);
-            } else {
-                el.textContent = formatNumber(target, decimals) + suffix;
-            }
-        }
-        requestAnimationFrame(step);
-    }
-
-    function animateAllCounters() {
-        document.querySelectorAll(".stat-number").forEach(animateCounter);
-    }
-
-    document.addEventListener("DOMContentLoaded", animateAllCounters);
-    setInterval(animateAllCounters, 5000);
-</script>
-
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

@@ -103,7 +103,7 @@ class Backtester:
     - Produces clean result dict for dashboard/scorer
     """
 
-    def __init__(self, df: pd.DataFrame, initial_balance: float = 10000):
+    def __init__(self, df: pd.DataFrame, initial_balance: float = 10000, allow_unvalidated_strategies: bool = False):   # claude code changed: new param
         # Store the original DataFrame safely so we never mutate the caller's data
         self.original_df = df.copy() if df is not None else pd.DataFrame()
 
@@ -126,6 +126,7 @@ class Backtester:
             allow_shorts=True,              # Short (sell) trades are permitted
             require_high_confidence=False,  # Accept MEDIUM confidence regimes too
             min_adx_for_trend=25,           # ADX must be at least 25 for trend trades
+            allow_unvalidated_strategies=allow_unvalidated_strategies,   # claude code changed: new — see validated_feature_registry.py
         )
         # TradeNarrativeGenerator writes plain English explanations for each trade
         self.narrator = TradeNarrativeGenerator()
@@ -251,6 +252,16 @@ class Backtester:
             "ema_alignment": signal.get("ema_alignment", None),   # Whether EMA20 was above EMA50
             "pullback": signal.get("pullback", None),              # Whether price was near EMA20
             "momentum": signal.get("momentum", None),             # Whether candle confirmed direction
+
+            # claude code changed: new three keys — Phase 2 (trade provenance).
+            # Populated by StrategyRouter._no_signal() only for blocks that
+            # came from the production-validation gate (see
+            # bot/research/validated_feature_registry.py); empty/False for
+            # every other rejection reason, since those weren't decided by a
+            # research verdict at all.
+            "research_verdict": signal.get("research_verdict", ""),
+            "production_eligible": signal.get("production_eligible", False),
+            "verdict_rejection_reason": signal.get("verdict_rejection_reason", ""),
         })
 
     def rejection_summary(self):
@@ -263,12 +274,28 @@ class Backtester:
 
         cleaned = {}   # Will hold the formatted table
 
+        # claude code changed: new — Phase 3 (UI pipeline view). One
+        # representative event per reason, so the dashboard's Rejection
+        # Analysis table can show WHICH verdict blocked a
+        # strategy_not_validated_* reason instead of just a bare count.
+        # Every event for the same reason carries the same verdict fields
+        # (the verdict doesn't vary candle-to-candle), so first-match is
+        # sufficient — this is display sampling, not aggregation.
+        verdict_by_reason = {}
+        for event in self.rejection_events:
+            reason_key = event.get("reason", "")
+            if reason_key not in verdict_by_reason:
+                verdict_by_reason[reason_key] = event
+
         for k, v in self.rejections.items():
             key = str(k).strip().lower().replace(" ", "_")   # Normalise key to snake_case
+            sample = verdict_by_reason.get(key, {})
 
             cleaned[key] = {
                 "count": v,                                        # Raw count for this reason
                 "percentage": round((v / total) * 100, 2),        # Percentage of total rejections
+                "research_verdict": sample.get("research_verdict", ""),        # claude code changed: new
+                "production_eligible": sample.get("production_eligible", False),  # claude code changed: new
             }
 
         return cleaned   # Return formatted table ready for the dashboard template
@@ -496,6 +523,8 @@ class Backtester:
             trade_dict["rsi_zone"] = self.open_trade_narrative.rsi_zone
             trade_dict["rr_ratio"] = self.open_trade_narrative.rr_ratio
             trade_dict["conditions"] = self.open_trade_narrative.conditions
+            trade_dict["research_verdict"] = self.open_trade_narrative.research_verdict          # claude code changed: new — Phase 3 (UI pipeline view)
+            trade_dict["production_eligible"] = self.open_trade_narrative.production_eligible    # claude code changed: new
 
         # ── ATTACH STRUCTURE CONTEXT ────────────────────────────
 
@@ -650,6 +679,8 @@ class Backtester:
             trade_dict["regime_confidence"] = self.open_trade_narrative.regime_confidence
             trade_dict["adx"] = self.open_trade_narrative.adx
             trade_dict["strategy_name"] = self.open_trade_narrative.strategy_name
+            trade_dict["research_verdict"] = self.open_trade_narrative.research_verdict          # claude code changed: new — Phase 3 (UI pipeline view)
+            trade_dict["production_eligible"] = self.open_trade_narrative.production_eligible    # claude code changed: new
 
         # Attach structure context from stored signal
         if self.open_trade_signal:
@@ -1341,7 +1372,7 @@ def analyze_rejections(rejection_table: dict) -> dict:
 # ============================================================
 # FUNCTION WRAPPER — PRESERVES OLD API
 # ============================================================
-def backtest(df: pd.DataFrame, initial_balance: float = 5000) -> dict:
+def backtest(df: pd.DataFrame, initial_balance: float = 5000, allow_unvalidated_strategies: bool = False) -> dict:   # claude code changed: new param
     """
     Backward-compatible wrapper.
 
@@ -1351,4 +1382,4 @@ def backtest(df: pd.DataFrame, initial_balance: float = 5000) -> dict:
     while the real work is now done by the Backtester class.
     """
     # Create a Backtester instance and run it — returns the full results dict
-    return Backtester(df=df, initial_balance=initial_balance).run()
+    return Backtester(df=df, initial_balance=initial_balance, allow_unvalidated_strategies=allow_unvalidated_strategies).run()   # claude code changed: new arg

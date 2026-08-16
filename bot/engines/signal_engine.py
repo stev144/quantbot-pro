@@ -1,8 +1,19 @@
 import pandas as pd
 
-from bot.strategies.moving_average import moving_average_strategy
-#from bot.strategies.mean_reversion_strategy import MeanReversionStrategy
-#from bot.engines.regime_detector import RegimeDetector
+# claude code changed: was "from bot.strategies.moving_average import
+# moving_average_strategy" — that function has never existed in this repo;
+# bot/strategies/moving_average.py defines a class, MovingAverageStrategy,
+# with a check_signal(df) method (confirmed via bot/engines/strategy_router.py,
+# which calls self.trend_strategy.check_signal(df)). This import has been
+# silently broken since whenever the strategy moved from a function to a
+# class — caught by manage.py health_check's "Signal Engine" check, which
+# has been reporting "generate_signal not importable" ever since. Nothing
+# in the live bot_runner.py/backtester.py pipeline actually imports this
+# module (confirmed via grep — StrategyRouter calls MovingAverageStrategy
+# directly), so the break never affected real trading; fixed anyway so the
+# health check reports a real pass instead of masking a genuinely broken
+# module behind "warn, skipping check".
+from bot.strategies.moving_average import MovingAverageStrategy
 
 # optional import (create file if not existing)
 from bot.engines.trade_filter import trade_quality_filter
@@ -12,8 +23,10 @@ from bot.engines.trade_filter import trade_quality_filter
 # INIT ONCE (performance)
 # =========================
 
-#regime_detector = RegimeDetector()
-#mr_strategy = MeanReversionStrategy()
+# claude code changed: new — instantiated once at module load, same pattern
+# StrategyRouter uses, instead of constructing a fresh MovingAverageStrategy
+# on every generate_signal() call.
+_trend_strategy = MovingAverageStrategy()
 
 def generate_signal(df, i):
 
@@ -25,7 +38,9 @@ def generate_signal(df, i):
             "reason": "insufficient_data"
         }
 
-    signal = moving_average_strategy(sub_df)
+    # claude code changed: was moving_average_strategy(sub_df) — see the
+    # import comment above for why that never worked.
+    signal = _trend_strategy.check_signal(sub_df)
 
     # ✅ HARD GUARD: strategy must NEVER return None
     if not signal or not isinstance(signal, dict):

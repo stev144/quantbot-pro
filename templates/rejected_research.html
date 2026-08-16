@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load research_extras %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Rejected Research. Same data
+   source as Research Archive (research_data/model_governance_log.md via
+   research_lab_data.py::get_research_conclusions()), filtered to
+   verdict_tag=REJECTED — "what we tried and killed, and why." A
+   research platform that surfaces its own rejections prominently is
+   the deliberate antidote to a SIGNAL -> BUY/SELL framing: it shows the
+   filtering, not just the survivors.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="rejected_research" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Rejected Research</span>
+            <span class="term-section-meta">source: model_governance_log.md — REJECTED verdicts only</span>
+        </div>
+        <div class="term-section-body">
+            {% if conclusions.available %}
+            {% if conclusions.entries %}
+            <div class="chart-caption" style="margin-bottom:10px">{{ conclusions.n_entries }} line(s) of research killed after failing a significance test or filter — see Research Archive for the full history including what passed.</div>
+            {% for e in conclusions.entries %}
+            <div class="term-panel" style="margin-bottom:10px">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                    <span style="font-weight:600">{{ e.title }}</span>
+                    <span><span class="badge {{ e.verdict_tag|verdict_class }}">{{ e.verdict_tag }}</span> <span class="text-dim mono" style="margin-left:8px">{{ e.date|default:"—" }}</span></span>
+                </div>
+                {% if e.verdict_text %}<div class="text-secondary" style="margin-bottom:6px"><strong>Verdict:</strong> {{ e.verdict_text }}</div>{% endif %}
+                <div class="text-dim" style="white-space:pre-line; font-size:12px">{{ e.excerpt }}</div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="unavailable">No entries in model_governance_log.md are tagged REJECTED.</div>
+            {% endif %}
+            {% else %}
+            <div class="unavailable">{{ conclusions.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Rejected Research" note="what we tried and killed, and why" %}
+
+{% endblock %}

@@ -168,6 +168,7 @@ class PermutationTestEngine:
         capital_usdt:          float = STRATEGY_CAPITAL_USDT,
         output_dir:              str   = PERMUTATION_OUTPUT_DIR,
         random_seed:              Optional[int] = None,        # Set for a reproducible shuffle sequence
+        resample_hours:            Optional[int] = None,        # claude code changed: new — threaded into the loader so df_real (and therefore every shuffle, which reshuffles df_real) is already at this candle width
     ) -> None:
         self.n_permutations     = n_permutations
         self.block_size          = block_size_candles       # May be None here — resolved to a real value in run()
@@ -175,6 +176,7 @@ class PermutationTestEngine:
         self.output_dir               = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.rng                        = np.random.default_rng(random_seed)   # Isolated RNG — doesn't disturb global numpy state
+        self.resample_hours             = resample_hours       # claude code changed: new
 
         block_desc = f"{block_size_candles} candles (fixed override)" if block_size_candles is not None else "adaptive - derived from the real run's own avg hold time"
         logger.info("PermutationTestEngine initialised")
@@ -245,7 +247,10 @@ class PermutationTestEngine:
         pair_dir.mkdir(parents=True, exist_ok=True)
 
         # ── Step 1: Load the real data once (reusing the already-fixed loader) ──
-        loader = EntryExitEngine(capital_usdt=self.capital_usdt, output_dir=str(pair_dir / "_loader_scratch"))
+        loader = EntryExitEngine(                                                 # claude code changed: added resample_hours=
+            capital_usdt=self.capital_usdt, output_dir=str(pair_dir / "_loader_scratch"),
+            resample_hours=self.resample_hours,                                   # claude code changed: new — df_real (and every shuffle derived from it) comes out already at this candle width
+        )
         df_real = loader._load_kalman_data(kalman_csv)                    # Same cleaned loader as everywhere else
         loader._validate_columns(df_real)
         shutil.rmtree(pair_dir / "_loader_scratch", ignore_errors=True)
@@ -269,12 +274,21 @@ class PermutationTestEngine:
                     f"falling back to the minimum block size ({MIN_BLOCK_SIZE_CANDLES} candles)"
                 )
             else:
-                raw_block = int(round(avg_hold / ADAPTIVE_BLOCK_DIVISOR))          # Target: well under a typical trade's lifespan
+                # claude code changed: was `avg_hold / ADAPTIVE_BLOCK_DIVISOR` only —
+                # that treats the result directly as a candle count, which is only
+                # correct when each candle is 1h wide. df_real (and therefore every
+                # shuffle) may now be resampled to self.resample_hours-wide candles
+                # (see PermutationTestEngine.__init__), so the real-hours target must
+                # be converted into a count of THOSE candles, not 1h ones — otherwise
+                # a block at e.g. resample_hours=4 would span 4x the intended real time.
+                candle_width_h = self.resample_hours if self.resample_hours else 1
+                raw_block = int(round(avg_hold / ADAPTIVE_BLOCK_DIVISOR / candle_width_h))   # Target: well under a typical trade's lifespan
                 self.block_size = int(np.clip(raw_block, MIN_BLOCK_SIZE_CANDLES, MAX_BLOCK_SIZE_CANDLES))
                 logger.info(
                     f"  Adaptive block size: {self.block_size} candles "
-                    f"(real avg hold time {avg_hold:.1f}h ÷ {ADAPTIVE_BLOCK_DIVISOR:.0f}, "
-                    f"clipped to [{MIN_BLOCK_SIZE_CANDLES}, {MAX_BLOCK_SIZE_CANDLES}])"
+                    f"({candle_width_h}h each -> {self.block_size * candle_width_h}h total; "
+                    f"real avg hold time {avg_hold:.1f}h ÷ {ADAPTIVE_BLOCK_DIVISOR:.0f}, "
+                    f"clipped to [{MIN_BLOCK_SIZE_CANDLES}, {MAX_BLOCK_SIZE_CANDLES}] candles)"
                 )
 
         # ── Step 3: Run N block-shuffled replicas ────────────────────────────────

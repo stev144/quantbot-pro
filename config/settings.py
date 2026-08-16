@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 import os
 from pathlib import Path
+from decouple import config    # claude code changed: new import — fixes architecture audit issue 5
+import dj_database_url    # claude code changed: new import — Railway deployment, parses DATABASE_URL
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,17 +21,67 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
+# claude code changed: SECRET_KEY was a hardcoded literal committed to source
+# (architecture audit issue 5) — now read from the QUANTBOT_SECRET_KEY
+# environment variable via python-decouple. No default: a missing value
+# fails loudly at startup rather than silently falling back to something
+# insecure.
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-f@*d@um9ui6z%jhj-g=0$ch%gm!z)(yjmn3_sctpo#$u=jp3%-'
+SECRET_KEY = config('QUANTBOT_SECRET_KEY')
 
+# claude code changed: was hardcoded True (architecture audit issue 5) — the
+# repo's own CLAUDE.md flagged this as a dev-only, not-production-hardened
+# setting. Now hardcoded False per the audit's explicit instruction. Note:
+# this changes local `runserver` behaviour too — Django's dev server only
+# auto-serves static files (django.contrib.staticfiles) when DEBUG=True (or
+# run with `runserver --insecure`), so templates referencing {% static %}
+# tags may 404 locally until collectstatic + a real static file server (or
+# the --insecure flag) is set up.
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
-    "192.168.43.229"
+    "192.168.43.229",   # phone hotspot subnet — kept in case you reconnect via that network
+    # claude code changed: new — this machine's WiFi IP changed to the
+    # 192.168.178.x home-router subnet (was 192.168.43.x, a phone hotspot
+    # IP that's no longer assigned to this machine — that's why phone
+    # access broke, not just the firewall). DHCP-leased, so it can change
+    # again on this router too; if phone access breaks again, check the
+    # current IP with `ipconfig` and update this list.
+    "192.168.178.91",
+    # claude code changed: new — Railway deployment. Leading-dot wildcard
+    # matches any *.up.railway.app subdomain (Django's documented syntax
+    # for ALLOWED_HOSTS wildcards), covering the default domain Railway
+    # assigns before you know its exact value.
+    ".up.railway.app",
 ]
+
+# claude code changed: new — Railway deployment. RAILWAY_PUBLIC_DOMAIN is
+# injected automatically by Railway at runtime once a domain (default or
+# custom) is generated for the service. Adding it explicitly — not just
+# relying on the .up.railway.app wildcard above — so a custom domain
+# attached in Railway's dashboard is trusted too, not only the default one.
+_railway_domain = config('RAILWAY_PUBLIC_DOMAIN', default='')
+if _railway_domain:
+    ALLOWED_HOSTS.append(_railway_domain)
+
+# claude code changed: new — Railway terminates TLS at its edge and
+# forwards to the container over plain HTTP, so without this Django can't
+# tell the original request was HTTPS — request.is_secure() would always
+# be False behind Railway. That silently breaks CSRF validation (and the
+# admin login is a POST, so it'd hit this directly) despite the site
+# genuinely being served over HTTPS from the browser's point of view.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# claude code changed: new — Django 4+ requires the scheme in
+# CSRF_TRUSTED_ORIGINS for any cross-scheme-appearing origin behind a
+# proxy; without this, POST requests (e.g. admin login) on the Railway
+# domain fail CSRF validation even with SECURE_PROXY_SSL_HEADER set above.
+CSRF_TRUSTED_ORIGINS = ['https://*.up.railway.app']
+if _railway_domain:
+    CSRF_TRUSTED_ORIGINS.append(f'https://{_railway_domain}')
 
 # Cache setup
 # Stores results in memory
@@ -60,13 +112,37 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # claude code changed: new — fixes static files (CSS/JS/typed.js
+    # animations) 404ing since DEBUG=False (issue 5) stopped Django's dev
+    # server from auto-serving them. WhiteNoise serves static files
+    # correctly regardless of DEBUG, so this works the same in local dev
+    # and in any eventual production deployment. Must sit directly after
+    # SecurityMiddleware per WhiteNoise's own install docs.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # claude code changed: LoginRequiredMiddleware (which gated every view
+    # behind a login) removed per explicit follow-up request — the product
+    # direction reversed from "private, single-operator tool" to "public
+    # dashboard, sign-in/sign-up optional, not a gate." Django admin
+    # (/admin/) is unaffected — it has always had its own separate
+    # is_staff-based auth check (AdminSite), independent of this
+    # middleware, so it stays protected either way. AuthenticationMiddleware
+    # itself stays — still needed to populate request.user (used to decide
+    # Sign In vs Logout in the navbar, and by the login/signup views).
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# claude code changed: LOGIN_URL/LOGIN_REDIRECT_URL kept — still used by the
+# optional sign-in/sign-up flow (e.g. @login_required on any future view
+# that specifically wants it, and as the target of the navbar's Sign In
+# link) even though nothing is gated globally anymore.
+LOGIN_URL = 'login'
+LOGIN_REDIRECT_URL = 'dashboard'
+LOGOUT_REDIRECT_URL = 'login'
 
 ROOT_URLCONF = 'config.urls'
 
@@ -91,12 +167,49 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# claude code changed: migrated from sqlite3 to postgresql (architecture
+# audit issue 3), then extended for Railway deployment (issue: Railway
+# public URL access). DATABASE_URL is what Railway's Postgres plugin
+# injects automatically at deploy time — when present, it takes priority
+# and is parsed via dj-database-url. Falls back to the discrete
+# QUANTBOT_DB_* vars (read via decouple's config(), same as SECRET_KEY
+# above — picked up from the local .env file) when DATABASE_URL isn't
+# set, so the local Postgres install from the earlier SQLite migration
+# keeps working unchanged for `manage.py runserver` on this machine.
+_database_url = config('DATABASE_URL', default='')
+
+if _database_url:
+    DATABASES = {
+        'default': dj_database_url.parse(_database_url, conn_max_age=600)
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE':   'django.db.backends.postgresql',
+            'NAME':     config('QUANTBOT_DB_NAME'),
+            'USER':     config('QUANTBOT_DB_USER'),
+            'PASSWORD': config('QUANTBOT_DB_PASSWORD'),
+            'HOST':     config('QUANTBOT_DB_HOST', default='127.0.0.1'),
+            'PORT':     config('QUANTBOT_DB_PORT', default='5432'),
+        }
+    }
+
+# claude code changed: new — Railway deployment hardening, from Django's
+# own `manage.py check --deploy` checklist. Gated on _is_production
+# (True only when DATABASE_URL/Railway's Postgres plugin is present) —
+# NOT unconditional, because SECURE_SSL_REDIRECT=True would break local
+# `runserver` LAN/phone access entirely (force-redirects every request to
+# https://, which the local dev server doesn't serve at all, breaking the
+# phone access this same session just fixed). SECURE_HSTS_SECONDS is
+# deliberately NOT set — Django's own check warns "enabling HSTS
+# carelessly can cause serious, irreversible problems" (browsers cache it
+# client-side); leave that as a manual opt-in once the Railway domain is
+# confirmed stable, not something to silently switch on.
+_is_production = bool(_database_url)
+
+SECURE_SSL_REDIRECT  = _is_production
+SESSION_COOKIE_SECURE = _is_production
+CSRF_COOKIE_SECURE    = _is_production
 
 
 # Password validation
@@ -138,3 +251,17 @@ STATIC_URL = 'static/'
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]
+
+# claude code changed: new — collectstatic's destination directory, needed
+# for Railway deployment (WHITENOISE_USE_FINDERS below means this isn't
+# strictly required for serving to work, but collectstatic itself errors
+# without a STATIC_ROOT to write to, and the deploy command runs it).
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# claude code changed: new — tells WhiteNoise to serve directly from the
+# app/STATICFILES_DIRS finders (same files DEBUG=True's dev-server serving
+# used) instead of requiring a `collectstatic` run into STATIC_ROOT first.
+# Right tradeoff for this repo: no production STATIC_ROOT/collectstatic
+# pipeline exists yet, and this keeps `runserver` working out of the box
+# exactly like before DEBUG flipped to False.
+WHITENOISE_USE_FINDERS = True

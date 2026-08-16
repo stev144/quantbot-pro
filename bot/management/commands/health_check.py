@@ -10,6 +10,7 @@ Usage:
 """
 
 import os
+import sys
 import json
 import time
 import socket
@@ -22,6 +23,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from django.core.cache import cache
 from django.core.management.base import BaseCommand
+
+# claude code changed: new — same fix bot_runner.py already has (see that
+# file's header comment for the full rationale). This command's summary
+# banner uses box-drawing characters (═) and status glyphs (✔/⚠/✖), which
+# Windows' default console codepage (cp1252) can't encode — without this,
+# `python manage.py health_check` crashes with UnicodeEncodeError before
+# printing any results at all. Found while establishing a post-migration
+# health baseline; this file never got the same fix bot_runner.py did.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 try:
     import psutil

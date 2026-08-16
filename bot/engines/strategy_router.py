@@ -12,7 +12,10 @@
 # ROUTING LOGIC:
 #   TRENDING_UP    → MovingAverageStrategy (BUY signals only)
 #   TRENDING_DOWN  → MovingAverageStrategy (SELL signals only)
-#   RANGING        → MeanReversionStrategy (both directions)
+#   RANGING        → MeanReversionStrategy (both directions) — claude code
+#                     changed: gated behind validated_feature_registry.py;
+#                     blocked by default (RSI/BB not research-validated),
+#                     see BLOCK 3 in route() below
 #   HIGH_VOLATILITY → No strategy fires — sit out
 #
 # WHY THIS MATTERS:
@@ -36,6 +39,9 @@ from bot.strategies.mean_reversion_strategy import MeanReversionStrategy
 
 # Import the RegimeResult dataclass for type hints and field access
 from bot.engines.regime_detector import RegimeResult
+
+# claude code changed: new import — gates strategies behind research validation
+from bot.research.validated_feature_registry import get_strategy_verdict
 
 # Create logger for this module
 logger = logging.getLogger(__name__)
@@ -83,6 +89,7 @@ class StrategyRouter:
         allow_shorts=True,          # Set False to disable all short trades
         require_high_confidence=False,  # If True, only trade HIGH confidence regimes
         min_adx_for_trend=25,       # Override ADX threshold for trend trades
+        allow_unvalidated_strategies=False,  # claude code changed: new param — see validated_feature_registry.py; default False is the safe state, mirrors entry_exit_engine.py's require_passes_filters=True-safe-default convention
     ):
 
         # ── STRATEGY INSTANCES ────────────────────────────────
@@ -111,6 +118,12 @@ class StrategyRouter:
         # Can override the detector's threshold for extra caution
         self.min_adx_for_trend = min_adx_for_trend
 
+        # claude code changed: new — if False (default), strategies without a
+        # SUPPORTED research verdict are blocked at routing time regardless of
+        # what the strategy itself would have returned. See
+        # bot/research/validated_feature_registry.py.
+        self.allow_unvalidated_strategies = allow_unvalidated_strategies
+
         # ── PERFORMANCE TRACKING ──────────────────────────────
         # Track how many times each route was taken
         # Useful for understanding bot behaviour over time
@@ -122,6 +135,7 @@ class StrategyRouter:
             "HIGH_VOLATILITY": 0,   # Times all trading was blocked
             "BLOCKED_CONFIDENCE": 0,  # Times blocked due to low confidence
             "BLOCKED_DIRECTION":  0,  # Times blocked due to long/short settings
+            "BLOCKED_UNVALIDATED": 0,  # claude code changed: new — times a strategy was blocked for lacking a SUPPORTED research verdict
         }
 
         # Log initialisation
@@ -129,7 +143,8 @@ class StrategyRouter:
             f"[StrategyRouter] Initialised | "
             f"Longs: {allow_longs} | "
             f"Shorts: {allow_shorts} | "
-            f"Require high confidence: {require_high_confidence}"
+            f"Require high confidence: {require_high_confidence} | "
+            f"Allow unvalidated strategies: {allow_unvalidated_strategies}"   # claude code changed: new
         )
 
 
@@ -308,6 +323,45 @@ class StrategyRouter:
         # MovingAverageStrategy would bleed in this environment
         if regime == "RANGING":
 
+            # claude code changed: new block — production-validation gate.
+            # MeanReversionStrategy fires directly off RSI/Bollinger Band
+            # thresholds, neither of which has cleared this project's own
+            # research validation bar (see validated_feature_registry.py for
+            # the cited evidence). Checked here, not inside
+            # MeanReversionStrategy.evaluate() itself, so the strategy's raw
+            # mechanics remain directly testable/inspectable in isolation —
+            # this is specifically about whether the ROUTER is allowed to
+            # dispatch to it for live/backtest trades.
+            verdict = get_strategy_verdict("MeanReversionStrategy")
+            if not verdict.production_eligible:
+                if not self.allow_unvalidated_strategies:
+                    self.route_counts["BLOCKED_UNVALIDATED"] += 1
+                    logger.warning(
+                        f"[StrategyRouter] BLOCKED — MeanReversionStrategy is not "
+                        f"production_eligible (verdict={verdict.research_verdict}). "
+                        f"{verdict.rejection_reason} "
+                        f"Set allow_unvalidated_strategies=True to override (test-only)."
+                    )
+                    return self._no_signal(
+                        reason=f"strategy_not_validated_{verdict.research_verdict.lower()}",
+                        regime=regime,
+                        confidence=confidence,
+                        verdict=verdict,   # claude code changed: new — Phase 2 (trade provenance)
+                    )
+                else:
+                    # claude code changed: new — make the override visible, not
+                    # silent, same convention as entry_exit_engine.py's
+                    # require_passes_filters=False warning. Fires only when the
+                    # override is actually bypassing a real block, not just
+                    # because the flag is set.
+                    logger.warning(
+                        f"[StrategyRouter] allow_unvalidated_strategies=True — "
+                        f"dispatching to MeanReversionStrategy despite verdict="
+                        f"{verdict.research_verdict}. {verdict.rejection_reason} "
+                        f"Treat any resulting trades as a deliberate test of an "
+                        f"unvalidated strategy, not a production decision."
+                    )
+
             # Increment ranging counter
             self.route_counts["RANGING"] += 1
 
@@ -427,11 +481,20 @@ class StrategyRouter:
         self,
         reason: str,
         regime: str = "UNKNOWN",
-        confidence: str = "LOW"
+        confidence: str = "LOW",
+        verdict=None,   # claude code changed: new — Optional[StrategyVerdict], Phase 2 (trade provenance)
     ) -> dict:
         """
         Returns a standardised NO_SIGNAL dict with regime context.
         Consistent structure means execution_engine.py never gets None.
+
+        verdict : Optional[StrategyVerdict]
+            claude code changed: new param. Only passed by call sites where
+            the block itself came from validated_feature_registry.py (the
+            production-validation gate) — most NO_SIGNAL reasons (ADX too
+            low, high volatility, direction disabled) aren't about a
+            strategy's research verdict at all, so they leave this None
+            rather than fabricating a verdict that didn't decide the block.
         """
 
         return {
@@ -445,6 +508,10 @@ class StrategyRouter:
             "regime":            regime,        # Regime at time of rejection
             "regime_confidence": confidence,    # Confidence at rejection
             "blocked_reason":    reason,        # Alias — used by trade narrative
+            # claude code changed: new three keys — Phase 2 (trade provenance)
+            "research_verdict":         verdict.research_verdict if verdict else "",
+            "production_eligible":      verdict.production_eligible if verdict else False,
+            "verdict_rejection_reason": verdict.rejection_reason if verdict else "",
         }
 
 

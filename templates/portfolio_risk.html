@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Portfolio & Risk. Real max-
+   drawdown (from a cached/real backtest), real live price correlation
+   across data/*.csv (bot/views/terminal_data.py::_compute_price_correlation),
+   and real open-position count from TradeRecord. Crash-risk stays
+   explicitly unavailable — contagion_engine.py has no persisted output
+   anywhere in this codebase; that is not approximated here.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="portfolio_risk" %}
+
+<div class="term-body">
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Portfolio &amp; Risk — {{ symbol }}</span>
+            <span class="term-section-meta">source: terminal_data.get_portfolio_risk()</span>
+        </div>
+        <div class="term-section-body">
+            <form method="get" action="." style="margin-bottom:14px">
+                <label class="text-dim">Symbol:</label>
+                <input type="text" name="symbol" class="term-input mono" value="{{ symbol }}">
+                <button type="submit" class="term-btn">Load</button>
+            </form>
+            <div class="term-grid term-grid-3" style="margin-bottom:16px">
+                <div class="metric-tile">
+                    <div class="metric-label">Max Drawdown ({{ symbol }} backtest)</div>
+                    {% if portfolio_risk.max_drawdown != None %}
+                    <div class="metric-value stat-number neg" data-target="{{ portfolio_risk.max_drawdown }}" data-decimals="2" data-suffix="%">0%</div>
+                    {% else %}
+                    <div class="metric-value small text-dim">Not calculated</div>
+                    {% endif %}
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Open Positions</div>
+                    <div class="metric-value stat-number" data-target="{{ open_count }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Crash Risk</div>
+                    <div class="metric-value small text-dim">Not calculated</div>
+                </div>
+            </div>
+            <div class="unavailable-inline">Crash risk: {{ portfolio_risk.crash_risk.reason }}</div>
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Cross-Asset Correlation</span>
+            <span class="term-section-meta">real, historical — pct-change correlation over data/*.csv, not a live feed</span>
+        </div>
+        <div class="term-section-body">
+            {% if portfolio_risk.correlation.available %}
+            <div class="term-grid term-grid-2" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Avg |Correlation| ({{ portfolio_risk.correlation.n_symbols }} symbols)</div><div class="metric-value stat-number" data-target="{{ portfolio_risk.correlation.avg_abs_correlation }}" data-decimals="3">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Window</div><div class="metric-value small">{{ portfolio_risk.correlation.window_candles }} candles</div></div>
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Pair</th><th class="num">Correlation</th></tr></thead>
+                    <tbody>
+                        {% for p in portfolio_risk.correlation.top_pairs %}
+                        <tr>
+                            <td class="label-cell">{{ p.a }} / {{ p.b }}</td>
+                            <td class="num stat-number {% if p.corr > 0 %}pos{% else %}neg{% endif %}" data-target="{{ p.corr }}" data-decimals="3">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ portfolio_risk.correlation.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Open Positions</span>
+            <span class="term-section-meta">source: TradeRecord (status=OPEN)</span>
+        </div>
+        <div class="term-section-body">
+            {% if not execution_available %}
+            <div class="unavailable">{{ execution_reason }}</div>
+            {% elif open_positions %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th>Side</th><th>Strategy</th><th class="num">Entry</th><th class="num">SL</th><th class="num">TP</th><th class="num">Quantity</th><th class="num">Risk Amount</th><th>Opened</th></tr></thead>
+                    <tbody>
+                        {% for p in open_positions %}
+                        <tr>
+                            <td class="label-cell">{{ p.symbol }}</td>
+                            <td class="{% if p.side == 'buy' %}dir-long{% else %}dir-short{% endif %}">{{ p.side|upper }}</td>
+                            <td class="text-dim">{{ p.strategy }}</td>
+                            <td class="num">{{ p.entry_price }}</td>
+                            <td class="num">{{ p.sl }}</td>
+                            <td class="num">{{ p.tp }}</td>
+                            <td class="num">{{ p.quantity }}</td>
+                            <td class="num">{{ p.risk_amount }}</td>
+                            <td class="text-dim mono">{{ p.created_at }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No open positions — 0 rows with status=OPEN in TradeRecord right now.</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Portfolio & Risk" note="real drawdown/correlation/positions, crash-risk unavailable" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
+{% endblock %}

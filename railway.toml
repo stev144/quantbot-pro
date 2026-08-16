@@ -1,0 +1,21 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+# Runs migrations against Railway's Postgres plugin (via DATABASE_URL) and
+# collects static files fresh on every deploy, before gunicorn starts
+# accepting traffic. Kept as one startCommand rather than a Procfile
+# "release:" line — Railway's Procfile support doesn't reliably run
+# Heroku-style release phases.
+# claude code changed: added --timeout 120 — the dashboard view runs a real
+# backtest synchronously on a cache-cold hit (bot/views/dashboard.py caches
+# results per-symbol for 1 hour, but every fresh deploy starts with an empty
+# in-memory cache), which took long enough on Railway's network path to
+# Binance that gunicorn's default 30s worker timeout killed the request
+# mid-computation — a genuine SystemExit/500 confirmed in production logs,
+# not a real application bug. 120s covers a legitimately slow first
+# backtest; subsequent requests within the hour hit the warm cache and
+# return fast regardless of this setting.
+startCommand = "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi --timeout 120 --log-file -"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
