@@ -46,12 +46,27 @@ STRATEGY_VERDICTS: dict[str, StrategyVerdict] = {
         strategy_name="MeanReversionStrategy",
         research_verdict=REJECTED,
         production_eligible=False,
+        # claude code changed: re-run against forward_return_4h across all
+        # 20 tracked symbols after fixing two real bugs in
+        # feature_validator.py's multiple-testing correction (it crashed
+        # unpacking multipletests()'s return, then fell into an except
+        # block that hardcoded passes_fdr/passes_bonferroni=False for
+        # EVERY feature regardless of the true result — so the previous
+        # "0/20 pass FDR/Bonferroni" here was an artifact of that bug, not
+        # a real finding). The REJECTED verdict itself is unchanged, but
+        # the evidence backing it was wrong and is corrected below.
         rejection_reason=(
-            "rsi: REVIEW recommendation on 20/20 tested symbols, 0/20 pass "
-            "FDR/Bonferroni (feature_validator.py output). bb_width: DELETE "
-            "recommendation on 15/20 tested symbols. Neither feature has "
-            "been through permutation_test_engine.py or walk_forward_engine.py "
-            "— that pipeline has only ever run on the AVAX/ATOM and DOT/LINK "
+            "rsi: statistically real (20/20 symbols pass real FDR-corrected "
+            "significance, p_fdr as low as 1e-27) but economically "
+            "negligible everywhere — quartile spread 0.00001-0.0012 vs. "
+            "the 0.5% economic-significance threshold, |IC| 0.02-0.06 "
+            "(mostly below the 0.05 'acceptable' bar) — REVIEW on 20/20 "
+            "symbols, KEEP on 0/20. bb_width: only 4/20 symbols even pass "
+            "FDR correction; where significant, IC is still negligible — "
+            "DELETE on 18/20 symbols, REVIEW on 2/20 (MATIC, SHIB), KEEP "
+            "on 0/20. Neither feature has been through "
+            "permutation_test_engine.py or walk_forward_engine.py — that "
+            "pipeline has only ever run on the AVAX/ATOM and DOT/LINK "
             "Kalman pairs, both REJECTED. See research_data/model_governance_log.md."
         ),
     ),

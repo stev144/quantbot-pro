@@ -320,11 +320,25 @@ class FeatureValidator:
         # Get all feature columns (exclude metadata/labels)
         exclude_cols = {
             'symbol', 'timeframe', 'timestamp', 'market_regime',
-            'forward_return_1h', 'forward_return_4h', 'forward_return_24h',
-            'win_1h', 'win_4h', 'win_24h', 'close', 'open', 'high', 'low', 'volume',
+            'close', 'open', 'high', 'low', 'volume',
             'realized_vol', 'adx'
         }
-        feature_cols = [col for col in df.columns if col not in exclude_cols and df[col].dtype in [np.float64, np.float32, np.int64]]
+        # claude code changed: was an enumerated set of specific horizons
+        # (forward_return_1h/4h/24h, win_1h/4h/24h) that didn't cover every
+        # horizon the research pipeline actually produces (e.g. contagion_
+        # engine.py emits forward_return_2h/12h too). Any horizon missing
+        # from the enumeration silently passed through as a "feature" —
+        # confirmed with real data: forward_return_2h got validated against
+        # itself as the label (IC=1.0, "STRONG KEEP") when forward_return_2h
+        # was the target column, pure leakage rather than signal. Matching
+        # by prefix instead covers every horizon these label columns come in.
+        label_prefixes = ('forward_return_', 'win_')
+        feature_cols = [
+            col for col in df.columns
+            if col not in exclude_cols
+            and not col.startswith(label_prefixes)
+            and df[col].dtype in [np.float64, np.float32, np.int64]
+        ]
         
         logger.info(f"\nValidating {len(feature_cols)} features...")
         logger.info("-" * 120)
@@ -351,20 +365,66 @@ class FeatureValidator:
         
         # Convert results to dataframe
         results_df = self._results_to_dataframe()
-        
+
         # Apply multiple testing correction globally
         logger.info(f"\nApplying multiple testing corrections...")
         results_df = self._apply_multiple_testing_correction(results_df)
-        
+
+        # claude code changed: recompute the FINAL recommendation/
+        # confidence_level for every feature using the real, corrected
+        # (FDR) significance now that it exists — see
+        # _recompute_recommendations_after_correction()'s docstring for
+        # why this step exists at all.
+        results_df = self._recompute_recommendations_after_correction(results_df)
+
         # Sort by confidence level — guard added in case column is missing
         if 'confidence_level' in results_df.columns:
             results_df = results_df.sort_values('confidence_level', ascending=False)
-        
+
         # Print summary
         self._print_institutional_summary(results_df)
-        
+
         return results_df
-    
+
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+    # DETERMINE RECOMMENDATION — shared decision-tree logic
+    # claude code changed: new — extracted from what used to be inline code
+    # in _validate_single_feature_institutional(), so the SAME logic can
+    # be reused for the provisional (pre-correction) and final
+    # (post-correction) recommendation without the two copies drifting
+    # out of sync.
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _determine_recommendation(
+        passed_significance: bool,
+        passed_economic: bool,
+        passed_stability: bool,
+        quartile_spread: float,
+        stability_consistency: float,
+        ic_overall: float,
+        significance_failure_reason: str = "Failed statistical significance (p >= alpha)",
+    ) -> Tuple[str, float]:
+        reasons = []
+
+        if not passed_significance:
+            reasons.append(significance_failure_reason)
+
+        if not passed_economic:
+            reasons.append(f"Failed economic significance (spread {quartile_spread:.4f} < {ECONOMIC_SIGNIFICANCE_THRESHOLD:.4f})")
+
+        if not passed_stability:
+            reasons.append(f"Poor stability across time (std={stability_consistency:.3f})")
+
+        if len(reasons) == 0 and abs(ic_overall) > IC_ACCEPTABLE:
+            return "STRONG KEEP", 95.0
+        elif len(reasons) == 0 and abs(ic_overall) > 0.02:
+            return "KEEP", 75.0
+        elif len(reasons) <= 1 and abs(ic_overall) > 0.01:
+            return "REVIEW", 50.0
+        else:
+            return "DELETE", 85.0
+
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     # VALIDATE SINGLE FEATURE WITH FULL INSTITUTIONAL PIPELINE
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -596,37 +656,29 @@ class FeatureValidator:
         feature_version = hashlib.md5(version_string.encode()).hexdigest()[:8]
         
         # ── STEP 10: Final decision logic (transparent) ────────────────────────
-        
+
         # Check each criterion
         passed_statistical_significance = p_value < self.alpha
         passed_economic_significance = is_economically_significant
-        # Multiple testing correction applied later
+        # claude code changed: multiple testing correction needs the full
+        # cross-feature p-value array, which only exists once every feature
+        # has been validated — so this per-feature pass uses the RAW
+        # (uncorrected) p-value as a PROVISIONAL recommendation only.
+        # validate_all_features_institutional() recomputes the FINAL
+        # recommendation/confidence_level for every feature via
+        # _determine_recommendation() after real FDR correction is applied
+        # (see that method and _apply_multiple_testing_correction() below) —
+        # this provisional value is what gets overwritten.
         passed_stability = stability_consistency < 0.20  # IC relatively stable
-        
-        # Build recommendation
-        reasons = []
-        
-        if not passed_statistical_significance:
-            reasons.append("Failed statistical significance (p >= 0.05)")
-        
-        if not passed_economic_significance:
-            reasons.append(f"Failed economic significance (spread {quartile_spread:.4f} < {ECONOMIC_SIGNIFICANCE_THRESHOLD:.4f})")
-        
-        if not passed_stability:
-            reasons.append(f"Poor stability across time (std={stability_consistency:.3f})")
-        
-        if len(reasons) == 0 and abs(ic_overall) > IC_ACCEPTABLE:
-            recommendation = "STRONG KEEP"
-            confidence_level = 95.0
-        elif len(reasons) == 0 and abs(ic_overall) > 0.02:
-            recommendation = "KEEP"
-            confidence_level = 75.0
-        elif len(reasons) <= 1 and abs(ic_overall) > 0.01:
-            recommendation = "REVIEW"
-            confidence_level = 50.0
-        else:
-            recommendation = "DELETE"
-            confidence_level = 85.0
+
+        recommendation, confidence_level = self._determine_recommendation(
+            passed_significance=passed_statistical_significance,
+            passed_economic=passed_economic_significance,
+            passed_stability=passed_stability,
+            quartile_spread=quartile_spread,
+            stability_consistency=stability_consistency,
+            ic_overall=ic_overall,
+        )
         
         # Create result
         result = InstitutionalValidationResult(
@@ -720,11 +772,22 @@ class FeatureValidator:
             results_df = results_df.copy()
             p_values = results_df['p_value_mannwhitney'].values
 
-            # Apply corrections
-            rejected, bonferroni_pvals, _, fdr_pvals = multipletests(
-                p_values,
-                alpha=self.alpha,
-                method='fdr_bh'  # Benjamini-Hochberg FDR
+            # claude code changed: multipletests() only returns real,
+            # per-feature corrected p-values in its SECOND return slot for
+            # whichever single `method=` was requested — the 3rd/4th slots
+            # are scalar significance thresholds (alphacSidak/alphacBonf),
+            # not a second method's p-value array. The original code called
+            # this once with method='fdr_bh' and mislabeled slot 4 (a
+            # scalar) as "bonferroni_pvals", then crashed computing n_fdr
+            # over it ('float' object is not iterable), which silently
+            # forced passes_fdr/passes_bonferroni to False for every
+            # feature via the except block below. Two separate calls, one
+            # per method, gives each its own real corrected p-value array.
+            _, bonferroni_pvals, _, _ = multipletests(
+                p_values, alpha=self.alpha, method='bonferroni'
+            )
+            _, fdr_pvals, _, _ = multipletests(
+                p_values, alpha=self.alpha, method='fdr_bh'  # Benjamini-Hochberg FDR
             )
 
             results_df['p_bonferroni']      = bonferroni_pvals
@@ -732,8 +795,6 @@ class FeatureValidator:
             results_df['passes_fdr']        = fdr_pvals < self.alpha
             results_df['passes_bonferroni'] = bonferroni_pvals < self.alpha
 
-            # FIX: rejected is a numpy bool array — use plain Python sum() not .sum()
-            # to avoid 'bool object has no attribute sum' error
             n_raw        = int(sum(1 for p in p_values if p < 0.05))
             n_fdr        = int(sum(1 for p in fdr_pvals if p < self.alpha))
             n_bonferroni = int(sum(1 for p in bonferroni_pvals if p < self.alpha))
@@ -755,7 +816,53 @@ class FeatureValidator:
             results_df['passes_fdr']        = False
             results_df['passes_bonferroni'] = False
             return results_df
-    
+
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+    # RECOMPUTE RECOMMENDATIONS AFTER CORRECTION
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+    def _recompute_recommendations_after_correction(self, results_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Overwrite each feature's recommendation/confidence_level with the
+        FDR-corrected version, and set passed_multiple_testing to the real
+        passes_fdr outcome.
+
+        claude code changed: new. _validate_single_feature_institutional()
+        computes a PROVISIONAL recommendation from the raw, uncorrected
+        p-value, because multiple-testing correction needs the full
+        cross-feature p-value array that only exists once every feature has
+        been validated. Previously nothing ever recomputed recommendation/
+        confidence_level/passed_multiple_testing after
+        _apply_multiple_testing_correction() ran, despite a comment
+        implying it should be ("Updated after correction") — so
+        passes_fdr/passes_bonferroni were decorative columns that never
+        actually influenced STRONG KEEP/KEEP/REVIEW/DELETE. This method is
+        the second half of that fix (the first half is
+        _apply_multiple_testing_correction()'s tuple-unpacking fix above).
+        """
+        if "passes_fdr" not in results_df.columns:
+            return results_df
+
+        results_df = results_df.copy()
+        final_recs, final_confs = [], []
+        for _, row in results_df.iterrows():
+            rec, conf = self._determine_recommendation(
+                passed_significance=bool(row["passes_fdr"]),
+                passed_economic=bool(row["econ_significant"]),
+                passed_stability=bool(row["stability_std"] < 0.20),
+                quartile_spread=row["quartile_spread"],
+                stability_consistency=row["stability_std"],
+                ic_overall=row["ic_overall"],
+                significance_failure_reason="Failed FDR-corrected statistical significance (p_fdr >= alpha)",
+            )
+            final_recs.append(rec)
+            final_confs.append(conf)
+
+        results_df["recommendation"] = final_recs
+        results_df["confidence_level"] = final_confs
+        results_df["passed_multiple_testing"] = results_df["passes_fdr"]
+        return results_df
+
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     # PRINT INSTITUTIONAL SUMMARY
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
