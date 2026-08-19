@@ -10,13 +10,26 @@
 # "Given the current market regime, which strategy should fire?"
 #
 # ROUTING LOGIC:
-#   TRENDING_UP    → MovingAverageStrategy (BUY signals only)
-#   TRENDING_DOWN  → MovingAverageStrategy (SELL signals only)
-#   RANGING        → MeanReversionStrategy (both directions) — claude code
-#                     changed: gated behind validated_feature_registry.py;
-#                     blocked by default (RSI/BB not research-validated),
-#                     see BLOCK 3 in route() below
+#   TRENDING_UP    → MovingAverageStrategy (BUY signals only) — claude code
+#                     changed: gated behind validated_feature_registry.py,
+#                     same as RANGING below; blocked by default (structure-
+#                     based entry logic has never been through
+#                     feature_validator.py/permutation/walk-forward testing
+#                     any more than RSI/BB had — see
+#                     _check_production_eligibility())
+#   TRENDING_DOWN  → MovingAverageStrategy (SELL signals only) — same gate
+#   RANGING        → MeanReversionStrategy (both directions) — gated behind
+#                     validated_feature_registry.py; blocked by default
+#                     (RSI/BB not research-validated)
 #   HIGH_VOLATILITY → No strategy fires — sit out
+#
+# claude code changed: as of this change, EVERY branch that can dispatch to
+# a real strategy calls the same _check_production_eligibility() gate before
+# doing so — there is no regime for which "trending = valid" is assumed.
+# Until a strategy earns a production_eligible=True verdict in
+# validated_feature_registry.py, this router cannot produce a live trade in
+# any regime by default. That is the correct, evidence-driven state, not a
+# bug — see validated_feature_registry.py's own STRATEGY_VERDICTS taxonomy.
 #
 # WHY THIS MATTERS:
 # Before this file existed, MovingAverageStrategy ran in ALL
@@ -224,6 +237,17 @@ class StrategyRouter:
         # SELL signals from this strategy are ignored in this regime
         if regime == "TRENDING_UP":
 
+            # claude code changed: new — production-validation gate, same
+            # mechanism already proven on the RANGING branch (see
+            # _check_production_eligibility()). Checked first, before the
+            # ADX/direction filters below, so BLOCKED_UNVALIDATED telemetry
+            # is never masked by an unrelated regime-quality filter.
+            blocked = self._check_production_eligibility(
+                "MovingAverageStrategy", regime, confidence
+            )
+            if blocked is not None:
+                return blocked
+
             # Check ADX meets minimum threshold for trend trades
             # This adds an extra layer beyond the detector's classification
             if adx < self.min_adx_for_trend:
@@ -274,6 +298,14 @@ class StrategyRouter:
         # BUY signals from this strategy are ignored in this regime
         if regime == "TRENDING_DOWN":
 
+            # claude code changed: new — same production-validation gate as
+            # TRENDING_UP/RANGING; checked first, before ADX/direction.
+            blocked = self._check_production_eligibility(
+                "MovingAverageStrategy", regime, confidence
+            )
+            if blocked is not None:
+                return blocked
+
             # Check ADX meets minimum threshold
             if adx < self.min_adx_for_trend:
                 logger.info(
@@ -323,44 +355,15 @@ class StrategyRouter:
         # MovingAverageStrategy would bleed in this environment
         if regime == "RANGING":
 
-            # claude code changed: new block — production-validation gate.
-            # MeanReversionStrategy fires directly off RSI/Bollinger Band
-            # thresholds, neither of which has cleared this project's own
-            # research validation bar (see validated_feature_registry.py for
-            # the cited evidence). Checked here, not inside
-            # MeanReversionStrategy.evaluate() itself, so the strategy's raw
-            # mechanics remain directly testable/inspectable in isolation —
-            # this is specifically about whether the ROUTER is allowed to
-            # dispatch to it for live/backtest trades.
-            verdict = get_strategy_verdict("MeanReversionStrategy")
-            if not verdict.production_eligible:
-                if not self.allow_unvalidated_strategies:
-                    self.route_counts["BLOCKED_UNVALIDATED"] += 1
-                    logger.warning(
-                        f"[StrategyRouter] BLOCKED — MeanReversionStrategy is not "
-                        f"production_eligible (verdict={verdict.research_verdict}). "
-                        f"{verdict.rejection_reason} "
-                        f"Set allow_unvalidated_strategies=True to override (test-only)."
-                    )
-                    return self._no_signal(
-                        reason=f"strategy_not_validated_{verdict.research_verdict.lower()}",
-                        regime=regime,
-                        confidence=confidence,
-                        verdict=verdict,   # claude code changed: new — Phase 2 (trade provenance)
-                    )
-                else:
-                    # claude code changed: new — make the override visible, not
-                    # silent, same convention as entry_exit_engine.py's
-                    # require_passes_filters=False warning. Fires only when the
-                    # override is actually bypassing a real block, not just
-                    # because the flag is set.
-                    logger.warning(
-                        f"[StrategyRouter] allow_unvalidated_strategies=True — "
-                        f"dispatching to MeanReversionStrategy despite verdict="
-                        f"{verdict.research_verdict}. {verdict.rejection_reason} "
-                        f"Treat any resulting trades as a deliberate test of an "
-                        f"unvalidated strategy, not a production decision."
-                    )
+            # claude code changed: was an inline block duplicating the same
+            # verdict-check logic now shared with TRENDING_UP/DOWN — moved
+            # into _check_production_eligibility() so all three branches use
+            # one gate, not three copies that could drift out of sync.
+            blocked = self._check_production_eligibility(
+                "MeanReversionStrategy", regime, confidence
+            )
+            if blocked is not None:
+                return blocked
 
             # Increment ranging counter
             self.route_counts["RANGING"] += 1
@@ -409,6 +412,72 @@ class StrategyRouter:
             reason=f"unhandled_regime_{regime}",
             regime=regime,
             confidence=confidence
+        )
+
+
+    # ============================================================
+    # CHECK PRODUCTION ELIGIBILITY — INTERNAL
+    # claude code changed: new — the single production-validation gate
+    # every regime branch calls before dispatching to a real strategy.
+    # Previously this check existed only inline in the RANGING branch;
+    # TRENDING_UP/DOWN dispatched to MovingAverageStrategy with no
+    # equivalent check at all, so a strategy with no validated evidence
+    # could still produce live/backtest trades as long as it happened to
+    # be the trend strategy rather than the ranging one. Regime detection
+    # and research validation are separate concepts — this method is the
+    # only place that decides the latter; route() decides the former.
+    # ============================================================
+    def _check_production_eligibility(self, strategy_name, regime, confidence):
+        """
+        Looks up strategy_name's research verdict and decides whether
+        routing may proceed to it.
+
+        Returns:
+            None                — verdict is production_eligible (or the
+                                   override is active); route() should
+                                   continue to the strategy.
+            dict (NO_SIGNAL)    — strategy is blocked; route() must return
+                                   this immediately without calling the
+                                   strategy.
+
+        Fails closed: get_strategy_verdict() itself returns UNTESTED /
+        production_eligible=False for any strategy name it has no recorded
+        evidence for (see validated_feature_registry.py) — this method adds
+        no separate allowlist, so an unknown strategy is blocked by the same
+        path as a known-REJECTED one, not treated differently.
+        """
+        verdict = get_strategy_verdict(strategy_name)
+
+        if verdict.production_eligible:
+            return None
+
+        if self.allow_unvalidated_strategies:
+            # claude code changed: make the override visible, not silent,
+            # same convention as entry_exit_engine.py's
+            # require_passes_filters=False warning. Fires only when the
+            # override is actually bypassing a real block, not just because
+            # the flag is set.
+            logger.warning(
+                f"[StrategyRouter] allow_unvalidated_strategies=True — "
+                f"dispatching to {strategy_name} despite verdict="
+                f"{verdict.research_verdict}. {verdict.rejection_reason} "
+                f"Treat any resulting trades as a deliberate test of an "
+                f"unvalidated strategy, not a production decision."
+            )
+            return None
+
+        self.route_counts["BLOCKED_UNVALIDATED"] += 1
+        logger.warning(
+            f"[StrategyRouter] BLOCKED — {strategy_name} is not "
+            f"production_eligible (verdict={verdict.research_verdict}). "
+            f"{verdict.rejection_reason} "
+            f"Set allow_unvalidated_strategies=True to override (test-only)."
+        )
+        return self._no_signal(
+            reason=f"strategy_not_validated_{verdict.research_verdict.lower()}",
+            regime=regime,
+            confidence=confidence,
+            verdict=verdict,
         )
 
 

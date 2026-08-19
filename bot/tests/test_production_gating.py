@@ -103,21 +103,83 @@ class ProductionGatingTest(SimpleTestCase):
         self.assertEqual(router.route_counts["BLOCKED_UNVALIDATED"], 0)
         self.assertIn(routed_signal["signal"], ("BUY", "SELL", "NO_SIGNAL"))
 
-    def test_trending_regimes_unaffected(self):
+    # claude code changed: was test_trending_regimes_unaffected, which
+    # asserted the exact bug this Phase A remediation fixes (forensic-audit
+    # finding P0-1) — that TRENDING_UP/DOWN were "unaffected by the RANGING-
+    # only gate". That was true and was the problem: MovingAverageStrategy
+    # has no more research evidence than MeanReversionStrategy did, and the
+    # router dispatched to it anyway. Replaced with tests asserting the
+    # opposite — TRENDING_UP/DOWN must be blocked by the same gate, by
+    # default, until MovingAverageStrategy earns a real verdict.
+    def test_trending_up_blocked_by_default(self):
         df = _make_ohlcv_df()
+        regime_result = _fake_regime("TRENDING_UP")
 
         raw_signal = MovingAverageStrategy().check_signal(df)
-        self.assertIsInstance(raw_signal, dict)
+        self.assertIsInstance(raw_signal, dict)  # raw strategy mechanics untouched
 
         router = StrategyRouter()
-        up_signal = router.route(df, _fake_regime("TRENDING_UP"))
-        down_signal = router.route(df, _fake_regime("TRENDING_DOWN"))
+        routed_signal = router.route(df, regime_result)
 
-        # Neither should ever be blocked by the RANGING-only gate.
-        for signal in (up_signal, down_signal):
-            self.assertNotEqual(signal.get("signal"), None)
-            self.assertFalse(str(signal.get("reason", "")).startswith("strategy_not_validated_"))
+        self.assertEqual(routed_signal["signal"], "NO_SIGNAL")
+        self.assertTrue(
+            routed_signal["reason"].startswith("strategy_not_validated_"),
+            f"unexpected reason: {routed_signal['reason']}",
+        )
+        self.assertEqual(router.route_counts["TRENDING_UP"], 0)
+        self.assertEqual(router.route_counts["BLOCKED_UNVALIDATED"], 1)
+
+    def test_trending_down_blocked_by_default(self):
+        df = _make_ohlcv_df()
+        regime_result = _fake_regime("TRENDING_DOWN")
+
+        router = StrategyRouter()
+        routed_signal = router.route(df, regime_result)
+
+        self.assertEqual(routed_signal["signal"], "NO_SIGNAL")
+        self.assertTrue(
+            routed_signal["reason"].startswith("strategy_not_validated_"),
+            f"unexpected reason: {routed_signal['reason']}",
+        )
+        self.assertEqual(router.route_counts["TRENDING_DOWN"], 0)
+        self.assertEqual(router.route_counts["BLOCKED_UNVALIDATED"], 1)
+
+    def test_moving_average_verdict_is_untested_not_production_eligible(self):
+        verdict = get_strategy_verdict("MovingAverageStrategy")
+        self.assertFalse(verdict.production_eligible)
+        self.assertEqual(verdict.research_verdict, UNTESTED)
+
+    def test_trending_override_flag_restores_old_behavior_with_warning(self):
+        df = _make_ohlcv_df()
+        regime_result = _fake_regime("TRENDING_UP")
+
+        router = StrategyRouter(allow_unvalidated_strategies=True)
+        with self.assertLogs("bot.engines.strategy_router", level="WARNING") as cm:
+            routed_signal = router.route(df, regime_result)
+
+        self.assertTrue(
+            any("allow_unvalidated_strategies=True" in msg for msg in cm.output),
+            f"expected override warning, got: {cm.output}",
+        )
+        self.assertEqual(router.route_counts["TRENDING_UP"], 1)
         self.assertEqual(router.route_counts["BLOCKED_UNVALIDATED"], 0)
+        self.assertIn(routed_signal["signal"], ("BUY", "SELL", "NO_SIGNAL"))
+
+    def test_unknown_strategy_name_fails_closed_through_router_gate(self):
+        # claude code changed: new — proves the router's shared gate
+        # doesn't special-case known strategy names; an unrecognized name
+        # would fail closed exactly like a real, evidenced REJECTED one.
+        # Exercised indirectly: _check_production_eligibility() calls
+        # get_strategy_verdict(), which is already proven fail-closed for
+        # unknown names by test_get_strategy_verdict_fails_closed above —
+        # this test instead proves route() itself never bypasses that call
+        # for either strategy it can dispatch to.
+        router = StrategyRouter()
+        for regime in ("TRENDING_UP", "TRENDING_DOWN", "RANGING"):
+            signal = router.route(_make_ohlcv_df(), _fake_regime(regime))
+            self.assertEqual(signal["signal"], "NO_SIGNAL")
+            self.assertTrue(signal["reason"].startswith("strategy_not_validated_"))
+        self.assertEqual(router.route_counts["BLOCKED_UNVALIDATED"], 3)
 
 
 # claude code changed: new class — Phase 2 (trade provenance). Verifies
@@ -156,12 +218,14 @@ class TradeProvenanceTest(SimpleTestCase):
         self.assertEqual(routed_signal["verdict_rejection_reason"], "")
 
     def test_generate_entry_attaches_verdict_for_moving_average_strategy(self):
-        # MovingAverageStrategy has no entry in STRATEGY_VERDICTS either —
-        # its structure-based logic has never been through
-        # permutation/walk-forward testing any more than RSI/BB had. This
-        # documents that honestly rather than letting it be a silent gap:
-        # the narrative should say UNTESTED/not-eligible for it too, even
-        # though Phase 1 didn't gate TRENDING regimes at the router level.
+        # claude code changed: comment updated — MovingAverageStrategy now
+        # has an explicit UNTESTED entry in STRATEGY_VERDICTS (Phase A of
+        # the remediation program), and the router gates TRENDING regimes
+        # on it too (see test_trending_up_blocked_by_default above). This
+        # test now documents the narrative side of the same fact: its
+        # structure-based logic has never been through
+        # permutation/walk-forward testing any more than RSI/BB had, so the
+        # narrative correctly says UNTESTED/not-eligible for it.
         signal = {
             "signal": "BUY", "entry": 100.0, "sl": 95.0, "tp": 115.0, "rsi": 55.0,
             "reason": "ema_buy_setup", "strategy": "MovingAverageStrategy",
@@ -206,8 +270,52 @@ class UIPipelineTest(SimpleTestCase):
         self.assertEqual(table["strategy_not_validated_rejected"]["research_verdict"], "REJECTED")
         self.assertFalse(table["strategy_not_validated_rejected"]["production_eligible"])
 
-        # An unrelated reason must not carry a fabricated verdict.
+        # claude code changed: Phase A now also gates TRENDING_UP/DOWN, so a
+        # 2000-candle window can legitimately produce a second
+        # verdict-carrying reason — "strategy_not_validated_untested" for
+        # MovingAverageStrategy — alongside the RANGING one. Both are
+        # verdict-carrying reasons now, not just the RANGING one.
+        verdict_carrying_reasons = {
+            "strategy_not_validated_rejected",
+            "strategy_not_validated_untested",
+        }
+        if "strategy_not_validated_untested" in table and table["strategy_not_validated_untested"]["count"] > 0:
+            self.assertEqual(table["strategy_not_validated_untested"]["research_verdict"], "UNTESTED")
+            self.assertFalse(table["strategy_not_validated_untested"]["production_eligible"])
+
+        # A reason unrelated to either strategy verdict must not carry a
+        # fabricated one.
         for reason, row in table.items():
-            if reason != "strategy_not_validated_rejected" and row["count"] > 0:
+            if reason not in verdict_carrying_reasons and row["count"] > 0:
                 self.assertEqual(row.get("research_verdict", ""), "")
                 self.assertFalse(row.get("production_eligible", False))
+
+
+# claude code changed: new class — Phase A of the controlled remediation
+# program. signal_engine.py is unused by the live/backtest pipeline (see its
+# own header comment) but calls MovingAverageStrategy directly, so it needed
+# the same gate closed for defense in depth — this proves it fires.
+class SignalEngineGatingTest(SimpleTestCase):
+
+    def test_generate_signal_blocked_by_default(self):
+        from bot.engines.signal_engine import generate_signal
+
+        df = _make_ohlcv_df(n=200)
+        result = generate_signal(df, 100)
+
+        self.assertEqual(result["signal"], "NO_SIGNAL")
+        self.assertTrue(result["reason"].startswith("strategy_not_validated_"))
+        self.assertEqual(result["research_verdict"], "UNTESTED")
+        self.assertFalse(result["production_eligible"])
+
+    def test_generate_signal_override_flag_bypasses_gate(self):
+        from bot.engines.signal_engine import generate_signal
+
+        df = _make_ohlcv_df(n=200)
+        result = generate_signal(df, 100, allow_unvalidated_strategies=True)
+
+        # No longer forced to NO_SIGNAL by the gate — whatever the raw
+        # strategy/filter chain decides is allowed through.
+        self.assertIn(result["signal"], ("BUY", "SELL", "NO_SIGNAL"))
+        if result["signal"] == "NO_SIGNAL":
+            self.assertNotEqual(result.get("reason", ""), "strategy_not_validated_untested")
