@@ -138,6 +138,17 @@ UNIVERSE: List[str] = [
 WINSOR_LOWER: float = 0.01    # Clip bottom 1% of returns upward
 WINSOR_UPPER: float = 0.99    # Clip top 99% of returns downward
 
+# claude code changed: new — Phase B remediation (forensic-audit finding
+# P1-1). Minimum observations needed before an expanding-window quantile is
+# trustworthy enough to use as a clip boundary. Estimating a 1st/99th
+# percentile (the tails of the distribution) from too few points is
+# unstable — the rule of thumb of roughly 10 observations per percentage
+# point of tail mass (10 / 0.01 = 1000) is what this is set from, not
+# picked arbitrarily. Below this many prior observations, a row keeps its
+# raw (unclipped) return rather than being winsorised against a boundary
+# estimated from too little history.
+WINSOR_MIN_PERIODS: int = 1000
+
 # Minimum assets needed at any timestamp for valid cross-section
 # With only 2 assets, a "rank" carries no information
 MIN_ASSETS_FOR_CROSS_SECTION: int = 4
@@ -177,6 +188,7 @@ class CrossSectionEngine:
         min_assets:     int   = MIN_ASSETS_FOR_CROSS_SECTION,
         momentum_short: int   = MOMENTUM_WINDOW_SHORT,
         momentum_long:  int   = MOMENTUM_WINDOW_LONG,
+        winsor_min_periods: int = WINSOR_MIN_PERIODS,   # claude code changed: new — Phase B (P1-1)
     ) -> None:
         """
         Store configuration. No data processing in the constructor.
@@ -188,6 +200,7 @@ class CrossSectionEngine:
         self.min_assets     = min_assets       # Minimum universe size
         self.momentum_short = momentum_short   # Short momentum window
         self.momentum_long  = momentum_long    # Long momentum window
+        self.winsor_min_periods = winsor_min_periods   # claude code changed: new — Phase B (P1-1)
 
         logger.info("CrossSectionEngine initialised")
         logger.info(f"  Universe        : {len(UNIVERSE)} symbols")
@@ -408,24 +421,70 @@ class CrossSectionEngine:
 
         We keep the raw return column for transparency.
         Winsorised return is a separate column used in all downstream features.
+
+        claude code changed: Phase B remediation (forensic-audit finding
+        P1-1). This used to compute ONE pair of clip boundaries from
+        `df["return_1h"].dropna()` — the symbol's ENTIRE history — and
+        apply that same pair to every row, including rows from years
+        before the boundary was "known". A row near the start of a
+        symbol's history was being winsorised using knowledge of that
+        symbol's most extreme future moves (e.g. a 2022-01 candle's clip
+        bound was informed by a crash that hadn't happened yet). Every
+        downstream cross-sectional feature (cs_rank, cs_zscore,
+        cs_percentile, cs_momentum_*, cs_reversal_signal — all built from
+        return_1h_winsor) inherited this look-ahead.
+
+        Fixed to a causal expanding window: each row's clip boundary is
+        estimated ONLY from returns strictly BEFORE that row (`.shift(1)`
+        — the boundary used to clip row t is the quantile of rows
+        [0..t-1], never including row t itself or anything later). This
+        is deliberately the strict interpretation ("row t's bound must not
+        even see row t's own realised return") rather than an
+        inclusive-of-today expanding window, so there is no ambiguity
+        about whether a row's own value could have influenced its own
+        clip boundary.
+
+        Before `winsor_min_periods` prior observations exist (see that
+        constant's docstring for why 1000), there isn't enough history to
+        estimate a stable 1st/99th percentile — those early rows keep
+        their raw, unclipped return rather than being clipped against a
+        boundary estimated from too few points.
         """
 
-        logger.info("Step 3: Winsorising returns...")
+        logger.info("Step 3: Winsorising returns (causal expanding window)...")
 
         for symbol, df in data.items():
 
-            # Calculate clip boundaries from this symbol's actual distribution
-            # Data-driven boundaries — adapts to each symbol's volatility
-            returns_clean = df["return_1h"].dropna()
-            lower = returns_clean.quantile(self.winsor_lower)   # e.g. -0.08
-            upper = returns_clean.quantile(self.winsor_upper)   # e.g. +0.07
+            returns = df["return_1h"]
 
-            # Clip: values below lower become lower, above upper become upper
-            df["return_1h_winsor"] = df["return_1h"].clip(lower=lower, upper=upper)
+            # Expanding quantile through row t-1 only (shift(1) excludes
+            # row t itself) — strictly historical information at time t.
+            lower_bound = (
+                returns.expanding(min_periods=self.winsor_min_periods)
+                .quantile(self.winsor_lower)
+                .shift(1)
+            )
+            upper_bound = (
+                returns.expanding(min_periods=self.winsor_min_periods)
+                .quantile(self.winsor_upper)
+                .shift(1)
+            )
+
+            # Row-wise clip against that row's own (causal) boundary.
+            # Rows with no boundary yet (NaN — not enough prior history)
+            # fall back to the raw, unclipped return via combine_first.
+            winsorised = returns.clip(lower=lower_bound, upper=upper_bound)
+            df["return_1h_winsor"] = winsorised.combine_first(returns)
 
             data[symbol] = df
 
-            logger.info(f"  {symbol}: clipped to [{lower:.4f}, {upper:.4f}]")
+            n_clipped = int(((df["return_1h_winsor"] != returns) & returns.notna()).sum())
+            n_unbounded = int(lower_bound.isna().sum())
+            logger.info(
+                f"  {symbol}: {n_clipped:,} rows clipped, "
+                f"{n_unbounded:,} rows too early for a stable boundary "
+                f"(kept raw)"
+            )
 
         return data
 

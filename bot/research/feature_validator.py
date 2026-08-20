@@ -26,6 +26,7 @@
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 import logging                                  # Professional logging
+import re                                       # claude code changed: new — parses the horizon out of forward_return_col's name (Phase B, P1-3)
 import pandas as pd                             # DataFrame operations
 import numpy as np                              # Numerical operations
 from typing import Dict, List, Tuple, Optional  # Type hints
@@ -105,6 +106,16 @@ IC_ACCEPTABLE = 0.05                          # IC > 0.05 = acceptable
 # Sharpe ratio threshold for contribution
 MIN_SHARPE_CONTRIBUTION = 0.5                 # Feature should contribute at least this to Sharpe
 
+# claude code changed: new — Phase B remediation (forensic-audit findings
+# P1-2, P1-3). See _block_shuffle_1d()/_block_permutation_pvalue()'s
+# docstrings for the dependence-aware significance test this drives, and
+# apply_family_wide_correction()'s docstring for the multiple-testing scope
+# fix. N_PERMUTATIONS matches permutation_test_engine.py's
+# DEFAULT_N_PERMUTATIONS (100) — same convention already established
+# elsewhere in this research pipeline, not picked independently.
+BLOCK_PERMUTATION_N: int = 100
+DEFAULT_HORIZON_CANDLES_FALLBACK: int = 4     # Used only if forward_return_col's name doesn't parse to a number
+
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 # ENHANCED VALIDATION RESULT (Dataclass)
@@ -131,7 +142,15 @@ class InstitutionalValidationResult:
     p_value_corrected_fdr: float               # p-value after FDR correction
     t_statistic: float                         # T-test statistic
     mann_whitney_pvalue: float                 # Mann-Whitney U test p-value (non-parametric)
-    
+
+    # claude code changed: new — Phase B (P1-3). Mann-Whitney/t-test above
+    # assume i.i.d. samples; forward_return_4h-style labels on 1h candles
+    # overlap and are serially dependent, which makes those p-values
+    # systematically too small. This is the dependence-aware p-value that
+    # actually drives passed_statistical_significance and multiple-testing
+    # correction now — see _block_permutation_pvalue().
+    block_permutation_pvalue: float
+
     # Economic significance
     quartile_spread: float                     # Q4 - Q1 return difference (%)
     is_economically_significant: bool          # spread > threshold?
@@ -267,14 +286,21 @@ class FeatureValidator:
     9. Final decision logic (transparent reasoning)
     """
     
-    def __init__(self, min_observations: int = 30, alpha: float = 0.05):
+    def __init__(self, min_observations: int = 30, alpha: float = 0.05,
+                 random_seed: Optional[int] = None):
         """Initialize validator with institutional settings"""
         self.min_observations = min_observations
         self.alpha = alpha
         self.results: List[InstitutionalValidationResult] = []
         # Initialize regime detector
         self.regime_detector = MarketRegimeDetector()
-        
+        # claude code changed: new — Phase B (P1-3). Isolated RNG for the
+        # block-permutation significance test, same pattern
+        # permutation_test_engine.py uses (np.random.default_rng, not the
+        # global numpy RNG). random_seed=None gives a fresh shuffle
+        # sequence each run; set it for reproducible test fixtures.
+        self.rng = np.random.default_rng(random_seed)
+
         logger.info(f"InstitutionalFeatureValidator initialized")
         logger.info(f"  Min observations per quartile: {min_observations}")
         logger.info(f"  Statistical significance: {alpha}")
@@ -284,20 +310,79 @@ class FeatureValidator:
     # MAIN METHOD: Validate all features with full institutional pipeline
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     
-    def validate_all_features_institutional(self, 
+    def validate_all_features_institutional(self,
                                            df: pd.DataFrame,
                                            forward_return_col: str = 'forward_return_4h') -> pd.DataFrame:
         """
-        Comprehensive feature validation with all institutional checks.
-        
+        Comprehensive feature validation with all institutional checks,
+        scoped to whatever is in `df` alone.
+
+        claude code changed: Phase B (P1-2) — this now delegates to
+        validate_all_features_raw() + the same correction/recompute steps
+        it always ran, unchanged in behavior for a single-call df (e.g. an
+        already-pooled multi-symbol research_data/observations.csv, or any
+        single-symbol exploratory run). What changed is that
+        run_research_all.py — the orchestrator that runs one call per
+        symbol — no longer relies on THIS method's per-call correction to
+        be the final word; see apply_family_wide_correction() below for
+        why, and validate_all_features_raw() for the split that makes it
+        possible.
+
         Args:
             df (pd.DataFrame): Observation database from Phase 1
             forward_return_col (str): Forward return column (label)
-        
+
         Returns:
-            pd.DataFrame: Full validation results
+            pd.DataFrame: Full validation results, corrected against
+            exactly the features present in `df` — nothing wider.
         """
-        
+        results_df = self.validate_all_features_raw(df, forward_return_col)
+
+        # Apply multiple testing correction across whatever features were
+        # actually passed to this call.
+        logger.info(f"\nApplying multiple testing corrections...")
+        results_df = self._apply_multiple_testing_correction(results_df)
+        results_df = self._recompute_recommendations_after_correction(results_df)
+
+        if 'confidence_level' in results_df.columns:
+            results_df = results_df.sort_values('confidence_level', ascending=False)
+
+        self._print_institutional_summary(results_df)
+
+        return results_df
+
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+    # RAW VALIDATION — no correction applied
+    # claude code changed: new — Phase B (P1-2). Extracted from what used
+    # to be the first half of validate_all_features_institutional(), which
+    # computed per-feature raw stats AND applied multiple-testing
+    # correction in the same call. That fused shape is exactly why
+    # run_research_all.py's per-symbol correction was too narrow: each
+    # symbol's ~16-19 features got corrected against each other, never
+    # against the other ~300 features tested across the other 19 symbols
+    # in the same research run. Splitting "compute the raw per-feature
+    # result" from "correct across however many results you're holding"
+    # lets the caller decide the correction scope explicitly instead of it
+    # being implicitly "whatever one call happened to see" — see
+    # apply_family_wide_correction() for the family-scoped caller.
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+    def validate_all_features_raw(self,
+                                   df: pd.DataFrame,
+                                   forward_return_col: str = 'forward_return_4h') -> pd.DataFrame:
+        """
+        Computes every feature's raw per-feature statistics (quartiles,
+        t-test, Mann-Whitney, block-permutation p-value, IC, stability,
+        regime breakdown) WITHOUT applying multiple-testing correction.
+
+        Returns a results DataFrame with a provisional (uncorrected)
+        recommendation — callers that want a final, correction-aware
+        recommendation must run this through _apply_multiple_testing_
+        correction() + _recompute_recommendations_after_correction()
+        themselves, at whatever scope their hypothesis family actually is
+        (see apply_family_wide_correction() for the intended one).
+        """
+
         logger.info(f"\n{'='*120}")
         logger.info("PHASE 2 INSTITUTIONAL: COMPREHENSIVE FEATURE VALIDATION")
         logger.info(f"{'='*120}")
@@ -363,27 +448,9 @@ class FeatureValidator:
                 logger.warning(f"  Skipping {feature_col}: {e}")
                 continue
         
-        # Convert results to dataframe
+        # Convert results to dataframe — provisional recommendation only,
+        # no correction applied. Caller decides correction scope.
         results_df = self._results_to_dataframe()
-
-        # Apply multiple testing correction globally
-        logger.info(f"\nApplying multiple testing corrections...")
-        results_df = self._apply_multiple_testing_correction(results_df)
-
-        # claude code changed: recompute the FINAL recommendation/
-        # confidence_level for every feature using the real, corrected
-        # (FDR) significance now that it exists — see
-        # _recompute_recommendations_after_correction()'s docstring for
-        # why this step exists at all.
-        results_df = self._recompute_recommendations_after_correction(results_df)
-
-        # Sort by confidence level — guard added in case column is missing
-        if 'confidence_level' in results_df.columns:
-            results_df = results_df.sort_values('confidence_level', ascending=False)
-
-        # Print summary
-        self._print_institutional_summary(results_df)
-
         return results_df
 
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -426,9 +493,112 @@ class FeatureValidator:
             return "DELETE", 85.0
 
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
+    # DEPENDENCE-AWARE SIGNIFICANCE TEST (BLOCK PERMUTATION)
+    # claude code changed: new — Phase B remediation (forensic-audit
+    # finding P1-3). forward_return_4h on 1h candles overlaps 3-of-4 hours
+    # between consecutive rows, so consecutive labels (and consecutive
+    # feature values, for any feature built from a rolling/EWM window) are
+    # seriously serially dependent — the exact opposite of what
+    # scipy.stats.ttest_ind/mannwhitneyu assume about their inputs. Under
+    # that dependence, the true number of "independent" observations is
+    # much smaller than the row count, so the analytic p-value is
+    # systematically too small (overstates significance) before multiple-
+    # testing correction even gets a chance to run on it.
+    #
+    # Reuses the same METHODOLOGY permutation_test_engine.py already
+    # established for the Kalman-pairs pipeline (contiguous block shuffle,
+    # preserve each block's internal short-range structure, destroy the
+    # cross-block feature/return alignment, empirical p-value = fraction of
+    # shuffles at least as extreme as the real result) rather than
+    # inventing an unrelated statistical framework (e.g. Newey-West). The
+    # implementation itself can't be imported directly —
+    # PermutationTestEngine._block_shuffle() is hard-wired to
+    # EntryExitEngine's specific Kalman columns and re-runs a full
+    # backtest engine per shuffle — so this is a from-scratch application
+    # of the same block-shuffle principle to a feature-validation test
+    # statistic (quartile spread) instead.
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_horizon_candles(forward_return_col: str) -> int:
+        """
+        Extracts the label horizon in candles from a column name like
+        'forward_return_4h' -> 4. This horizon IS the mechanical source of
+        the overlap: row t's label and row t+1's label share horizon-1
+        candles of underlying return in common by construction, so it's
+        the natural, principled block size — not an arbitrary tuning
+        knob. Falls back to DEFAULT_HORIZON_CANDLES_FALLBACK if the name
+        doesn't parse (e.g. a custom label column).
+        """
+        match = re.search(r'(\d+)\s*h', forward_return_col)
+        if match:
+            horizon = int(match.group(1))
+            return max(horizon, 1)
+        return DEFAULT_HORIZON_CANDLES_FALLBACK
+
+    def _block_shuffle_1d(self, arr: np.ndarray, block_size: int) -> np.ndarray:
+        """
+        Chops arr into contiguous blocks of block_size and reassembles
+        them in a randomly shuffled order. Preserves each block's own
+        internal serial structure while destroying alignment across block
+        boundaries — same principle as
+        PermutationTestEngine._block_shuffle(), applied to a plain 1-D
+        array instead of a multi-column DataFrame.
+        """
+        n = len(arr)
+        n_blocks = int(np.ceil(n / block_size))
+        block_bounds = [
+            (i * block_size, min((i + 1) * block_size, n))
+            for i in range(n_blocks)
+        ]
+        order = self.rng.permutation(n_blocks)
+        positions = np.concatenate([
+            np.arange(start, end) for start, end in (block_bounds[i] for i in order)
+        ])
+        return arr[positions]
+
+    def _block_permutation_pvalue(
+        self,
+        returns_clean: np.ndarray,
+        q1_mask: np.ndarray,
+        q4_mask: np.ndarray,
+        real_spread: float,
+        block_size: int,
+        n_permutations: int = BLOCK_PERMUTATION_N,
+    ) -> float:
+        """
+        Empirical, dependence-aware significance test for the same
+        Q4-mean-minus-Q1-mean spread the Mann-Whitney/t-test compare.
+
+        Feature-quartile membership (q1_mask/q4_mask) is computed ONCE
+        from the real, unshuffled feature values and held fixed — only
+        the RETURNS are block-shuffled each replica. This asks exactly
+        the right null-hypothesis question ("if returns were randomly
+        reassigned in a way that preserves their own short-range
+        dependence structure, but with no real relationship to which
+        feature-quartile a row belongs to, how often would a spread this
+        large happen by chance?") without disturbing the feature side's
+        own autocorrelation at all.
+
+        Empirical p-value convention matches
+        PermutationTestEngine._compare(): (extreme_count + 1) / (n + 1) —
+        never exactly zero, since the real result is itself one possible
+        draw.
+        """
+        extreme_count = 0
+        for _ in range(n_permutations):
+            shuffled_returns = self._block_shuffle_1d(returns_clean, block_size)
+            shuffled_spread = abs(
+                np.mean(shuffled_returns[q4_mask]) - np.mean(shuffled_returns[q1_mask])
+            )
+            if shuffled_spread >= abs(real_spread):
+                extreme_count += 1
+        return (extreme_count + 1) / (n_permutations + 1)
+
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
     # VALIDATE SINGLE FEATURE WITH FULL INSTITUTIONAL PIPELINE
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
-    
+
     def _validate_single_feature_institutional(self,
                                               df: pd.DataFrame,
                                               feature_col: str,
@@ -532,7 +702,24 @@ class FeatureValidator:
         
         # Use Mann-Whitney p-value (more robust for market data)
         p_value = p_value_mw
-        
+
+        # claude code changed: new — Phase B (P1-3). Mann-Whitney/t-test
+        # above assume i.i.d. observations; forward_return_4h-style labels
+        # overlap across consecutive rows and violate that assumption,
+        # which makes p_value_mw systematically too small. block_pvalue is
+        # the dependence-aware replacement — see
+        # _block_permutation_pvalue()'s docstring. Computed here (not
+        # deferred) because it needs the same q1_mask/q4_mask/spread this
+        # step already has in scope.
+        horizon_candles = self._parse_horizon_candles(forward_return_col)
+        block_pvalue = self._block_permutation_pvalue(
+            returns_clean=returns_clean,
+            q1_mask=q1_mask,
+            q4_mask=q4_mask,
+            real_spread=spread,
+            block_size=horizon_candles,
+        )
+
         # ── STEP 4: Economic significance check (CRITICAL!) ────────────────────
         # This is what ChatGPT emphasized
         # p < 0.05 means statistically real
@@ -658,7 +845,13 @@ class FeatureValidator:
         # ── STEP 10: Final decision logic (transparent) ────────────────────────
 
         # Check each criterion
-        passed_statistical_significance = p_value < self.alpha
+        # claude code changed: was `p_value < self.alpha` (the i.i.d.-
+        # assuming Mann-Whitney p-value). Now gates on block_pvalue, the
+        # dependence-aware empirical p-value — see the STEP 3.5 comment
+        # above for why p_value_mw can't be trusted as-is on overlapping
+        # labels. p_value_mw/mann_whitney_pvalue are still computed and
+        # stored for transparency/comparison, just no longer authoritative.
+        passed_statistical_significance = block_pvalue < self.alpha
         passed_economic_significance = is_economically_significant
         # claude code changed: multiple testing correction needs the full
         # cross-feature p-value array, which only exists once every feature
@@ -686,13 +879,23 @@ class FeatureValidator:
             feature_version=feature_version,
             calculation_timestamp=datetime.now().isoformat(),
             
-            is_valid=(p_value < self.alpha) and is_economically_significant,
+            # claude code changed: was (p_value < self.alpha) — the naive
+            # Mann-Whitney raw p-value. Phase B (P1-3): every other
+            # significance-derived field in this pipeline (passed_
+            # statistical_significance, passes_fdr, the recommendation
+            # itself) now runs on block_pvalue instead; leaving 'valid'
+            # on the old measure would let research_lab_data.py's
+            # "STATISTICALLY SUPPORTED" classification (valid AND
+            # passes_fdr AND passes_bonferroni) combine two different,
+            # inconsistent significance tests.
+            is_valid=(block_pvalue < self.alpha) and is_economically_significant,
             p_value=float(p_value),
             p_value_corrected_bonferroni=float(p_value),  # Will be updated in correction step
             p_value_corrected_fdr=float(p_value),         # Will be updated in correction step
             t_statistic=float(t_stat),
             mann_whitney_pvalue=float(p_value_mw),
-            
+            block_permutation_pvalue=float(block_pvalue),
+
             quartile_spread=float(quartile_spread),
             is_economically_significant=is_economically_significant,
             quartile_returns=q_means,
@@ -740,6 +943,7 @@ class FeatureValidator:
             'confidence_level': [r.confidence_level for r in self.results],  # matches dataclass field name
             'valid': [r.is_valid for r in self.results],
             'p_value_mannwhitney': [r.mann_whitney_pvalue for r in self.results],
+            'p_value_block_permutation': [r.block_permutation_pvalue for r in self.results],  # claude code changed: new — Phase B (P1-3), the authoritative significance p-value
             'quartile_spread': [r.quartile_spread for r in self.results],
             'econ_significant': [r.is_economically_significant for r in self.results],
             'ic_overall': [r.ic_overall for r in self.results],
@@ -770,7 +974,14 @@ class FeatureValidator:
 
         try:
             results_df = results_df.copy()
-            p_values = results_df['p_value_mannwhitney'].values
+            # claude code changed: was results_df['p_value_mannwhitney'] —
+            # Phase B (P1-3). Correcting the i.i.d.-assuming Mann-Whitney
+            # p-value would still be wrong even at the right family scope;
+            # p_value_block_permutation is the dependence-aware p-value
+            # that actually accounts for overlapping-label autocorrelation
+            # (see _block_permutation_pvalue()). p_value_mannwhitney stays
+            # in the output for transparency/comparison only.
+            p_values = results_df['p_value_block_permutation'].values
 
             # claude code changed: multipletests() only returns real,
             # per-feature corrected p-values in its SECOND return slot for
@@ -811,8 +1022,8 @@ class FeatureValidator:
             # Always return a usable dataframe even on failure
             # so _print_institutional_summary() doesn't crash on missing columns
             results_df = results_df.copy()
-            results_df['p_bonferroni']      = results_df['p_value_mannwhitney']
-            results_df['p_fdr']             = results_df['p_value_mannwhitney']
+            results_df['p_bonferroni']      = results_df['p_value_block_permutation']
+            results_df['p_fdr']             = results_df['p_value_block_permutation']
             results_df['passes_fdr']        = False
             results_df['passes_bonferroni'] = False
             return results_df
@@ -853,7 +1064,7 @@ class FeatureValidator:
                 quartile_spread=row["quartile_spread"],
                 stability_consistency=row["stability_std"],
                 ic_overall=row["ic_overall"],
-                significance_failure_reason="Failed FDR-corrected statistical significance (p_fdr >= alpha)",
+                significance_failure_reason="Failed FDR-corrected, dependence-aware statistical significance (p_fdr >= alpha)",
             )
             final_recs.append(rec)
             final_confs.append(conf)
@@ -939,6 +1150,106 @@ class FeatureValidator:
         except Exception as e:
             logger.error(f"Error saving results: {e}")
             return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# FAMILY-WIDE MULTIPLE-TESTING CORRECTION
+# claude code changed: new — Phase B remediation (forensic-audit finding
+# P1-2). The bug: run_research_all.py called
+# validate_all_features_institutional() once PER SYMBOL, so each symbol's
+# ~16-19 features were corrected only against each other — 20 independent
+# corrections, each blind to the other 19. The true hypothesis space one
+# run_research_all.py invocation actually tests is every (symbol, feature)
+# pair together.
+#
+# HYPOTHESIS FAMILY DEFINITION (documented per the remediation brief):
+# One "family" = every (symbol, feature) raw result produced by a single
+# run_research_all.py invocation — today, ~20 symbols x ~16-19 features =
+# roughly 320-380 tests. This is deliberately the FULL pooled scope, not a
+# per-feature-across-symbols or per-symbol-across-features partial scope,
+# because that's the scope the research pipeline's own existing language
+# already claims ("re-run against forward_return_4h across all 20 tracked
+# symbols" — validated_feature_registry.py) and it's the most conservative
+# choice available: correcting a smaller family would let more features
+# through, which is exactly the "optimize the methodology merely to
+# increase the number of passing features" trap the remediation brief
+# explicitly warns against. A test is NOT run per-symbol as a separate
+# "replication opportunity" here — testing the same feature on 20 symbols
+# and only reporting the ones that happened to pass is itself a form of
+# selective reporting across a hypothesis space, and needs the same
+# guard multiple-testing correction provides for testing 16 different
+# features on one symbol.
+#
+# HOW FDR IS CONTROLLED: identical mechanism as before
+# (statsmodels.stats.multitest.multipletests, method='fdr_bh', alpha=0.05)
+# — only the population being corrected changed, from ~16-19 p-values to
+# the full pooled ~320-380.
+#
+# WHAT CHANGES IN INTERPRETATION: "passes_fdr" for a given (symbol,
+# feature) row now means "still significant after accounting for every
+# other symbol/feature combination looked at in this research sweep", not
+# just the ~16-19 features that happened to share that one symbol's CSV.
+# Expect FEWER passes than the old per-symbol-scoped correction produced —
+# that's the correction working as intended, not a regression.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+def apply_family_wide_correction(
+    raw_results_by_symbol: Dict[str, pd.DataFrame],
+    alpha: float = 0.05,
+) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+    """
+    Pools every symbol's raw (uncorrected) validate_all_features_raw()
+    output into one hypothesis family, applies ONE multiple-testing
+    correction across all of it, recomputes every row's final
+    recommendation from the corrected significance, then splits the
+    result back into one DataFrame per symbol (preserving the existing
+    per-symbol CSV contract downstream consumers rely on).
+
+    Args:
+        raw_results_by_symbol: symbol -> validate_all_features_raw()
+            output (uncorrected). Every value must already share the same
+            columns (i.e. come from the same FeatureValidator config).
+        alpha: significance level for the correction.
+
+    Returns:
+        (per_symbol_corrected, pooled_corrected) — per_symbol_corrected is
+        symbol -> corrected DataFrame (same shape/columns as the input,
+        recommendation/confidence_level/passed_multiple_testing now
+        reflect the family-wide correction); pooled_corrected is the full
+        concatenated DataFrame (with a 'symbol' column) — saved separately
+        as the auditable record of exactly what the family-wide
+        correction actually corrected across.
+    """
+    tagged = []
+    for symbol, df in raw_results_by_symbol.items():
+        df = df.copy()
+        df.insert(0, 'symbol', symbol)
+        tagged.append(df)
+
+    pooled = pd.concat(tagged, ignore_index=True)
+
+    # Reuse the exact same correction/recompute logic every other call
+    # site uses — a throwaway validator instance just for its alpha
+    # config and these two methods, not for re-running any per-feature
+    # computation (that already happened in each symbol's raw pass).
+    validator = FeatureValidator(alpha=alpha)
+    pooled_corrected = validator._apply_multiple_testing_correction(pooled)
+    pooled_corrected = validator._recompute_recommendations_after_correction(pooled_corrected)
+
+    n_family = len(pooled_corrected)
+    n_pass = int(pooled_corrected['passes_fdr'].sum()) if 'passes_fdr' in pooled_corrected.columns else 0
+    logger.info(
+        f"Family-wide correction: {n_pass}/{n_family} (symbol, feature) "
+        f"pairs pass FDR at alpha={alpha} across the full pooled family "
+        f"({len(raw_results_by_symbol)} symbols)."
+    )
+
+    per_symbol_corrected = {
+        symbol: group.drop(columns=['symbol']).reset_index(drop=True)
+        for symbol, group in pooled_corrected.groupby('symbol', sort=False)
+    }
+
+    return per_symbol_corrected, pooled_corrected
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
