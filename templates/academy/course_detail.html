@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}{{ course.title }} — Academy{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ course.title }}</span>
+            <span class="term-section-meta">{{ course.path.title }} · {{ course.difficulty }} · ~{{ course.estimated_hours }}h</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption">{{ course.description }}</div>
+
+            {% if unmet_prerequisites %}
+            <div class="term-message error mono" style="margin-top:12px">
+                Requires first: {% for p in unmet_prerequisites %}{{ p.title }}{% if not forloop.last %}, {% endif %}{% endfor %}
+            </div>
+            {% elif enrollment %}
+            <div class="badge pos" style="margin-top:12px">ENROLLED</div>
+            {% else %}
+            <form method="post" action="{% url 'academy_enroll' slug=course.slug %}" style="margin-top:12px">
+                {% csrf_token %}
+                <button type="submit" class="term-btn mono">Enroll (Free)</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if enrollment %}
+    {% for module in course.modules.all %}
+    <div class="term-section">
+        <div class="term-section-head"><span class="term-section-title">{{ module.title }}</span></div>
+        <div class="term-section-body">
+            <ul class="term-list">
+                {% for lesson in module.lessons.all %}
+                <li><a href="{% url 'academy_lesson_detail' course_slug=course.slug lesson_slug=lesson.slug %}">{{ lesson.title }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% for quiz in course.quizzes.all %}
+    <div class="term-section">
+        <div class="term-section-body">
+            <a class="term-btn mono" href="{% url 'academy_quiz_detail' quiz_id=quiz.id %}">Take Quiz: {{ quiz.title }}</a>
+        </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice" %}
+
+{% endblock %}

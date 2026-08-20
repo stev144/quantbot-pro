@@ -4,6 +4,7 @@ aiohttp==3.13.5
 aiosignal==1.4.0
 asgiref==3.11.1
 attrs==26.1.0
+bleach==6.4.0
 ccxt==4.5.51
 certifi==2026.2.25
 cffi==2.0.0
@@ -13,6 +14,7 @@ cryptography==47.0.0
 dj-database-url==3.1.2
 Django==6.0.3
 frozenlist==1.8.0
+markdown==3.10.3
 gunicorn==26.0.0
 idna==3.11
 multidict==6.7.1
@@ -36,5 +38,6 @@ statsmodels==0.14.6
 typing_extensions==4.15.0
 tzdata==2026.1
 urllib3==2.6.3
+webencodings==0.6.1
 whitenoise==6.12.0
 yarl==1.23.0

@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}{{ lesson.title }} — {{ course.title }}{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ lesson.title }}</span>
+            <span class="term-section-meta">{{ course.title }}</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-lesson-body">
+                {{ rendered_body|safe }}
+            </div>
+
+            <form method="post" action="{% url 'academy_complete_lesson' course_slug=course.slug lesson_slug=lesson.slug %}" style="margin-top:20px">
+                {% csrf_token %}
+                <button type="submit" class="term-btn mono">
+                    {% if next_lesson %}Mark Complete & Continue{% else %}Mark Complete{% endif %}
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice" %}
+
+{% endblock %}

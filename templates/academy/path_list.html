@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}Academy — Learning Paths{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+    {% for path in paths %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title"><a href="{% url 'academy_path_detail' slug=path.slug %}">{{ path.title }}</a></span>
+            <span class="term-section-meta">{{ path.courses.count }} course(s)</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption">{{ path.description }}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="curriculum catalog" %}
+
+{% endblock %}

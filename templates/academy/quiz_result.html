@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block title %}{{ quiz.title }} — Results{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ quiz.title }} — Results</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-stat-row">
+                <div class="term-stat"><span class="term-stat-label">Score</span><span class="term-stat-value mono">{{ attempt.score }}%</span></div>
+                <div class="term-stat"><span class="term-stat-label">Result</span><span class="badge {% if attempt.passed %}pos{% else %}neg{% endif %}">{% if attempt.passed %}PASSED{% else %}NOT YET{% endif %}</span></div>
+            </div>
+
+            <div class="term-table-wrap" style="margin-top:16px">
+                <table class="term-table">
+                    <thead><tr><th>Question</th><th>Your Answer Correct?</th><th>Explanation</th></tr></thead>
+                    <tbody>
+                        {% for response in attempt.responses.all %}
+                        <tr class="{% if not response.is_correct %}row-loss{% endif %}">
+                            <td>{{ response.question.prompt }}</td>
+                            <td><span class="badge {% if response.is_correct %}pos{% else %}neg{% endif %}">{% if response.is_correct %}YES{% else %}NO{% endif %}</span></td>
+                            <td class="text-dim" style="font-size:12px">{{ response.question.explanation }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice" %}
+
+{% endblock %}
