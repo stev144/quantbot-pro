@@ -35,6 +35,12 @@
            {% if active == 'market_intelligence' %}aria-current="page"{% endif %}
            href="{% url 'market_intelligence' %}">Market</a>
 
+        {# claude code changed: new -- Academy entry, one top-level link #}
+        {# mirroring the Market link pattern above. #}
+        <a class="term-nav-link {% if active == 'academy' %}active{% endif %}"
+           {% if active == 'academy' %}aria-current="page"{% endif %}
+           href="{% url 'academy_dashboard' %}">Academy</a>
+
         <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
             <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>
             <div class="term-nav-dropdown">
