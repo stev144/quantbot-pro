@@ -728,7 +728,7 @@ def run_bot():
 
     # ── STARTUP BANNER ────────────────────────────────────────
     logger.info("=" * 60)
-    logger.info("[BotRunner] Quant Bot Pro starting up")
+    logger.info("[BotRunner] Steph Quant Technologies starting up")  # claude code changed: rebrand from Quant Bot Pro
     logger.info(f"[BotRunner] Symbol:     {SYMBOL}")
     logger.info(f"[BotRunner] Timeframe:  {TIMEFRAME}")
     logger.info(f"[BotRunner] Candles:    {CANDLE_LIMIT}")

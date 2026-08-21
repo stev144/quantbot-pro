@@ -1,3 +1,4 @@
+# claude code changed: module docstring below rebranded from Quant Bot Pro to Steph Quant Technologies
 """
 bot/management/commands/deep_health_check.py  (v2)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -6,7 +7,7 @@ Deep Health Check — Five-Layer Self-Auditing Platform
 WHAT THIS MODULE IS
 ─────────────────
 A Django management command that performs a five-layer automated audit
-of every module, class, and function in Quant Bot Pro. It goes far
+of every module, class, and function in Steph Quant Technologies. It goes far
 beyond basic health checks that only confirm imports and connectivity.
 
 THE FIVE LAYERS
@@ -1476,11 +1477,12 @@ class LayerRunner:
 # SECTION 9 — DJANGO MANAGEMENT COMMAND
 # ═════════════════════════════════════════════════════════════════════════
 
+# claude code changed: docstring below rebranded from Quant Bot Pro to Steph Quant Technologies
 class Command(BaseCommand):
     """
     Django management command: python manage.py deep_health_check
 
-    Performs a five-layer self-audit of the entire Quant Bot Pro platform.
+    Performs a five-layer self-audit of the entire Steph Quant Technologies platform.
     Three audit modes:
       fast     — Layers 1+2 only (structure and execution, ~5s)
       standard — Layers 1–3 (adds mathematical validation, ~20s)
@@ -1715,7 +1717,7 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write(f"{BOLD}{CYAN}{'═' * 76}{RESET}")
         self.stdout.write(
-            f"{BOLD}{CYAN}   QUANT BOT PRO — DEEP HEALTH CHECK "
+            f"{BOLD}{CYAN}   STEPH QUANT TECHNOLOGIES — DEEP HEALTH CHECK "  # claude code changed: rebrand from Quant Bot Pro
             f"[{mode_labels.get(mode, mode)}]{RESET}"
         )
         self.stdout.write(f"{BOLD}{CYAN}{'═' * 76}{RESET}")

@@ -17,7 +17,7 @@ Spearman's correlation compares the *ranking* of feature values against the *ran
 
 ## A real example from this platform's own research pipeline
 
-Quant Bot Pro's `feature_validator.py` computes IC exactly this way — Spearman correlation between a feature column and a forward-return label column, on real historical data across 20 tracked crypto symbols.
+Steph Quant Technologies' `feature_validator.py` computes IC exactly this way — Spearman correlation between a feature column and a forward-return label column, on real historical data across 20 tracked crypto symbols.
 
 Here is a real, current finding from that pipeline for the RSI indicator, tested against every symbol:
 
@@ -31,3 +31,6 @@ Here is a real, current finding from that pipeline for the RSI indicator, tested
 Every single symbol shows a small but *positive and statistically real* IC for RSI. That might look like the beginning of a strategy. It is not — not yet. The next three lessons explain exactly why, using this same real dataset.
 
 **Test yourself:** if a feature has IC = 0.15 measured on 40,000 historical trades, would you call that IC "acceptable," "good," or "excellent" by the thresholds this platform's own research code uses (`IC_ACCEPTABLE = 0.05`, `IC_GOOD = 0.10`, `IC_EXCELLENT = 0.15`)?
+
+
+<!-- claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies -->

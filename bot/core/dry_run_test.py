@@ -794,7 +794,7 @@ def main():
 
     print()
     print("=" * 55)
-    print("QUANT BOT PRO — DRY RUN TEST")
+    print("STEPH QUANT TECHNOLOGIES — DRY RUN TEST")  # claude code changed: rebrand from Quant Bot Pro
     print("Testing all system components before live trading")
     print("=" * 55)
 

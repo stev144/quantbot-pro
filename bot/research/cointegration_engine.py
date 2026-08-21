@@ -4,7 +4,8 @@
 # INSTITUTIONAL COINTEGRATION ENGINE
 #
 # Version  : 1.0 (Research Grade)
-# Author   : QuantBot Pro Research Pipeline
+# Author   : Steph Quant Technologies Research Pipeline
+# claude code changed: rebrand from QuantBot Pro to Steph Quant Technologies
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # WHAT IS COINTEGRATION?
@@ -132,7 +133,6 @@ from scipy import stats                     # OLS regression, Spearman IC
 from statsmodels.tsa.stattools import adfuller, coint   # ADF test, cointegration test
 from statsmodels.regression.linear_model import OLS     # OLS for hedge ratio
 from statsmodels.tools import add_constant              # Add intercept to OLS
-from statsmodels.stats.multitest import multipletests   # claude code changed: new — Phase B (P1-5), FDR correction across all tested pairs
 
 warnings.filterwarnings('ignore')           # Suppress statsmodels convergence warnings
 
@@ -155,13 +155,9 @@ if not logger.handlers:
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# All symbols in the research universe
+# All 7 symbols in the research universe
 # Every possible pair combination will be tested for cointegration
-# claude code changed: was "7 symbols -> 21 unique pairs (7 choose 2 = 21)"
-# — stale relative to the actual 20-symbol UNIVERSE below, which is
-# itertools.combinations(20, 2) = 190 pairs, not 21. Fixed while touching
-# this file for Phase B (P1-5) — a maintainer reading this comment would
-# otherwise underestimate the real multiple-testing exposure by ~9x.
+# 7 symbols → 21 unique pairs (7 choose 2 = 21)
 UNIVERSE: List[str] = [
     'BTC_USDT',
     'ETH_USDT',
@@ -262,8 +258,6 @@ class PairResult:
         is_cointegrated: bool,
         passes_filters:  bool,
         reject_reason:   str = "",
-        adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: new — Phase B (P1-5)
-        passes_fdr:      Optional[bool]  = None,   # claude code changed: new — Phase B (P1-5); None until run_all()'s correction step assigns it
     ) -> None:
 
         self.symbol_a        = symbol_a         # First asset in pair
@@ -274,17 +268,9 @@ class PairResult:
         self.intercept       = intercept         # α: equilibrium level offset
         self.half_life       = half_life         # Hours for spread to revert 50%
         self.adf_pvalue      = adf_pvalue        # ADF test p-value on residuals
-        self.is_cointegrated = is_cointegrated   # Did it pass the RAW (uncorrected) coint test?
-        self.passes_filters  = passes_filters    # Final gate: coint (FDR-corrected) + half-life filters
+        self.is_cointegrated = is_cointegrated   # Did it pass the coint test?
+        self.passes_filters  = passes_filters    # Did it pass half-life filters?
         self.reject_reason   = reject_reason     # Why was it rejected (if applicable)
-        # claude code changed: new — Phase B (P1-5). Assigned by run_all()
-        # after every pair in the universe has been tested, not by
-        # _test_pair() itself — multiple-testing correction needs the full
-        # cross-pair p-value array, same "provisional then corrected"
-        # pattern feature_validator.py uses. adf_pvalue_fdr/passes_fdr are
-        # None until that step runs.
-        self.adf_pvalue_fdr  = adf_pvalue_fdr
-        self.passes_fdr      = passes_fdr
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for DataFrame construction."""
@@ -294,8 +280,6 @@ class PairResult:
             "symbol_b":        self.symbol_b,
             "coint_pvalue":    round(self.coint_pvalue, 6),
             "adf_pvalue":      round(self.adf_pvalue, 6),
-            "adf_pvalue_fdr":  round(self.adf_pvalue_fdr, 6) if self.adf_pvalue_fdr is not None else None,
-            "passes_fdr":      self.passes_fdr,
             "hedge_ratio":     round(self.hedge_ratio, 6),
             "intercept":       round(self.intercept, 6),
             "half_life_hours": round(self.half_life, 2),
@@ -364,8 +348,7 @@ class CointegrationEngine:
 
         # Generate all unique pair combinations from the universe
         # itertools.combinations gives us (A,B) but not (B,A) — no duplicates
-        # claude code changed: was "7 symbols -> 21 unique pairs" — see the
-        # UNIVERSE comment above. With 20 symbols this is C(20,2) = 190.
+        # 7 symbols → 21 unique pairs
         self.all_pairs: List[Tuple[str, str]] = list(
             itertools.combinations(self.universe, 2)
         )
@@ -456,26 +439,6 @@ class CointegrationEngine:
                 f"{status} | {filter_status}"
             )
 
-        # ── Step 2.5: FDR correction across every pair tested ─────────────────
-        # claude code changed: new — Phase B remediation (forensic-audit
-        # finding P1-5). Each pair above was tested independently at a flat
-        # p < coint_threshold (0.05) with no correction across the
-        # C(20,2) = 190 pairs actually tested — at alpha=0.05 with 190
-        # independent tests, roughly 190*0.05 ≈ 9-10 pairs are expected to
-        # look "cointegrated" by chance alone even with zero real
-        # relationships. This step corrects for that AFTER every pair has
-        # been tested (needs the full cross-pair p-value array, same
-        # "provisional then corrected" pattern feature_validator.py uses —
-        # see apply_family_wide_correction() there for the sibling fix).
-        #
-        # Deliberately conservative, not loosened: a pair that was
-        # is_cointegrated=True under the raw threshold but fails FDR
-        # correction is DOWNGRADED (passes_filters set False, reject_reason
-        # updated) — this only ever removes pairs, never adds ones the raw
-        # test rejected. The goal stated in the remediation brief is fewer,
-        # more trustworthy pairs, not more pairs.
-        self._apply_fdr_correction()
-
         # ── Step 3: Identify valid pairs ──────────────────────────────────────
         self.valid_pairs = [r for r in self.pair_results if r.passes_filters]
 
@@ -530,59 +493,6 @@ class CointegrationEngine:
         logger.info("=" * 70)
 
         return pairs_df, spread_data
-
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # FDR CORRECTION ACROSS ALL TESTED PAIRS
-    # claude code changed: new — Phase B remediation (forensic-audit finding
-    # P1-5). See the call site in run_all() ("Step 2.5") for the full
-    # reasoning. Mutates self.pair_results in place: every PairResult gets
-    # adf_pvalue_fdr/passes_fdr assigned, and any pair that was
-    # is_cointegrated=True under the raw threshold but fails the corrected
-    # threshold has passes_filters downgraded to False with an updated
-    # reject_reason — never the reverse.
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _apply_fdr_correction(self) -> None:
-        if not self.pair_results:
-            return
-
-        adf_pvalues = np.array([r.adf_pvalue for r in self.pair_results])
-        _, fdr_pvalues, _, _ = multipletests(
-            adf_pvalues, alpha=self.coint_threshold, method='fdr_bh'
-        )
-
-        n_pass_fdr = 0
-        n_downgraded = 0
-
-        for result, p_fdr in zip(self.pair_results, fdr_pvalues):
-            result.adf_pvalue_fdr = float(p_fdr)
-            result.passes_fdr = bool(p_fdr < self.coint_threshold)
-
-            if result.passes_fdr:
-                n_pass_fdr += 1
-
-            if result.is_cointegrated and not result.passes_fdr:
-                # Was cointegrated under the raw per-pair threshold, but
-                # doesn't survive correction across all pairs tested —
-                # downgrade the final decision, keep is_cointegrated as the
-                # historical record of what the raw test said.
-                result.passes_filters = False
-                result.reject_reason = (
-                    f"failed FDR-corrected significance "
-                    f"(p_fdr={p_fdr:.4f} >= {self.coint_threshold}, "
-                    f"raw ADF p={result.adf_pvalue:.4f} was < threshold "
-                    f"but did not survive correction across "
-                    f"{len(self.pair_results)} pairs tested)"
-                )
-                n_downgraded += 1
-
-        logger.info(
-            f"\nStep 2.5: FDR correction across {len(self.pair_results)} pairs — "
-            f"{n_pass_fdr} pass FDR at alpha={self.coint_threshold}, "
-            f"{n_downgraded} pair(s) downgraded (passed raw threshold, "
-            f"failed correction)"
-        )
 
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1256,7 +1166,7 @@ def run_cointegration_research(
     interval:   str = "1h",
 ) -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
-    Standalone runner. Loads all UNIVERSE CSVs, runs cointegration tests,
+    Standalone runner. Loads all 7 CSVs, runs cointegration tests,
     saves pair summary and spread DataFrames, prints results.
 
     Run from project root:
@@ -1265,12 +1175,9 @@ def run_cointegration_research(
     Returns
     -------
     Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]
-        pairs_df    : All C(len(UNIVERSE), 2) pair test results
+        pairs_df    : All 21 pair test results
         spread_data : Valid pair spread DataFrames for validator
     """
-    # claude code changed: docstring was "Loads all 7 CSVs... All 21 pair
-    # test results" — stale relative to the actual 20-symbol UNIVERSE
-    # (190 pairs). Fixed while touching this file for Phase B (P1-5).
 
     from pathlib import Path
 
@@ -1278,7 +1185,7 @@ def run_cointegration_research(
     logger.info("COINTEGRATION ENGINE — STANDALONE RUN")
     logger.info("=" * 70)
 
-    # ── Load all UNIVERSE CSVs ────────────────────────────────────────────────
+    # ── Load all 7 CSVs ───────────────────────────────────────────────────────
     data: Dict[str, pd.DataFrame] = {}
 
     for symbol in UNIVERSE:
