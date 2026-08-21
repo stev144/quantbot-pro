@@ -44,13 +44,13 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
     "192.168.43.229",   # phone hotspot subnet — kept in case you reconnect via that network
-    # claude code changed: new — this machine's WiFi IP changed to the
-    # 192.168.178.x home-router subnet (was 192.168.43.x, a phone hotspot
-    # IP that's no longer assigned to this machine — that's why phone
-    # access broke, not just the firewall). DHCP-leased, so it can change
-    # again on this router too; if phone access breaks again, check the
+    "192.168.178.91",   # previous home-router lease — kept in case DHCP reassigns it back
+    # claude code changed: new — DHCP re-leased this machine's WiFi IP again,
+    # this time to 192.168.117.x (was 192.168.178.x). Same router, new lease
+    # — this is the cause of "can't access from phone", not a firewall or
+    # academy-specific issue. If phone access breaks again, check the
     # current IP with `ipconfig` and update this list.
-    "192.168.178.91",
+    "192.168.117.91",
     # claude code changed: new — Railway deployment. Leading-dot wildcard
     # matches any *.up.railway.app subdomain (Django's documented syntax
     # for ALLOWED_HOSTS wildcards), covering the default domain Railway
