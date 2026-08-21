@@ -6,7 +6,7 @@
 from django.urls import path
 
 from bot.academy.views.dashboard import academy_dashboard
-from bot.academy.views.onboarding import onboarding
+from bot.academy.views.onboarding import onboarding, onboarding_step, onboarding_result
 from bot.academy.views.paths import path_list, path_detail
 from bot.academy.views.courses import course_detail, enroll
 from bot.academy.views.lessons import lesson_detail, complete_lesson
@@ -15,6 +15,8 @@ from bot.academy.views.quiz import quiz_detail
 urlpatterns = [
     path("", academy_dashboard, name="academy_dashboard"),
     path("onboarding/", onboarding, name="academy_onboarding"),
+    path("onboarding/result/", onboarding_result, name="academy_onboarding_result"),
+    path("onboarding/<int:step>/", onboarding_step, name="academy_onboarding_step"),
     path("paths/", path_list, name="academy_path_list"),
     path("paths/<slug:slug>/", path_detail, name="academy_path_detail"),
     path("courses/<slug:slug>/", course_detail, name="academy_course_detail"),
