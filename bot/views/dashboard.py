@@ -423,7 +423,6 @@ def portfolio_backtest_view(request):
             "error": str(e),
             "trace": traceback.format_exc()
         })
-
 def _safe_float(value):
     if value in (None, "", "None"):
         return 0
