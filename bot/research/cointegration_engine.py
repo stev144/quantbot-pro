@@ -4,7 +4,8 @@
 # INSTITUTIONAL COINTEGRATION ENGINE
 #
 # Version  : 1.0 (Research Grade)
-# Author   : QuantBot Pro Research Pipeline
+# Author   : Steph Quant Technologies Research Pipeline
+# claude code changed: rebrand from QuantBot Pro to Steph Quant Technologies
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # WHAT IS COINTEGRATION?

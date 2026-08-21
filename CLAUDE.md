@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Django project ("Quant Bot Pro") that is really three things sharing one codebase:
+A Django project ("Steph Quant Technologies") that is really three things sharing one codebase:
 
 1. **Live trading bot** (`bot/core/bot_runner.py`) — polls Binance via `ccxt`, detects market regime, routes to a strategy, executes/manages positions, journals trades to the DB.
 2. **Backtesting/dashboard web app** (Django views + `templates/dashboard.html`) — fetches historical klines, runs the backtester, renders equity curve / stats / trade table.
