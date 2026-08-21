@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 
 from bot.views.dashboard import (
     dashboard, live_data, portfolio_backtest_view, live_regime_monitor, walk_forward_view,
@@ -31,6 +31,14 @@ urlpatterns = [
 
     # ---- MARKET ----
     path('market/', market_intelligence, name='market_intelligence'),
+
+    # ---- ACADEMY ----
+    # claude code changed: new — one include() line, per the approved
+    # Academy architecture report, rather than importing every academy
+    # view individually into this file the way every other section does.
+    # Keeps this file's flat route list from doubling in size as the
+    # curriculum grows past its first course.
+    path('academy/', include('bot.academy.urls')),
 
     # ---- RESEARCH ----
     path('research/', research_lab, name='research_lab'),

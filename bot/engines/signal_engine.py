@@ -18,6 +18,17 @@ from bot.strategies.moving_average import MovingAverageStrategy
 # optional import (create file if not existing)
 from bot.engines.trade_filter import trade_quality_filter
 
+# claude code changed: new import — Phase A of the controlled remediation
+# program (forensic-audit finding: "no direct strategy call elsewhere
+# bypasses the gate" must hold repo-wide, not just inside StrategyRouter).
+# This module is unused by the live/backtest pipeline today (see the
+# comment above), but it does call MovingAverageStrategy.check_signal()
+# directly, with no production-eligibility check at all — a latent bypass
+# of the exact gate strategy_router.py now enforces. Closed here too, for
+# defense in depth, rather than relying on "nothing calls this today"
+# staying true forever.
+from bot.research.validated_feature_registry import get_strategy_verdict
+
 
 # =========================
 # INIT ONCE (performance)
@@ -28,7 +39,7 @@ from bot.engines.trade_filter import trade_quality_filter
 # on every generate_signal() call.
 _trend_strategy = MovingAverageStrategy()
 
-def generate_signal(df, i):
+def generate_signal(df, i, allow_unvalidated_strategies=False):
 
     sub_df = df.iloc[:i]
 
@@ -36,6 +47,21 @@ def generate_signal(df, i):
         return {
             "signal": "NO_SIGNAL",
             "reason": "insufficient_data"
+        }
+
+    # claude code changed: new — same production-eligibility gate
+    # strategy_router.py enforces (see validated_feature_registry.py).
+    # Checked before calling the strategy at all, not after, so an
+    # unvalidated strategy's raw signal is never even produced from this
+    # entry point by default — mirrors the router's fail-closed default.
+    verdict = get_strategy_verdict("MovingAverageStrategy")
+    if not verdict.production_eligible and not allow_unvalidated_strategies:
+        return {
+            "signal": "NO_SIGNAL",
+            "reason": f"strategy_not_validated_{verdict.research_verdict.lower()}",
+            "research_verdict": verdict.research_verdict,
+            "production_eligible": verdict.production_eligible,
+            "verdict_rejection_reason": verdict.rejection_reason,
         }
 
     # claude code changed: was moving_average_strategy(sub_df) — see the

@@ -42,32 +42,87 @@ class StrategyVerdict:
 # against research_data/*_validated_features.csv and
 # research_data/model_governance_log.md before writing this, not assumed.
 STRATEGY_VERDICTS: dict[str, StrategyVerdict] = {
+    # claude code changed: new entry — Phase A of the controlled remediation
+    # program (forensic-audit finding P0-1). Before this entry existed,
+    # MovingAverageStrategy had no row here at all, and StrategyRouter never
+    # asked this registry about it either (it only gated the RANGING
+    # branch) — so the strategy that actually produces every live/backtest
+    # trade in this system had silently never been asked to earn its
+    # eligibility. This entry makes the true state explicit rather than
+    # leaving it to the (also-correct, but silent) get_strategy_verdict()
+    # fail-closed fallback: MovingAverageStrategy's EMA/structure/pullback
+    # entry logic (bot/strategies/moving_average.py) has never been run
+    # through feature_validator.py, permutation_test_engine.py, or
+    # walk_forward_engine.py — no IC test, no significance test, nothing.
+    # It is UNTESTED, not REJECTED — the evidence to reject or support it
+    # simply doesn't exist yet. production_eligible stays False until it
+    # does, per Rule 4 (fail closed: unknown != validated).
+    "MovingAverageStrategy": StrategyVerdict(
+        strategy_name="MovingAverageStrategy",
+        research_verdict=UNTESTED,
+        production_eligible=False,
+        rejection_reason=(
+            "No research evidence has ever been recorded for this strategy's "
+            "EMA-trend + structure-confirmation + pullback entry logic "
+            "(bot/strategies/moving_average.py). It has not been run through "
+            "feature_validator.py's significance testing, "
+            "permutation_test_engine.py, or walk_forward_engine.py — those "
+            "pipelines have only ever been run against the AVAX/ATOM and "
+            "DOT/LINK Kalman pairs (both REJECTED) and, separately, against "
+            "MeanReversionStrategy's rsi/bb_width features (also REJECTED). "
+            "MovingAverageStrategy's own EMA/structure/pullback thresholds "
+            "(bot/strategies/moving_average.py's ema_fast_period, "
+            "ema_slow_period, pullback_tolerance, sl_range_factor, "
+            "tp_rr_ratio, and StructureAnalyser's lookback/min_swing_points/"
+            "min_structure_change) have no cited backtest or statistical "
+            "evidence anywhere in this repository. Until a real validation "
+            "run produces IC/significance/robustness evidence for this "
+            "strategy specifically, it remains UNTESTED, not SUPPORTED — "
+            "see research_data/model_governance_log.md for the standard "
+            "this project holds every other strategy candidate to."
+        ),
+    ),
     "MeanReversionStrategy": StrategyVerdict(
         strategy_name="MeanReversionStrategy",
         research_verdict=REJECTED,
         production_eligible=False,
-        # claude code changed: re-run against forward_return_4h across all
-        # 20 tracked symbols after fixing two real bugs in
-        # feature_validator.py's multiple-testing correction (it crashed
-        # unpacking multipletests()'s return, then fell into an except
-        # block that hardcoded passes_fdr/passes_bonferroni=False for
-        # EVERY feature regardless of the true result — so the previous
-        # "0/20 pass FDR/Bonferroni" here was an artifact of that bug, not
-        # a real finding). The REJECTED verdict itself is unchanged, but
-        # the evidence backing it was wrong and is corrected below.
+        # claude code changed: Phase A of the controlled remediation program
+        # (forensic-audit finding P0-2). The previous version of this
+        # citation described a "re-run" whose numbers could not actually be
+        # reproduced from the repository's state — the research_data/
+        # *_validated_features.csv files it pointed to predated the
+        # feature_validator.py multiple-testing-correction bugfix (commit
+        # a4113f4) by three weeks and still carried that bug's exact
+        # signature. Rather than editing the prose, this entry now cites a
+        # real, from-scratch, reproducible re-run performed 2026-08-20:
+        # bot/fetch_all_symbols.py re-fetched all 20 symbols fresh from
+        # Binance, then `python -m bot.run_research_all` re-ran
+        # feature_validator.py's institutional validation (today's code,
+        # not a prior session's) against that fresh data, regenerating
+        # every research_data/*_validated_features.csv this citation
+        # references. The REJECTED verdict reproduces: see rejection_reason
+        # below for the numbers this run actually produced. Two figures
+        # shifted slightly from the prior (unreproducible) citation — the
+        # bb_width FDR-pass count (was cited as 4/20, this run measured
+        # 3/20) — expected, since this run's 50k-candle window ends
+        # 2026-08-20, not whatever window backed the original prose. The
+        # decision-relevant conclusions (REVIEW/DELETE/KEEP counts,
+        # economic-significance verdict) reproduced exactly.
         rejection_reason=(
             "rsi: statistically real (20/20 symbols pass real FDR-corrected "
-            "significance, p_fdr as low as 1e-27) but economically "
-            "negligible everywhere — quartile spread 0.00001-0.0012 vs. "
-            "the 0.5% economic-significance threshold, |IC| 0.02-0.06 "
-            "(mostly below the 0.05 'acceptable' bar) — REVIEW on 20/20 "
-            "symbols, KEEP on 0/20. bb_width: only 4/20 symbols even pass "
-            "FDR correction; where significant, IC is still negligible — "
-            "DELETE on 18/20 symbols, REVIEW on 2/20 (MATIC, SHIB), KEEP "
-            "on 0/20. Neither feature has been through "
+            "significance, p_fdr as low as 2.9e-27) but economically "
+            "negligible everywhere — quartile spread 0.0000129-0.00122 vs. "
+            "the 0.5% economic-significance threshold, |IC| 0.021-0.061, "
+            "econ_significant=False on 20/20 symbols — REVIEW on 20/20 "
+            "symbols, KEEP on 0/20. bb_width: 3/20 symbols pass FDR "
+            "correction (FIL, MATIC, SHIB); where significant, IC is still "
+            "negligible — DELETE on 18/20 symbols, REVIEW on 2/20 (MATIC, "
+            "SHIB), KEEP on 0/20. Neither feature has been through "
             "permutation_test_engine.py or walk_forward_engine.py — that "
             "pipeline has only ever run on the AVAX/ATOM and DOT/LINK "
-            "Kalman pairs, both REJECTED. See research_data/model_governance_log.md."
+            "Kalman pairs, both REJECTED. Reproduced 2026-08-20 from "
+            "research_data/*_validated_features.csv (all 20 regenerated "
+            "same run) and research_data/model_governance_log.md."
         ),
     ),
 }

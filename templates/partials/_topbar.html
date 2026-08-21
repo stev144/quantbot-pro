@@ -34,6 +34,17 @@
            {% if active == 'market_intelligence' %}aria-current="page"{% endif %}
            href="{% url 'market_intelligence' %}">Market</a>
 
+        {# claude code changed: new — Academy entry, per the approved #}
+        {# architecture report (one top-level link, not buried in a #}
+        {# dropdown, given it's a first-class capability). Mirrors the #}
+        {# existing single-<a> pattern the Market link above uses, not #}
+        {# the <details> dropdown pattern the multi-page Research/Risk #}
+        {# groups use — Academy's own sub-navigation lives on the #}
+        {# Academy dashboard page itself, not in this topbar. #}
+        <a class="term-nav-link {% if active == 'academy' %}active{% endif %}"
+           {% if active == 'academy' %}aria-current="page"{% endif %}
+           href="{% url 'academy_dashboard' %}">Academy</a>
+
         <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
             <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>
             <div class="term-nav-dropdown">

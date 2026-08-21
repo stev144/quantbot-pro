@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% block title %}{{ quiz.title }}{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ quiz.title }}</span>
+            <span class="term-section-meta">passing score: {{ quiz.passing_score }}%</span>
+        </div>
+        <div class="term-section-body">
+            <form method="post">
+                {% csrf_token %}
+                {% for q in questions %}
+                <div style="margin-bottom:18px">
+                    <div class="chart-caption" style="margin-bottom:6px">{{ q.prompt }}</div>
+
+                    {% if q.question_type == "multiple_choice" or q.question_type == "code_comprehension" %}
+                        {% for choice in q.payload.choices %}
+                        <label class="mono" style="display:block">
+                            <input type="radio" name="q{{ q.id }}" value="{{ forloop.counter0 }}" required> {{ choice }}
+                        </label>
+                        {% endfor %}
+                    {% elif q.question_type == "true_false" %}
+                        <label class="mono"><input type="radio" name="q{{ q.id }}" value="true" required> True</label>
+                        <label class="mono" style="margin-left:16px"><input type="radio" name="q{{ q.id }}" value="false"> False</label>
+                    {% elif q.question_type == "numerical" %}
+                        <input type="number" step="any" name="q{{ q.id }}" class="term-input mono" required>
+                    {% elif q.question_type == "research_interpretation" or q.question_type == "research_decision" %}
+                        <input type="text" name="q{{ q.id }}" class="term-input mono" placeholder="e.g. KEEP / REVIEW / REJECT / yes / no" required>
+                    {% elif q.question_type == "debugging" %}
+                        {% for issue in q.payload.issues %}
+                        <label class="mono" style="display:block">
+                            <input type="checkbox" name="q{{ q.id }}" value="{{ issue }}"> {{ issue }}
+                        </label>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+                {% endfor %}
+                <button type="submit" class="term-btn mono">Submit</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice" %}
+
+{% endblock %}

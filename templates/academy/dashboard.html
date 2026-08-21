@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% block title %}Academy — Quant Bot Pro{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+
+    {% if onboarding_needed %}
+    <div class="term-section">
+        <div class="term-section-body">
+            <div class="chart-caption">
+                Take the onboarding diagnostic so the Academy can recommend where to start, instead of assuming
+                everyone begins in the same place.
+            </div>
+            <a class="term-btn mono" href="{% url 'academy_onboarding' %}">Start Diagnostic</a>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Your Progress</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-stat-row">
+                <div class="term-stat"><span class="term-stat-label">Lessons Completed</span><span class="term-stat-value mono">{{ completed_lessons }}{% if total_lessons_enrolled %} / {{ total_lessons_enrolled }}{% endif %}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Quiz Attempts</span><span class="term-stat-value mono">{{ quiz_attempts_count }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Avg Quiz Score</span><span class="term-stat-value mono">{% if avg_quiz_score is not None %}{{ avg_quiz_score }}%{% else %}—{% endif %}</span></div>
+            </div>
+
+            {% if profile %}
+            <div class="chart-caption" style="margin-top:16px">Skill levels (from your diagnostic)</div>
+            <div class="term-stat-row">
+                <div class="term-stat"><span class="term-stat-label">Trading Experience</span><span class="term-stat-value mono">{{ profile.trading_experience_level }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Programming</span><span class="term-stat-value mono">{{ profile.programming_level }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Quantitative</span><span class="term-stat-value mono">{{ profile.quant_level }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Research</span><span class="term-stat-value mono">{{ profile.research_level }}</span></div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Enrolled Courses</span>
+        </div>
+        <div class="term-section-body">
+            {% if enrollments %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Course</th><th>Path</th><th>Status</th></tr></thead>
+                    <tbody>
+                        {% for e in enrollments %}
+                        <tr>
+                            <td>{% if e.course %}<a href="{% url 'academy_course_detail' slug=e.course.slug %}">{{ e.course.title }}</a>{% else %}{{ e.learning_path }}{% endif %}</td>
+                            <td class="text-dim">{{ e.course.path.title|default:e.learning_path.title }}</td>
+                            <td><span class="badge pos">{{ e.status }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="chart-caption">Not enrolled in anything yet — <a href="{% url 'academy_path_list' %}">browse the curriculum</a>.</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice — see each course's disclaimer" %}
+
+{% endblock %}

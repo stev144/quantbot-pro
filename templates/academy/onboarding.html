@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}Academy Diagnostic — Quant Bot Pro{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Onboarding Diagnostic</span>
+            <span class="term-section-meta">used only to recommend a starting point — never to gate access</span>
+        </div>
+        <div class="term-section-body">
+            <form method="post">
+                {% csrf_token %}
+
+                {% for category, questions in questions_by_category.items %}
+                <div class="term-section" style="margin-top:16px">
+                    <div class="term-section-head"><span class="term-section-title">{{ category|title }}</span></div>
+                    <div class="term-section-body">
+                        {% for q in questions %}
+                        <div style="margin-bottom:14px">
+                            <label class="mono" style="display:block; margin-bottom:6px">{{ q.prompt }}</label>
+                            {% if q.type == "boolean" %}
+                                <select name="{{ category }}__{{ q.key }}" class="term-input mono">
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            {% elif q.type == "choice" %}
+                                <select name="{{ category }}__{{ q.key }}" class="term-input mono">
+                                    <option value="">—</option>
+                                    {% for choice in q.choices %}
+                                    <option value="{% if q.correct_index is not None %}{{ forloop.counter0 }}{% else %}{{ choice }}{% endif %}">{{ choice }}</option>
+                                    {% endfor %}
+                                </select>
+                            {% elif q.type == "multi_choice" %}
+                                {% for choice in q.choices %}
+                                <label class="mono" style="margin-right:12px">
+                                    <input type="checkbox" name="{{ category }}__{{ q.key }}" value="{{ choice }}"> {{ choice }}
+                                </label>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                <button type="submit" class="term-btn mono" style="margin-top:16px">Submit</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Quant Bot Academy" note="diagnostic responses shape recommendations only" %}
+
+{% endblock %}
