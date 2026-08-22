@@ -616,7 +616,7 @@
  * weight + size on the existing mono stack). */
 .typed-static {
   color: #00FF9F;
-  font-size: clamp(1.8rem, 3.8vw, 2.75rem);
+  font-size: clamp(0.95rem, 1.3vw, 1.125rem);   /* claude code changed: was clamp(1.8rem, 3.8vw, 2.75rem) — user reported the typed text dwarfed .term-brand-name (14px); now tops out at 18px, just a bit larger than the brand title, not 2-3x it */
   font-weight: 700;
 }
 
@@ -631,7 +631,7 @@
  * request — matched to .typed-static so "We" and the animating message
  * still read as one consistent line. */
 #typed-text {
-  font-size: clamp(1.8rem, 3.8vw, 2.75rem);
+  font-size: clamp(0.95rem, 1.3vw, 1.125rem);   /* claude code changed: was clamp(1.8rem, 3.8vw, 2.75rem) — matched to .typed-static's new size, see that rule's comment for the reason */
   font-weight: 700;
   color: #F0B90B;
   display: inline-block;
