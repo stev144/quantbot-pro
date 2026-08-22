@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Formalize Hypothesis — Research Lab{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section academy-step-card" style="max-width:640px; margin:0 auto;">
+        <div class="term-section-head">
+            <span class="term-section-title">Let's formalize your hypothesis</span>
+            <span class="term-section-meta">{{ interpreter_name }} — a rules-based suggestion tool, not AI</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption mono" style="margin-bottom:18px">"{{ experiment.hypothesis_text }}"</div>
+
+            {% if errors %}
+            <div class="term-message error mono" style="margin-bottom:16px">
+                {% for e in errors %}{{ e }}<br>{% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="chart-caption mono" style="margin-bottom:14px">
+                Every field below is our best-effort suggestion — please confirm or correct each one. Nothing runs until you do.
+            </div>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <label class="mono" style="display:block; margin-bottom:6px">Asset {% if not spec.asset %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
+                <select name="asset" class="term-input mono" style="margin-bottom:16px">
+                    <option value="">—</option>
+                    {% for a in supported_assets %}
+                    <option value="{{ a }}" {% if spec.asset == a %}selected{% endif %}>{{ a }}</option>
+                    {% endfor %}
+                </select>
+
+                <label class="mono" style="display:block; margin-bottom:6px">Timeframe</label>
+                <select name="timeframe" class="term-input mono" style="margin-bottom:16px">
+                    {% for t in supported_timeframes %}
+                    <option value="{{ t }}" {% if spec.timeframe == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+
+                <label class="mono" style="display:block; margin-bottom:6px">Feature to test {% if not spec.features %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
+                <select name="feature_name" class="term-input mono" style="margin-bottom:16px">
+                    <option value="">—</option>
+                    {% for f in derivable_features %}
+                    <option value="{{ f }}" {% if f in spec.features %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                </select>
+
+                <label class="mono" style="display:block; margin-bottom:6px">Expected direction {% if not spec.direction %}<span style="color:var(--verdict-warning)">— not detected</span>{% endif %}</label>
+                <select name="direction" class="term-input mono" style="margin-bottom:16px">
+                    <option value="">—</option>
+                    {% for d in supported_directions %}
+                    <option value="{{ d }}" {% if spec.direction == d %}selected{% endif %}>{{ d }}</option>
+                    {% endfor %}
+                </select>
+
+                <label class="mono" style="display:block; margin-bottom:6px">Horizon (candles, 1h each) {% if not spec.target.horizon %}<span style="color:var(--verdict-warning)">— not detected, please enter</span>{% endif %}</label>
+                <input type="number" name="horizon" class="term-input mono" style="margin-bottom:16px" value="{{ spec.target.horizon|default:'' }}" min="1">
+
+                <label class="mono" style="display:block; margin-bottom:6px">Compute budget</label>
+                <select name="risk_tier" class="term-input mono" style="margin-bottom:20px">
+                    <option value="LOW">LOW — statistical test only</option>
+                    <option value="MEDIUM">MEDIUM — includes backtest &amp; cointegration</option>
+                </select>
+
+                <button type="submit" class="term-btn mono">Continue to Research Plan</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="ambiguous fields are never guessed — they require your confirmation" %}
+
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Research Lab{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section academy-step-card" style="max-width:640px; margin:0 auto;">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Lab</span>
+            <span class="term-section-meta">deterministic, evidence-backed hypothesis testing</span>
+        </div>
+        <div class="term-section-body">
+            <h2 class="term-section-title" style="font-weight:400; margin-bottom:18px">What do you believe about the market?</h2>
+            <div class="chart-caption mono" style="margin-bottom:18px">
+                Example: "I believe Bitcoin tends to fall within 24 hours when trading volume becomes unusually high."
+            </div>
+
+            {% if error %}
+            <div class="term-message error mono" style="margin-bottom:16px">{{ error }}</div>
+            {% endif %}
+
+            <form method="post">
+                {% csrf_token %}
+                <textarea name="hypothesis_text" class="term-input mono" rows="4" style="width:100%" placeholder="Describe your hypothesis in plain language..."></textarea>
+                <button type="submit" class="term-btn mono" style="margin-top:14px">Formalize This Hypothesis</button>
+            </form>
+
+            {% if recent %}
+            <div class="chart-caption mono" style="margin-top:28px">Recent experiments</div>
+            <div class="term-table-wrap" style="margin-top:10px">
+                <table class="term-table">
+                    <thead><tr><th>Hypothesis</th><th>Status</th><th>Verdict</th><th></th></tr></thead>
+                    <tbody>
+                        {% for e in recent %}
+                        <tr>
+                            <td>{{ e.hypothesis_text|truncatechars:50 }}</td>
+                            <td><span class="badge">{{ e.status }}</span></td>
+                            <td>{{ e.verdict|default:"—" }}</td>
+                            <td><a href="{% url 'research_lab_results' experiment_id=e.id %}">View</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            <div class="chart-caption mono" style="margin-top:16px"><a href="{% url 'research_lab_history' %}">Full experiment history &rarr;</a></div>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="every number shown here comes from a deterministic Python research engine — see each experiment's report" %}
+
+{% endblock %}

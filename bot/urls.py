@@ -40,6 +40,14 @@ urlpatterns = [
     # curriculum grows past its first course.
     path('academy/', include('bot.academy.urls')),
 
+    # ---- RESEARCH LAB (MVP) ----
+    # claude code changed: new — same one-include-line pattern as Academy
+    # above. Deliberately 'research-lab/' (hyphen), distinct from the
+    # existing 'research/' path below (bot/views/research_lab.py's
+    # dashboard panel, a different, pre-existing feature with the same
+    # short name) — no route or name collision with it.
+    path('research-lab/', include('bot.research_lab.urls')),
+
     # ---- RESEARCH ----
     path('research/', research_lab, name='research_lab'),
     # compare/ and correlation/ must be registered before

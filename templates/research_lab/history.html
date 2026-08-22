@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Experiment History — Research Lab{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Experiment History</span>
+            <span class="term-section-meta">immutable research records</span>
+        </div>
+        <div class="term-section-body">
+            {% if experiments %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Hypothesis</th><th>Asset</th><th>Status</th><th>Verdict</th><th>Created</th><th></th></tr></thead>
+                    <tbody>
+                        {% for e in experiments %}
+                        <tr>
+                            <td>{{ e.hypothesis_text|truncatechars:60 }}</td>
+                            <td class="text-dim">{{ e.research_plan.spec.asset|default:"—" }}</td>
+                            <td><span class="badge">{{ e.status }}</span></td>
+                            <td>{{ e.verdict|default:"—" }}</td>
+                            <td class="text-dim">{{ e.created_at|date:"Y-m-d H:i" }}</td>
+                            <td><a href="{% url 'research_lab_results' experiment_id=e.id %}">View</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="chart-caption">No experiments yet — <a href="{% url 'research_lab_dashboard' %}">start one</a>.</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="rerunning creates a new experiment — records here are never overwritten" %}
+
+{% endblock %}

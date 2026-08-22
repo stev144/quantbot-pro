@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Results — Research Lab{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section academy-step-card" style="max-width:680px; margin:0 auto;">
+        <div class="term-section-head">
+            <span class="term-section-title">Evidence &amp; Verdict</span>
+            <span class="term-section-meta">{{ experiment.status }}</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption mono" style="margin-bottom:18px">"{{ experiment.hypothesis_text }}"</div>
+
+            {% if experiment.status != "COMPLETED" %}
+            <div class="term-message mono">This experiment is {{ experiment.status }}. {{ experiment.error_message }}</div>
+            {% else %}
+
+            <div class="chart-caption mono" style="margin-bottom:8px">Dataset</div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Asset</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Horizon</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.target.horizon }} candles</span></div>
+            </div>
+
+            <div class="chart-caption mono" style="margin-bottom:8px">Statistical Evidence</div>
+            {% if experiment.statistical_results %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono">{{ experiment.statistical_results.ic|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono">{{ experiment.statistical_results.block_permutation_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Sample Size</span><span class="term-stat-value mono">{{ experiment.statistical_results.sample_size }}</span></div>
+            </div>
+            {% if experiment.validation_results %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{{ experiment.validation_results.fdr_adjusted_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.validation_results.passes_fdr }}</span></div>
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="chart-caption mono" style="margin-bottom:18px">Not evaluated by this experiment.</div>
+            {% endif %}
+
+            {% if experiment.warnings %}
+            <div class="chart-caption mono" style="margin-bottom:8px">Warnings</div>
+            <ul class="mono" style="margin-bottom:18px">
+                {% for w in experiment.warnings %}<li>{{ w }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+
+            <div class="chart-caption mono" style="margin-bottom:8px">Verdict</div>
+            <h2 class="term-section-title" style="margin-bottom:10px">{{ experiment.verdict }}</h2>
+            {% if experiment.robustness_results.verdict_explanation %}
+            <ul class="mono" style="margin-bottom:18px">
+                {% for e in experiment.robustness_results.verdict_explanation %}<li>{{ e }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+
+            <div class="chart-caption mono" style="margin-bottom:8px">Explanation</div>
+            <div class="mono" style="margin-bottom:18px">{{ experiment.ai_interpretation }}</div>
+
+            <a href="{% url 'research_lab_report' experiment_id=experiment.id %}" class="term-btn mono">Full Reproducible Report</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="every metric above came from a deterministic Python research engine, never invented" %}
+
+{% endblock %}
