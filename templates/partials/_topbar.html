@@ -45,6 +45,15 @@
            {% if active == 'academy' %}aria-current="page"{% endif %}
            href="{% url 'academy_dashboard' %}">Academy</a>
 
+        {# claude code changed: new -- Research Lab MVP entry, same #}
+        {# single-<a> top-level pattern as Academy above. Named #}
+        {# 'research_lab_mvp' for the active-state check to avoid #}
+        {# colliding with the pre-existing 'research_lab' slug used by #}
+        {# the Research menu's dropdown item below. #}
+        <a class="term-nav-link {% if active == 'research_lab_mvp' %}active{% endif %}"
+           {% if active == 'research_lab_mvp' %}aria-current="page"{% endif %}
+           href="{% url 'research_lab_dashboard' %}">Research Lab</a>
+
         <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
             <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>
             <div class="term-nav-dropdown">

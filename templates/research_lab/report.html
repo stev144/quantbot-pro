@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Research Report — {{ experiment.id }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section academy-step-card" style="max-width:720px; margin:0 auto;">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Report</span>
+            <span class="term-section-meta mono">{{ experiment.id }}</span>
+        </div>
+        <div class="term-section-body mono">
+
+            <p><strong>Hypothesis:</strong> {{ experiment.hypothesis_text }}</p>
+            <p><strong>Formal specification:</strong> asset={{ experiment.research_plan.spec.asset }}, timeframe={{ experiment.research_plan.spec.timeframe }}, direction={{ experiment.research_plan.spec.direction|default:"unspecified" }}, horizon={{ experiment.research_plan.spec.target.horizon }} candles, features={{ experiment.research_plan.spec.features|join:", " }}</p>
+            <p><strong>Dataset:</strong> {{ experiment.research_plan.data_availability.checks|length }} data requirement(s) checked, all_available={{ experiment.research_plan.data_availability.all_available }}</p>
+
+            <p><strong>Statistical evidence:</strong></p>
+            <ul>
+                <li>IC: {{ experiment.statistical_results.ic|default:"not evaluated" }}</li>
+                <li>Block-permutation p-value: {{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</li>
+                <li>Sample size: {{ experiment.statistical_results.sample_size|default:"not evaluated" }}</li>
+                <li>FDR-adjusted p-value: {{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</li>
+                <li>Passes FDR: {{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</li>
+            </ul>
+
+            <p><strong>Limitations:</strong></p>
+            <ul>
+                {% for w in experiment.warnings %}<li>{{ w }}</li>{% empty %}<li>None recorded.</li>{% endfor %}
+                <li>Single-experiment result — no walk-forward or out-of-sample validation was run in this MVP pass.</li>
+            </ul>
+
+            <p><strong>Verdict:</strong> {{ experiment.verdict }} (criteria version {{ verdict_criteria_version }})</p>
+            <p><strong>Explanation:</strong> {{ experiment.ai_interpretation }}</p>
+
+            <p><strong>Code version:</strong> {{ experiment.code_version }}</p>
+            <p><strong>Random seed:</strong> {{ experiment.random_seed }}</p>
+            <p><strong>Experiment timestamps:</strong> created {{ experiment.created_at }}, started {{ experiment.started_at }}, completed {{ experiment.completed_at }}</p>
+            <p><strong>Research ID:</strong> {{ experiment.id }}</p>
+
+            {% if experiment.rerun_of %}<p><strong>Rerun of:</strong> <a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></p>{% endif %}
+
+            <details style="margin-top:20px">
+                <summary class="mono">Full tool call log ({{ experiment.tool_call_log|length }} calls)</summary>
+                <pre class="mono" style="white-space:pre-wrap; font-size:12px">{{ experiment.tool_call_log }}</pre>
+            </details>
+
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="reproducible — same code_version + random_seed will produce the same evidence" %}
+
+{% endblock %}

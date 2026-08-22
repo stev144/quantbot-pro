@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Research Plan — Research Lab{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section academy-step-card" style="max-width:640px; margin:0 auto;">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Plan</span>
+            <span class="term-section-meta">{{ experiment.status }}</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption mono" style="margin-bottom:18px">"{{ experiment.hypothesis_text }}"</div>
+
+            {% if experiment.status == "BLOCKED" %}
+            <div class="term-message error mono" style="margin-bottom:16px">
+                <strong>This request cannot run.</strong><br>{{ experiment.error_message }}
+            </div>
+            {% else %}
+
+            <div class="chart-caption mono">We will test</div>
+            <ul class="mono" style="margin:8px 0 18px">
+                <li>Dataset availability for {{ experiment.research_plan.spec.asset }}</li>
+                {% if experiment.research_plan.spec.features %}<li>Signal construction: {{ experiment.research_plan.spec.features|join:", " }}</li>{% endif %}
+                <li>Forward-return relationship over {{ experiment.research_plan.spec.target.horizon }} candles</li>
+                <li>Statistical significance (block-permutation test)</li>
+                <li>Multiple-testing (FDR) correction</li>
+            </ul>
+
+            <div class="chart-caption mono">Tools approved for this experiment</div>
+            <div style="margin:8px 0 18px">
+                {% for t in experiment.research_plan.policy_decision.allowed_tools %}
+                <span class="badge pos mono" style="margin-right:6px">{{ t }}</span>
+                {% endfor %}
+            </div>
+
+            {% if experiment.research_plan.policy_decision.requires_approval %}
+            <div class="term-message warn mono" style="margin-bottom:16px">This request uses MEDIUM-budget tools (real compute cost) — running it below is your explicit approval.</div>
+            {% endif %}
+
+            <form method="post">
+                {% csrf_token %}
+                <button type="submit" class="term-btn mono">Run Approved Research</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="nothing runs without a fail-closed policy-gate approval shown here" %}
+
+{% endblock %}
