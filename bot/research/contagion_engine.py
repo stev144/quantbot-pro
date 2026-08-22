@@ -198,6 +198,13 @@ FORWARD_HORIZONS: Dict[str, int] = {
 DIVERGENCE_WINSOR_LOWER: float = 0.01   # Bottom 1%
 DIVERGENCE_WINSOR_UPPER: float = 0.99   # Top 99%
 
+# claude code changed: new — Phase 1 remediation (Research Agent architecture
+# report finding). Minimum prior observations needed before an expanding-
+# window quantile is a stable clip boundary — same value and same rationale
+# as cross_section_engine.py's WINSOR_MIN_PERIODS, mirrored here for the
+# identical causal-winsorization fix applied below.
+DIVERGENCE_WINSOR_MIN_PERIODS: int = 1000
+
 # Minimum data required before the engine processes a symbol
 MIN_CANDLES: int = 500
 
@@ -262,6 +269,7 @@ class ContagionEngine:
         zscore_lookback:      int              = ZSCORE_LOOKBACK,
         zscore_min_periods:   int              = ZSCORE_MIN_PERIODS,
         forward_horizons:     Dict[str, int]   = None,
+        winsor_min_periods:   int              = DIVERGENCE_WINSOR_MIN_PERIODS,   # claude code changed: new — Phase 1 causal-winsorization fix
     ) -> None:
         """
         Initialise the engine with research configuration.
@@ -297,6 +305,7 @@ class ContagionEngine:
         self.zscore_lookback    = zscore_lookback
         self.zscore_min_periods = zscore_min_periods
         self.forward_horizons   = forward_horizons or FORWARD_HORIZONS
+        self.winsor_min_periods = winsor_min_periods   # claude code changed: new — Phase 1 causal-winsorization fix
 
         logger.info("ContagionEngine initialised")
         logger.info(f"  Hypothesis       : 7 — Cross-Asset Divergence Reversal")
@@ -732,6 +741,19 @@ class ContagionEngine:
 
         Winsorisation clips these extremes to the 1st/99th percentile,
         keeping the directional information while removing the extreme magnitude.
+
+        claude code changed: fixed a real look-ahead leakage bug found during
+        the Research Agent architecture study (Phase 1) — the original
+        implementation computed lower/upper clip bounds from
+        `alt_df[div_col].dropna().quantile(...)`, i.e. the ENTIRE column,
+        so row t's clip boundary was estimated using divergence values from
+        rows AFTER t. Identical shape to the bug already fixed in
+        cross_section_engine.py's `_winsorise_returns()` this session. Fixed
+        the same way: a causal expanding-window quantile, shifted by one row
+        so row t's boundary only ever sees rows [0..t-1], with early rows
+        (fewer than `winsor_min_periods` prior observations) kept at their
+        raw, unclipped value via `combine_first` rather than skipped
+        entirely — matching cross_section_engine.py's fallback exactly.
         """
 
         for window in self.divergence_windows:
@@ -741,18 +763,29 @@ class ContagionEngine:
             if div_col not in alt_df.columns:
                 continue
 
-            # Calculate clip boundaries from this feature's distribution
-            clean = alt_df[div_col].dropna()
-            if len(clean) < 100:   # Need minimum data for percentile calculation
-                continue
+            raw = alt_df[div_col]   # claude code changed: keep raw series for causal winsorization + fallback
 
-            lower = clean.quantile(DIVERGENCE_WINSOR_LOWER)
-            upper = clean.quantile(DIVERGENCE_WINSOR_UPPER)
+            # claude code changed: causal expanding-window bounds — shift(1)
+            # excludes row t itself, so the boundary used to clip row t is
+            # estimated only from strictly-prior rows, never future ones.
+            lower_bound = (
+                raw.expanding(min_periods=self.winsor_min_periods)
+                .quantile(DIVERGENCE_WINSOR_LOWER)
+                .shift(1)
+            )   # claude code changed: causal boundary, not whole-series quantile
+            upper_bound = (
+                raw.expanding(min_periods=self.winsor_min_periods)
+                .quantile(DIVERGENCE_WINSOR_UPPER)
+                .shift(1)
+            )   # claude code changed: causal boundary, not whole-series quantile
 
-            # Apply clip — preserves direction, limits magnitude
-            alt_df[div_col] = alt_df[div_col].clip(lower=lower, upper=upper)
+            # claude code changed: row-wise clip against each row's own
+            # causal boundary; rows with no boundary yet (not enough prior
+            # history) fall back to the raw, unclipped value.
+            winsorised = raw.clip(lower=lower_bound, upper=upper_bound)
+            alt_df[div_col] = winsorised.combine_first(raw)   # claude code changed: early rows keep raw value
 
-        logger.info(f"    {symbol}: divergence winsorised")
+        logger.info(f"    {symbol}: divergence winsorised (causal expanding window)")   # claude code changed: log message reflects the fix
 
         return alt_df
 
@@ -819,13 +852,27 @@ class ContagionEngine:
             )
 
             # Winsorise z-scores too — z > 5 or z < -5 are almost certainly errors
-            clean_z = alt_df[zscore_col].dropna()
-            if len(clean_z) > 100:
-                z_lower = clean_z.quantile(0.005)   # 0.5th percentile
-                z_upper = clean_z.quantile(0.995)   # 99.5th percentile
-                alt_df[zscore_col] = alt_df[zscore_col].clip(
-                    lower=z_lower, upper=z_upper
-                )
+            #
+            # claude code changed: fixed the same look-ahead leakage bug as
+            # _winsorise_divergence() above (Phase 1, Research Agent
+            # architecture study) — this used to compute z_lower/z_upper
+            # from `alt_df[zscore_col].dropna().quantile(...)`, the whole
+            # column, so early rows' clip bounds were estimated using future
+            # z-score values. Same causal expanding-window fix, same
+            # combine_first fallback for rows without enough prior history.
+            raw_z = alt_df[zscore_col]   # claude code changed: keep raw series for causal winsorization + fallback
+            z_lower_bound = (
+                raw_z.expanding(min_periods=self.winsor_min_periods)
+                .quantile(0.005)
+                .shift(1)
+            )   # claude code changed: causal boundary, not whole-series quantile
+            z_upper_bound = (
+                raw_z.expanding(min_periods=self.winsor_min_periods)
+                .quantile(0.995)
+                .shift(1)
+            )   # claude code changed: causal boundary, not whole-series quantile
+            winsorised_z = raw_z.clip(lower=z_lower_bound, upper=z_upper_bound)
+            alt_df[zscore_col] = winsorised_z.combine_first(raw_z)   # claude code changed: early rows keep raw value
 
         logger.info(
             f"    {symbol}: z-scores calculated "
