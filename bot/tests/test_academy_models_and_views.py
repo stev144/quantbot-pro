@@ -193,18 +193,83 @@ class AcademyViewFlowTest(TestCase):
             LessonProgress.objects.filter(student=self.user, lesson=self.lesson, status="completed").exists()
         )
 
-    def test_onboarding_creates_profile_and_redirects(self):
+    def _answer_data_for(self, question):
+        """Encodes an answer the same way onboarding_step.html's answer
+        cards would (index-string for scored choice questions, raw string/
+        list otherwise) — correct_index answers submitted correctly so
+        quant_level/research_level land on "advanced" for assertions below."""
+        if question["type"] == "boolean":
+            return {"value": "false"}
+        if question["type"] == "multi_choice":
+            return {"value": [question["choices"][0]]}
+        if "correct_index" in question:
+            return {"value": str(question["correct_index"])}
+        return {"value": question["choices"][0]}
+
+    def test_full_diagnostic_walkthrough_creates_profile_and_reaches_result(self):
+        from bot.academy.diagnostics import FLAT_DIAGNOSTIC_QUESTIONS
+
         self.client.login(username="student4", password="x")
-        response = self.client.post(reverse("academy_onboarding"), data={
-            "trading_experience__has_traded": "false",
-            "quantitative__quant_pvalue": "1",
-            "quantitative__quant_multiple_testing": "1",
-            "quantitative__quant_autocorrelation": "1",
-            "quantitative__quant_confidence_interval": "2",
-            "goals__primary_goal": "become_quant_researcher",
-        })
-        self.assertEqual(response.status_code, 302)
+        response = None
+        for step, question in enumerate(FLAT_DIAGNOSTIC_QUESTIONS, start=1):
+            response = self.client.post(
+                reverse("academy_onboarding_step", kwargs={"step": step}),
+                data=self._answer_data_for(question),
+            )
+            self.assertEqual(response.status_code, 302)
+
+        self.assertEqual(response.url, reverse("academy_onboarding_result"))
+
+        # Visiting the result page is what actually finalizes scoring
+        # (finish_onboarding_if_ready) — the last step's redirect target
+        # alone doesn't create the StudentProfile.
+        result_response = self.client.get(reverse("academy_onboarding_result"))
+        self.assertEqual(result_response.status_code, 200)
+
         profile = StudentProfile.objects.get(student=self.user)
         self.assertIsNotNone(profile.onboarding_completed_at)
-        self.assertEqual(profile.primary_goal, "become_quant_researcher")
         self.assertEqual(profile.quant_level, "advanced")  # all 4 quant answers correct
+        self.assertEqual(profile.research_level, "advanced")  # all 4 research answers correct
+
+    def test_answering_a_step_advances_to_the_next_one(self):
+        from bot.academy.diagnostics import FLAT_DIAGNOSTIC_QUESTIONS
+
+        self.client.login(username="student4", password="x")
+        response = self.client.post(
+            reverse("academy_onboarding_step", kwargs={"step": 1}),
+            data=self._answer_data_for(FLAT_DIAGNOSTIC_QUESTIONS[0]),
+        )
+        self.assertRedirects(response, reverse("academy_onboarding_step", kwargs={"step": 2}))
+
+    def test_empty_submission_re_renders_same_step_with_error(self):
+        self.client.login(username="student4", password="x")
+        response = self.client.post(reverse("academy_onboarding_step", kwargs={"step": 1}), data={})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Please choose an answer")
+
+    def test_result_page_redirects_to_first_unanswered_step_if_incomplete(self):
+        from bot.academy.diagnostics import FLAT_DIAGNOSTIC_QUESTIONS
+
+        self.client.login(username="student4", password="x")
+        self.client.post(
+            reverse("academy_onboarding_step", kwargs={"step": 1}),
+            data=self._answer_data_for(FLAT_DIAGNOSTIC_QUESTIONS[0]),
+        )
+        response = self.client.get(reverse("academy_onboarding_result"))
+        self.assertRedirects(response, reverse("academy_onboarding_step", kwargs={"step": 2}))
+
+    def test_onboarding_entry_point_resumes_at_first_unanswered_step(self):
+        from bot.academy.diagnostics import FLAT_DIAGNOSTIC_QUESTIONS
+
+        self.client.login(username="student4", password="x")
+        self.client.post(
+            reverse("academy_onboarding_step", kwargs={"step": 1}),
+            data=self._answer_data_for(FLAT_DIAGNOSTIC_QUESTIONS[0]),
+        )
+        response = self.client.get(reverse("academy_onboarding"))
+        self.assertRedirects(response, reverse("academy_onboarding_step", kwargs={"step": 2}))
+
+    def test_onboarding_step_requires_login(self):
+        response = self.client.get(reverse("academy_onboarding_step", kwargs={"step": 1}))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login/", response.url)

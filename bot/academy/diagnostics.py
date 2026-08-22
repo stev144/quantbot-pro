@@ -105,6 +105,23 @@ DIAGNOSTIC_QUESTIONS: Dict[str, List[dict]] = {
 
 
 # ─────────────────────────────────────────────────────────────
+# FLATTENED QUESTION ORDER
+# claude code changed: new — one-question-at-a-time onboarding UI (Academy
+# UX/UI transformation, Phase B) needs a single stable ordering across all
+# categories instead of DIAGNOSTIC_QUESTIONS' category-grouped dict. Each
+# entry carries its own "category" so downstream saving/scoring keeps
+# working exactly as before — this is a display-order view over the same
+# data, not a second copy of it.
+# ─────────────────────────────────────────────────────────────
+
+FLAT_DIAGNOSTIC_QUESTIONS: List[dict] = [
+    {**question, "category": category}
+    for category, questions in DIAGNOSTIC_QUESTIONS.items()
+    for question in questions
+]
+
+
+# ─────────────────────────────────────────────────────────────
 # SCORING
 # ─────────────────────────────────────────────────────────────
 

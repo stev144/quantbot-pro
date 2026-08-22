@@ -1,0 +1,152 @@
+/* claude code changed: new — Academy-scoped design layer (UX/UI
+ * transformation, Phase B). Deliberately kept out of terminal.css: that
+ * file's own header states "no gradients, no glassmorphism, no
+ * decorative animation" as a platform-wide, explicit prior decision.
+ * This file only ever gets loaded on Academy pages, so the glass-card /
+ * gradient / teal+purple language it introduces stays scoped to the
+ * Academy rather than reopening that decision for the rest of the
+ * platform (dashboard, research pages, etc.).
+ *
+ * Colors are new local tokens, not overrides of terminal.css's --accent
+ * etc. — terminal.css has no teal/purple token at all, so there is
+ * nothing to conflict with. Every rule below only sets background/
+ * border/shadow/animation; text color is left to inherit from
+ * terminal.css's existing cascade so Academy pages stay legible across
+ * all 5 platform themes without per-theme overrides.
+ */
+
+:root {
+  --academy-teal: #2dd4bf;
+  --academy-teal-dim: rgba(45, 212, 191, 0.14);
+  --academy-purple: #8b5cf6;
+  --academy-purple-dim: rgba(139, 92, 246, 0.14);
+  --academy-gold: #f0b90b;
+}
+
+.academy-step-card {
+  background: linear-gradient(135deg, var(--academy-teal-dim), var(--academy-purple-dim));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  backdrop-filter: blur(6px);
+}
+
+@keyframes academyFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.academy-step-card {
+  animation: academyFadeIn 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .academy-step-card {
+    animation: none;
+  }
+}
+
+/* Progress bar */
+
+.academy-progress-bar-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.academy-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--academy-teal), var(--academy-purple));
+  transition: width 300ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .academy-progress-bar-fill {
+    transition: none;
+  }
+}
+
+/* Answer cards — real <button>/<label> elements, not divs, so keyboard
+ * navigation and screen readers get this for free (section 13). Large
+ * touch targets (16px vertical padding, full-width) for mobile. */
+
+.academy-answer-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 10px;
+  font-size: 15px;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 100ms ease;
+}
+
+.academy-answer-card:hover {
+  border-color: var(--academy-teal);
+  background: var(--academy-teal-dim);
+}
+
+.academy-answer-card:focus-visible {
+  outline: none;
+  border-color: var(--academy-teal);
+  box-shadow: 0 0 0 2px var(--academy-teal);
+}
+
+.academy-answer-card:active {
+  transform: scale(0.99);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .academy-answer-card {
+    transition: none;
+  }
+  .academy-answer-card:active {
+    transform: none;
+  }
+}
+
+/* Result page — profile level bars */
+
+.academy-level-row {
+  margin-bottom: 16px;
+}
+
+.academy-level-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.academy-level-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--academy-teal), var(--academy-purple));
+  transition: width 500ms ease;
+  width: 0%;
+}
+
+.academy-level-fill.beginner { width: 33%; }
+.academy-level-fill.intermediate { width: 66%; }
+.academy-level-fill.advanced { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .academy-level-fill {
+    transition: none;
+  }
+}
+
+/* Mobile — answer cards get even larger tap targets on narrow screens,
+ * and font-size stays >=16px so iOS Safari doesn't auto-zoom on focus. */
+
+@media (max-width: 480px) {
+  .academy-answer-card {
+    padding: 18px 16px;
+    font-size: 16px;
+  }
+}
