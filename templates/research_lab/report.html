@@ -33,7 +33,8 @@
                 <li>Target: cointegration / spread stationarity (no forward-return horizon — see spec.py's validate_spec())</li>
                 {% else %}
                 <li>Target: forward return</li>
-                <li>Horizon: {{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h)</li>
+                {# claude code changed: Multi-Asset Foundation Refactor STEP 3 — was a literal "hours, timeframe=1h" regardless of the spec's actual timeframe #}
+                <li>Horizon: {{ experiment.research_plan.spec.target.horizon }} candles{% if experiment.research_plan.spec.timeframe == "1h" %} ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
                 {% endif %}
                 <li>Expected direction: {{ experiment.research_plan.spec.direction|default:"unspecified" }}</li>
             </ul>

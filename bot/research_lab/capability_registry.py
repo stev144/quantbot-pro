@@ -85,6 +85,20 @@ class ResearchCapability:
     ui_visible: bool = True      # section 10/11 — capabilities are visible-but-locked by design; False is reserved for something not yet announced at all
     status_note: str = ""        # short, honest, user-facing reason for the current engine_status — shown verbatim in the "temporarily unavailable" UI state
     compute_budget: Dict = field(default_factory=dict)   # section 13 — capability-specific limits, enforced by policy_gate.py, never removed by subscription tier
+    # claude code changed: new — Multi-Asset Foundation Refactor STEP 9.
+    # Which asset classes this SPECIFIC capability actually works for —
+    # deliberately per-capability, not a platform-wide flag, since a
+    # future capability could plausibly reach CRYPTO+US_EQUITY before
+    # FOREX (or never reach one at all) independently of any other
+    # capability's own readiness. Defaults to CRYPTO-only for every entry
+    # below because that is, honestly, the only asset class any backing
+    # engine in this registry has ever been run against — not a forecast
+    # of future readiness, a statement of current fact. Not yet consulted
+    # by entitlements.py/can_access() this phase (section 14 of the
+    # refactor brief: prepare the boundary, don't wire enforcement that
+    # has nothing real to enforce yet — every capability supports exactly
+    # the same one asset class today, so gating on it would be a no-op).
+    supported_asset_classes: List[str] = field(default_factory=lambda: ["CRYPTO"])
 
     @property
     def operationally_ready(self) -> bool:

@@ -14,13 +14,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List
 
-from bot.fetch_all_symbols import symbol_to_filename  # claude code changed: reuse, section 25 — same symbol->filename convention as the real fetch pipeline
+from bot.instruments import UnknownInstrumentError, get_instrument, resolve_ohlcv_path  # claude code changed: Multi-Asset Foundation Refactor STEP 2 — was symbol_to_filename() called directly here, a second independent copy of the same provider-path convention tools/_data.py also had (see bot/instruments.py's module docstring)
 from bot.research_lab.spec import ResearchSpec, DERIVABLE_FROM_OHLCV  # claude code changed: DERIVABLE_FROM_OHLCV moved to spec.py — single source, see that module's docstring for why (it used to drift independently from tools/statistical_tools.py's own copy)
-
-DATA_DIR = "data"
 
 # claude code changed: new — real, honest examples of data sources this
 # platform does NOT ingest anywhere (confirmed via the Research Agent
@@ -33,11 +30,37 @@ KNOWN_UNAVAILABLE_SOURCES = {
 }
 
 
+# claude code changed: new — Multi-Asset Foundation Refactor STEP 6. The
+# explicit five-state taxonomy the refactor brief's section 7 asked for.
+# AVAILABLE/UNAVAILABLE existed implicitly as the `available` bool before;
+# these three states didn't exist as anything a caller could distinguish:
+#   REQUIRES_DATASET     — the instrument/data IS the right kind, just not
+#                           fetched yet (run fetch_all_symbols.py and it's
+#                           solved — a temporary, actionable gap)
+#   REQUIRES_ASSET_CLASS — the instrument belongs to an asset class this
+#                           platform has never ingested any data for at all
+#                           (US_EQUITY/FOREX today — an architectural gap,
+#                           not a "just fetch it" gap)
+#   REQUIRES_PROVIDER    — the feature is a genuinely different kind of
+#                           data (funding_rate, open_interest) that no
+#                           OHLCV re-fetch would ever produce — needs a new
+#                           provider integration, not more of the same one
+# `available` (bool) is kept as-is alongside `status` — every existing
+# reader of `.available`/`all_available` keeps working unchanged; `status`
+# is additive richness, not a replacement.
+AVAILABLE = "AVAILABLE"
+UNAVAILABLE = "UNAVAILABLE"
+REQUIRES_PROVIDER = "REQUIRES_PROVIDER"
+REQUIRES_ASSET_CLASS = "REQUIRES_ASSET_CLASS"
+REQUIRES_DATASET = "REQUIRES_DATASET"
+
+
 @dataclass
 class DataRequirementCheck:
     name: str
     available: bool
     reason: str
+    status: str = AVAILABLE  # claude code changed: new field, see taxonomy above — defaults to AVAILABLE only as a dataclass default; every real construction site below sets it explicitly
 
 
 @dataclass
@@ -48,12 +71,40 @@ class DataAvailabilityReport:
     def to_dict(self) -> dict:
         return {
             "all_available": self.all_available,
-            "checks": [{"name": c.name, "available": c.available, "reason": c.reason} for c in self.checks],
+            "checks": [{"name": c.name, "available": c.available, "reason": c.reason, "status": c.status} for c in self.checks],
         }
 
 
-def _ohlcv_path(asset: str) -> Path:
-    return Path(DATA_DIR) / symbol_to_filename(asset)  # claude code changed: symbol_to_filename() already returns the full "BTC_USDT_1h.csv" name — no extra suffix needed
+def _ohlcv_check(asset: str) -> DataRequirementCheck:
+    """
+    claude code changed: Multi-Asset Foundation Refactor STEP 2/6. Was
+    `_ohlcv_path()` returning a bare Path this function's caller then
+    called `.exists()` on directly. Now routes through
+    bot.instruments.resolve_ohlcv_path() (the single provider-path
+    boundary, see that module) and turns its two distinct failure modes
+    into the right status rather than letting either propagate as a raw
+    exception — this function must always return a check, never raise.
+    """
+    try:
+        path = resolve_ohlcv_path(asset)
+    except UnknownInstrumentError as exc:
+        # claude code changed: distinguish "wrong asset class, no data
+        # source exists at all for it" from "not a real instrument" —
+        # resolve_ohlcv_path's message already says which; in practice
+        # this branch is unreachable for a spec that already passed
+        # validate_spec() (asset is checked against the supported
+        # universe first), but this function must degrade honestly rather
+        # than crash if that invariant is ever violated by a future caller.
+        instrument = get_instrument(asset)
+        status = REQUIRES_ASSET_CLASS if instrument is not None else UNAVAILABLE
+        return DataRequirementCheck(name=f"ohlcv:{asset}", available=False, reason=str(exc), status=status)
+
+    if path.exists():
+        return DataRequirementCheck(name=f"ohlcv:{asset}", available=True, reason=f"found {path}", status=AVAILABLE)
+    return DataRequirementCheck(
+        name=f"ohlcv:{asset}", available=False,
+        reason=f"no OHLCV file at {path} — run fetch_all_symbols.py", status=REQUIRES_DATASET,
+    )
 
 
 def check_data_availability(spec: ResearchSpec) -> DataAvailabilityReport:
@@ -65,25 +116,15 @@ def check_data_availability(spec: ResearchSpec) -> DataAvailabilityReport:
     """
     checks: List[DataRequirementCheck] = []
 
-    ohlcv_path = _ohlcv_path(spec.asset)
-    ohlcv_available = ohlcv_path.exists()
-    checks.append(DataRequirementCheck(
-        name=f"ohlcv:{spec.asset}",
-        available=ohlcv_available,
-        reason=f"found {ohlcv_path}" if ohlcv_available else f"no OHLCV file at {ohlcv_path} — run fetch_all_symbols.py",
-    ))
+    ohlcv_check = _ohlcv_check(spec.asset)
+    checks.append(ohlcv_check)
+    ohlcv_available = ohlcv_check.available
 
     # claude code changed: new — Advanced Quant Research Capability
     # Architecture. A pairs hypothesis needs TWO OHLCV files, not one —
     # cointegration testing is meaningless with only asset's own history.
     if spec.hypothesis_type == "pairs" and spec.asset_b:
-        ohlcv_b_path = _ohlcv_path(spec.asset_b)
-        ohlcv_b_available = ohlcv_b_path.exists()
-        checks.append(DataRequirementCheck(
-            name=f"ohlcv:{spec.asset_b}",
-            available=ohlcv_b_available,
-            reason=f"found {ohlcv_b_path}" if ohlcv_b_available else f"no OHLCV file at {ohlcv_b_path} — run fetch_all_symbols.py",
-        ))
+        checks.append(_ohlcv_check(spec.asset_b))
 
     # claude code changed: new — for a conditional hypothesis, the feature
     # under test lives inside spec.conditions, not spec.features. Checking
@@ -98,17 +139,20 @@ def check_data_availability(spec: ResearchSpec) -> DataAvailabilityReport:
             checks.append(DataRequirementCheck(
                 name=feature_name, available=False,
                 reason=f"'{feature_name}' is not ingested anywhere on this platform — no substitute dataset will be used",
+                status=REQUIRES_PROVIDER,
             ))
         elif feature_name in DERIVABLE_FROM_OHLCV:
             checks.append(DataRequirementCheck(
                 name=feature_name, available=ohlcv_available,
                 reason="derivable from OHLCV via feature_calculator.py" if ohlcv_available
                 else "derivable from OHLCV, but the underlying OHLCV file is missing",
+                status=AVAILABLE if ohlcv_available else REQUIRES_DATASET,
             ))
         else:
             checks.append(DataRequirementCheck(
                 name=feature_name, available=False,
                 reason=f"'{feature_name}' is not a recognized feature this platform can calculate",
+                status=UNAVAILABLE,
             ))
 
     return DataAvailabilityReport(

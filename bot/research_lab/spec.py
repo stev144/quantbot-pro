@@ -33,6 +33,21 @@
 # failed deep inside a tool call). Both now live here, once, as the
 # schema's own authoritative domain constants; every other module imports
 # them from this file.
+#
+# claude code changed: Multi-Asset Foundation Refactor, STEP 3/5.
+# SUPPORTED_ASSETS/SUPPORTED_TIMEFRAMES are now DERIVED from
+# bot/instruments.py's instrument registry instead of importing
+# fetch_all_symbols.SYMBOLS/INTERVAL directly — same 20 symbols, same "1h"
+# timeframe, byte-for-byte identical values today, but the source of truth
+# is now the one place that also knows each instrument's asset_class,
+# rather than a bare list with no asset-class dimension at all. Horizon
+# support is now a function of timeframe (available_horizons_for_timeframe,
+# below) rather than one hardcoded platform-wide dict — the exact
+# "represent horizons as capabilities of the current dataset, not
+# immutable platform constants" requirement the refactor brief's section 5
+# describes. Behavior is unchanged (still only "1h" -> the same 3
+# horizons) because that is still, honestly, the only real dataset this
+# platform has.
 # ============================================================
 
 from __future__ import annotations
@@ -40,15 +55,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from bot.fetch_all_symbols import SYMBOLS, INTERVAL  # claude code changed: reuse the canonical symbol universe/interval, section 25 — never a second copy
+from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASSES, get_instrument, list_instruments, symbols_for_asset_class
 
 # claude code changed: this platform has exactly one native candle interval
-# (fetch_all_symbols.py's INTERVAL='1h') — SUPPORTED_TIMEFRAMES is a list of
-# one on purpose, not an oversight. A hypothesis naming a different
-# timeframe is a real, honest INSUFFICIENT_DATA case, not something to
-# silently coerce to 1h.
-SUPPORTED_TIMEFRAMES = [INTERVAL]
-SUPPORTED_ASSETS = list(SYMBOLS)
+# today (every CRYPTO instrument in the registry is "1h") —
+# SUPPORTED_TIMEFRAMES is a list of one on purpose, not an oversight. A
+# hypothesis naming a different timeframe is a real, honest
+# INSUFFICIENT_DATA case, not something to silently coerce to 1h.
+SUPPORTED_TIMEFRAMES = sorted({i.timeframe for i in list_instruments(ASSET_CLASS_CRYPTO) if i.timeframe})
+SUPPORTED_ASSETS = symbols_for_asset_class(ASSET_CLASS_CRYPTO)
 
 SUPPORTED_TARGET_TYPES = ["forward_return"]  # claude code changed: the only label type every tool in the Tool Layer (§08) can score against today
 
@@ -59,6 +74,24 @@ SUPPORTED_TARGET_TYPES = ["forward_return"]  # claude code changed: the only lab
 # honest limit of the platform, and must be rejected at validation time,
 # not discovered only after a tool call fails.
 SUPPORTED_HORIZONS = {1: "forward_return_1h", 4: "forward_return_4h", 24: "forward_return_24h"}
+
+# claude code changed: new — Multi-Asset Foundation Refactor STEP 3. Which
+# horizons are available is a property of a TIMEFRAME's own labeling
+# capability (what feature_calculator.py can actually produce for candles
+# at that resolution), not a bare platform-wide constant. Today there is
+# only one timeframe, so this has exactly one entry — but the shape now
+# correctly says "1h candles support these horizons" rather than "the
+# platform supports these horizons forever," which is what SUPPORTED_HORIZONS
+# on its own actually claimed before this fix.
+HORIZONS_BY_TIMEFRAME: Dict[str, Dict[int, str]] = {"1h": SUPPORTED_HORIZONS}
+
+
+def available_horizons_for_timeframe(timeframe: Optional[str]) -> Dict[int, str]:
+    """claude code changed: new. The capability lookup validate_spec() and
+    the Tool Layer should use instead of assuming SUPPORTED_HORIZONS
+    applies to every timeframe — an unrecognized timeframe honestly has no
+    available horizons (empty dict), not a silent fallback to 1h's set."""
+    return HORIZONS_BY_TIMEFRAME.get(timeframe, {})
 
 # claude code changed: moved from data_availability.py (single source now).
 # The exact, real output columns bot/research/feature_calculator.py
@@ -91,6 +124,17 @@ RISK_TIERS = ["LOW", "MEDIUM", "HIGH"]
 # entitlements.py. Advanced Quant Research Capability Architecture.
 HYPOTHESIS_TYPES = ["feature", "conditional", "pairs"]
 
+# claude code changed: new — Multi-Asset Foundation Refactor STEP 10. A
+# controlled, closed representation of how many instruments a piece of
+# research actually touches — section 10 of the refactor brief: "prevent
+# the current single-asset assumption from becoming embedded throughout
+# the architecture." Deliberately NOT a field a caller sets independently
+# of hypothesis_type (that would let the two disagree — a spec claiming
+# research_scope=CROSS_SECTIONAL while hypothesis_type=="feature" would be
+# a second, inconsistent source of truth for the same fact). See
+# ResearchSpec.research_scope below — it's computed, not stored.
+RESEARCH_SCOPES = ["SINGLE_ASSET", "PAIR", "CROSS_SECTIONAL", "PORTFOLIO", "NETWORK"]
+
 # claude code changed: new — the only condition operators the interpreter
 # and the conditional-test tool agree to support in this pass. A relative
 # condition ("volume > average") is deliberately NOT expressible here —
@@ -103,7 +147,7 @@ CONDITION_OPERATORS = ["<", "<=", ">", ">="]
 # "If the AI cannot confidently determine an important field, it must
 # explicitly mark the field as ambiguous rather than inventing it." A field
 # name outside this set can never be marked ambiguous (typo-proofing).
-SPEC_FIELDS = ["asset", "asset_b", "timeframe", "direction", "target", "features", "conditions", "hypothesis_type"]  # claude code changed: +asset_b — Advanced Quant Research Capability Architecture, pairs hypotheses
+SPEC_FIELDS = ["asset", "asset_b", "asset_class", "timeframe", "direction", "target", "features", "conditions", "hypothesis_type"]  # claude code changed: +asset_b — Advanced Quant Research Capability Architecture, pairs hypotheses; +asset_class — Multi-Asset Foundation Refactor STEP 5
 
 
 @dataclass
@@ -119,6 +163,15 @@ class ResearchSpec:
 
     asset: Optional[str] = None
     asset_b: Optional[str] = None  # claude code changed: new — Advanced Quant Research Capability Architecture. Only meaningful when hypothesis_type=="pairs"; a pair is exactly (asset, asset_b)
+    # claude code changed: new — Multi-Asset Foundation Refactor STEP 5.
+    # Optional and independent of `asset` on purpose: this lets a future AI
+    # interpreter declare "the student wants FOREX research" before any
+    # specific instrument is even confirmed (section 15 of the refactor
+    # brief's future-AI-input-context requirement), without forcing every
+    # existing single-asset spec to start setting it. See
+    # `resolved_asset_class` below for the value actually trusted once
+    # `asset` is known — this field is intent, that property is fact.
+    asset_class: Optional[str] = None
     timeframe: Optional[str] = None
     hypothesis_type: str = "feature"  # claude code changed: new — "feature" | "conditional", see module docstring
     features: List[str] = field(default_factory=list)
@@ -139,11 +192,50 @@ class ResearchSpec:
     # not evidence the field was actually understood).
     ambiguous_fields: List[str] = field(default_factory=list)
 
+    @property
+    def resolved_asset_class(self) -> Optional[str]:
+        """
+        claude code changed: new — Multi-Asset Foundation Refactor STEP 5.
+        The AUTHORITATIVE asset class, looked up from the instrument
+        registry for `self.asset` — never trusted from the caller-settable
+        `asset_class` field when the two could disagree. Falls back to the
+        explicitly-declared `asset_class` only when `asset` isn't (yet, or
+        never will be) a registered instrument — e.g. during interpreter
+        suggestion, before a specific symbol is confirmed.
+        """
+        if self.asset:
+            instrument = get_instrument(self.asset)
+            if instrument is not None:
+                return instrument.asset_class
+        return self.asset_class
+
+    @property
+    def research_scope(self) -> str:
+        """claude code changed: new — Multi-Asset Foundation Refactor STEP
+        10. Computed from hypothesis_type, never independently settable
+        (see RESEARCH_SCOPES' own comment for why). Every experiment that
+        predates this field implicitly returns SINGLE_ASSET, exactly as
+        the refactor brief's section 10 requires."""
+        if self.hypothesis_type == "pairs":
+            return "PAIR"
+        return "SINGLE_ASSET"
+
+    @property
+    def instruments(self) -> List[str]:
+        """claude code changed: new — the canonical symbols this spec
+        actually touches, regardless of hypothesis_type. [asset] for a
+        single-asset/conditional spec, [asset, asset_b] for a pairs spec.
+        A future CROSS_SECTIONAL/PORTFOLIO hypothesis_type would extend
+        this list without any existing caller needing to change how it
+        asks "which instruments does this spec need data for.\""""
+        return [s for s in (self.asset, self.asset_b) if s]
+
     def to_dict(self) -> Dict:
         return {
             "hypothesis_text": self.hypothesis_text,
             "asset": self.asset,
             "asset_b": self.asset_b,
+            "asset_class": self.asset_class,
             "timeframe": self.timeframe,
             "hypothesis_type": self.hypothesis_type,
             "features": list(self.features),
@@ -162,6 +254,7 @@ class ResearchSpec:
             hypothesis_text=data.get("hypothesis_text", ""),
             asset=data.get("asset"),
             asset_b=data.get("asset_b"),
+            asset_class=data.get("asset_class"),
             timeframe=data.get("timeframe"),
             hypothesis_type=data.get("hypothesis_type", "feature"),
             features=list(data.get("features", [])),
@@ -208,6 +301,25 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
         elif spec.asset not in SUPPORTED_ASSETS:
             errors.append(f"asset '{spec.asset}' is not in the supported universe ({len(SUPPORTED_ASSETS)} symbols)")
 
+    # claude code changed: new — Multi-Asset Foundation Refactor STEP 5.
+    # asset_class is optional (None is valid — it means "infer from asset",
+    # which is what every spec predating this field implicitly does). When
+    # it IS set, it must be a real asset class, and if `asset` already
+    # resolves to a known instrument, the two must agree — this is the one
+    # place a future AI-declared "I want FOREX research" could disagree
+    # with an actually-picked crypto symbol, and that disagreement must be
+    # a validation error, not silently resolved in either direction.
+    if "asset_class" not in unresolved and spec.asset_class is not None:
+        if spec.asset_class not in ASSET_CLASSES:
+            errors.append(f"asset_class '{spec.asset_class}' must be one of {ASSET_CLASSES}")
+        elif spec.asset:
+            instrument = get_instrument(spec.asset)
+            if instrument is not None and instrument.asset_class != spec.asset_class:
+                errors.append(
+                    f"asset_class '{spec.asset_class}' does not match asset '{spec.asset}', "
+                    f"which is {instrument.asset_class}"
+                )
+
     if "timeframe" not in unresolved:
         if not spec.timeframe:
             errors.append("timeframe is required")
@@ -238,16 +350,27 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
             errors.append("target.horizon is required")
         elif not isinstance(horizon, int) or horizon <= 0:
             errors.append("target.horizon must be a positive integer (candles)")
-        # claude code changed: new — real horizon-set validation, was
-        # missing entirely (Bug 4). This is now checked at the SAME point
-        # tools/statistical_tools.py enforces it — a horizon that would
-        # fail at execution time now fails here instead, before the user
-        # ever sees a Research Plan screen.
-        elif horizon not in SUPPORTED_HORIZONS:
-            errors.append(
-                f"target.horizon={horizon} is not a supported horizon — only "
-                f"{sorted(SUPPORTED_HORIZONS)} candles are available as labels"
-            )
+        else:
+            # claude code changed: real horizon-set validation, was missing
+            # entirely (Bug 4). This is now checked at the SAME point
+            # tools/statistical_tools.py enforces it — a horizon that would
+            # fail at execution time now fails here instead, before the
+            # user ever sees a Research Plan screen.
+            #
+            # claude code changed: Multi-Asset Foundation Refactor STEP 3
+            # — now looked up per spec.timeframe via
+            # available_horizons_for_timeframe() instead of testing
+            # membership in the bare SUPPORTED_HORIZONS constant. Identical
+            # behavior today (spec.timeframe can only be "1h", which maps
+            # to exactly the same dict) — but a horizon is now honestly
+            # validated as "available for THIS timeframe," not "available
+            # on the platform, forever, regardless of timeframe."
+            horizons = available_horizons_for_timeframe(spec.timeframe)
+            if horizon not in horizons:
+                errors.append(
+                    f"target.horizon={horizon} is not a supported horizon for timeframe '{spec.timeframe}' — only "
+                    f"{sorted(horizons)} candles are available as labels"
+                )
 
     # claude code changed: new — Advanced Quant Research Capability
     # Architecture. asset_b is only meaningful (and only required) for a

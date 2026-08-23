@@ -124,7 +124,8 @@
                 <select name="horizon" class="term-input mono" style="margin-bottom:8px">
                     <option value="">—</option>
                     {% for h in supported_horizons %}
-                    <option value="{{ h }}" {% if spec.target.horizon == h %}selected{% endif %}>{{ h }} candles ({{ h }} hours, timeframe=1h)</option>
+                    {# claude code changed: Multi-Asset Foundation Refactor STEP 3 — was a literal "hours, timeframe=1h" regardless of spec.timeframe's actual value; now reads the confirmed timeframe instead of assuming it #}
+                    <option value="{{ h }}" {% if spec.target.horizon == h %}selected{% endif %}>{{ h }} candles{% if spec.timeframe == "1h" %} ({{ h }} hours, timeframe=1h){% else %} (timeframe={{ spec.timeframe|default:"unconfirmed" }}){% endif %}</option>
                     {% endfor %}
                 </select>
                 <div class="chart-caption mono" style="margin-bottom:16px">Only these horizons are supported — feature_calculator.py doesn't produce forward-return labels for any other value.</div>

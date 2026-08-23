@@ -31,7 +31,8 @@
                 {% else %}
                 {% if experiment.research_plan.spec.features %}<li>Feature (continuous): {{ experiment.research_plan.spec.features|join:", " }}</li>{% endif %}
                 {% endif %}
-                <li>Forward-return relationship over {{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h)</li>
+                {# claude code changed: Multi-Asset Foundation Refactor STEP 3 — was a literal "hours, timeframe=1h" regardless of the spec's actual timeframe #}
+                <li>Forward-return relationship over {{ experiment.research_plan.spec.target.horizon }} candles{% if experiment.research_plan.spec.timeframe == "1h" %} ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
                 <li>Statistical significance (block-permutation test)</li>
                 {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
                 <li class="text-dim">No FDR correction applies to conditional/event tests in this pass — known limitation</li>
