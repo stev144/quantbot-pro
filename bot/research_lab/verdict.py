@@ -247,12 +247,24 @@ def compute_verdict_pairs(cointegration_test: Optional[Dict]) -> VerdictResult:
         return VerdictResult("INVALID_RESEARCH", [cointegration_test.get("reject_reason")])
 
     coint_p = cointegration_test.get("coint_pvalue")
-    half_life = cointegration_test.get("half_life_hours")
+    # claude code changed: Multi-Asset Foundation Refactor Phase 1B,
+    # Objective 2. Was `half_life_hours` — a value only ever actually
+    # correct in hours because every dataset this engine has run on so
+    # far happened to be 1h candles. Prefers the new, honestly
+    # timeframe-aware half_life_time/half_life_time_unit
+    # (cointegration_engine.py's PairResult); falls back to the old key
+    # only for pre-Phase-1B evidence dicts that predate this fix (e.g. a
+    # hand-built test fixture), so this function keeps working either way.
+    half_life_time = cointegration_test.get("half_life_time")
+    half_life_unit = cointegration_test.get("half_life_time_unit")
+    if half_life_time is None:
+        half_life_time = cointegration_test.get("half_life_hours")
+        half_life_unit = "hours"
     is_cointegrated = bool(cointegration_test.get("is_cointegrated"))
     passes_filters = bool(cointegration_test.get("passes_filters"))
 
     explanation.append(
-        f"coint_pvalue={coint_p}, half_life={half_life}h, "
+        f"coint_pvalue={coint_p}, half_life={half_life_time} {half_life_unit}, "
         f"is_cointegrated={is_cointegrated}, passes_filters={passes_filters}"
         + (f" ({cointegration_test.get('reject_reason')})" if cointegration_test.get("reject_reason") else "")
     )

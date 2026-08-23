@@ -144,7 +144,13 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
 
     df = load_ohlcv(asset)
     calc = FeatureCalculator(min_data_required=100)
-    enriched = calc.calculate_all_features(df, symbol=asset)
+    # claude code changed: Multi-Asset Foundation Refactor Phase 1B — was
+    # relying on calculate_all_features()'s "1h" default; now reads the
+    # loaded data's real timeframe explicitly (see dataset_tools.py's
+    # calculate_feature() for the identical fix and its rationale).
+    instrument = df.attrs.get("instrument")
+    timeframe = instrument.timeframe if instrument else "1h"
+    enriched = calc.calculate_all_features(df, symbol=asset, timeframe=timeframe)
 
     if feature_name not in enriched.columns:
         raise ValueError(f"'{feature_name}' is not a column feature_calculator.py produced")

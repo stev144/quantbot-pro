@@ -26,10 +26,33 @@ def run_cointegration_test(asset_a: str, asset_b: str) -> dict:
     method the full universe scan calls per pair, just for the one pair
     this hypothesis names, never the full O(n^2) universe sweep.
     """
-    price_a = load_ohlcv(asset_a)["close"]
-    price_b = load_ohlcv(asset_b)["close"]
+    df_a = load_ohlcv(asset_a)
+    df_b = load_ohlcv(asset_b)
+    price_a = df_a["close"]
+    price_b = df_b["close"]
 
-    engine = CointegrationEngine()
+    # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B,
+    # Objective 2. Half-life is only reported in honest wall-clock time if
+    # the engine knows the real candle resolution of the data it's being
+    # given — read from the instrument metadata load_ohlcv() attaches
+    # (Phase 1A), never assumed. Both legs of a pair MUST share the same
+    # timeframe for cointegration testing to mean anything (candle-for-
+    # candle alignment) — a mismatch is a real, honest INSUFFICIENT_DATA-
+    # shaped failure, not something to silently pick one side's timeframe
+    # for.
+    instrument_a = df_a.attrs.get("instrument")
+    instrument_b = df_b.attrs.get("instrument")
+    timeframe_a = instrument_a.timeframe if instrument_a else None
+    timeframe_b = instrument_b.timeframe if instrument_b else None
+    if timeframe_a != timeframe_b:
+        return {
+            "asset_a": asset_a, "asset_b": asset_b,
+            "is_cointegrated": False, "passes_filters": False,
+            "reject_reason": f"timeframe mismatch: {asset_a} is {timeframe_a}, {asset_b} is {timeframe_b} — cointegration requires both legs on the same candle resolution",
+            "fdr_note": "not evaluated — rejected before the cointegration test could run",
+        }
+
+    engine = CointegrationEngine(timeframe=timeframe_a or "1h")
     result = engine._test_pair(asset_a, asset_b, price_a, price_b)
     output = result.to_dict()
     # claude code changed: FDR correction for this field is only ever

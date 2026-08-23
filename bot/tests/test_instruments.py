@@ -14,6 +14,8 @@ from bot.instruments import (
     INSTRUMENT_REGISTRY,
     Instrument,
     UnknownInstrumentError,
+    UnsupportedTimeframeError,
+    candles_to_wall_clock,
     get_instrument,
     list_instruments,
     resolve_ohlcv_path,
@@ -89,3 +91,34 @@ class ResolveOhlcvPathTest(SimpleTestCase):
         self.assertEqual(fake_registry_entry.asset_class, ASSET_CLASS_US_EQUITY)
         with self.assertRaises(UnknownInstrumentError):
             resolve_ohlcv_path("AAPL")  # not in INSTRUMENT_REGISTRY at all — the real, current state
+
+
+class CandlesToWallClockTest(SimpleTestCase):
+    """claude code changed: new — Multi-Asset Foundation Refactor Phase
+    1B, Objective 1. The single candles<->wall-clock-time boundary every
+    research engine's timeframe-aware quantities (half-life, decay,
+    rolling windows) should route through, rather than each inventing its
+    own hours-per-candle assumption. Examples are the exact ones the
+    Phase 1B brief itself specifies."""
+
+    def test_1h_data_reports_hours_one_to_one(self):
+        self.assertEqual(candles_to_wall_clock(12, "1h"), (12.0, "hours"))
+
+    def test_4h_data_scales_hours_by_4(self):
+        self.assertEqual(candles_to_wall_clock(12, "4h"), (48.0, "hours"))
+
+    def test_1d_data_reports_days_one_to_one(self):
+        self.assertEqual(candles_to_wall_clock(12, "1d"), (12.0, "days"))
+
+    def test_sub_hour_timeframes_report_minutes(self):
+        self.assertEqual(candles_to_wall_clock(30, "5m"), (150.0, "minutes"))
+        self.assertEqual(candles_to_wall_clock(4, "15m"), (60.0, "minutes"))
+
+    def test_unknown_timeframe_fails_closed_never_guesses(self):
+        with self.assertRaises(UnsupportedTimeframeError):
+            candles_to_wall_clock(12, "2h")
+
+    def test_infinite_candles_converts_without_crashing(self):
+        value, unit = candles_to_wall_clock(float("inf"), "1h")
+        self.assertEqual(value, float("inf"))
+        self.assertEqual(unit, "hours")

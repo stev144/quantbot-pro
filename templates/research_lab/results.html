@@ -74,7 +74,8 @@
                 <div class="term-stat"><span class="term-stat-label">Hedge ratio (&beta;)</span><span class="term-stat-value mono">{{ experiment.statistical_results.hedge_ratio|floatformat:4 }}</span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Half-life</span><span class="term-stat-value mono">{{ experiment.statistical_results.half_life_hours|floatformat:1 }}h</span></div>
+                {# claude code changed: Multi-Asset Foundation Refactor Phase 1B — was a hardcoded "h" suffix on half_life_hours, correct only because every dataset this engine has ever run on is 1h candles. Now reads the honestly timeframe-aware half_life_time/half_life_time_unit. #}
+                <div class="term-stat"><span class="term-stat-label">Half-life</span><span class="term-stat-value mono">{{ experiment.statistical_results.half_life_time|floatformat:1 }} {{ experiment.statistical_results.half_life_time_unit|default:"hours" }} ({{ experiment.statistical_results.half_life_candles|floatformat:1 }} candles)</span></div>
                 <div class="term-stat"><span class="term-stat-label">Is cointegrated (raw test)</span><span class="term-stat-value mono">{{ experiment.statistical_results.is_cointegrated }}</span></div>
                 <div class="term-stat"><span class="term-stat-label">Passes tradability filter</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_filters }}</span></div>
             </div>

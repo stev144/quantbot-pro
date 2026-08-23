@@ -140,3 +140,64 @@ class DivergenceCalculationSanityTest(SimpleTestCase):
         self.assertAlmostEqual(out["forward_return_2h"].iloc[2], 0.07, places=10)
         # Last two rows have no full 2h future window left — must be NaN.
         self.assertTrue(pd.isna(out["forward_return_2h"].iloc[-1]))
+
+
+# claude code changed: new — Multi-Asset Foundation Refactor Phase 1B,
+# Objective 4. This engine was NOT redesigned this phase (per the
+# brief's own explicit instruction) — these tests instead PROVE two
+# correctness boundaries the audit discovered were already real,
+# structural properties of the existing implementation, not something
+# that needed building: (1) the "BTC" reference asset is a genuine
+# constructor parameter, not a hardcoded symbol string anywhere in the
+# actual computation — btc_symbol="ETH/USDT" really does make ETH play
+# the benchmark role, using real price data; (2) a left-join-based
+# altcoin/benchmark merge already tolerates a missing altcoin entirely
+# (skips it, logs a warning, never crashes) — real asynchronous-market
+# tolerance, already present, not a gap this phase needed to close.
+#
+# What this phase deliberately did NOT fix, and why: DIVERGENCE_WINDOWS/
+# ZSCORE_LOOKBACK are documented in "hours" but are actually raw candle
+# counts (rolling(window=N) on a candle-indexed Series) — the identical
+# class of bug fixed in cointegration_engine.py's half-life this same
+# phase. Left untouched here because (a) this engine has no live
+# Research Lab traffic to verify a before/after baseline against (unlike
+# cointegration, which does), and (b) rewiring its rolling-window
+# reporting risks the same "requires touching a functioning research
+# engine's public output shape" territory the brief's own STOP
+# conditions warn against, for a capability nothing currently consumes.
+# Recorded here, not silently — see the Phase 1B report's Contagion
+# Findings section.
+class ContagionCrossAssetBoundaryTest(SimpleTestCase):
+
+    def test_benchmark_asset_is_a_real_parameter_not_hardcoded(self):
+        """Real price data, both legs — proves btc_symbol genuinely
+        controls which asset plays the reference role, using ETH instead
+        of BTC, with zero code changes to the engine itself."""
+        from bot.research_lab.tools._data import load_ohlcv
+
+        eth = load_ohlcv("ETH/USDT")
+        sol = load_ohlcv("SOL/USDT")
+
+        engine = ContagionEngine(btc_symbol="ETH/USDT", altcoin_symbols=["SOL/USDT"])
+        result = engine.calculate_all({"ETH/USDT": eth.copy(), "SOL/USDT": sol.copy()})
+
+        self.assertIn("return_1h", result["ETH/USDT"].columns)
+        divergence_cols = [c for c in result["SOL/USDT"].columns if c.startswith("divergence_")]
+        self.assertTrue(divergence_cols, "SOL's divergence-from-ETH features must exist when ETH is the benchmark")
+
+    def test_missing_altcoin_is_skipped_not_crashed(self):
+        """An altcoin named in altcoin_symbols but absent from the data
+        dict must be skipped with a warning, never raise — real tolerance
+        for a genuinely asynchronous/incomplete multi-asset dataset."""
+        from bot.research_lab.tools._data import load_ohlcv
+
+        btc = load_ohlcv("BTC/USDT")
+        sol = load_ohlcv("SOL/USDT")
+
+        engine = ContagionEngine(altcoin_symbols=["SOL/USDT", "NOT_IN_DATA/USDT"])
+        result = engine.calculate_all({"BTC/USDT": btc.copy(), "SOL/USDT": sol.copy()})   # NOT_IN_DATA/USDT deliberately absent
+
+        self.assertIn("SOL/USDT", result)
+        self.assertNotIn("NOT_IN_DATA/USDT", result)
+        divergence_cols = [c for c in result["SOL/USDT"].columns if c.startswith("divergence_")]
+        self.assertTrue(divergence_cols)

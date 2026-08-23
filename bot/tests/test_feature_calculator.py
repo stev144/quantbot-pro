@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from django.test import SimpleTestCase
 
+from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_US_EQUITY
 from bot.research.feature_calculator import FeatureCalculator  # claude code changed: module under test
 
 
@@ -160,3 +161,118 @@ class WinLabelConsistencyTest(SimpleTestCase):
                 result.loc[valid, win_col], expected, check_names=False,
                 obj=f"{win_col} must exactly equal ({fwd_col} > 0)",
             )  # claude code changed: real behavioral property, not shape/type only
+
+
+# claude code changed: new — Multi-Asset Foundation Refactor Phase 1B,
+# Objective 3. _calculate_realized_vol() used a hardcoded sqrt(252)
+# regardless of timeframe or asset class — wrong even for this platform's
+# own crypto/1h data (crypto trades 24/7/365; 1h candles need x24
+# scaling, not x1). These tests hand-verify the exact annualization
+# factor for the brief's own required cases (1h crypto, daily
+# equity-style, another timeframe) against deterministic synthetic data,
+# by asserting the RESULT equals the raw (unannualized) std times the
+# exact expected sqrt(periods_per_year) — never just "it doesn't crash."
+class RealizedVolAnnualizationTest(SimpleTestCase):
+
+    def _synthetic_df(self, n=60, seed=7):
+        rng = np.random.default_rng(seed)  # claude code changed: reproducible
+        close = 100 + np.cumsum(rng.normal(0, 1, n))
+        return pd.DataFrame({"close": close})
+
+    def _raw_std(self, df, period=20):
+        return df["close"].pct_change().rolling(window=period).std()
+
+    def test_1h_crypto_annualizes_by_sqrt_24x365(self):
+        """The brief's own required example: 1h crypto ~= 24 x 365
+        observations/year."""
+        df = self._synthetic_df()
+        calc = FeatureCalculator(min_data_required=1)
+
+        result = calc._calculate_realized_vol(df, timeframe="1h", asset_class=ASSET_CLASS_CRYPTO)
+        expected = self._raw_std(df) * np.sqrt(24 * 365)
+
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_daily_equity_style_data_annualizes_by_sqrt_252(self):
+        """The brief's own required example: US equities ~= 252 trading
+        sessions/year for daily observations."""
+        df = self._synthetic_df()
+        calc = FeatureCalculator(min_data_required=1)
+
+        result = calc._calculate_realized_vol(df, timeframe="1d", asset_class=ASSET_CLASS_US_EQUITY)
+        expected = self._raw_std(df) * np.sqrt(252)
+
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_daily_crypto_annualizes_by_sqrt_365_not_252(self):
+        """A second, distinct timeframe (daily crypto) — 365 days/year,
+        never silently reusing the equity 252-day convention just because
+        both are 'daily' bars."""
+        df = self._synthetic_df()
+        calc = FeatureCalculator(min_data_required=1)
+
+        result = calc._calculate_realized_vol(df, timeframe="1d", asset_class=ASSET_CLASS_CRYPTO)
+        expected = self._raw_std(df) * np.sqrt(365)
+
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_4h_crypto_annualizes_by_sqrt_6x365(self):
+        """A third timeframe: 4h candles -> 6 candles/day on a 24/7 market."""
+        df = self._synthetic_df()
+        calc = FeatureCalculator(min_data_required=1)
+
+        result = calc._calculate_realized_vol(df, timeframe="4h", asset_class=ASSET_CLASS_CRYPTO)
+        expected = self._raw_std(df) * np.sqrt(6 * 365)
+
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_no_asset_class_falls_back_to_legacy_252_not_a_crash(self):
+        """Backward compatibility: every pre-Phase-1B caller (unit tests
+        using symbol='TEST', any code not passing a real symbol) keeps
+        getting exactly the old numeric behavior."""
+        df = self._synthetic_df()
+        calc = FeatureCalculator(min_data_required=1)
+
+        result = calc._calculate_realized_vol(df, timeframe="1h", asset_class=None)
+        expected = self._raw_std(df) * np.sqrt(252)
+
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_intraday_equity_has_no_session_model_yet_falls_back_honestly(self):
+        """No market-session-length model exists for intraday equities —
+        must fall back to the legacy constant (logged), never silently
+        apply crypto's 24/7 assumption to a market that isn't one."""
+        df = self._synthetic_df()
+        calc = FeatureCalculator(min_data_required=1)
+
+        result = calc._calculate_realized_vol(df, timeframe="1h", asset_class=ASSET_CLASS_US_EQUITY)
+        expected = self._raw_std(df) * np.sqrt(252)
+
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_volatility_state_classification_is_unaffected_by_annualization_factor(self):
+        """The one feature that CONSUMES realized_vol internally
+        (volatility_state) must classify identically regardless of
+        annualization factor — it's a ratio of realized_vol to its own
+        rolling mean, and the constant sqrt(factor) term cancels out of
+        that ratio exactly. Proves the annualization fix changes
+        realized_vol's absolute value without silently changing this
+        derived classification's behavior."""
+        rng = np.random.default_rng(11)
+        n = 200
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+        df = pd.DataFrame({
+            "open": close, "high": close * 1.001, "low": close * 0.999,
+            "close": close, "volume": rng.uniform(1000, 5000, n),
+        })
+        calc = FeatureCalculator(min_data_required=100)
+
+        crypto_1h = calc.calculate_all_features(df.copy(), symbol="BTC/USDT", timeframe="1h")
+        unresolved = calc.calculate_all_features(df.copy(), symbol="TEST")
+
+        self.assertGreater(crypto_1h["realized_vol"].dropna().iloc[-1], unresolved["realized_vol"].dropna().iloc[-1] * 2)  # genuinely different absolute values
+        valid = crypto_1h["volatility_state"].notna() & unresolved["volatility_state"].notna()
+        pd.testing.assert_series_equal(
+            crypto_1h.loc[valid, "volatility_state"], unresolved.loc[valid, "volatility_state"],
+            check_names=False, obj="volatility_state must classify identically regardless of annualization factor",
+        )

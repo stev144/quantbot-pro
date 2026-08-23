@@ -8,6 +8,7 @@
 
 from django.test import SimpleTestCase
 
+from bot.instruments import UnsupportedTimeframeError
 from bot.research.cointegration_engine import CointegrationEngine, PairResult
 
 
@@ -103,3 +104,107 @@ class FdrCorrectionTest(SimpleTestCase):
         engine.pair_results = []
         engine._apply_fdr_correction()   # must not raise
         self.assertEqual(engine.pair_results, [])
+
+
+# claude code changed: new — Multi-Asset Foundation Refactor Phase 1B,
+# Objective 2. _estimate_half_life() has only ever returned a raw AR(1)
+# decay CANDLE COUNT — never hours — silently correct-by-coincidence only
+# because every dataset this engine has ever run on happened to be 1h
+# candles. These tests lock the real fix: half_life_candles is the honest
+# raw quantity; half_life_time/half_life_time_unit is the real,
+# timeframe-derived wall-clock conversion (bot.instruments.
+# candles_to_wall_clock()); half_life_hours is kept, unchanged in value,
+# only for backward compatibility with pre-Phase-1B consumers that have
+# only ever seen 1h data (kalman_filter_engine.py's CSV loader,
+# templates/pairs_performance.html, templates/research_lab.html).
+class HalfLifeTimeframeTest(SimpleTestCase):
+
+    def test_default_timeframe_is_1h_and_matches_old_behavior_exactly(self):
+        """No timeframe passed at all — every pre-Phase-1B call site."""
+        result = _pair_result("BTC_USDT", "ETH_USDT", adf_pvalue=0.01)
+        d = result.to_dict()
+        self.assertEqual(d["timeframe"], "1h")
+        self.assertEqual(d["half_life_hours"], d["half_life_candles"])
+        self.assertEqual(d["half_life_time"], d["half_life_candles"])
+        self.assertEqual(d["half_life_time_unit"], "hours")
+
+    def test_4h_timeframe_reports_half_life_in_hours_scaled_by_4(self):
+        """The refactor brief's own required example: 4h data + half-life
+        = 12 candles -> 48 hours, not 12 hours and not 2 days."""
+        result = PairResult(
+            symbol_a="BTC_USDT", symbol_b="ETH_USDT",
+            coint_pvalue=0.01, hedge_ratio=1.0, intercept=0.0,
+            half_life=12.0, adf_pvalue=0.01,
+            is_cointegrated=True, passes_filters=True,
+            timeframe="4h",
+        )
+        d = result.to_dict()
+        self.assertEqual(d["half_life_candles"], 12.0)
+        self.assertEqual(d["half_life_time"], 48.0)
+        self.assertEqual(d["half_life_time_unit"], "hours")
+        # claude code changed: half_life_hours stays the OLD (wrong for
+        # non-1h data) value — this is the deliberate backward-compat
+        # carve-out, not an oversight. Real Research Lab traffic can never
+        # actually reach this branch with today's data (every supported
+        # instrument is 1h), so this test exists purely to document the
+        # boundary, not to certify the old field as correct.
+        self.assertEqual(d["half_life_hours"], 12.0)
+
+    def test_1d_timeframe_reports_half_life_in_days(self):
+        """The refactor brief's own required example: 1d data + half-life
+        = 12 candles -> 12 days."""
+        result = PairResult(
+            symbol_a="BTC_USDT", symbol_b="ETH_USDT",
+            coint_pvalue=0.01, hedge_ratio=1.0, intercept=0.0,
+            half_life=12.0, adf_pvalue=0.01,
+            is_cointegrated=True, passes_filters=True,
+            timeframe="1d",
+        )
+        d = result.to_dict()
+        self.assertEqual(d["half_life_time"], 12.0)
+        self.assertEqual(d["half_life_time_unit"], "days")
+
+    def test_infinite_half_life_converts_cleanly_without_crashing(self):
+        """A non-cointegrated/failed pair's half_life is np.inf — must
+        still produce a usable (inf, unit) pair, never raise."""
+        result = PairResult(
+            symbol_a="BTC_USDT", symbol_b="ETH_USDT",
+            coint_pvalue=1.0, hedge_ratio=0.0, intercept=0.0,
+            half_life=float("inf"), adf_pvalue=1.0,
+            is_cointegrated=False, passes_filters=False,
+            reject_reason="not cointegrated",
+        )
+        d = result.to_dict()
+        self.assertEqual(d["half_life_time"], float("inf"))
+        self.assertEqual(d["half_life_time_unit"], "hours")
+
+    def test_unsupported_timeframe_fails_closed(self):
+        """No known candle width for this timeframe — must raise, never
+        silently assume 1h (the exact bug this phase removes)."""
+        with self.assertRaises(UnsupportedTimeframeError):
+            PairResult(
+                symbol_a="BTC_USDT", symbol_b="ETH_USDT",
+                coint_pvalue=0.01, hedge_ratio=1.0, intercept=0.0,
+                half_life=12.0, adf_pvalue=0.01,
+                is_cointegrated=True, passes_filters=True,
+                timeframe="2h",  # not a real timeframe this platform has ever used
+            )
+
+    def test_engine_threads_its_timeframe_into_every_pair_result(self):
+        """CointegrationEngine(timeframe=...) must reach PairResult via
+        _test_pair() — checked at the engine-construction level (cheap,
+        no I/O) since _test_pair() itself needs real OLS/ADF-worthy price
+        data, already covered end-to-end by
+        test_research_lab_pairs_research.py."""
+        engine = CointegrationEngine(timeframe="4h")
+        self.assertEqual(engine.timeframe, "4h")
+
+    def test_max_min_half_life_filter_bounds_are_unchanged_numerically(self):
+        """Objective 2 deliberately does NOT rescale the filter thresholds
+        by timeframe (see cointegration_engine.py's own module-level note)
+        — only how half-life is REPORTED changed. Locks that the filter
+        bounds a 1h experiment sees today are byte-identical to before
+        this phase."""
+        engine = CointegrationEngine()
+        self.assertEqual(engine.max_half_life, 120)
+        self.assertEqual(engine.min_half_life, 2.0)

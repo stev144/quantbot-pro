@@ -47,6 +47,18 @@ from dataclasses import dataclass
 from enum import Enum
 import warnings
 
+# claude code changed: new — Multi-Asset Foundation Refactor Phase 1B,
+# Objective 3. The single source of "how many candles/year at this
+# timeframe, under this asset class's trading calendar" — see
+# bot/instruments.py's own module-level note for why this replaces the
+# hardcoded sqrt(252) below rather than swapping in a second constant.
+from bot.instruments import (
+    UnsupportedAnnualizationError,
+    UnsupportedTimeframeError,
+    get_instrument,
+    periods_per_year,
+)
+
 # ───────────────────────────────────────────────────────────────────────────────────────────────────────
 # LOGGING CONFIGURATION
 # ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -136,20 +148,31 @@ class FeatureCalculator:
             logger.error("Missing required OHLCV columns")
             return df
         
+        # claude code changed: new — Multi-Asset Foundation Refactor Phase
+        # 1B, Objective 3. Resolve asset_class from `symbol` via the
+        # instrument registry (bot/instruments.py) so realized_vol's
+        # annualization factor is derived from real market structure
+        # instead of a hardcoded sqrt(252). `symbol="UNKNOWN"` (the
+        # default, and any symbol this platform doesn't recognize) leaves
+        # asset_class=None — _calculate_realized_vol() falls back to the
+        # legacy constant in that case, loudly logged, never silent.
+        instrument = get_instrument(symbol)
+        asset_class = instrument.asset_class if instrument else None
+
         try:
             # Make a copy to avoid modifying original
             result_df = df.copy()
-            
+
             # ── PURE MATH FEATURES ──────────────────────────────────────────────────────────
             logger.info(f"Calculating pure math features for {symbol}...")
-            
+
             result_df['atr'] = self._calculate_atr(result_df)
             result_df['adr'] = self._calculate_adr(result_df)
             result_df['range_used'] = self._calculate_range_used(result_df)
-            result_df['volatility_state'] = self._calculate_volatility_state(result_df)
+            result_df['volatility_state'] = self._calculate_volatility_state(result_df, timeframe=timeframe, asset_class=asset_class)
             result_df['efficiency'] = self._calculate_efficiency(result_df)
             result_df['atr_ratio'] = self._calculate_atr_ratio(result_df)
-            result_df['realized_vol'] = self._calculate_realized_vol(result_df)
+            result_df['realized_vol'] = self._calculate_realized_vol(result_df, timeframe=timeframe, asset_class=asset_class)
             result_df['volume_ratio'] = self._calculate_volume_ratio(result_df)
             
             # ── INDICATOR FEATURES (To be statistically tested) ─────────────────────────────
@@ -253,16 +276,26 @@ class FeatureCalculator:
             logger.debug(f"Error calculating range_used: {e}")
             return pd.Series(np.nan, index=df.index)
     
-    def _calculate_volatility_state(self, df: pd.DataFrame) -> pd.Series:
+    def _calculate_volatility_state(self, df: pd.DataFrame, timeframe: str = "1h", asset_class: Optional[str] = None) -> pd.Series:
         """
         Classify volatility state: compressed/normal/expanding.
-        
+
         Normal = 20-day average
         Compressed = < 80% of normal
         Expanding = > 120% of normal
+
+        claude code changed: Multi-Asset Foundation Refactor Phase 1B —
+        timeframe/asset_class are threaded through purely for consistency
+        with realized_vol's own signature and to avoid a spurious
+        "falling back to legacy annualization" warning on every call. The
+        classification here is mathematically UNAFFECTED by the
+        annualization factor either way: it's a ratio of realized_vol to
+        its own rolling mean, and the constant sqrt(factor) term cancels
+        out of that ratio exactly. Verified, not assumed — see
+        test_feature_calculator.py's AnnualizationTest.
         """
         try:
-            realized_vol = self._calculate_realized_vol(df)
+            realized_vol = self._calculate_realized_vol(df, timeframe=timeframe, asset_class=asset_class)
             normal_vol = realized_vol.rolling(window=VOL_NORMAL_WINDOW).mean()
             
             ratio = realized_vol / normal_vol.replace(0, np.nan)
@@ -317,16 +350,58 @@ class FeatureCalculator:
             logger.debug(f"Error calculating atr_ratio: {e}")
             return pd.Series(np.nan, index=df.index)
     
-    def _calculate_realized_vol(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
+    def _calculate_realized_vol(self, df: pd.DataFrame, period: int = 20, timeframe: str = "1h", asset_class: Optional[str] = None) -> pd.Series:
         """
-        Calculate realized volatility (actual observed).
-        
-        Std dev of returns
+        Calculate realized volatility (actual observed), annualized.
+
+        Std dev of returns x sqrt(periods/year)
+
+        claude code changed: Multi-Asset Foundation Refactor Phase 1B,
+        Objective 3. Was `np.sqrt(252)` unconditionally — the US-equity
+        daily-bar annualization convention, applied regardless of
+        timeframe or asset class. Wrong even for this platform's own only
+        real dataset (crypto, 1h candles): 252 assumes ~252 DAILY
+        observations/year, but 1h crypto candles produce ~8,760
+        observations/year on a 24/7/365 market — the old value
+        under-annualized realized_vol by a factor of ~5.9x
+        (sqrt(8760/252) ~= 5.9) for every crypto/1h experiment that has
+        ever computed this feature. Now derived from
+        bot.instruments.periods_per_year(timeframe, asset_class) — the
+        correct factor for whatever data this actually is, not a constant
+        borrowed from a different market's convention.
+
+        Falls back to the legacy 252 constant — loudly logged, never
+        silent — only when asset_class can't be resolved at all (no real
+        symbol was passed) or when the (timeframe, asset_class) pair has
+        no known trading-calendar convention yet (e.g. intraday
+        US_EQUITY/FOREX — see UnsupportedAnnualizationError). This keeps
+        every existing caller that doesn't pass a real symbol (unit tests
+        using symbol="TEST", the "UNKNOWN" default) working exactly as
+        before; every REAL Research Lab call, which always names a real
+        instrument, now gets the correct factor.
         """
         try:
             returns = df['close'].pct_change()
-            realized_vol = returns.rolling(window=period).std() * np.sqrt(252)  # Annualized
-            
+
+            if asset_class is None:
+                logger.warning(
+                    "_calculate_realized_vol: no asset_class resolved (symbol not in the instrument "
+                    "registry) — falling back to the legacy 252 (US-equity daily-bar) annualization constant"
+                )
+                annualization_factor = 252.0
+            else:
+                try:
+                    annualization_factor = periods_per_year(timeframe, asset_class)
+                except (UnsupportedTimeframeError, UnsupportedAnnualizationError) as exc:
+                    logger.warning(
+                        f"_calculate_realized_vol: cannot derive a correct annualization factor for "
+                        f"timeframe={timeframe!r}, asset_class={asset_class!r} ({exc}) — falling back to "
+                        f"the legacy 252 (US-equity daily-bar) annualization constant"
+                    )
+                    annualization_factor = 252.0
+
+            realized_vol = returns.rolling(window=period).std() * np.sqrt(annualization_factor)
+
             return realized_vol
         except Exception as e:
             logger.debug(f"Error calculating realized_vol: {e}")

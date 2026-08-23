@@ -50,7 +50,8 @@
                 <li>Cointegration p-value: {{ experiment.statistical_results.coint_pvalue|default:"not evaluated" }}</li>
                 <li>ADF p-value: {{ experiment.statistical_results.adf_pvalue|default:"not evaluated" }}</li>
                 <li>Hedge ratio: {{ experiment.statistical_results.hedge_ratio|default:"not evaluated" }}</li>
-                <li>Half-life: {{ experiment.statistical_results.half_life_hours|default:"not evaluated" }} hours</li>
+                {# claude code changed: Multi-Asset Foundation Refactor Phase 1B — was a hardcoded "hours" suffix regardless of the actual timeframe the evidence was computed on #}
+                <li>Half-life: {{ experiment.statistical_results.half_life_time|default:"not evaluated" }} {{ experiment.statistical_results.half_life_time_unit|default:"" }} ({{ experiment.statistical_results.half_life_candles|default:"?" }} candles, timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }})</li>
                 <li>Is cointegrated (raw test): {{ experiment.statistical_results.is_cointegrated|default:"not evaluated" }}</li>
                 <li>Passes tradability filter: {{ experiment.statistical_results.passes_filters|default:"not evaluated" }}</li>
                 <li>{{ experiment.statistical_results.fdr_note|default:"" }}</li>

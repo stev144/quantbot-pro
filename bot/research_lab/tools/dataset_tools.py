@@ -34,7 +34,15 @@ def calculate_feature(asset: str, feature_name: str) -> dict:
 
     df = load_ohlcv(asset)
     calc = FeatureCalculator(min_data_required=100)
-    enriched = calc.calculate_all_features(df, symbol=asset)
+    # claude code changed: Multi-Asset Foundation Refactor Phase 1B,
+    # Objective 1/3 — was relying on calculate_all_features()'s "1h"
+    # default rather than the loaded data's real timeframe (load_ohlcv()
+    # already attaches it via df.attrs, Phase 1A). Harmless today only by
+    # coincidence (every real instrument IS 1h) — explicit now, so this
+    # stops being a silent assumption the moment a second timeframe exists.
+    instrument = df.attrs.get("instrument")
+    timeframe = instrument.timeframe if instrument else "1h"
+    enriched = calc.calculate_all_features(df, symbol=asset, timeframe=timeframe)
 
     if feature_name not in enriched.columns:
         raise ValueError(f"feature_calculator.py did not produce a '{feature_name}' column for this dataset")

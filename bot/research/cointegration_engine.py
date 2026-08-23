@@ -69,7 +69,10 @@
 #   spread_zscore        (spread - mean) / std — how far from equilibrium?
 #   spread_zscore_lag1   Previous candle's z-score (momentum context)
 #   spread_pct_rank      Percentile rank of current spread (0-100)
-#   half_life            How many hours does this spread take to revert?
+#   half_life            How many CANDLES does this spread take to revert
+#                        halfway? (converted to physical time via
+#                        bot.instruments.candles_to_wall_clock() — see
+#                        PairResult.half_life_time/half_life_time_unit)
 #   pair_signal          Composite signal: direction + magnitude + half-life weight
 #   forward_return_Nh    What the spread did N hours later (IC test label)
 #
@@ -133,6 +136,8 @@ from scipy import stats                     # OLS regression, Spearman IC
 from statsmodels.tsa.stattools import adfuller, coint   # ADF test, cointegration test
 from statsmodels.regression.linear_model import OLS     # OLS for hedge ratio
 from statsmodels.tools import add_constant              # Add intercept to OLS
+
+from bot.instruments import candles_to_wall_clock  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. The single candles->wall-clock-time conversion, see bot/instruments.py
 
 warnings.filterwarnings('ignore')           # Suppress statsmodels convergence warnings
 
@@ -202,15 +207,32 @@ ZSCORE_WINDOW: int = 504      # 3 weeks
 # Need at least 2 weeks of data before trusting the z-score
 ZSCORE_MIN_PERIODS: int = 336  # 2 weeks
 
-# Half-life filter — maximum acceptable half-life in hours
-# Spreads that take too long to revert tie up capital unproductively
-# 120 hours = 5 days — if reversion takes longer than this, skip the pair
-MAX_HALF_LIFE_HOURS: int = 120   # 5 days
+# Half-life filter — maximum acceptable half-life, expressed in CANDLES.
+# Spreads that take too long to revert tie up capital unproductively.
+# 120 candles of 1h data = 5 days — if reversion takes longer than this,
+# skip the pair.
+#
+# claude code changed: Multi-Asset Foundation Refactor Phase 1B,
+# Objective 2. These two constants are named "*_HOURS" and were always
+# documented as hours — but _estimate_half_life() has only ever returned
+# a raw candle count (see that method), so numerically these bounds have
+# ALWAYS been compared against candles, not hours; the name was
+# aspirational, not descriptive. Deliberately NOT rescaling these bounds
+# by timeframe in this phase: "how many candles of illiquid capital lockup
+# is acceptable" is arguably a more natural risk bound than a wall-clock
+# one regardless of candle width, and reinterpreting the THRESHOLD's
+# meaning is a bigger judgment call than this phase's actual objective
+# (fixing the REPORTED units — see half_life_time/half_life_time_unit).
+# For the only data this engine has ever run on (1h candles), the two
+# readings are numerically identical, so this note changes no behavior
+# today — it only stops the name from implying a conversion that was
+# never actually happening.
+MAX_HALF_LIFE_HOURS: int = 120   # 120 candles (= 5 days at 1h)
 
-# Minimum half-life in hours
-# Spreads that revert in under 2 hours are too fast for 1h candle trading
-# The entry and exit would need sub-hourly data
-MIN_HALF_LIFE_HOURS: float = 2.0  # 2 hours
+# Minimum half-life, expressed in CANDLES.
+# Spreads that revert too fast are too fast for the candle resolution
+# being traded — the entry and exit would need finer-grained data.
+MIN_HALF_LIFE_HOURS: float = 2.0  # 2 candles
 
 # Forward return horizons for the spread (what we predict)
 # The validator tests each horizon to find the best trading window
@@ -258,6 +280,7 @@ class PairResult:
         is_cointegrated: bool,
         passes_filters:  bool,
         reject_reason:   str = "",
+        timeframe:       str = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h" so every existing call site (all of which predate this parameter) keeps constructing byte-identical PairResults.
     ) -> None:
 
         self.symbol_a        = symbol_a         # First asset in pair
@@ -266,11 +289,26 @@ class PairResult:
         self.coint_pvalue    = coint_pvalue      # Engle-Granger p-value
         self.hedge_ratio     = hedge_ratio       # β: A = α + β×B + ε
         self.intercept       = intercept         # α: equilibrium level offset
-        self.half_life       = half_life         # Hours for spread to revert 50%
+        # claude code changed: was documented "Hours for spread to revert
+        # 50%" — that was never actually true for any timeframe other than
+        # 1h; _estimate_half_life() below has only ever returned a candle
+        # count (the raw -log(2)/lambda AR(1) decay constant), silently
+        # correct only because every dataset this engine has ever seen
+        # happened to be 1h candles. Renamed to say what it actually is;
+        # see half_life_time/half_life_time_unit below for the real,
+        # timeframe-aware wall-clock conversion.
+        self.half_life       = half_life         # Candles for spread to revert 50% (raw OU decay periods)
         self.adf_pvalue      = adf_pvalue        # ADF test p-value on residuals
         self.is_cointegrated = is_cointegrated   # Did it pass the coint test?
         self.passes_filters  = passes_filters    # Did it pass half-life filters?
         self.reject_reason   = reject_reason     # Why was it rejected (if applicable)
+        self.timeframe       = timeframe         # claude code changed: new — the candle resolution half_life was estimated on; see bot/instruments.py's candles_to_wall_clock()
+        # claude code changed: new — the actual physical-time conversion,
+        # derived from the instrument/timeframe abstraction (bot/
+        # instruments.py), never a hardcoded "×1 for hours" assumption.
+        # inf half_life (non-cointegrated/failed pairs) converts to inf
+        # cleanly — still meaningful ("never reverts"), never a crash.
+        self.half_life_time, self.half_life_time_unit = candles_to_wall_clock(half_life, timeframe)
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for DataFrame construction."""
@@ -282,7 +320,21 @@ class PairResult:
             "adf_pvalue":      round(self.adf_pvalue, 6),
             "hedge_ratio":     round(self.hedge_ratio, 6),
             "intercept":       round(self.intercept, 6),
-            "half_life_hours": round(self.half_life, 2),
+            # claude code changed: half_life_hours is KEPT, unchanged in
+            # meaning and value, for backward compatibility with existing
+            # consumers of the standalone research pipeline's CSV output
+            # (kalman_filter_engine.py's loader, templates/
+            # pairs_performance.html, templates/research_lab.html) — every
+            # one of them has only ever run on 1h data, for which this
+            # value is, and remains, numerically correct. New code should
+            # prefer half_life_candles/half_life_time/half_life_time_unit
+            # below, which are honestly correct for ANY timeframe, not
+            # just 1h.
+            "half_life_hours":     round(self.half_life, 2),
+            "half_life_candles":   round(self.half_life, 2),
+            "half_life_time":      round(self.half_life_time, 2),
+            "half_life_time_unit": self.half_life_time_unit,
+            "timeframe":            self.timeframe,
             "is_cointegrated": self.is_cointegrated,
             "passes_filters":  self.passes_filters,
             "reject_reason":   self.reject_reason,
@@ -325,6 +377,7 @@ class CointegrationEngine:
         max_half_life:         int              = MAX_HALF_LIFE_HOURS,
         min_half_life:         float            = MIN_HALF_LIFE_HOURS,
         forward_horizons:      Dict[str, int]   = None,
+        timeframe:             str              = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h", this engine's only real dataset today — every existing construction site (none of which pass this parameter) is unaffected. MAX/MIN_HALF_LIFE_HOURS/TRAINING_WINDOW/ZSCORE_WINDOW stay expressed in raw candles — this parameter affects ONLY how half-life is REPORTED (half_life_time/half_life_time_unit), not the filter thresholds themselves; see the module-level note on why that's the correct, minimal scope for this fix.
     ) -> None:
         """
         Initialise with research configuration.
@@ -338,9 +391,10 @@ class CointegrationEngine:
         self.training_window    = training_window     # Candles for hedge ratio estimation
         self.zscore_window      = zscore_window       # Rolling window for z-score
         self.zscore_min_periods = zscore_min_periods  # Min candles before z-score valid
-        self.max_half_life      = max_half_life       # Max acceptable half-life (hours)
-        self.min_half_life      = min_half_life       # Min acceptable half-life (hours)
+        self.max_half_life      = max_half_life       # Max acceptable half-life (candles — see timeframe note above)
+        self.min_half_life      = min_half_life       # Min acceptable half-life (candles — see timeframe note above)
         self.forward_horizons   = forward_horizons or FORWARD_HORIZONS
+        self.timeframe          = timeframe           # claude code changed: new — candle resolution of the data this engine instance will receive; threaded into every PairResult so half-life is reported honestly
 
         # Results storage — populated during run_all()
         self.pair_results: List[PairResult] = []      # All pair test results
@@ -616,6 +670,7 @@ class CointegrationEngine:
                 half_life=np.inf, adf_pvalue=1.0,
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"insufficient aligned data ({len(aligned)} rows)",
+                timeframe=self.timeframe,
             )
 
         # ── Use training window only for all estimation ───────────────────────
@@ -645,6 +700,7 @@ class CointegrationEngine:
                 half_life=np.inf, adf_pvalue=1.0,
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"OLS failed: {e}",
+                timeframe=self.timeframe,
             )
 
         # ── Calculate residuals (the spread) on training data ─────────────────
@@ -676,6 +732,7 @@ class CointegrationEngine:
                 half_life=np.inf, adf_pvalue=1.0,
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"ADF test failed: {e}",
+                timeframe=self.timeframe,
             )
 
         # ── Engle-Granger cointegration test (confirmation) ───────────────────
@@ -702,6 +759,7 @@ class CointegrationEngine:
                 adf_pvalue=adf_pvalue,
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"ADF p={adf_pvalue:.4f} > {self.coint_threshold}",
+                timeframe=self.timeframe,
             )
 
         # ── Half-life estimation (Ornstein-Uhlenbeck) ─────────────────────────
@@ -715,14 +773,14 @@ class CointegrationEngine:
         if half_life > self.max_half_life:
             passes_filters = False
             reject_reason  = (
-                f"half-life {half_life:.1f}h > max {self.max_half_life}h "
+                f"half-life {half_life:.1f} candles > max {self.max_half_life} candles "
                 f"(spread reverts too slowly)"
             )
         elif half_life < self.min_half_life:
             passes_filters = False
             reject_reason  = (
-                f"half-life {half_life:.1f}h < min {self.min_half_life}h "
-                f"(spread reverts too fast for 1h candles)"
+                f"half-life {half_life:.1f} candles < min {self.min_half_life} candles "
+                f"(spread reverts too fast for {self.timeframe} candles)"
             )
 
         return PairResult(
@@ -732,6 +790,7 @@ class CointegrationEngine:
             adf_pvalue=adf_pvalue,
             is_cointegrated=True, passes_filters=passes_filters,
             reject_reason=reject_reason,
+            timeframe=self.timeframe,
         )
 
 
@@ -749,7 +808,8 @@ class CointegrationEngine:
         The Ornstein-Uhlenbeck model describes a mean-reverting process:
             dS_t = λ(μ - S_t)dt + σdW_t
 
-        In discrete time (1h candles):
+        In discrete time (one candle per step, whatever that candle's
+        actual width is):
             ΔS_t = λ × S_{t-1} + ε_t
 
         Where:
@@ -762,8 +822,15 @@ class CointegrationEngine:
             HL = -log(2) / λ
 
         Interpretation:
-            HL = 10 hours means: if the spread is 100 units above equilibrium,
-            it will be at 50 units above equilibrium after 10 hours on average.
+            HL = 10 CANDLES means: if the spread is 100 units above
+            equilibrium, it will be at 50 units above equilibrium after 10
+            candles on average — this function has no notion of wall-clock
+            time at all, since it never sees a timeframe, only a spread
+            Series indexed by candle. Converting 10 candles to physical
+            time (10 hours on 1h data, 40 hours on 4h data, 10 days on
+            daily data) is _test_pair()'s/PairResult's job, via
+            bot.instruments.candles_to_wall_clock() — see PairResult's
+            half_life_time/half_life_time_unit.
 
         Returns np.inf if estimation fails or λ is not negative.
         """

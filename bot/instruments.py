@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from bot.fetch_all_symbols import INTERVAL, SYMBOLS, symbol_to_filename
 
@@ -159,3 +159,149 @@ def resolve_ohlcv_path(canonical_symbol: str) -> Path:
             f"'{canonical_symbol}' is asset_class={instrument.asset_class}, which has no data source configured yet"
         )
     return Path(DATA_DIR) / symbol_to_filename(canonical_symbol)
+
+
+# ============================================================
+# Multi-Asset Foundation Refactor — Phase 1B, Objective 1/2.
+#
+# claude code changed: new. The timeframe/candle-count <-> wall-clock-time
+# conversion boundary. Lives here, not in cointegration_engine.py or
+# feature_calculator.py, for the same reason resolve_ohlcv_path() lives
+# here: it is instrument/timeframe knowledge, and every research engine
+# that needs "how much physical time does N candles represent" should
+# import ONE answer to that question rather than each engine inventing
+# its own hours-per-candle constant (which is exactly how
+# cointegration_engine.py's half-life ended up silently mislabeled
+# "hours" for any candle width — the value was always correct in
+# CANDLES, only the wall-clock conversion was missing).
+# ============================================================
+
+# claude code changed: new — minutes represented by one candle at each
+# timeframe. The one place this conversion factor is defined; extend this
+# dict, never hardcode a second copy of it in a research engine.
+TIMEFRAME_MINUTES_PER_CANDLE: Dict[str, float] = {
+    "1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+    "1h": 60.0, "4h": 240.0, "1d": 1440.0,
+}
+
+# claude code changed: new — which unit a timeframe's own wall-clock
+# durations should be reported in. Not auto-scaled from the magnitude of
+# any particular result (a 48-hour half-life on 4h candles is reported as
+# "48 hours," not "2 days") — the unit follows the TIMEFRAME's natural
+# resolution, which is what a researcher reading "half-life: 48" actually
+# expects units for.
+TIMEFRAME_NATIVE_UNIT: Dict[str, str] = {
+    "1m": "minutes", "5m": "minutes", "15m": "minutes", "30m": "minutes",
+    "1h": "hours", "4h": "hours", "1d": "days",
+}
+
+_MINUTES_PER_UNIT = {"minutes": 1.0, "hours": 60.0, "days": 1440.0}
+
+
+class UnsupportedTimeframeError(ValueError):
+    """claude code changed: new — raised by candles_to_wall_clock() for a
+    timeframe string with no known candle width. Fail loud rather than
+    silently assuming 1h, the exact bug this function exists to remove."""
+
+
+def candles_to_wall_clock(n_candles: float, timeframe: str) -> Tuple[float, str]:
+    """
+    claude code changed: new. The single conversion point from "N candles"
+    to "how much physical time is that," honest about which unit it's
+    reporting in. Examples (from the Phase 1B brief itself):
+
+        candles_to_wall_clock(12, "1h") -> (12.0, "hours")
+        candles_to_wall_clock(12, "4h") -> (48.0, "hours")
+        candles_to_wall_clock(12, "1d") -> (12.0, "days")
+
+    Raises UnsupportedTimeframeError for any timeframe not in
+    TIMEFRAME_MINUTES_PER_CANDLE — never guesses a conversion factor.
+    """
+    if timeframe not in TIMEFRAME_MINUTES_PER_CANDLE:
+        raise UnsupportedTimeframeError(
+            f"'{timeframe}' has no known candle width — cannot convert {n_candles} candles to wall-clock time"
+        )
+    unit = TIMEFRAME_NATIVE_UNIT[timeframe]
+    total_minutes = n_candles * TIMEFRAME_MINUTES_PER_CANDLE[timeframe]
+    return total_minutes / _MINUTES_PER_UNIT[unit], unit
+
+
+# ============================================================
+# Multi-Asset Foundation Refactor — Phase 1B, Objective 3.
+#
+# claude code changed: new. The annualization-factor boundary —
+# "how many `timeframe`-candles occur in one year, under `asset_class`'s
+# trading-calendar convention." feature_calculator.py's realized_vol used
+# a hardcoded sqrt(252) (the US-equity daily-bar convention) regardless of
+# timeframe OR asset class — wrong even for this platform's own crypto/1h
+# data (crypto trades 24/7/365, and 1h candles need scaling by 24, not by
+# nothing). Lives here rather than in feature_calculator.py for the same
+# reason every other timeframe/instrument fact does: one answer, not one
+# per research engine that happens to need it.
+# ============================================================
+
+# claude code changed: new — trading days/year per asset class's market
+# structure. CRYPTO is a real, uncontroversial fact (24/7/365 market).
+# US_EQUITY (252) is the standard NYSE/NASDAQ trading-day convention.
+# FOREX (260 = 5 days/week x 52 weeks) is a conventional approximation,
+# not a real session calendar this platform has ever modeled — flagged
+# explicitly rather than presented as equally solid as the other two.
+TRADING_DAYS_PER_YEAR: Dict[str, float] = {
+    ASSET_CLASS_CRYPTO: 365.0,
+    ASSET_CLASS_US_EQUITY: 252.0,
+    ASSET_CLASS_FOREX: 260.0,  # convention, not a modeled session calendar — see note above
+}
+
+
+class UnsupportedAnnualizationError(ValueError):
+    """claude code changed: new — raised by periods_per_year() when the
+    (timeframe, asset_class) pair can't be honestly annualized with what
+    this platform currently knows. This is expected and correct for any
+    intraday US_EQUITY/FOREX timeframe today: annualizing sub-daily bars
+    requires knowing the market's real session length (e.g. ~6.5h/day for
+    US equities), which this platform has no session-calendar model for
+    yet — and since no US_EQUITY/FOREX data has ever been ingested,
+    nothing currently reachable actually hits this path."""
+
+
+def periods_per_year(timeframe: str, asset_class: str) -> float:
+    """
+    claude code changed: new. How many `timeframe`-candles occur in one
+    year under `asset_class`'s trading-calendar convention — the single
+    correct replacement for a hardcoded annualization constant. Matches
+    the Phase 1B brief's own worked examples exactly:
+
+        periods_per_year("1d", ASSET_CLASS_US_EQUITY) -> 252.0
+        periods_per_year("1d", ASSET_CLASS_CRYPTO)    -> 365.0
+        periods_per_year("1h", ASSET_CLASS_CRYPTO)    -> 8760.0  (24 x 365)
+
+    Raises UnsupportedTimeframeError / UnsupportedAnnualizationError
+    rather than guessing — see UnsupportedAnnualizationError's own
+    docstring for exactly which cases fail closed and why.
+    """
+    if timeframe not in TIMEFRAME_MINUTES_PER_CANDLE:
+        raise UnsupportedTimeframeError(f"'{timeframe}' has no known candle width")
+    if asset_class not in TRADING_DAYS_PER_YEAR:
+        raise UnsupportedAnnualizationError(f"no trading-calendar convention defined for asset_class='{asset_class}'")
+
+    if timeframe == "1d":
+        # claude code changed: one candle IS one trading day — no session-
+        # length ambiguity regardless of asset class.
+        return TRADING_DAYS_PER_YEAR[asset_class]
+
+    if asset_class == ASSET_CLASS_CRYPTO:
+        # claude code changed: crypto trades every minute of every
+        # calendar day — candles/day is a pure function of candle width,
+        # no session-hours model needed.
+        candles_per_day = 1440.0 / TIMEFRAME_MINUTES_PER_CANDLE[timeframe]
+        return TRADING_DAYS_PER_YEAR[asset_class] * candles_per_day
+
+    # claude code changed: US_EQUITY/FOREX at an intraday timeframe needs
+    # a real market-session-length model (equities don't trade 24h/day)
+    # this platform doesn't have — fail closed, never guess a session
+    # length. Unreachable with real data today (no non-CRYPTO data
+    # exists), but the correct behavior the day it does.
+    raise UnsupportedAnnualizationError(
+        f"intraday annualization for asset_class='{asset_class}' at timeframe='{timeframe}' "
+        f"requires a market-session-length model this platform does not have yet"
+    )

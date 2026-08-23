@@ -618,6 +618,23 @@
   color: #00FF9F;
   font-size: clamp(0.95rem, 1.3vw, 1.125rem);   /* claude code changed: was clamp(1.8rem, 3.8vw, 2.75rem) — user reported the typed text dwarfed .term-brand-name (14px); now tops out at 18px, just a bit larger than the brand title, not 2-3x it */
   font-weight: 700;
+  /* claude code changed: new — match .term-brand-name's own typography
+   * exactly per direct request ("the very specific fonts and designs
+   * that are being used by the heading STEPH QUANT TECHNOLOGIES... in
+   * uppercase"). Was inheriting --font-mono from the parent
+   * .term-typed-strip.mono wrapper; the brand heading has never used
+   * mono, it uses --font-ui (system sans stack) with 0.02em
+   * letter-spacing — both set explicitly here so this no longer depends
+   * on the parent's .mono class. text-transform:uppercase is new: the
+   * heading's own uppercase comes from literal uppercase text content
+   * ("STEPH QUANT TECHNOLOGIES") rather than CSS, but typed.js's source
+   * strings aren't all-caps, so a transform is the equivalent for
+   * dynamically-typed text. Size/weight/color untouched — not part of
+   * this request, and weight already matched (700 on both).
+   */
+  font-family: var(--font-ui);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 /* claude code changed: size (clamp) and color (gold) were approved as-is
@@ -636,6 +653,15 @@
   color: #F0B90B;
   display: inline-block;
   max-width: 100%;
+  /* claude code changed: new — matches .term-brand-name's typography
+   * exactly, same request/rationale as .typed-static above (was
+   * --font-mono via the parent's .mono class; now the brand heading's
+   * own --font-ui + 0.02em letter-spacing, plus uppercase since typed.js's
+   * source strings aren't authored in caps the way the heading's literal
+   * text is). */
+  font-family: var(--font-ui);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .typed-cursor {
