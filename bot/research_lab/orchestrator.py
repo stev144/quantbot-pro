@@ -193,6 +193,7 @@ def _execute_conditional_hypothesis(experiment: ResearchExperiment, spec: Resear
     tool_log = []
     warnings = []
     conditional_result = None
+    insufficient_events = False  # claude code changed: new — Statistical Integrity Hardening (gap #3), see verdict.compute_verdict_conditional()'s docstring
 
     if "inspect_dataset" in allowed_tools:
         result = run_tool("inspect_dataset", spec.risk_tier, asset=spec.asset)
@@ -219,11 +220,26 @@ def _execute_conditional_hypothesis(experiment: ResearchExperiment, spec: Resear
         tool_log.append(result.to_dict())
         if result.status == "success":
             conditional_result = result.output
+            conditional_result["expected_direction"] = spec.direction  # claude code changed: new — gap #4/#12, persist what the hypothesis predicted alongside what run_conditional_test() observed, so results/report can show both without re-deriving from hypothesis_text
+        elif result.error_type == "InsufficientEventsError":
+            # claude code changed: new — Statistical Integrity Hardening
+            # (gap #3). Distinct from the generic "tool failed" branch below
+            # — this is specifically "the condition WAS computable, there
+            # just aren't enough qualifying/non-qualifying candles," which
+            # must reach VERDICT=INSUFFICIENT_DATA, not REQUIRES_REVIEW.
+            insufficient_events = True
+            warnings.append(f"run_conditional_test: {result.error.splitlines()[0]}")
         else:
             warnings.append(f"run_conditional_test failed: {result.error}")
 
-    if not conditional_result:
-        warnings.append("no FDR correction applies to conditional/event tests in this pass — known limitation, see the engineering report")
+    if not conditional_result and not insufficient_events:
+        # claude code changed: was "no FDR correction applies to
+        # conditional/event tests in this pass — known limitation" — no
+        # longer accurate, run_conditional_test() now computes an exact
+        # m=1 FDR-adjusted p-value on success (see conditional_tools.py).
+        # This branch only means no test ran at all, so there's nothing to
+        # correct.
+        warnings.append("no conditional test evidence was produced for this experiment — nothing to statistically correct")
 
-    verdict_result = compute_verdict_conditional(conditional_result, hypothesized_direction=spec.direction)
+    verdict_result = compute_verdict_conditional(conditional_result, hypothesized_direction=spec.direction, insufficient_events=insufficient_events)
     _finalize_experiment(experiment, tool_log, warnings, conditional_result, {}, verdict_result)

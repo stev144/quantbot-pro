@@ -34,13 +34,22 @@
 
             <p><strong>Statistical evidence:</strong></p>
             {% if experiment.statistical_results.metric == "conditional_event_test" %}
+            {# claude code changed: Statistical Integrity Hardening — expanded per gap #4/#8/#10/#12; FDR is now computed (m=1 identity), not skipped. #}
             <ul>
+                <li>Total observations: {{ experiment.statistical_results.sample_size|default:"not evaluated" }}</li>
+                <li>Qualifying observations (condition true): {{ experiment.statistical_results.n_condition_true|default:"not evaluated" }} ({{ experiment.statistical_results.pct_condition_true|floatformat:2 }}% of dataset)</li>
+                <li>Non-qualifying observations (condition false / baseline): {{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</li>
+                <li>Qualifying episodes (contiguous runs, not raw candles): {{ experiment.statistical_results.n_condition_episodes|default:"not evaluated" }} — average {{ experiment.statistical_results.episode_ratio|floatformat:1 }} candles/episode</li>
                 <li>Mean return when condition true: {{ experiment.statistical_results.mean_return_when_true|default:"not evaluated" }}</li>
-                <li>Mean return when condition false: {{ experiment.statistical_results.mean_return_when_false|default:"not evaluated" }}</li>
+                <li>Mean return when condition false (baseline): {{ experiment.statistical_results.mean_return_when_false|default:"not evaluated" }}</li>
+                <li>Median return when condition true: {{ experiment.statistical_results.median_return_when_true|default:"not evaluated" }}</li>
+                <li>Median return when condition false (baseline): {{ experiment.statistical_results.median_return_when_false|default:"not evaluated" }}</li>
+                <li>Expected direction: {{ experiment.statistical_results.expected_direction|default:"unspecified" }}</li>
+                <li>Observed direction: {{ experiment.statistical_results.observed_direction|default:"not evaluated" }}</li>
                 <li>Mann-Whitney U p-value: {{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</li>
                 <li>Block-permutation p-value: {{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</li>
-                <li>Sample size (true / false): {{ experiment.statistical_results.n_condition_true|default:"not evaluated" }} / {{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</li>
-                <li>FDR-adjusted p-value: not evaluated by this experiment — no FDR correction exists for conditional/event tests in this pass (known limitation)</li>
+                <li>FDR-adjusted p-value: {{ experiment.statistical_results.fdr_adjusted_p_value|default:"not evaluated" }} (exact for a single-condition family, m=1)</li>
+                <li>Passes FDR: {{ experiment.statistical_results.passes_fdr|default:"not evaluated" }}</li>
             </ul>
             {% else %}
             <ul>

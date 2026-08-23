@@ -25,6 +25,27 @@ from bot.research_lab.spec import (
 
 
 def _context(experiment, spec, errors=None):
+    # claude code changed: new — Statistical Integrity Hardening (gap #1).
+    # Before this, a horizon the interpreter genuinely detected (e.g. "6"
+    # from "6-hour forward return") but that isn't in SUPPORTED_HORIZONS
+    # was truthy, so the template's existing "— not detected, please
+    # choose" warning never fired, and the <select> just silently rendered
+    # with no option selected — the student had no way to know their
+    # stated horizon was ever seen, let alone why it disappeared. This is
+    # the literal UI-layer version of the "silent 6h -> 4h" failure mode:
+    # it doesn't happen in validate_spec() (which already correctly
+    # rejects it), it happens because nothing ever told the human what was
+    # detected vs. what's actually selectable.
+    requested_horizon = (spec.target or {}).get("horizon")
+    horizon_unsupported_notice = None
+    if requested_horizon is not None and requested_horizon not in SUPPORTED_HORIZONS:
+        horizon_unsupported_notice = (
+            f"Your hypothesis appears to reference a {requested_horizon}-hour forward return, "
+            f"but this dataset only has forward-return labels for {sorted(SUPPORTED_HORIZONS)} hours. "
+            f"A {requested_horizon}-hour horizon cannot be tested — choose one of the supported horizons below "
+            f"instead of the nearest guess; testing a different horizon is a different research question."
+        )
+
     return {
         "experiment": experiment, "spec": spec, "errors": errors or [],
         "supported_assets": SUPPORTED_ASSETS, "supported_timeframes": SUPPORTED_TIMEFRAMES,
@@ -32,6 +53,7 @@ def _context(experiment, spec, errors=None):
         "supported_horizons": sorted(SUPPORTED_HORIZONS),  # claude code changed: new — real, closed horizon set, shown before submit
         "hypothesis_types": HYPOTHESIS_TYPES, "condition_operators": CONDITION_OPERATORS,  # claude code changed: new
         "interpreter_name": INTERPRETER_NAME,
+        "horizon_unsupported_notice": horizon_unsupported_notice,  # claude code changed: new — gap #1
     }
 
 

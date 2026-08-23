@@ -39,12 +39,60 @@ MIN_CONDITION_SAMPLE = 30  # claude code changed: below this, a "difference in m
 BLOCK_PERMUTATION_N = 100  # claude code changed: matches permutation_test_engine.py's own DEFAULT_N_PERMUTATIONS — smallest achievable p-value is 1/(N+1)
 BLOCK_SIZE_CANDLES = 24  # claude code changed: one day of 1h candles — short enough to preserve statistical power, long enough to respect short-range autocorrelation, same reasoning as this codebase's other block-permutation tools
 
+# claude code changed: new — Statistical Integrity Hardening. Above this
+# candle:episode ratio, "n_condition_true qualifying candles" materially
+# overstates how many independent pieces of evidence exist (a single
+# 10-hour low-RSI regime counts as 10 candles but ~1 event) — see
+# n_condition_episodes below and the module docstring's block-permutation
+# note.
+EPISODE_RATIO_WARNING_THRESHOLD = 3.0
+
 _OPERATORS = {
     "<": lambda series, threshold: series < threshold,
     "<=": lambda series, threshold: series <= threshold,
     ">": lambda series, threshold: series > threshold,
     ">=": lambda series, threshold: series >= threshold,
 }
+
+
+class InsufficientEventsError(ValueError):
+    """
+    claude code changed: new — Statistical Integrity Hardening (gap #3).
+    A condition that IS fully specified and IS computable, but produces too
+    few qualifying (or too few non-qualifying) observations to trust a
+    comparison, is a genuinely different failure mode from "the condition
+    could not be resolved at all" (which orchestrator.py already routes to
+    REQUIRES_REVIEW). This subclass lets the orchestrator distinguish the
+    two and route this one to the INSUFFICIENT_DATA verdict the taxonomy
+    already defines but, before this fix, could never actually reach for a
+    conditional hypothesis.
+    """
+
+    def __init__(self, message: str, n_true: int, n_false: int):
+        super().__init__(message)
+        self.n_true = n_true
+        self.n_false = n_false
+
+
+def _count_episodes(condition_mask: np.ndarray) -> int:
+    """
+    Counts contiguous True-runs in condition_mask — e.g. [T,T,T,F,F,T,T] has
+    2 episodes, not 5 qualifying candles' worth of independent events.
+    claude code changed: new — Statistical Integrity Hardening (gap #6).
+    Exposed alongside the raw candle count so a report can show both,
+    rather than letting "n_condition_true=1,247" silently imply 1,247
+    independent observations when overlapping/adjacent candles from the
+    same regime episode are counted individually. This does NOT change the
+    statistical test itself — the block-permutation p-value already
+    defends the null distribution against this serial dependence by
+    shuffling contiguous blocks, not individual candles (see this module's
+    docstring). This is a transparency metric only.
+    """
+    if condition_mask.size == 0:
+        return 0
+    padded = np.concatenate(([False], condition_mask, [False]))
+    starts = np.flatnonzero(~padded[:-1] & padded[1:])
+    return int(len(starts))
 
 
 def _block_permutation_pvalue(condition_mask: np.ndarray, forward_returns: np.ndarray, observed_diff: float, seed: int) -> float:
@@ -112,31 +160,68 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
     n_true = int(condition_mask.sum())
     n_false = int((~condition_mask).sum())
     if n_true < MIN_CONDITION_SAMPLE or n_false < MIN_CONDITION_SAMPLE:
-        raise ValueError(
+        # claude code changed: was a bare ValueError — now the distinguishable
+        # InsufficientEventsError (gap #3) so the orchestrator can route this
+        # specific failure mode to VERDICT=INSUFFICIENT_DATA instead of the
+        # generic "condition unresolved" REQUIRES_REVIEW path.
+        raise InsufficientEventsError(
             f"condition '{feature_name} {operator} {threshold}' produces too few observations "
-            f"(true={n_true}, false={n_false}, minimum={MIN_CONDITION_SAMPLE} each) for a trustworthy comparison"
+            f"(true={n_true}, false={n_false}, minimum={MIN_CONDITION_SAMPLE} each) for a trustworthy comparison",
+            n_true=n_true, n_false=n_false,
         )
 
-    mean_true = float(forward_returns[condition_mask].mean())
-    mean_false = float(forward_returns[~condition_mask].mean())
+    true_returns = forward_returns[condition_mask]
+    false_returns = forward_returns[~condition_mask]
+
+    mean_true = float(true_returns.mean())
+    mean_false = float(false_returns.mean())
+    median_true = float(np.median(true_returns))
+    median_false = float(np.median(false_returns))
     observed_diff = mean_true - mean_false
+    observed_direction = "positive" if observed_diff > 0 else "negative" if observed_diff < 0 else "neutral"
 
     mannwhitney_stat, mannwhitney_p = scipy_stats.mannwhitneyu(
-        forward_returns[condition_mask], forward_returns[~condition_mask], alternative="two-sided",
+        true_returns, false_returns, alternative="two-sided",
     )
 
     block_p = _block_permutation_pvalue(condition_mask, forward_returns, observed_diff, seed=random_seed)
+
+    # claude code changed: new — Statistical Integrity Hardening (gap #5).
+    # Each experiment tests exactly one condition (m=1 hypothesis family).
+    # Benjamini-Hochberg FDR correction over a single p-value is EXACT
+    # identity (adjusted_p = min(1, p * m/rank) = p when m=rank=1) — not an
+    # approximation and not a shortcut, so this is computed directly rather
+    # than routed through apply_family_wide_correction() (built for
+    # feature_validator.py's many-features-at-once DataFrame shape, the
+    # wrong tool for a single already-computed p-value). If the Research
+    # Lab is ever extended to evaluate multiple conditional hypotheses as
+    # one family, real family-wide correction would replace this — out of
+    # scope for this MVP, where every conditional experiment is its own
+    # hypothesis family of size 1.
+    fdr_adjusted_p_value = block_p
+    passes_fdr = block_p < 0.05
+
+    n_episodes_true = _count_episodes(condition_mask)
+    episode_ratio = (n_true / n_episodes_true) if n_episodes_true > 0 else float("nan")
 
     return {
         "asset": asset, "feature_name": feature_name, "operator": operator, "threshold": threshold, "horizon": horizon,
         "metric": "conditional_event_test",  # claude code changed: explicit metric label so downstream code (verdict.py, explain_evidence) never confuses this with "information_coefficient"
         "n_condition_true": n_true,
         "n_condition_false": n_false,
+        "pct_condition_true": n_true / (n_true + n_false),  # claude code changed: new — gap #4/#10, so a report never implies the total dataset size represents the conditional sample
         "mean_return_when_true": mean_true,
         "mean_return_when_false": mean_false,
+        "median_return_when_true": median_true,  # claude code changed: new — gap #4
+        "median_return_when_false": median_false,  # claude code changed: new — gap #4
         "observed_diff": observed_diff,
+        "observed_direction": observed_direction,  # claude code changed: new — gap #4, persisted in evidence rather than only computed transiently inside verdict.py
         "mannwhitney_p_value": float(mannwhitney_p),
         "block_permutation_p_value": block_p,
+        "fdr_adjusted_p_value": fdr_adjusted_p_value,  # claude code changed: new — gap #5
+        "passes_fdr": passes_fdr,  # claude code changed: new — gap #5
         "sample_size": n_true + n_false,
+        "n_condition_episodes": n_episodes_true,  # claude code changed: new — gap #6, contiguous-run count, not raw candle count
+        "episode_ratio": episode_ratio,  # claude code changed: new — gap #6, candles-per-episode; large values flag overlapping/clustered events
         "random_seed": random_seed,
     }

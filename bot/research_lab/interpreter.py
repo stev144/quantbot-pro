@@ -333,17 +333,33 @@ def explain_evidence(experiment) -> str:
     lines = [f"This experiment tested: {executed_description}"]
 
     if stat.get("metric") == "conditional_event_test":
+        # claude code changed: Statistical Integrity Hardening — every value
+        # below already exists in `stat` (run_conditional_test()'s stored
+        # evidence); this only reads and formats, never recomputes, per the
+        # hard rule this function's own docstring states.
         n_true = stat.get("n_condition_true")
+        pct_true = stat.get("pct_condition_true")
         mean_true = stat.get("mean_return_when_true")
         mean_false = stat.get("mean_return_when_false")
         p = stat.get("mannwhitney_p_value")
+        block_p = stat.get("block_permutation_p_value")
+        expected_dir = stat.get("expected_direction")
+        observed_dir = stat.get("observed_direction")
         if mean_true is not None and mean_false is not None:
+            pct_desc = f", {pct_true:.2%} of the dataset" if pct_true is not None else ""
             lines.append(
-                f"When the condition held ({n_true} candles), the mean forward return was {mean_true:+.4%}, "
+                f"When the condition held ({n_true} candles{pct_desc}), the mean forward return was {mean_true:+.4%}, "
                 f"versus {mean_false:+.4%} when it did not."
             )
+        if observed_dir is not None:
+            if expected_dir and expected_dir != observed_dir:
+                lines.append(f"The hypothesis expected a {expected_dir} effect; the observed effect was {observed_dir}.")
+            else:
+                lines.append(f"Observed effect direction: {observed_dir}.")
         if p is not None:
             lines.append(f"Mann-Whitney U p-value: {p:.4f}.")
+        if block_p is not None:
+            lines.append(f"Block-permutation p-value: {block_p:.4f}.")
     else:
         ic = stat.get("ic")
         p = stat.get("block_permutation_p_value")
