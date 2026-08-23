@@ -18,22 +18,9 @@ from pathlib import Path
 from typing import List
 
 from bot.fetch_all_symbols import symbol_to_filename  # claude code changed: reuse, section 25 — same symbol->filename convention as the real fetch pipeline
-from bot.research_lab.spec import ResearchSpec
+from bot.research_lab.spec import ResearchSpec, DERIVABLE_FROM_OHLCV  # claude code changed: DERIVABLE_FROM_OHLCV moved to spec.py — single source, see that module's docstring for why (it used to drift independently from tools/statistical_tools.py's own copy)
 
 DATA_DIR = "data"
-
-# claude code changed: new — the exact, real output columns
-# bot/research/feature_calculator.py produces (verified by reading the
-# module directly, not guessed), minus forward_return_*/win_* which are
-# labels, not features a hypothesis would reference as a signal input.
-# Anything named in a spec's `features` list that ISN'T in this set is
-# honestly reported as not available, rather than assumed calculable.
-DERIVABLE_FROM_OHLCV = {
-    "atr", "adr", "range_used", "volatility_state", "efficiency", "atr_ratio",
-    "realized_vol", "volume_ratio", "rsi", "ema_12", "ema_26", "adx",
-    "atr_indicator", "bb_upper", "bb_middle", "bb_lower", "bb_width",
-    "macd", "macd_signal", "macd_histogram", "volume",
-}
 
 # claude code changed: new — real, honest examples of data sources this
 # platform does NOT ingest anywhere (confirmed via the Research Agent
@@ -86,7 +73,15 @@ def check_data_availability(spec: ResearchSpec) -> DataAvailabilityReport:
         reason=f"found {ohlcv_path}" if ohlcv_available else f"no OHLCV file at {ohlcv_path} — run fetch_all_symbols.py",
     ))
 
-    for feature_name in spec.features:
+    # claude code changed: new — for a conditional hypothesis, the feature
+    # under test lives inside spec.conditions, not spec.features. Checking
+    # both (deduplicated) means data availability is verified for whichever
+    # shape the confirmed spec actually uses, rather than assuming
+    # hypothesis_type=="feature" everywhere.
+    condition_feature_names = [c.get("feature") for c in spec.conditions if c.get("feature")]
+    feature_names_to_check = list(dict.fromkeys(list(spec.features) + condition_feature_names))  # claude code changed: dedupe, preserve order
+
+    for feature_name in feature_names_to_check:
         if feature_name in KNOWN_UNAVAILABLE_SOURCES:
             checks.append(DataRequirementCheck(
                 name=feature_name, available=False,

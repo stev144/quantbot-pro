@@ -10,7 +10,7 @@
 import numpy as np
 
 from bot.research.feature_calculator import FeatureCalculator
-from bot.research_lab.data_availability import DERIVABLE_FROM_OHLCV
+from bot.research_lab.spec import DERIVABLE_FROM_OHLCV  # claude code changed: import from the single source (spec.py), not data_availability.py's former copy
 from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
 

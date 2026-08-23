@@ -77,6 +77,11 @@ class AmbiguousFieldTest(SimpleTestCase):
 class RoundTripTest(SimpleTestCase):
 
     def test_to_dict_from_dict_round_trip_preserves_every_field(self):
-        spec = _valid_spec(features=["volume_zscore"], conditions=["volume > 2std"])
+        # claude code changed: conditions is now List[Dict] ({"feature",
+        # "operator", "threshold"}), not List[str] — Conditional Hypothesis
+        # Integrity fix. Fixture updated to the real current schema; the
+        # test's actual assertion (round-trip preserves every field,
+        # including conditions) is unchanged.
+        spec = _valid_spec(features=["volume_zscore"], conditions=[{"feature": "volume", "operator": ">", "threshold": 2.0}])
         restored = ResearchSpec.from_dict(spec.to_dict())
         self.assertEqual(spec.to_dict(), restored.to_dict())

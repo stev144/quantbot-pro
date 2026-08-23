@@ -21,13 +21,23 @@
             </div>
             {% else %}
 
-            <div class="chart-caption mono">We will test</div>
+            {# claude code changed: Conditional Hypothesis Integrity fix — shows the real executed research question (Condition: X op threshold), never just a bare feature name, when hypothesis_type == "conditional" #}
+            <div class="chart-caption mono">Executed specification</div>
             <ul class="mono" style="margin:8px 0 18px">
                 <li>Dataset availability for {{ experiment.research_plan.spec.asset }}</li>
-                {% if experiment.research_plan.spec.features %}<li>Signal construction: {{ experiment.research_plan.spec.features|join:", " }}</li>{% endif %}
-                <li>Forward-return relationship over {{ experiment.research_plan.spec.target.horizon }} candles</li>
+                <li>Hypothesis type: <strong>{{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</strong></li>
+                {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
+                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</li>
+                {% else %}
+                {% if experiment.research_plan.spec.features %}<li>Feature (continuous): {{ experiment.research_plan.spec.features|join:", " }}</li>{% endif %}
+                {% endif %}
+                <li>Forward-return relationship over {{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h)</li>
                 <li>Statistical significance (block-permutation test)</li>
+                {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
+                <li class="text-dim">No FDR correction applies to conditional/event tests in this pass — known limitation</li>
+                {% else %}
                 <li>Multiple-testing (FDR) correction</li>
+                {% endif %}
             </ul>
 
             <div class="chart-caption mono">Tools approved for this experiment</div>

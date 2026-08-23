@@ -14,11 +14,35 @@
         </div>
         <div class="term-section-body mono">
 
-            <p><strong>Hypothesis:</strong> {{ experiment.hypothesis_text }}</p>
-            <p><strong>Formal specification:</strong> asset={{ experiment.research_plan.spec.asset }}, timeframe={{ experiment.research_plan.spec.timeframe }}, direction={{ experiment.research_plan.spec.direction|default:"unspecified" }}, horizon={{ experiment.research_plan.spec.target.horizon }} candles, features={{ experiment.research_plan.spec.features|join:", " }}</p>
+            {# claude code changed: Bug 3 fix — explicit "Original" vs "Executed" labels, per the brief's own required provenance vocabulary. These are two genuinely different fields on the model (hypothesis_text is immutable; research_plan.spec is the confirmed/executed spec) — the labels now say so instead of implying they're the same thing. #}
+            <p><strong>Original hypothesis:</strong> "{{ experiment.hypothesis_text }}"</p>
+            <p><strong>Executed specification:</strong></p>
+            <ul>
+                <li>Asset: {{ experiment.research_plan.spec.asset }}</li>
+                <li>Timeframe: {{ experiment.research_plan.spec.timeframe }}</li>
+                <li>Hypothesis type: {{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</li>
+                {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
+                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</li>
+                {% else %}
+                <li>Feature: {{ experiment.research_plan.spec.features|join:", "|default:"none specified" }}</li>
+                {% endif %}
+                <li>Target: forward return</li>
+                <li>Horizon: {{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h)</li>
+                <li>Expected direction: {{ experiment.research_plan.spec.direction|default:"unspecified" }}</li>
+            </ul>
             <p><strong>Dataset:</strong> {{ experiment.research_plan.data_availability.checks|length }} data requirement(s) checked, all_available={{ experiment.research_plan.data_availability.all_available }}</p>
 
             <p><strong>Statistical evidence:</strong></p>
+            {% if experiment.statistical_results.metric == "conditional_event_test" %}
+            <ul>
+                <li>Mean return when condition true: {{ experiment.statistical_results.mean_return_when_true|default:"not evaluated" }}</li>
+                <li>Mean return when condition false: {{ experiment.statistical_results.mean_return_when_false|default:"not evaluated" }}</li>
+                <li>Mann-Whitney U p-value: {{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</li>
+                <li>Block-permutation p-value: {{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</li>
+                <li>Sample size (true / false): {{ experiment.statistical_results.n_condition_true|default:"not evaluated" }} / {{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</li>
+                <li>FDR-adjusted p-value: not evaluated by this experiment — no FDR correction exists for conditional/event tests in this pass (known limitation)</li>
+            </ul>
+            {% else %}
             <ul>
                 <li>IC: {{ experiment.statistical_results.ic|default:"not evaluated" }}</li>
                 <li>Block-permutation p-value: {{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</li>
@@ -26,6 +50,7 @@
                 <li>FDR-adjusted p-value: {{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</li>
                 <li>Passes FDR: {{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</li>
             </ul>
+            {% endif %}
 
             <p><strong>Limitations:</strong></p>
             <ul>

@@ -10,6 +10,29 @@
 # ResearchSpec into an actual research plan. This is the second seam the
 # architecture study called for: "AI understood the idea" is a data
 # structure, not code.
+#
+# claude code changed: Conditional Hypothesis Integrity fix. GOVERNING
+# STATISTICAL PRINCIPLE (see also verdict.py and tools/conditional_tools.py):
+# a research system must test the hypothesis that was specified, not a
+# nearby hypothesis that happens to be easier to compute.
+# "RSI < 30 -> forward return" (a CONDITIONAL/event hypothesis: what
+# happens in the subset of history where RSI is below 30) is NOT the same
+# research question as "RSI -> forward return" (a FEATURE/continuous
+# hypothesis: does the general level of RSI correlate with forward
+# returns everywhere). Before this fix, ResearchSpec.conditions existed
+# but was never populated, validated, or read anywhere — every hypothesis,
+# conditional or not, silently ran the continuous-IC path. hypothesis_type
+# now makes the distinction a first-class, validated field instead of an
+# unused one.
+#
+# claude code changed: SUPPORTED_HORIZONS and DERIVABLE_FROM_OHLCV used to
+# be defined independently in tools/statistical_tools.py and
+# data_availability.py respectively — two copies of "what's actually
+# supported" that could silently drift apart (confirmed: they had, which
+# is exactly how horizon=12 passed validation and the policy gate, then
+# failed deep inside a tool call). Both now live here, once, as the
+# schema's own authoritative domain constants; every other module imports
+# them from this file.
 # ============================================================
 
 from __future__ import annotations
@@ -28,15 +51,51 @@ SUPPORTED_TIMEFRAMES = [INTERVAL]
 SUPPORTED_ASSETS = list(SYMBOLS)
 
 SUPPORTED_TARGET_TYPES = ["forward_return"]  # claude code changed: the only label type every tool in the Tool Layer (§08) can score against today
+
+# claude code changed: moved from tools/statistical_tools.py (single
+# source now, see module docstring). feature_calculator.py only ever
+# produces these three forward-return label columns — verified by reading
+# that module directly, not guessed. A horizon outside this set is a real,
+# honest limit of the platform, and must be rejected at validation time,
+# not discovered only after a tool call fails.
+SUPPORTED_HORIZONS = {1: "forward_return_1h", 4: "forward_return_4h", 24: "forward_return_24h"}
+
+# claude code changed: moved from data_availability.py (single source now).
+# The exact, real output columns bot/research/feature_calculator.py
+# produces, minus forward_return_*/win_* which are labels, not features a
+# hypothesis would reference as a signal input or condition.
+DERIVABLE_FROM_OHLCV = {
+    "atr", "adr", "range_used", "volatility_state", "efficiency", "atr_ratio",
+    "realized_vol", "volume_ratio", "rsi", "ema_12", "ema_26", "adx",
+    "atr_indicator", "bb_upper", "bb_middle", "bb_lower", "bb_width",
+    "macd", "macd_signal", "macd_histogram", "volume",
+}
+
 SUPPORTED_DIRECTIONS = ["positive", "negative", "neutral"]
 RISK_TIERS = ["LOW", "MEDIUM", "HIGH"]
+
+# claude code changed: new — Conditional Hypothesis Integrity fix.
+# "feature": a continuous-relationship hypothesis ("higher RSI is
+# associated with higher subsequent returns") — tested by the existing
+# run_statistical_test (Spearman IC) path, unchanged.
+# "conditional": an event hypothesis ("WHEN RSI falls below 30, subsequent
+# returns are higher") — tested by the new run_conditional_test path
+# (tools/conditional_tools.py), never by run_statistical_test.
+HYPOTHESIS_TYPES = ["feature", "conditional"]
+
+# claude code changed: new — the only condition operators the interpreter
+# and the conditional-test tool agree to support in this pass. A relative
+# condition ("volume > average") is deliberately NOT expressible here —
+# see interpreter.py's own comment on why that's left honestly ambiguous
+# rather than approximated.
+CONDITION_OPERATORS = ["<", "<=", ">", ">="]
 
 # claude code changed: new — the fixed, closed set of fields the spec
 # tracks as either present-and-confident or explicitly ambiguous. Section 6:
 # "If the AI cannot confidently determine an important field, it must
 # explicitly mark the field as ambiguous rather than inventing it." A field
 # name outside this set can never be marked ambiguous (typo-proofing).
-SPEC_FIELDS = ["asset", "timeframe", "direction", "target", "features", "conditions"]
+SPEC_FIELDS = ["asset", "timeframe", "direction", "target", "features", "conditions", "hypothesis_type"]
 
 
 @dataclass
@@ -52,8 +111,13 @@ class ResearchSpec:
 
     asset: Optional[str] = None
     timeframe: Optional[str] = None
+    hypothesis_type: str = "feature"  # claude code changed: new — "feature" | "conditional", see module docstring
     features: List[str] = field(default_factory=list)
-    conditions: List[str] = field(default_factory=list)
+    # claude code changed: was List[str] (never populated/used). Now a real,
+    # validated list of {"feature": str, "operator": "<"|"<="|">"|">=",
+    # "threshold": float} dicts — only meaningful when hypothesis_type ==
+    # "conditional".
+    conditions: List[Dict] = field(default_factory=list)
     direction: Optional[str] = None
     target: Dict = field(default_factory=dict)  # {"type": "forward_return", "horizon": int}
     data_requirements: List[Dict] = field(default_factory=list)  # [{"source": str, "availability": "ingested"|"not_ingested"}]
@@ -71,8 +135,9 @@ class ResearchSpec:
             "hypothesis_text": self.hypothesis_text,
             "asset": self.asset,
             "timeframe": self.timeframe,
+            "hypothesis_type": self.hypothesis_type,
             "features": list(self.features),
-            "conditions": list(self.conditions),
+            "conditions": [dict(c) for c in self.conditions],  # claude code changed: deep-ish copy — conditions are now dicts, not strings
             "direction": self.direction,
             "target": dict(self.target),
             "data_requirements": list(self.data_requirements),
@@ -87,8 +152,9 @@ class ResearchSpec:
             hypothesis_text=data.get("hypothesis_text", ""),
             asset=data.get("asset"),
             timeframe=data.get("timeframe"),
+            hypothesis_type=data.get("hypothesis_type", "feature"),
             features=list(data.get("features", [])),
-            conditions=list(data.get("conditions", [])),
+            conditions=[dict(c) for c in data.get("conditions", [])],
             direction=data.get("direction"),
             target=dict(data.get("target", {})),
             data_requirements=list(data.get("data_requirements", [])),
@@ -122,6 +188,9 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
     if not spec.hypothesis_text or not spec.hypothesis_text.strip():
         errors.append("hypothesis_text is required")
 
+    if spec.hypothesis_type not in HYPOTHESIS_TYPES:
+        errors.append(f"hypothesis_type '{spec.hypothesis_type}' must be one of {HYPOTHESIS_TYPES}")
+
     if "asset" not in unresolved:
         if not spec.asset:
             errors.append("asset is required")
@@ -150,6 +219,36 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
             errors.append("target.horizon is required")
         elif not isinstance(horizon, int) or horizon <= 0:
             errors.append("target.horizon must be a positive integer (candles)")
+        # claude code changed: new — real horizon-set validation, was
+        # missing entirely (Bug 4). This is now checked at the SAME point
+        # tools/statistical_tools.py enforces it — a horizon that would
+        # fail at execution time now fails here instead, before the user
+        # ever sees a Research Plan screen.
+        elif horizon not in SUPPORTED_HORIZONS:
+            errors.append(
+                f"target.horizon={horizon} is not a supported horizon — only "
+                f"{sorted(SUPPORTED_HORIZONS)} candles are available as labels"
+            )
+
+    # claude code changed: new — Conditional Hypothesis Integrity fix.
+    # "conditions" is only in SPEC_FIELDS's ambiguous-check list, not the
+    # unresolved-skip list below, on purpose: even if the interpreter
+    # didn't mark "conditions" ambiguous, a hypothesis_type=="conditional"
+    # spec with no actual condition content must still fail here — silence
+    # is not confirmation.
+    if spec.hypothesis_type == "conditional":
+        if not spec.conditions:
+            errors.append("hypothesis_type is 'conditional' but no condition was specified")
+        for c in spec.conditions:
+            feature = c.get("feature")
+            operator = c.get("operator")
+            threshold = c.get("threshold")
+            if feature not in DERIVABLE_FROM_OHLCV:
+                errors.append(f"condition feature '{feature}' is not a feature this platform can calculate")
+            if operator not in CONDITION_OPERATORS:
+                errors.append(f"condition operator '{operator}' must be one of {CONDITION_OPERATORS}")
+            if not isinstance(threshold, (int, float)):
+                errors.append(f"condition threshold must be numeric, got {threshold!r}")
 
     if spec.risk_tier not in RISK_TIERS:
         errors.append(f"risk_tier '{spec.risk_tier}' must be one of {RISK_TIERS}")

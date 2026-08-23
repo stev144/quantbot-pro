@@ -79,10 +79,17 @@ class AmbiguousHypothesisTest(SimpleTestCase):
 class ExplainEvidenceTest(SimpleTestCase):
 
     class _FakeExperiment:
-        def __init__(self, hypothesis_text, statistical_results, verdict):
+        # claude code changed: +research_plan — explain_evidence() now
+        # reads experiment.research_plan['spec'] to describe the EXECUTED
+        # specification (Conditional Hypothesis Integrity / Bug 2/3 fix),
+        # not experiment.hypothesis_text directly. Default matches
+        # ResearchExperiment's own real default (empty dict) so this
+        # fixture's shape stays honest to the real model.
+        def __init__(self, hypothesis_text, statistical_results, verdict, research_plan=None):
             self.hypothesis_text = hypothesis_text
             self.statistical_results = statistical_results
             self.verdict = verdict
+            self.research_plan = research_plan or {}
 
     def test_explanation_only_uses_numbers_already_in_the_evidence(self):
         exp = self._FakeExperiment("BTC falls after volume spikes", {"ic": 0.081234, "block_permutation_p_value": 0.002}, "SUPPORTED")
