@@ -81,7 +81,15 @@ RISK_TIERS = ["LOW", "MEDIUM", "HIGH"]
 # "conditional": an event hypothesis ("WHEN RSI falls below 30, subsequent
 # returns are higher") — tested by the new run_conditional_test path
 # (tools/conditional_tools.py), never by run_statistical_test.
-HYPOTHESIS_TYPES = ["feature", "conditional"]
+#
+# claude code changed: new — "pairs": a relationship hypothesis between
+# TWO assets ("are asset and asset_b cointegrated, with a stable
+# mean-reverting spread?") — tested via run_cointegration_test
+# (tools/research_tools.py, wraps cointegration_engine.py), never by
+# run_statistical_test/run_conditional_test. Gated PRO by
+# capability_registry.py's cointegration_pairs_research capability — see
+# entitlements.py. Advanced Quant Research Capability Architecture.
+HYPOTHESIS_TYPES = ["feature", "conditional", "pairs"]
 
 # claude code changed: new — the only condition operators the interpreter
 # and the conditional-test tool agree to support in this pass. A relative
@@ -95,7 +103,7 @@ CONDITION_OPERATORS = ["<", "<=", ">", ">="]
 # "If the AI cannot confidently determine an important field, it must
 # explicitly mark the field as ambiguous rather than inventing it." A field
 # name outside this set can never be marked ambiguous (typo-proofing).
-SPEC_FIELDS = ["asset", "timeframe", "direction", "target", "features", "conditions", "hypothesis_type"]
+SPEC_FIELDS = ["asset", "asset_b", "timeframe", "direction", "target", "features", "conditions", "hypothesis_type"]  # claude code changed: +asset_b — Advanced Quant Research Capability Architecture, pairs hypotheses
 
 
 @dataclass
@@ -110,6 +118,7 @@ class ResearchSpec:
     hypothesis_text: str
 
     asset: Optional[str] = None
+    asset_b: Optional[str] = None  # claude code changed: new — Advanced Quant Research Capability Architecture. Only meaningful when hypothesis_type=="pairs"; a pair is exactly (asset, asset_b)
     timeframe: Optional[str] = None
     hypothesis_type: str = "feature"  # claude code changed: new — "feature" | "conditional", see module docstring
     features: List[str] = field(default_factory=list)
@@ -134,6 +143,7 @@ class ResearchSpec:
         return {
             "hypothesis_text": self.hypothesis_text,
             "asset": self.asset,
+            "asset_b": self.asset_b,
             "timeframe": self.timeframe,
             "hypothesis_type": self.hypothesis_type,
             "features": list(self.features),
@@ -151,6 +161,7 @@ class ResearchSpec:
         return cls(
             hypothesis_text=data.get("hypothesis_text", ""),
             asset=data.get("asset"),
+            asset_b=data.get("asset_b"),
             timeframe=data.get("timeframe"),
             hypothesis_type=data.get("hypothesis_type", "feature"),
             features=list(data.get("features", [])),
@@ -207,7 +218,15 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
         if spec.direction not in SUPPORTED_DIRECTIONS:
             errors.append(f"direction '{spec.direction}' must be one of {SUPPORTED_DIRECTIONS}")
 
-    if "target" not in unresolved:
+    # claude code changed: new — Advanced Quant Research Capability
+    # Architecture. A pairs (cointegration) hypothesis has no forward-return
+    # target at all — run_cointegration_test(asset_a, asset_b) tests spread
+    # stationarity, not IC against a forward-return horizon. Requiring
+    # target.horizon for a pairs spec would demand a field the tool never
+    # reads and could never satisfy meaningfully, so this whole block is
+    # scoped away from hypothesis_type=="pairs" rather than forcing a
+    # placeholder horizon value through it.
+    if spec.hypothesis_type != "pairs" and "target" not in unresolved:
         target_type = spec.target.get("type")
         if not target_type:
             errors.append("target.type is required")
@@ -229,6 +248,19 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
                 f"target.horizon={horizon} is not a supported horizon — only "
                 f"{sorted(SUPPORTED_HORIZONS)} candles are available as labels"
             )
+
+    # claude code changed: new — Advanced Quant Research Capability
+    # Architecture. asset_b is only meaningful (and only required) for a
+    # pairs hypothesis — mirrors the asset validation above, plus the
+    # pairs-specific "must be two distinct assets" rule a single-asset
+    # spec has no equivalent of.
+    if spec.hypothesis_type == "pairs" and "asset_b" not in unresolved:
+        if not spec.asset_b:
+            errors.append("asset_b is required for a pairs hypothesis")
+        elif spec.asset_b not in SUPPORTED_ASSETS:
+            errors.append(f"asset_b '{spec.asset_b}' is not in the supported universe ({len(SUPPORTED_ASSETS)} symbols)")
+        elif spec.asset and spec.asset_b == spec.asset:
+            errors.append("asset_b must differ from asset — a pair needs two distinct assets")
 
     # claude code changed: new — Conditional Hypothesis Integrity fix.
     # "conditions" is only in SPEC_FIELDS's ambiguous-check list, not the

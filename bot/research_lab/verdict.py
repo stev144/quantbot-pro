@@ -205,3 +205,72 @@ def compute_verdict_conditional(
 
     explanation.append(f"block-permutation p={block_p:.4f} is significant but above the strong threshold ({CONDITIONAL_EFFECT_STRONG_P})")
     return VerdictResult("PARTIALLY_SUPPORTED", explanation)
+
+
+# claude code changed: new — Advanced Quant Research Capability
+# Architecture. compute_verdict() (IC-based) and compute_verdict_conditional()
+# (event-based) both stay completely unchanged — a pairs/cointegration
+# hypothesis is a THIRD, genuinely different evidence shape (Engle-Granger
+# ADF p-value + half-life, not IC or a mean-difference test) and gets its
+# own function for the same reason those two are separate: never let one
+# evidence shape's thresholds be silently applied to a different research
+# question.
+
+
+def compute_verdict_pairs(cointegration_test: Optional[Dict]) -> VerdictResult:
+    """
+    Deterministic verdict for a PAIRS/cointegration hypothesis, from
+    run_cointegration_test()'s evidence shape only (a PairResult.to_dict()
+    — has 'is_cointegrated'/'passes_filters'/'reject_reason' keys, never
+    'ic' or 'metric'=='conditional_event_test').
+
+    Unlike compute_verdict()/compute_verdict_conditional(), there is no
+    hypothesized_direction parameter — "are these two assets cointegrated"
+    has no directional claim to contradict, only a yes/no answer plus the
+    half-life/tradability filter cointegration_engine.py itself already
+    applies.
+    """
+    explanation: List[str] = []
+
+    if cointegration_test is None:
+        return VerdictResult("REQUIRES_REVIEW", ["hypothesis_type is 'pairs' but no cointegration test was executed — the requested research question was not actually tested"])
+
+    if "is_cointegrated" not in cointegration_test:
+        # claude code changed: defensive — same fail-closed pattern as
+        # compute_verdict_conditional()'s metric-shape check.
+        return VerdictResult("REQUIRES_REVIEW", ["evidence shape does not match a cointegration test — the requested pairs hypothesis was not actually tested"])
+
+    reject_reason = (cointegration_test.get("reject_reason") or "").lower()
+    if "insufficient" in reject_reason:
+        return VerdictResult("INSUFFICIENT_DATA", [cointegration_test.get("reject_reason")])
+    if "ols failed" in reject_reason:
+        return VerdictResult("INVALID_RESEARCH", [cointegration_test.get("reject_reason")])
+
+    coint_p = cointegration_test.get("coint_pvalue")
+    half_life = cointegration_test.get("half_life_hours")
+    is_cointegrated = bool(cointegration_test.get("is_cointegrated"))
+    passes_filters = bool(cointegration_test.get("passes_filters"))
+
+    explanation.append(
+        f"coint_pvalue={coint_p}, half_life={half_life}h, "
+        f"is_cointegrated={is_cointegrated}, passes_filters={passes_filters}"
+        + (f" ({cointegration_test.get('reject_reason')})" if cointegration_test.get("reject_reason") else "")
+    )
+
+    if not is_cointegrated:
+        explanation.append("the raw Engle-Granger test did not find this pair cointegrated")
+        return VerdictResult("REJECTED", explanation)
+
+    if passes_filters:
+        explanation.append("cointegrated and passes the half-life/tradability filter")
+        return VerdictResult("SUPPORTED", explanation)
+
+    # claude code changed: cointegrated on the raw test, but rejected by
+    # cointegration_engine.py's own half-life (or FDR, in a full-universe
+    # run) filter — a real, partial finding, not a wrong one: the
+    # statistical relationship exists, it just doesn't clear the
+    # practical tradability bar. Not REJECTED (that would misstate what
+    # the raw test actually found) and not SUPPORTED (a half-life outside
+    # the accepted range is a real caveat, not a footnote).
+    explanation.append("cointegrated on the raw test, but rejected by the half-life/tradability filter — a partial finding")
+    return VerdictResult("PARTIALLY_SUPPORTED", explanation)

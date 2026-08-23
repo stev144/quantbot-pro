@@ -73,6 +73,18 @@ def check_data_availability(spec: ResearchSpec) -> DataAvailabilityReport:
         reason=f"found {ohlcv_path}" if ohlcv_available else f"no OHLCV file at {ohlcv_path} — run fetch_all_symbols.py",
     ))
 
+    # claude code changed: new — Advanced Quant Research Capability
+    # Architecture. A pairs hypothesis needs TWO OHLCV files, not one —
+    # cointegration testing is meaningless with only asset's own history.
+    if spec.hypothesis_type == "pairs" and spec.asset_b:
+        ohlcv_b_path = _ohlcv_path(spec.asset_b)
+        ohlcv_b_available = ohlcv_b_path.exists()
+        checks.append(DataRequirementCheck(
+            name=f"ohlcv:{spec.asset_b}",
+            available=ohlcv_b_available,
+            reason=f"found {ohlcv_b_path}" if ohlcv_b_available else f"no OHLCV file at {ohlcv_b_path} — run fetch_all_symbols.py",
+        ))
+
     # claude code changed: new — for a conditional hypothesis, the feature
     # under test lives inside spec.conditions, not spec.features. Checking
     # both (deduplicated) means data availability is verified for whichever

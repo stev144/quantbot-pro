@@ -31,10 +31,19 @@
                 <label class="mono" style="display:block; margin-bottom:6px">Hypothesis type</label>
                 <div style="margin-bottom:16px">
                     <label class="mono" style="margin-right:16px">
-                        <input type="radio" name="hypothesis_type" value="feature" id="type-feature" {% if spec.hypothesis_type != "conditional" %}checked{% endif %}> Feature-based (continuous relationship)
+                        <input type="radio" name="hypothesis_type" value="feature" id="type-feature" {% if spec.hypothesis_type == "pairs" or spec.hypothesis_type == "conditional" %}{% else %}checked{% endif %}> Feature-based (continuous relationship)
                     </label>
-                    <label class="mono">
+                    <label class="mono" style="margin-right:16px">
                         <input type="radio" name="hypothesis_type" value="conditional" id="type-conditional" {% if spec.hypothesis_type == "conditional" %}checked{% endif %}> Conditional (event — "WHEN X, THEN Y")
+                    </label>
+                    {# claude code changed: new — Advanced Quant Research Capability Architecture. Visible to every student (section 11's "visible but locked"), but disabled unless pairs_ui_state.badge == "AVAILABLE" — the real enforcement is the POST handler's entitlement check (views/formalize.py), this disabled attribute is a UX convenience only, never authorization by itself (section 12). #}
+                    <label class="mono">
+                        <input type="radio" name="hypothesis_type" value="pairs" id="type-pairs" {% if spec.hypothesis_type == "pairs" %}checked{% endif %} {% if pairs_ui_state.badge != "AVAILABLE" %}disabled{% endif %}>
+                        Pairs / Cointegration (relationship between two assets)
+                        {% if pairs_ui_state.badge == "LOCKED" %}<span style="color:var(--verdict-warning)">🔒 Pro Research — {{ pairs_ui_state.message }}</span>
+                        {% elif pairs_ui_state.badge == "COMING_SOON" %}<span style="color:var(--verdict-warning)">🧪 Coming soon</span>
+                        {% elif pairs_ui_state.badge == "UNAVAILABLE" %}<span style="color:var(--verdict-warning)">⚠️ {{ pairs_ui_state.message }}</span>
+                        {% endif %}
                     </label>
                 </div>
 
@@ -53,7 +62,7 @@
                     {% endfor %}
                 </select>
 
-                <div id="feature-block" style="{% if spec.hypothesis_type == 'conditional' %}display:none{% endif %}">
+                <div id="feature-block" style="{% if spec.hypothesis_type == 'conditional' or spec.hypothesis_type == 'pairs' %}display:none{% endif %}">
                     <label class="mono" style="display:block; margin-bottom:6px">Feature to test {% if not spec.features %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
                     <select name="feature_name" class="term-input mono" style="margin-bottom:16px">
                         <option value="">—</option>
@@ -85,6 +94,20 @@
                     <div class="chart-caption mono" style="margin-top:-8px; margin-bottom:16px">Example: rsi &lt; 30 tests "when RSI is below 30" as an event, not RSI as a continuous feature.</div>
                 </div>
 
+                {# claude code changed: new — Advanced Quant Research Capability Architecture. Pairs research names a SECOND asset, not a feature/condition — the cointegration test itself decides whether the pair is related, so there's nothing to pre-select here. #}
+                <div id="pairs-block" style="{% if spec.hypothesis_type != 'pairs' %}display:none{% endif %}">
+                    <label class="mono" style="display:block; margin-bottom:6px">Second asset (asset_b) {% if not spec.asset_b %}<span style="color:var(--verdict-warning)">— required for pairs research</span>{% endif %}</label>
+                    <select name="asset_b" class="term-input mono" style="margin-bottom:16px">
+                        <option value="">—</option>
+                        {% for a in supported_assets %}
+                        <option value="{{ a }}" {% if spec.asset_b == a %}selected{% endif %}>{{ a }}</option>
+                        {% endfor %}
+                    </select>
+                    <div class="chart-caption mono" style="margin-top:-8px; margin-bottom:16px">Tests whether "Asset" and "asset_b" above are statistically cointegrated with a stable, mean-reverting spread (Engle-Granger two-step + ADF test + half-life).</div>
+                </div>
+
+                {# claude code changed: new — Advanced Quant Research Capability Architecture. Direction and forward horizon are meaningless for a pairs hypothesis (cointegration tests spread stationarity, not a directional forward-return IC) — see spec.py's validate_spec(), which does not require target.horizon when hypothesis_type=="pairs". #}
+                <div id="direction-horizon-block" style="{% if spec.hypothesis_type == 'pairs' %}display:none{% endif %}">
                 <label class="mono" style="display:block; margin-bottom:6px">Expected direction {% if not spec.direction %}<span style="color:var(--verdict-warning)">— not detected</span>{% endif %}</label>
                 <select name="direction" class="term-input mono" style="margin-bottom:16px">
                     <option value="">—</option>
@@ -105,6 +128,7 @@
                     {% endfor %}
                 </select>
                 <div class="chart-caption mono" style="margin-bottom:16px">Only these horizons are supported — feature_calculator.py doesn't produce forward-return labels for any other value.</div>
+                </div>
 
                 <label class="mono" style="display:block; margin-bottom:6px">Compute budget</label>
                 <select name="risk_tier" class="term-input mono" style="margin-bottom:20px">
@@ -133,13 +157,20 @@
 (function () {
     var featureBlock = document.getElementById('feature-block');
     var conditionBlock = document.getElementById('condition-block');
+    var pairsBlock = document.getElementById('pairs-block');
+    var directionHorizonBlock = document.getElementById('direction-horizon-block');
+    var typePairs = document.getElementById('type-pairs');
     function sync() {
         var conditional = document.getElementById('type-conditional').checked;
-        featureBlock.style.display = conditional ? 'none' : '';
+        var pairs = typePairs.checked;
+        featureBlock.style.display = (conditional || pairs) ? 'none' : '';
         conditionBlock.style.display = conditional ? '' : 'none';
+        pairsBlock.style.display = pairs ? '' : 'none';
+        directionHorizonBlock.style.display = pairs ? 'none' : '';
     }
     document.getElementById('type-feature').addEventListener('change', sync);
     document.getElementById('type-conditional').addEventListener('change', sync);
+    typePairs.addEventListener('change', sync);
 })();
 </script>
 {% endblock %}

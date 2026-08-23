@@ -169,10 +169,13 @@ class SecurityNoPathToLiveExecutionTest(TestCase):
         import bot.research_lab.tools.statistical_tools as statistical_tools_module
         import bot.research_lab.tools.research_tools as research_tools_module
         import bot.research_lab.tools.conditional_tools as conditional_tools_module
+        import bot.research_lab.capability_registry as capability_registry_module  # claude code changed: new — Advanced Quant Research Capability Architecture, scan every new module added by this pass too
+        import bot.research_lab.entitlements as entitlements_module  # claude code changed: new
 
         modules = (
             orch_module, interpreter_module, verdict_module, tools_base_module,
             dataset_tools_module, statistical_tools_module, research_tools_module, conditional_tools_module,
+            capability_registry_module, entitlements_module,
         )
         for module in modules:
             source = inspect.getsource(module)
