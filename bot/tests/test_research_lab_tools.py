@@ -90,3 +90,47 @@ class RiskTierEnforcementTest(SimpleTestCase):
     def test_unregistered_tool_name_fails_closed(self):
         result = run_tool("run_arbitrary_python", "LOW")
         self.assertEqual(result.status, "error")
+
+
+# claude code changed: new — Multi-Asset Foundation Refactor Phase 1B
+# hardening (Rule 3). run_conditional_test's block-permutation block size
+# used to be a hardcoded module constant (BLOCK_SIZE_CANDLES=24, "one day
+# of 1h candles") applied regardless of the actual data's timeframe — the
+# same class of bug already fixed in cointegration_engine.py's half-life
+# and feature_calculator.py's realized_vol this phase. Now derived from
+# bot.instruments.candles_per_calendar_day(timeframe).
+class ConditionalTestBlockSizeTest(SimpleTestCase):
+
+    def test_real_1h_crypto_result_is_byte_identical_to_pre_fix_baseline(self):
+        """The exact backward-compatibility guarantee — candles_per_calendar_day('1h')
+        == 24.0 == the old hardcoded constant, so real 1h crypto experiments
+        must produce numerically identical evidence to before this fix."""
+        result = run_tool(
+            "run_conditional_test", "LOW", asset="BTC/USDT", feature_name="rsi",
+            operator="<", threshold=30, horizon=24, random_seed=42,
+        )
+        self.assertEqual(result.status, "success")
+        # claude code changed: exact values captured from a real run before
+        # this fix — see the Phase 1B hardening report's baseline diff.
+        self.assertAlmostEqual(result.output["block_permutation_p_value"], 0.43564356435643564, places=12)
+        self.assertAlmostEqual(result.output["mean_return_when_true"], 0.0010569971240427796, places=12)
+
+    def test_block_size_is_timeframe_derived_not_hardcoded(self):
+        from bot.instruments import candles_per_calendar_day
+        from bot.research_lab.tools.conditional_tools import BLOCK_SIZE_CANDLES, _block_permutation_pvalue
+
+        self.assertEqual(round(candles_per_calendar_day("1h")), BLOCK_SIZE_CANDLES)  # unchanged default, confirmed equal
+        self.assertEqual(round(candles_per_calendar_day("4h")), 6)
+        self.assertEqual(round(candles_per_calendar_day("1d")), 1)
+
+        # claude code changed: a different block_size_candles genuinely
+        # changes the block-permutation result — proves the parameter is
+        # real, not a decorative unused default.
+        import numpy as np
+        rng = np.random.default_rng(0)
+        n = 500
+        mask = rng.random(n) < 0.3
+        returns = rng.normal(0, 0.01, n)
+        p_24 = _block_permutation_pvalue(mask, returns, observed_diff=0.001, seed=1, block_size_candles=24)
+        p_6 = _block_permutation_pvalue(mask, returns, observed_diff=0.001, seed=1, block_size_candles=6)
+        self.assertNotEqual(p_24, p_6, "different block sizes must genuinely change the shuffle structure")

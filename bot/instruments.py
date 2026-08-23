@@ -305,3 +305,20 @@ def periods_per_year(timeframe: str, asset_class: str) -> float:
         f"intraday annualization for asset_class='{asset_class}' at timeframe='{timeframe}' "
         f"requires a market-session-length model this platform does not have yet"
     )
+
+
+def candles_per_calendar_day(timeframe: str) -> float:
+    """
+    claude code changed: new — Phase 1B hardening (Rule 3). How many
+    candles of this timeframe fit in one 24h calendar day — the exact
+    quantity a block-permutation block size ("one day of candles") or
+    similar calendar-day-scoped window should derive from, instead of a
+    hardcoded candle count that's only correct for the one timeframe it
+    was chosen for. Deliberately calendar-day-based (1440 minutes), not
+    trading-session-based — this is a pure candle-width conversion, not
+    an annualization/trading-calendar question (see periods_per_year()
+    for that). Raises UnsupportedTimeframeError for an unknown timeframe.
+    """
+    if timeframe not in TIMEFRAME_MINUTES_PER_CANDLE:
+        raise UnsupportedTimeframeError(f"'{timeframe}' has no known candle width")
+    return 1440.0 / TIMEFRAME_MINUTES_PER_CANDLE[timeframe]
