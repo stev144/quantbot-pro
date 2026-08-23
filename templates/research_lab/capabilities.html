@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Research Capabilities — Research Lab{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">
+<style>
+/* claude code changed: new — Advanced Quant Research Capability Architecture, Phase E. Small, scoped additions on top of the existing academy.css term- classes, not a new design system. */
+.cap-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px; margin-bottom:32px; }
+.cap-card{ border:1px solid var(--border-color, #333); border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:8px; }
+.cap-card-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+.cap-badge{ font-size:11px; padding:2px 8px; border-radius:10px; white-space:nowrap; font-family:monospace; }
+.cap-badge.available{ background:rgba(60,180,100,.15); color:#3cb464; }
+.cap-badge.locked{ background:rgba(200,160,40,.15); color:#c8a028; }
+.cap-badge.coming_soon{ background:rgba(120,120,200,.15); color:#7878c8; }
+.cap-badge.unavailable{ background:rgba(200,80,80,.15); color:#c85050; }
+.cap-desc{ font-size:13px; opacity:.85; flex-grow:1; }
+.cap-note{ font-size:12px; opacity:.7; font-style:italic; }
+</style>
+{% endblock %}
+{% block content %}
+
+{% include "partials/_topbar.html" with active="research_lab_mvp" %}
+
+<div class="term-body">
+    <div class="term-section" style="max-width:960px; margin:0 auto;">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Capabilities</span>
+            <span class="term-section-meta">Core research is available to every account. Advanced capabilities require Pro Research.</span>
+        </div>
+        <div class="term-section-body">
+
+            {% for category in categories %}
+            <div class="chart-caption mono" style="margin:24px 0 12px; text-transform:uppercase; letter-spacing:.05em;">{{ category.name }}</div>
+            <div class="cap-grid">
+                {% for row in category.capabilities %}
+                <div class="cap-card">
+                    <div class="cap-card-head">
+                        <strong class="mono">{{ row.capability.name }}</strong>
+                        {% if row.ui_state.badge == "AVAILABLE" %}
+                        <span class="cap-badge available">✅ AVAILABLE</span>
+                        {% elif row.ui_state.badge == "LOCKED" %}
+                        <span class="cap-badge locked">🔒 PRO RESEARCH</span>
+                        {% elif row.ui_state.badge == "COMING_SOON" %}
+                        <span class="cap-badge coming_soon">🧪 COMING SOON</span>
+                        {% else %}
+                        <span class="cap-badge unavailable">⚠️ UNAVAILABLE</span>
+                        {% endif %}
+                    </div>
+                    <div class="cap-desc">{{ row.capability.description }}</div>
+                    <div class="cap-note mono">{{ row.ui_state.message }}</div>
+                    {% if row.ui_state.badge == "LOCKED" %}
+                    <a href="{% url 'research_lab_dashboard' %}" class="term-btn mono" style="align-self:flex-start; margin-top:4px;">Upgrade to unlock</a>
+                    {% elif row.ui_state.badge == "AVAILABLE" %}
+                    <a href="{% url 'research_lab_dashboard' %}" class="term-btn mono" style="align-self:flex-start; margin-top:4px;">Start a hypothesis</a>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Research Lab" note="a locked or unavailable capability is never a hidden one — every capability listed here is real and, if not yet operational, honestly labeled" %}
+
+{% endblock %}

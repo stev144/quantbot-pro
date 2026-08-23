@@ -22,11 +22,19 @@
             <div class="chart-caption mono" style="margin-bottom:8px">Dataset &amp; Signal</div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Asset</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset }}</span></div>
+                {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
+                {# claude code changed: new — Advanced Quant Research Capability Architecture. Pairs research has no forward-return horizon (see spec.py's validate_spec()) — showing "Asset B" here instead of a blank/meaningless Horizon stat. #}
+                <div class="term-stat"><span class="term-stat-label">Asset B</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset_b }}</span></div>
+                {% else %}
                 <div class="term-stat"><span class="term-stat-label">Horizon</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }}h)</span></div>
+                {% endif %}
             </div>
             {# claude code changed: Conditional Hypothesis Integrity fix — shows Condition: X op threshold for conditional hypotheses, never just a bare feature name #}
             {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
             <div class="chart-caption mono" style="margin-bottom:18px">Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</div>
+            {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
+            {# claude code changed: new — Advanced Quant Research Capability Architecture #}
+            <div class="chart-caption mono" style="margin-bottom:18px">Pair: {{ experiment.research_plan.spec.asset }} / {{ experiment.research_plan.spec.asset_b }}</div>
             {% else %}
             <div class="chart-caption mono" style="margin-bottom:18px">Feature (continuous): {{ experiment.research_plan.spec.features|join:", " }}</div>
             {% endif %}
@@ -58,6 +66,22 @@
             {% if experiment.statistical_results.episode_ratio > 3 %}
             <div class="chart-caption mono" style="margin-bottom:18px">Note: ~{{ experiment.statistical_results.episode_ratio|floatformat:1 }} qualifying candles per episode — many qualifying candles come from the same contiguous regime, not independent events. The block-permutation p-value above already accounts for this serial dependence (it shuffles whole blocks, not individual candles); the raw qualifying-observation count does not.</div>
             {% endif %}
+            {% elif experiment.research_plan.spec.hypothesis_type == "pairs" and experiment.statistical_results %}
+            {# claude code changed: new — Advanced Quant Research Capability Architecture. run_cointegration_test()'s evidence shape (is_cointegrated/passes_filters/half_life_hours) has no "metric" key and no "ic" — a distinct branch, not the generic IC branch below, which would otherwise silently show blank/wrong fields for a pairs result. #}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Cointegration p-value</span><span class="term-stat-value mono">{{ experiment.statistical_results.coint_pvalue|floatformat:6 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">ADF p-value</span><span class="term-stat-value mono">{{ experiment.statistical_results.adf_pvalue|floatformat:6 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Hedge ratio (&beta;)</span><span class="term-stat-value mono">{{ experiment.statistical_results.hedge_ratio|floatformat:4 }}</span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Half-life</span><span class="term-stat-value mono">{{ experiment.statistical_results.half_life_hours|floatformat:1 }}h</span></div>
+                <div class="term-stat"><span class="term-stat-label">Is cointegrated (raw test)</span><span class="term-stat-value mono">{{ experiment.statistical_results.is_cointegrated }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Passes tradability filter</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_filters }}</span></div>
+            </div>
+            {% if experiment.statistical_results.reject_reason %}
+            <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.reject_reason }}</div>
+            {% endif %}
+            <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.fdr_note }}</div>
             {% elif experiment.statistical_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono">{{ experiment.statistical_results.ic|floatformat:4 }}</span></div>

@@ -41,10 +41,19 @@ ALLOWED_TOOLS = {
 # per section 10 and section 23. All plain module constants (not Django
 # settings) for this MVP pass — easy to promote to settings.py later if an
 # operator needs to tune them without a code change, but not overbuilt now.
-MAX_SYMBOLS_PER_EXPERIMENT = 1  # claude code changed: ResearchSpec.asset is single-symbol by design this phase
+MAX_SYMBOLS_PER_EXPERIMENT = 1  # claude code changed: ResearchSpec.asset is single-symbol by design this phase — does not apply to hypothesis_type=="pairs", which has its own MAX_PAIRS_PER_EXPERIMENT below
 MAX_TARGET_HORIZON_CANDLES = 24 * 30  # 30 days of 1h candles
 MAX_FEATURES_PER_EXPERIMENT = 10
 MAX_CONCURRENT_EXPERIMENTS_PER_USER = 3
+# claude code changed: new — Advanced Quant Research Capability
+# Architecture, section 13. A PRO subscription grants ACCESS to
+# cointegration_pairs_research, never a bigger compute budget than a
+# single pair per experiment — ResearchSpec.asset_b is a single field by
+# construction (structurally enforces this already), but this constant
+# makes the limit an explicit, documented, budget-dict-visible fact rather
+# than an implicit consequence of the schema shape, matching every other
+# budget constant in this file.
+MAX_PAIRS_PER_EXPERIMENT = 1
 
 # claude code changed: new — risk_tier gates which tools are reachable at
 # all. MEDIUM tools (backtest/cointegration/sensitivity — real compute
@@ -138,5 +147,6 @@ def evaluate_policy(
             "max_target_horizon_candles": MAX_TARGET_HORIZON_CANDLES,
             "max_features": MAX_FEATURES_PER_EXPERIMENT,
             "max_concurrent_experiments": MAX_CONCURRENT_EXPERIMENTS_PER_USER,
+            "max_pairs_per_experiment": MAX_PAIRS_PER_EXPERIMENT,
         },
     )

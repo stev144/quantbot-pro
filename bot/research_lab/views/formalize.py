@@ -15,6 +15,8 @@
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 
+from bot.research_lab.capability_registry import capability_for_hypothesis_type, RESEARCH_CAPABILITIES  # claude code changed: new — Advanced Quant Research Capability Architecture
+from bot.research_lab.entitlements import ResearchEntitlementService  # claude code changed: new — Advanced Quant Research Capability Architecture
 from bot.research_lab.interpreter import suggest_spec, INTERPRETER_NAME
 from bot.research_lab.models import ResearchExperiment
 from bot.research_lab.spec import (
@@ -46,6 +48,16 @@ def _context(experiment, spec, errors=None):
             f"instead of the nearest guess; testing a different horizon is a different research question."
         )
 
+    # claude code changed: new — Advanced Quant Research Capability
+    # Architecture. Section 11's "visible but locked" UX: the pairs radio
+    # option always appears on this form, but formalize.html shows a
+    # locked notice next to it (rather than hiding it) when the student
+    # isn't entitled — visibility and entitlement are independent, per
+    # section 10. This is DISPLAY ONLY; the real enforcement is the POST
+    # handler's entitlement.allowed check above, not this flag.
+    pairs_capability = RESEARCH_CAPABILITIES.get("cointegration_pairs_research")
+    pairs_ui_state = ResearchEntitlementService.capability_ui_state(experiment.student, "cointegration_pairs_research") if pairs_capability else None
+
     return {
         "experiment": experiment, "spec": spec, "errors": errors or [],
         "supported_assets": SUPPORTED_ASSETS, "supported_timeframes": SUPPORTED_TIMEFRAMES,
@@ -54,6 +66,7 @@ def _context(experiment, spec, errors=None):
         "hypothesis_types": HYPOTHESIS_TYPES, "condition_operators": CONDITION_OPERATORS,  # claude code changed: new
         "interpreter_name": INTERPRETER_NAME,
         "horizon_unsupported_notice": horizon_unsupported_notice,  # claude code changed: new — gap #1
+        "pairs_capability": pairs_capability, "pairs_ui_state": pairs_ui_state,  # claude code changed: new — Advanced Quant Research Capability Architecture
     }
 
 
@@ -63,6 +76,7 @@ def _spec_from_post(post_data, hypothesis_text):
 
     conditions = []
     features = []
+    asset_b = None
     if hypothesis_type == "conditional":
         cond_feature = post_data.get("condition_feature") or None
         cond_operator = post_data.get("condition_operator") or None
@@ -70,19 +84,31 @@ def _spec_from_post(post_data, hypothesis_text):
         cond_threshold = float(cond_threshold_raw) if cond_threshold_raw else None
         if cond_feature:
             conditions = [{"feature": cond_feature, "operator": cond_operator, "threshold": cond_threshold}]
+    elif hypothesis_type == "pairs":
+        # claude code changed: new — Advanced Quant Research Capability
+        # Architecture. Pairs research has no forward-return target at
+        # all (see spec.py's validate_spec()) — risk_tier is forced to
+        # MEDIUM regardless of what the form posted, since
+        # run_cointegration_test is only reachable at MEDIUM (matches the
+        # capability registry's own risk_tier for this capability, not a
+        # value the form should need to get right).
+        asset_b = post_data.get("asset_b") or None
     else:
         features = [f for f in [post_data.get("feature_name")] if f]
+
+    risk_tier = "MEDIUM" if hypothesis_type == "pairs" else post_data.get("risk_tier", "LOW")
 
     return ResearchSpec(
         hypothesis_text=hypothesis_text,
         asset=post_data.get("asset") or None,
+        asset_b=asset_b,
         timeframe=post_data.get("timeframe") or None,
         hypothesis_type=hypothesis_type,
         features=features,
         conditions=conditions,
         direction=post_data.get("direction") or None,
         target={"type": "forward_return", "horizon": int(horizon_raw)} if horizon_raw.isdigit() else {"type": "forward_return"},
-        risk_tier=post_data.get("risk_tier", "LOW"),
+        risk_tier=risk_tier,
     )
 
 
@@ -95,6 +121,23 @@ def formalize(request, experiment_id):
         validation = validate_spec(spec)
         if not validation.is_valid:
             return render(request, "research_lab/formalize.html", _context(experiment, spec, validation.errors))
+
+        # claude code changed: new — Advanced Quant Research Capability
+        # Architecture, section 12: "hiding a button is NOT authorization
+        # ... the backend must reject unauthorized capability requests."
+        # This is the HTTP-level enforcement point a manually-crafted POST
+        # (bypassing the formalize.html radio buttons entirely) still hits
+        # — a free user posting hypothesis_type="pairs" is rejected HERE,
+        # not just visually prevented by a disabled radio button.
+        # plan_experiment() re-checks this independently too (defense in
+        # depth, see orchestrator.py), so even a spec that somehow reached
+        # structured_spec through another path is still blocked before any
+        # tool call.
+        capability = capability_for_hypothesis_type(spec.hypothesis_type)
+        if capability is not None:
+            entitlement = ResearchEntitlementService.can_access(request.user, capability.id)
+            if not entitlement.allowed:
+                return render(request, "research_lab/formalize.html", _context(experiment, spec, [entitlement.message]))
 
         experiment.structured_spec = spec.to_dict()
         experiment.save()

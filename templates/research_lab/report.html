@@ -23,17 +23,38 @@
                 <li>Hypothesis type: {{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</li>
                 {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
                 <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</li>
+                {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
+                {# claude code changed: new — Advanced Quant Research Capability Architecture #}
+                <li>Pair: {{ experiment.research_plan.spec.asset }} / {{ experiment.research_plan.spec.asset_b }}</li>
                 {% else %}
                 <li>Feature: {{ experiment.research_plan.spec.features|join:", "|default:"none specified" }}</li>
                 {% endif %}
+                {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
+                <li>Target: cointegration / spread stationarity (no forward-return horizon — see spec.py's validate_spec())</li>
+                {% else %}
                 <li>Target: forward return</li>
                 <li>Horizon: {{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h)</li>
+                {% endif %}
                 <li>Expected direction: {{ experiment.research_plan.spec.direction|default:"unspecified" }}</li>
             </ul>
             <p><strong>Dataset:</strong> {{ experiment.research_plan.data_availability.checks|length }} data requirement(s) checked, all_available={{ experiment.research_plan.data_availability.all_available }}</p>
+            {% if experiment.capability_id %}
+            <p><strong>Capability:</strong> {{ experiment.capability_id }} &mdash; subscription tier at planning: {{ experiment.research_plan.entitlement.tier_at_planning|default:"CORE" }}</p>
+            {% endif %}
 
             <p><strong>Statistical evidence:</strong></p>
-            {% if experiment.statistical_results.metric == "conditional_event_test" %}
+            {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
+            {# claude code changed: new — Advanced Quant Research Capability Architecture #}
+            <ul>
+                <li>Cointegration p-value: {{ experiment.statistical_results.coint_pvalue|default:"not evaluated" }}</li>
+                <li>ADF p-value: {{ experiment.statistical_results.adf_pvalue|default:"not evaluated" }}</li>
+                <li>Hedge ratio: {{ experiment.statistical_results.hedge_ratio|default:"not evaluated" }}</li>
+                <li>Half-life: {{ experiment.statistical_results.half_life_hours|default:"not evaluated" }} hours</li>
+                <li>Is cointegrated (raw test): {{ experiment.statistical_results.is_cointegrated|default:"not evaluated" }}</li>
+                <li>Passes tradability filter: {{ experiment.statistical_results.passes_filters|default:"not evaluated" }}</li>
+                <li>{{ experiment.statistical_results.fdr_note|default:"" }}</li>
+            </ul>
+            {% elif experiment.statistical_results.metric == "conditional_event_test" %}
             {# claude code changed: Statistical Integrity Hardening — expanded per gap #4/#8/#10/#12; FDR is now computed (m=1 identity), not skipped. #}
             <ul>
                 <li>Total observations: {{ experiment.statistical_results.sample_size|default:"not evaluated" }}</li>

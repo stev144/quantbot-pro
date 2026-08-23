@@ -4,6 +4,7 @@
 
 from django.urls import path
 
+from bot.research_lab.views.capabilities import capabilities  # claude code changed: new — Advanced Quant Research Capability Architecture
 from bot.research_lab.views.dashboard import research_lab_dashboard
 from bot.research_lab.views.formalize import formalize
 from bot.research_lab.views.history import history
@@ -13,6 +14,7 @@ from bot.research_lab.views.results import results
 
 urlpatterns = [
     path("", research_lab_dashboard, name="research_lab_dashboard"),
+    path("capabilities/", capabilities, name="research_lab_capabilities"),  # claude code changed: new — Advanced Quant Research Capability Architecture
     path("history/", history, name="research_lab_history"),
     path("<uuid:experiment_id>/formalize/", formalize, name="research_lab_formalize"),
     path("<uuid:experiment_id>/plan/", plan, name="research_lab_plan"),
