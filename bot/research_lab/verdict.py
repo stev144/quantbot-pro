@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from bot.research.feature_decay_analyzer import IC_STRONG, IC_MODERATE, IC_WEAK  # claude code changed: reuse, section 25
+from bot.research_lab.tools.conditional_tools import MIN_CONDITION_SAMPLE  # claude code changed: new — Statistical Integrity Hardening (gap #2), single source for "enough qualifying events," not a second constant that could drift from the tool layer's own floor
 
 VERDICT_CRITERIA_VERSION = "1.0.0"
 
@@ -126,13 +127,28 @@ CONDITIONAL_EFFECT_STRONG_P = 0.01  # claude code changed: new — stricter than
 def compute_verdict_conditional(
     conditional_test: Optional[Dict],
     hypothesized_direction: Optional[str] = None,
+    insufficient_events: bool = False,
 ) -> VerdictResult:
     """
     Deterministic verdict for a CONDITIONAL/event hypothesis, from
     run_conditional_test()'s evidence shape only (metric ==
     "conditional_event_test") — never from IC-based evidence.
+
+    claude code changed: new `insufficient_events` param — Statistical
+    Integrity Hardening (gap #3). "The condition was never resolved"
+    (REQUIRES_REVIEW, e.g. a relative threshold like "above average" that
+    couldn't be parsed) and "the condition WAS resolved and computed but
+    too few qualifying/non-qualifying candles exist to trust the
+    comparison" (INSUFFICIENT_DATA — a real taxonomy state that was
+    previously unreachable for any conditional hypothesis) are different
+    failure modes with different remedies for the researcher. The
+    orchestrator sets this flag when run_conditional_test() raised
+    InsufficientEventsError specifically, not for any other tool failure.
     """
     explanation: List[str] = []
+
+    if insufficient_events:
+        return VerdictResult("INSUFFICIENT_DATA", ["the condition was computed, but too few qualifying (or too few non-qualifying) observations exist for a trustworthy comparison — see the experiment's warnings for the exact counts"])
 
     if conditional_test is None:
         return VerdictResult("REQUIRES_REVIEW", ["hypothesis_type is 'conditional' but no conditional test was executed — the requested research question was not actually tested"])
@@ -143,11 +159,23 @@ def compute_verdict_conditional(
         # mistake), fail closed rather than misinterpret it.
         return VerdictResult("REQUIRES_REVIEW", ["evidence shape does not match a conditional/event test — the requested conditional hypothesis was not actually tested"])
 
-    sample_size = conditional_test.get("sample_size", 0)
-    if sample_size < MIN_SAMPLE_SIZE:
+    # claude code changed: was `sample_size < MIN_SAMPLE_SIZE` — `sample_size`
+    # here is n_condition_true + n_condition_false, effectively the WHOLE
+    # dataset (~50k rows for this project), which clears a 1000-row floor
+    # unconditionally regardless of how few qualifying EVENTS exist (gap
+    # #2 — the exact "must not report the total dataset size as though it
+    # represents the conditional sample" failure the hardening brief warns
+    # against, except here it was the actual gating variable, not just a
+    # display bug). The correct floor is on the smaller of the two group
+    # sizes, using the SAME constant run_conditional_test() itself already
+    # enforces (MIN_CONDITION_SAMPLE) — single source, not a second number
+    # that could drift from the tool layer's own guard.
+    n_true = conditional_test.get("n_condition_true", 0)
+    n_false = conditional_test.get("n_condition_false", 0)
+    if n_true < MIN_CONDITION_SAMPLE or n_false < MIN_CONDITION_SAMPLE:
         return VerdictResult(
-            "INVALID_RESEARCH",
-            [f"sample_size={sample_size} is below the {MIN_SAMPLE_SIZE}-observation floor for a trustworthy result"],
+            "INSUFFICIENT_DATA",
+            [f"n_condition_true={n_true}, n_condition_false={n_false} — below the {MIN_CONDITION_SAMPLE}-observation floor for a trustworthy comparison"],
         )
 
     observed_diff = conditional_test.get("observed_diff")

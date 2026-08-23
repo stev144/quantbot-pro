@@ -33,14 +33,31 @@
 
             <div class="chart-caption mono" style="margin-bottom:8px">Statistical Evidence</div>
             {% if experiment.statistical_results.metric == "conditional_event_test" %}
+            {# claude code changed: Statistical Integrity Hardening — expanded from 5 to include the fields gap #4/#8/#10 require: qualifying %, median return, FDR (now computed, not skipped), episode count, expected vs observed direction. #}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Total observations</span><span class="term-stat-value mono">{{ experiment.statistical_results.sample_size }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying observations</span><span class="term-stat-value mono">{{ experiment.statistical_results.n_condition_true }} ({{ experiment.statistical_results.pct_condition_true|floatformat:2 }}%)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying episodes (contiguous runs)</span><span class="term-stat-value mono">{{ experiment.statistical_results.n_condition_episodes }}</span></div>
+            </div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_true|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Mean Return (condition false)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_false|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (baseline / condition false)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_false|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (condition true)</span><span class="term-stat-value mono">{{ experiment.statistical_results.median_return_when_true|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (baseline)</span><span class="term-stat-value mono">{{ experiment.statistical_results.median_return_when_false|floatformat:4 }}</span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Expected direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.expected_direction|default:"unspecified" }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Observed direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.observed_direction }}</span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Mann-Whitney p</span><span class="term-stat-value mono">{{ experiment.statistical_results.mannwhitney_p_value|floatformat:4 }}</span></div>
                 <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono">{{ experiment.statistical_results.block_permutation_p_value|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">n (true / false)</span><span class="term-stat-value mono">{{ experiment.statistical_results.n_condition_true }} / {{ experiment.statistical_results.n_condition_false }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{{ experiment.statistical_results.fdr_adjusted_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_fdr }}</span></div>
             </div>
-            <div class="chart-caption mono" style="margin-bottom:18px">Not evaluated by this experiment: FDR correction (no multiple-testing correction exists for conditional/event tests in this pass).</div>
+            {% if experiment.statistical_results.episode_ratio > 3 %}
+            <div class="chart-caption mono" style="margin-bottom:18px">Note: ~{{ experiment.statistical_results.episode_ratio|floatformat:1 }} qualifying candles per episode — many qualifying candles come from the same contiguous regime, not independent events. The block-permutation p-value above already accounts for this serial dependence (it shuffles whole blocks, not individual candles); the raw qualifying-observation count does not.</div>
+            {% endif %}
             {% elif experiment.statistical_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono">{{ experiment.statistical_results.ic|floatformat:4 }}</span></div>

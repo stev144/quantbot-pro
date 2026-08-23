@@ -94,6 +94,10 @@
                 </select>
 
                 <label class="mono" style="display:block; margin-bottom:6px">Forward horizon {% if not spec.target.horizon %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
+                {# claude code changed: new — Statistical Integrity Hardening (gap #1). Fires specifically when a horizon WAS detected but isn't one this dataset supports — distinct from the generic "not detected" case above, which fires only when nothing was found at all. Without this, the <select> below just silently shows no selection with no explanation. #}
+                {% if horizon_unsupported_notice %}
+                <div class="term-message error mono" style="margin-bottom:10px">{{ horizon_unsupported_notice }}</div>
+                {% endif %}
                 <select name="horizon" class="term-input mono" style="margin-bottom:8px">
                     <option value="">—</option>
                     {% for h in supported_horizons %}

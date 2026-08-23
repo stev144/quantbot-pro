@@ -28,6 +28,7 @@ class ToolResult:
     output: Dict = field(default_factory=dict)
     duration_seconds: float = 0.0
     error: str = ""
+    error_type: str = ""  # claude code changed: new — Statistical Integrity Hardening. The exception CLASS name (e.g. "InsufficientEventsError"), separate from the formatted `error` message, so a caller can route on failure MODE (not just log a string) without parsing free text. Empty on success, always populated on failure.
 
     def to_dict(self) -> dict:
         return {
@@ -36,6 +37,7 @@ class ToolResult:
             "output": dict(self.output),
             "duration_seconds": round(self.duration_seconds, 4),
             "error": self.error,
+            "error_type": self.error_type,
         }
 
 
@@ -82,4 +84,5 @@ def run_tool(tool_name: str, risk_tier: str, **params) -> ToolResult:
         return ToolResult(
             tool_name=tool_name, status="error", duration_seconds=duration,
             error=f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}",
+            error_type=type(exc).__name__,
         )
