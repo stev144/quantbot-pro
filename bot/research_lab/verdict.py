@@ -103,3 +103,77 @@ def compute_verdict(
 
     explanation.append(f"|IC|={abs_ic:.4f} survives FDR correction but is below the moderate threshold ({IC_MODERATE}) — statistically real but too weak to act on")
     return VerdictResult("INCONCLUSIVE", explanation)
+
+
+# claude code changed: new — Conditional Hypothesis Integrity fix (Bug 7).
+# compute_verdict() above is IC-specific (IC_STRONG/IC_MODERATE/IC_WEAK
+# thresholds are meaningless for a conditional/event test's mean-difference
+# statistic) and stays completely unchanged — a conditional hypothesis
+# must NEVER be routed through it, since that would produce a confident
+# SUPPORTED/REJECTED verdict for a research question that was never
+# actually tested (the exact bug this fix targets). This is a genuinely
+# separate function, not a branch bolted onto compute_verdict(), so the
+# two evidence shapes (IC-based vs event-based) can never be silently
+# cross-applied.
+#
+# No FDR correction exists for conditional/event tests in this pass (see
+# tools/conditional_tools.py's module docstring and the final engineering
+# report's Known Limitations) — this function's own significance gate is
+# therefore the block-permutation p-value alone, at the same ALPHA.
+CONDITIONAL_EFFECT_STRONG_P = 0.01  # claude code changed: new — stricter than ALPHA for a "strong" conditional verdict, mirroring compute_verdict()'s IC_STRONG vs IC_MODERATE two-tier grading
+
+
+def compute_verdict_conditional(
+    conditional_test: Optional[Dict],
+    hypothesized_direction: Optional[str] = None,
+) -> VerdictResult:
+    """
+    Deterministic verdict for a CONDITIONAL/event hypothesis, from
+    run_conditional_test()'s evidence shape only (metric ==
+    "conditional_event_test") — never from IC-based evidence.
+    """
+    explanation: List[str] = []
+
+    if conditional_test is None:
+        return VerdictResult("REQUIRES_REVIEW", ["hypothesis_type is 'conditional' but no conditional test was executed — the requested research question was not actually tested"])
+
+    if conditional_test.get("metric") != "conditional_event_test":
+        # claude code changed: defensive — if this is ever called with the
+        # wrong evidence shape (e.g. a feature-test result passed in by
+        # mistake), fail closed rather than misinterpret it.
+        return VerdictResult("REQUIRES_REVIEW", ["evidence shape does not match a conditional/event test — the requested conditional hypothesis was not actually tested"])
+
+    sample_size = conditional_test.get("sample_size", 0)
+    if sample_size < MIN_SAMPLE_SIZE:
+        return VerdictResult(
+            "INVALID_RESEARCH",
+            [f"sample_size={sample_size} is below the {MIN_SAMPLE_SIZE}-observation floor for a trustworthy result"],
+        )
+
+    observed_diff = conditional_test.get("observed_diff")
+    block_p = conditional_test.get("block_permutation_p_value")
+    if observed_diff is None or block_p is None:
+        return VerdictResult("INVALID_RESEARCH", ["conditional test produced no usable difference-in-means or p-value"])
+
+    explanation.append(
+        f"mean return when condition true={conditional_test.get('mean_return_when_true'):+.4%}, "
+        f"when false={conditional_test.get('mean_return_when_false'):+.4%}, "
+        f"block-permutation p={block_p:.4f} (alpha={ALPHA})"
+    )
+
+    if hypothesized_direction in ("positive", "negative"):
+        actual_direction = "positive" if observed_diff > 0 else "negative" if observed_diff < 0 else "neutral"
+        if actual_direction != "neutral" and actual_direction != hypothesized_direction:
+            explanation.append(f"hypothesis claimed direction={hypothesized_direction}, evidence shows {actual_direction}")
+            return VerdictResult("REJECTED", explanation)
+
+    if block_p >= ALPHA:
+        explanation.append("not statistically significant under the block-permutation test")
+        return VerdictResult("REJECTED" if abs(observed_diff) < 1e-6 else "INCONCLUSIVE", explanation)
+
+    if block_p <= CONDITIONAL_EFFECT_STRONG_P:
+        explanation.append(f"block-permutation p={block_p:.4f} clears the strong threshold ({CONDITIONAL_EFFECT_STRONG_P})")
+        return VerdictResult("SUPPORTED", explanation)
+
+    explanation.append(f"block-permutation p={block_p:.4f} is significant but above the strong threshold ({CONDITIONAL_EFFECT_STRONG_P})")
+    return VerdictResult("PARTIALLY_SUPPORTED", explanation)

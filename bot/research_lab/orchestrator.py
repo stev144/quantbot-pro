@@ -22,7 +22,7 @@ from bot.research_lab.models import ResearchExperiment
 from bot.research_lab.policy_gate import evaluate_policy
 from bot.research_lab.spec import ResearchSpec, validate_spec
 from bot.research_lab.tools import run_tool
-from bot.research_lab.verdict import compute_verdict
+from bot.research_lab.verdict import compute_verdict, compute_verdict_conditional  # claude code changed: +compute_verdict_conditional, Conditional Hypothesis Integrity fix
 
 DEFAULT_RANDOM_SEED = 42
 
@@ -104,6 +104,38 @@ def run_experiment(experiment: ResearchExperiment) -> None:
 
 
 def _execute_planned_tools(experiment: ResearchExperiment, spec: ResearchSpec, allowed_tools: set) -> None:
+    """
+    claude code changed: Conditional Hypothesis Integrity fix (Bug 1/7).
+    This is now a dispatcher, not a single execution path. Before this
+    fix, EVERY hypothesis — conditional or not — ran through the
+    continuous-feature path below, because spec.hypothesis_type didn't
+    exist. A conditional hypothesis must never fall through to
+    _execute_feature_hypothesis(); the two functions use entirely
+    different tools and entirely different verdict functions, on purpose.
+    """
+    if spec.hypothesis_type == "conditional":
+        _execute_conditional_hypothesis(experiment, spec, allowed_tools)
+    else:
+        _execute_feature_hypothesis(experiment, spec, allowed_tools)
+
+
+def _finalize_experiment(experiment: ResearchExperiment, tool_log: list, warnings: list, evidence: dict, validation: dict, verdict_result) -> None:
+    experiment.tool_call_log = tool_log
+    experiment.warnings = warnings
+    experiment.statistical_results = evidence or {}
+    experiment.validation_results = validation or {}
+    experiment.verdict = verdict_result.verdict
+    experiment.robustness_results = {"verdict_explanation": verdict_result.explanation, "criteria_version": verdict_result.criteria_version}
+    experiment.ai_interpretation = explain_evidence(experiment)  # claude code changed: reads experiment.research_plan['spec'] (the EXECUTED spec) via describe_executed_spec() — never the stale original hypothesis_text, see interpreter.py
+    experiment.status = "COMPLETED"
+    experiment.completed_at = timezone.now()
+    experiment.save()
+
+
+def _execute_feature_hypothesis(experiment: ResearchExperiment, spec: ResearchSpec, allowed_tools: set) -> None:
+    """Continuous FEATURE hypothesis path — unchanged behavior from before
+    the Conditional Hypothesis Integrity fix, still only ever reachable
+    when spec.hypothesis_type == "feature"."""
     tool_log = []
     warnings = []
     statistical_result = None
@@ -146,19 +178,52 @@ def _execute_planned_tools(experiment: ResearchExperiment, spec: ResearchSpec, a
             else:
                 warnings.append(f"run_fdr_correction failed: {result.error}")
 
-    experiment.tool_call_log = tool_log
-    experiment.warnings = warnings
-    experiment.statistical_results = statistical_result or {}
-    experiment.validation_results = fdr_result or {}
+    verdict_result = compute_verdict(None, None) if statistical_result is None else compute_verdict(statistical_result, fdr_result, hypothesized_direction=spec.direction)
+    _finalize_experiment(experiment, tool_log, warnings, statistical_result, fdr_result, verdict_result)
 
-    if statistical_result is None:
-        verdict_result = compute_verdict(None, None)
+
+def _execute_conditional_hypothesis(experiment: ResearchExperiment, spec: ResearchSpec, allowed_tools: set) -> None:
+    """
+    claude code changed: new — CONDITIONAL/event hypothesis path. Calls
+    run_conditional_test(), never run_statistical_test() — the two are not
+    interchangeable (see spec.py's module docstring). Routes evidence
+    through compute_verdict_conditional(), never compute_verdict() — an IC
+    threshold has no meaning for this evidence shape.
+    """
+    tool_log = []
+    warnings = []
+    conditional_result = None
+
+    if "inspect_dataset" in allowed_tools:
+        result = run_tool("inspect_dataset", spec.risk_tier, asset=spec.asset)
+        tool_log.append(result.to_dict())
+
+    condition = spec.conditions[0] if spec.conditions else None
+    condition_fully_specified = bool(condition and condition.get("operator") is not None and condition.get("threshold") is not None)
+
+    if not condition_fully_specified:
+        # claude code changed: this is the fail-closed branch Bug 1 requires
+        # — a conditional hypothesis with no resolvable condition must NOT
+        # silently fall back to a continuous feature test. It produces no
+        # evidence at all, and the verdict engine reports REQUIRES_REVIEW
+        # rather than a confident SUPPORTED/REJECTED on an untested question.
+        warnings.append("hypothesis_type is 'conditional' but no fully-specified condition was confirmed — no conditional test was executed")
+    elif "run_conditional_test" not in allowed_tools:
+        warnings.append("run_conditional_test is not an approved tool for this experiment's risk tier")
     else:
-        verdict_result = compute_verdict(statistical_result, fdr_result, hypothesized_direction=spec.direction)
+        result = run_tool(
+            "run_conditional_test", spec.risk_tier, asset=spec.asset,
+            feature_name=condition["feature"], operator=condition["operator"], threshold=condition["threshold"],
+            horizon=spec.target.get("horizon"), random_seed=experiment.random_seed,
+        )
+        tool_log.append(result.to_dict())
+        if result.status == "success":
+            conditional_result = result.output
+        else:
+            warnings.append(f"run_conditional_test failed: {result.error}")
 
-    experiment.verdict = verdict_result.verdict
-    experiment.robustness_results = {"verdict_explanation": verdict_result.explanation, "criteria_version": verdict_result.criteria_version}
-    experiment.ai_interpretation = explain_evidence(experiment)
-    experiment.status = "COMPLETED"
-    experiment.completed_at = timezone.now()
-    experiment.save()
+    if not conditional_result:
+        warnings.append("no FDR correction applies to conditional/event tests in this pass — known limitation, see the engineering report")
+
+    verdict_result = compute_verdict_conditional(conditional_result, hypothesized_direction=spec.direction)
+    _finalize_experiment(experiment, tool_log, warnings, conditional_result, {}, verdict_result)

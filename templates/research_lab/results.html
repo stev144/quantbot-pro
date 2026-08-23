@@ -19,14 +19,29 @@
             <div class="term-message mono">This experiment is {{ experiment.status }}. {{ experiment.error_message }}</div>
             {% else %}
 
-            <div class="chart-caption mono" style="margin-bottom:8px">Dataset</div>
+            <div class="chart-caption mono" style="margin-bottom:8px">Dataset &amp; Signal</div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Asset</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Horizon</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.target.horizon }} candles</span></div>
+                <div class="term-stat"><span class="term-stat-label">Horizon</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }}h)</span></div>
             </div>
+            {# claude code changed: Conditional Hypothesis Integrity fix — shows Condition: X op threshold for conditional hypotheses, never just a bare feature name #}
+            {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
+            <div class="chart-caption mono" style="margin-bottom:18px">Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</div>
+            {% else %}
+            <div class="chart-caption mono" style="margin-bottom:18px">Feature (continuous): {{ experiment.research_plan.spec.features|join:", " }}</div>
+            {% endif %}
 
             <div class="chart-caption mono" style="margin-bottom:8px">Statistical Evidence</div>
-            {% if experiment.statistical_results %}
+            {% if experiment.statistical_results.metric == "conditional_event_test" %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_true|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (condition false)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_false|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Mann-Whitney p</span><span class="term-stat-value mono">{{ experiment.statistical_results.mannwhitney_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono">{{ experiment.statistical_results.block_permutation_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">n (true / false)</span><span class="term-stat-value mono">{{ experiment.statistical_results.n_condition_true }} / {{ experiment.statistical_results.n_condition_false }}</span></div>
+            </div>
+            <div class="chart-caption mono" style="margin-bottom:18px">Not evaluated by this experiment: FDR correction (no multiple-testing correction exists for conditional/event tests in this pass).</div>
+            {% elif experiment.statistical_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono">{{ experiment.statistical_results.ic|floatformat:4 }}</span></div>
                 <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono">{{ experiment.statistical_results.block_permutation_p_value|floatformat:4 }}</span></div>

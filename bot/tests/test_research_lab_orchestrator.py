@@ -151,17 +151,39 @@ class SecurityNoPathToLiveExecutionTest(TestCase):
         self.user = User.objects.create_user(username="researcher5", password="x")
 
     def test_no_execution_engine_or_order_manager_import_anywhere_in_research_lab(self):
-        import bot.research_lab.orchestrator as orch_module
-        import bot.research_lab.tools as tools_module
+        # claude code changed: fixed a real gap — inspect.getsource() on a
+        # PACKAGE module (bot.research_lab.tools) only returns that
+        # package's __init__.py source, not its submodules. This test
+        # previously never actually scanned dataset_tools.py/
+        # statistical_tools.py/research_tools.py/conditional_tools.py's
+        # real content at all. Now imports and scans every individual
+        # submodule explicitly, including the new conditional_tools.py
+        # added by the Conditional Hypothesis Integrity fix.
         import inspect
 
-        for module in (orch_module, tools_module):
+        import bot.research_lab.orchestrator as orch_module
+        import bot.research_lab.interpreter as interpreter_module
+        import bot.research_lab.verdict as verdict_module
+        import bot.research_lab.tools.base as tools_base_module
+        import bot.research_lab.tools.dataset_tools as dataset_tools_module
+        import bot.research_lab.tools.statistical_tools as statistical_tools_module
+        import bot.research_lab.tools.research_tools as research_tools_module
+        import bot.research_lab.tools.conditional_tools as conditional_tools_module
+
+        modules = (
+            orch_module, interpreter_module, verdict_module, tools_base_module,
+            dataset_tools_module, statistical_tools_module, research_tools_module, conditional_tools_module,
+        )
+        for module in modules:
             source = inspect.getsource(module)
-            self.assertNotIn("execution_engine", source)
-            self.assertNotIn("order_manager", source)
-            self.assertNotIn("bot_runner", source)
-            self.assertNotIn("ExecutionEngine", source)
-            self.assertNotIn("OrderManager", source)
+            self.assertNotIn("execution_engine", source, module.__name__)
+            self.assertNotIn("order_manager", source, module.__name__)
+            self.assertNotIn("bot_runner", source, module.__name__)
+            self.assertNotIn("ExecutionEngine", source, module.__name__)
+            self.assertNotIn("OrderManager", source, module.__name__)
+            self.assertNotIn("ccxt", source, module.__name__)  # claude code changed: new — confirms no direct exchange-library import anywhere either
+            self.assertNotIn("API_KEY", source, module.__name__)
+            self.assertNotIn("API_SECRET", source, module.__name__)
 
     def test_full_experiment_run_never_touches_live_credentials(self):
         experiment = _make_experiment(self.user)

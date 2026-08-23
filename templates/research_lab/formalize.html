@@ -28,6 +28,16 @@
             <form method="post">
                 {% csrf_token %}
 
+                <label class="mono" style="display:block; margin-bottom:6px">Hypothesis type</label>
+                <div style="margin-bottom:16px">
+                    <label class="mono" style="margin-right:16px">
+                        <input type="radio" name="hypothesis_type" value="feature" id="type-feature" {% if spec.hypothesis_type != "conditional" %}checked{% endif %}> Feature-based (continuous relationship)
+                    </label>
+                    <label class="mono">
+                        <input type="radio" name="hypothesis_type" value="conditional" id="type-conditional" {% if spec.hypothesis_type == "conditional" %}checked{% endif %}> Conditional (event — "WHEN X, THEN Y")
+                    </label>
+                </div>
+
                 <label class="mono" style="display:block; margin-bottom:6px">Asset {% if not spec.asset %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
                 <select name="asset" class="term-input mono" style="margin-bottom:16px">
                     <option value="">—</option>
@@ -43,13 +53,37 @@
                     {% endfor %}
                 </select>
 
-                <label class="mono" style="display:block; margin-bottom:6px">Feature to test {% if not spec.features %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
-                <select name="feature_name" class="term-input mono" style="margin-bottom:16px">
-                    <option value="">—</option>
-                    {% for f in derivable_features %}
-                    <option value="{{ f }}" {% if f in spec.features %}selected{% endif %}>{{ f }}</option>
-                    {% endfor %}
-                </select>
+                <div id="feature-block" style="{% if spec.hypothesis_type == 'conditional' %}display:none{% endif %}">
+                    <label class="mono" style="display:block; margin-bottom:6px">Feature to test {% if not spec.features %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
+                    <select name="feature_name" class="term-input mono" style="margin-bottom:16px">
+                        <option value="">—</option>
+                        {% for f in derivable_features %}
+                        <option value="{{ f }}" {% if f in spec.features %}selected{% endif %}>{{ f }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div id="condition-block" style="{% if spec.hypothesis_type != 'conditional' %}display:none{% endif %}">
+                    <label class="mono" style="display:block; margin-bottom:6px">
+                        Condition {% if "conditions" in spec.ambiguous_fields %}<span style="color:var(--verdict-warning)">— we detected a condition but couldn't resolve its threshold, please complete it</span>{% elif not spec.conditions %}<span style="color:var(--verdict-warning)">— not detected, please specify</span>{% endif %}
+                    </label>
+                    <div style="display:flex; gap:8px; margin-bottom:16px">
+                        <select name="condition_feature" class="term-input mono">
+                            <option value="">feature</option>
+                            {% for f in derivable_features %}
+                            <option value="{{ f }}" {% if spec.conditions.0.feature == f %}selected{% endif %}>{{ f }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="condition_operator" class="term-input mono">
+                            <option value="">op</option>
+                            {% for op in condition_operators %}
+                            <option value="{{ op }}" {% if spec.conditions.0.operator == op %}selected{% endif %}>{{ op }}</option>
+                            {% endfor %}
+                        </select>
+                        <input type="number" step="any" name="condition_threshold" class="term-input mono" placeholder="threshold" value="{{ spec.conditions.0.threshold|default_if_none:'' }}">
+                    </div>
+                    <div class="chart-caption mono" style="margin-top:-8px; margin-bottom:16px">Example: rsi &lt; 30 tests "when RSI is below 30" as an event, not RSI as a continuous feature.</div>
+                </div>
 
                 <label class="mono" style="display:block; margin-bottom:6px">Expected direction {% if not spec.direction %}<span style="color:var(--verdict-warning)">— not detected</span>{% endif %}</label>
                 <select name="direction" class="term-input mono" style="margin-bottom:16px">
@@ -59,12 +93,18 @@
                     {% endfor %}
                 </select>
 
-                <label class="mono" style="display:block; margin-bottom:6px">Horizon (candles, 1h each) {% if not spec.target.horizon %}<span style="color:var(--verdict-warning)">— not detected, please enter</span>{% endif %}</label>
-                <input type="number" name="horizon" class="term-input mono" style="margin-bottom:16px" value="{{ spec.target.horizon|default:'' }}" min="1">
+                <label class="mono" style="display:block; margin-bottom:6px">Forward horizon {% if not spec.target.horizon %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
+                <select name="horizon" class="term-input mono" style="margin-bottom:8px">
+                    <option value="">—</option>
+                    {% for h in supported_horizons %}
+                    <option value="{{ h }}" {% if spec.target.horizon == h %}selected{% endif %}>{{ h }} candles ({{ h }} hours, timeframe=1h)</option>
+                    {% endfor %}
+                </select>
+                <div class="chart-caption mono" style="margin-bottom:16px">Only these horizons are supported — feature_calculator.py doesn't produce forward-return labels for any other value.</div>
 
                 <label class="mono" style="display:block; margin-bottom:6px">Compute budget</label>
                 <select name="risk_tier" class="term-input mono" style="margin-bottom:20px">
-                    <option value="LOW">LOW — statistical test only</option>
+                    <option value="LOW">LOW — statistical/conditional test only</option>
                     <option value="MEDIUM">MEDIUM — includes backtest &amp; cointegration</option>
                 </select>
 
@@ -76,4 +116,26 @@
 
 {% include "partials/_footer.html" with label="Research Lab" note="ambiguous fields are never guessed — they require your confirmation" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+// claude code changed: new — minimal vanilla JS toggle, no framework,
+// matching this project's existing "no big JS bundle" convention. Purely
+// a display convenience: the backend only ever reads the fields relevant
+// to whichever hypothesis_type radio was actually submitted, so this
+// script being disabled/broken cannot cause a silent semantic mismatch —
+// it only affects which inputs are visible, not which are processed.
+(function () {
+    var featureBlock = document.getElementById('feature-block');
+    var conditionBlock = document.getElementById('condition-block');
+    function sync() {
+        var conditional = document.getElementById('type-conditional').checked;
+        featureBlock.style.display = conditional ? 'none' : '';
+        conditionBlock.style.display = conditional ? '' : 'none';
+    }
+    document.getElementById('type-feature').addEventListener('change', sync);
+    document.getElementById('type-conditional').addEventListener('change', sync);
+})();
+</script>
 {% endblock %}

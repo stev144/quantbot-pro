@@ -30,6 +30,7 @@ ALLOWED_TOOLS = {
     "calculate_feature",
     "run_statistical_test",
     "run_fdr_correction",
+    "run_conditional_test",  # claude code changed: new — Conditional Hypothesis Integrity fix, real event/conditional test, see tools/conditional_tools.py
     "run_cointegration_test",
     "run_backtest",
     "run_parameter_sensitivity",
@@ -53,7 +54,7 @@ MAX_CONCURRENT_EXPERIMENTS_PER_USER = 3
 # gate will never approve computing at all (matches section 3: no path to
 # live execution regardless of declared risk_tier).
 TOOLS_BY_RISK_TIER = {
-    "LOW": {"inspect_dataset", "calculate_feature", "run_statistical_test", "run_fdr_correction", "generate_research_report"},
+    "LOW": {"inspect_dataset", "calculate_feature", "run_statistical_test", "run_fdr_correction", "run_conditional_test", "generate_research_report"},
     "MEDIUM": {"run_cointegration_test", "run_backtest", "run_parameter_sensitivity"},
 }
 

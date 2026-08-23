@@ -9,15 +9,9 @@
 
 from bot.research.feature_calculator import FeatureCalculator
 from bot.research.feature_validator import FeatureValidator, apply_family_wide_correction
+from bot.research_lab.spec import SUPPORTED_HORIZONS  # claude code changed: moved to spec.py — single source, was independently defined here and could drift from validate_spec()'s check (Bug 4)
 from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
-
-# claude code changed: new — feature_calculator.py only ever produces
-# these three forward-return label columns (verified by reading the
-# module directly). A spec asking for a horizon outside this set is a
-# real, honest limit of this tool, not something to silently round to the
-# nearest supported value.
-SUPPORTED_HORIZONS = {1: "forward_return_1h", 4: "forward_return_4h", 24: "forward_return_24h"}
 
 
 def _prepare(asset: str, horizon: int):
