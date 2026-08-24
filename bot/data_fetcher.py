@@ -311,7 +311,7 @@ def _build_ohlcv_dataframe(raw_data: List[List[Any]]) -> pd.DataFrame:
     )
     df.drop_duplicates(subset=["timestamp"], inplace=True)  # Remove duplicate candles.
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)  # Convert to UTC datetime.
-    for col in ["open", "high", "low", "close", "volume"]:  # Clean numeric columns.
+    for col in ["open", "high", "low", "close", "volume", "qav", "taker_base_vol"]:  # claude code changed: was only open/high/low/close/volume — Phase 2B Step 1, qav/taker_base_vol are also numeric strings in Binance's raw response and need the same coercion; num_trades arrives as a real int already and needs none.
         df[col] = pd.to_numeric(df[col], errors="coerce")  # Convert and coerce invalid values.
     df.set_index("timestamp", inplace=True)  # Use timestamp as the index.
     df.sort_index(inplace=True)  # Sort candles chronologically.

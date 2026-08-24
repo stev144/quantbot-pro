@@ -81,12 +81,25 @@ def prepare_dataframe_for_csv(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         result = result.rename(columns={result.columns[0]: 'timestamp'})
 
     # Keep only the columns downstream code needs
-    keep = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    # claude code changed: added qav/num_trades/taker_base_vol — Phase 2B
+    # Step 1. Binance's raw kline response already includes these (see
+    # data_fetcher._build_ohlcv_dataframe's column list); this pipeline
+    # discarded them before saving to disk for no real reason. Classified
+    # "safe to persist immediately" (stable, documented Binance semantics,
+    # purely additive — no existing column's values change). close_time and
+    # taker_quote_vol deliberately NOT persisted: close_time is fully
+    # redundant with timestamp + the known 1h interval, and taker_quote_vol
+    # is a redundant transform of taker_base_vol x price, not new
+    # information — not accumulating fields for their own sake.
+    keep = [
+        'timestamp', 'open', 'high', 'low', 'close', 'volume',
+        'qav', 'num_trades', 'taker_base_vol',
+    ]
     existing = [c for c in keep if c in result.columns]
     result = result[existing].copy()
 
     # Ensure numeric types (data_fetcher already does this but be defensive)
-    for col in ['open', 'high', 'low', 'close', 'volume']:
+    for col in ['open', 'high', 'low', 'close', 'volume', 'qav', 'taker_base_vol']:  # claude code changed: was only OHLCV — see above
         if col in result.columns:
             result[col] = pd.to_numeric(result[col], errors='coerce')
 

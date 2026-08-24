@@ -219,6 +219,43 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
                 "significance-testing capability in this registry already has. Withheld pending that fix."
             ),
         ),
+        # claude code changed: new entry — Phase 2B (Crypto Market Data
+        # Foundation & Trade-Flow Research Layer). The first genuinely new
+        # microstructure data source this platform ingests (Phase 2A's
+        # audit ranked aggregated trade-level signed-volume/CVD the
+        # highest-priority genuinely new data, given funding/OI already
+        # existed). PARTIALLY_IMPLEMENTED, not further — deliberately NOT
+        # added to bot/research_lab/policy_gate.py's ALLOWED_TOOLS/
+        # TOOLS_BY_RISK_TIER, per Phase 2B Step 11's explicit "do NOT
+        # automatically add it to ALLOWED_TOOLS" instruction; no
+        # run_trade_flow_test-style Research Lab tool exists yet either —
+        # premature to build a tool wrapper for a feature family that
+        # hasn't cleared its own statistical bar yet (see Phase 2B's
+        # incremental-information experiment findings in that phase's
+        # engineering report).
+        ResearchCapability(
+            id="crypto_trade_flow_research",
+            name="Crypto Trade-Flow Research",
+            description="Candle-aligned signed trade volume, delta, cumulative volume delta (CVD), buy/sell ratio, trade intensity, and price/flow divergence, derived from Binance's public aggregated-trade feed — genuinely independent information OHLCV cannot reconstruct (individual trade direction is destroyed by candle aggregation).",
+            category=MARKET_STRUCTURE_RESEARCH, required_tier=PRO, risk_tier="HIGH", compute_tier="MEDIUM",
+            backing_engine="bot.research.trade_flow_engine.TradeFlowEngine",
+            engine_status=PARTIALLY_IMPLEMENTED, has_tests=True,
+            status_note=(
+                "The raw-trade fetch/storage pipeline (bot.engines.trade_data) and the candle-alignment/feature "
+                "math (bot.research.trade_flow_engine) are real, tested against the live Binance API, and "
+                "specifically hardened against look-ahead bias — a boundary-exact causal alignment bug was found "
+                "and fixed during construction (bot/tests/test_trade_flow_engine.py's CausalAlignmentTest exists "
+                "specifically to keep that class of bug caught). What's missing before this could ever reach "
+                "IMPLEMENTED_AND_READY: (1) no Research Lab tool wrapper exists — building one is deliberately "
+                "deferred until the data earns it, not the other way around; (2) no statistical validation has "
+                "been run yet (IC, permutation significance, walk-forward stability, cross-symbol consistency, "
+                "FDR correction across the feature family) — see Phase 2B's incremental-information experiment "
+                "for whatever evidence that produced; risk_tier=HIGH reflects this is a brand-new, wholly "
+                "unvalidated feature family, the same caution kalman_dynamic_hedge_ratio's HIGH classification "
+                "already established for a different reason (dynamic per-candle state vs. here, zero prior "
+                "validation of any kind)."
+            ),
+        ),
         ResearchCapability(
             id="walk_forward_validation",
             name="Walk-Forward Validation",

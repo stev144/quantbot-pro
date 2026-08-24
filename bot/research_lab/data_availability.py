@@ -19,15 +19,42 @@ from typing import List
 from bot.instruments import UnknownInstrumentError, get_instrument, resolve_ohlcv_path  # claude code changed: Multi-Asset Foundation Refactor STEP 2 — was symbol_to_filename() called directly here, a second independent copy of the same provider-path convention tools/_data.py also had (see bot/instruments.py's module docstring)
 from bot.research_lab.spec import ResearchSpec, DERIVABLE_FROM_OHLCV  # claude code changed: DERIVABLE_FROM_OHLCV moved to spec.py — single source, see that module's docstring for why (it used to drift independently from tools/statistical_tools.py's own copy)
 
-# claude code changed: new — real, honest examples of data sources this
-# platform does NOT ingest anywhere (confirmed via the Research Agent
-# architecture audit this session: data_fetcher.py is Binance spot
-# klines/ticker only). Listed explicitly so a rejection can name what's
-# missing, rather than the checker only ever saying "unknown."
+# claude code changed: real, honest examples of data sources this platform
+# has NO working pipeline for at all — not fetchable, not stored, no
+# provider code exists anywhere in the repo. Listed explicitly so a
+# rejection can name what's missing, rather than the checker only ever
+# saying "unknown."
+#
+# claude code changed: funding_rate/open_interest REMOVED from this set —
+# Phase 2B, Step 2. The original listing (comment used to say "confirmed...
+# data_fetcher.py is Binance spot klines/ticker only") predates
+# bot/engines/derivatives_data.py and bot/research/derivatives_engine.py,
+# which now implement a real, tested, look-ahead-safe funding-rate/OI
+# pipeline (bot/tests/test_derivatives_data.py, test_derivatives_engine.py).
+# They are NOT moved to KNOWN_UNAVAILABLE_SOURCES's opposite (silently
+# AVAILABLE) either — see REQUIRES_INTEGRATION below for why "the fetch
+# code works" and "a ResearchSpec can test this as a feature" are
+# different, both real, claims, and collapsing them into one boolean would
+# just move the dishonesty rather than fix it.
 KNOWN_UNAVAILABLE_SOURCES = {
-    "funding_rate", "open_interest", "orderbook_depth_history",
+    "orderbook_depth_history",
     "options_flow", "liquidation_data", "social_sentiment", "on_chain_data",
 }
+
+# claude code changed: new — Phase 2B, Step 2. Sources with a real, tested
+# fetch/compute pipeline (bot/engines/derivatives_data.py +
+# bot/research/derivatives_engine.py — live ccxt calls, historical
+# pagination, look-ahead-safe merge_asof alignment, real test coverage)
+# that are still NOT reachable through the Research Lab's tool/spec layer:
+# no run_statistical_test-compatible bridge merges funding_rate/
+# open_interest into a feature column the way DERIVABLE_FROM_OHLCV features
+# already are. A ResearchSpec naming "funding_rate" as a feature today
+# would still find nothing to test against — the gap is Research Lab
+# wiring, not data existence, the exact "engine works, not yet a typed
+# tool-call" situation kalman_dynamic_hedge_ratio was in before Phase 1D's
+# capability_registry.py update (see that module's status_note history for
+# the same distinction applied there).
+SOURCES_PENDING_RESEARCH_LAB_INTEGRATION = {"funding_rate", "open_interest"}
 
 
 # claude code changed: new — Multi-Asset Foundation Refactor STEP 6. The
@@ -41,18 +68,35 @@ KNOWN_UNAVAILABLE_SOURCES = {
 #                           platform has never ingested any data for at all
 #                           (US_EQUITY/FOREX today — an architectural gap,
 #                           not a "just fetch it" gap)
-#   REQUIRES_PROVIDER    — the feature is a genuinely different kind of
-#                           data (funding_rate, open_interest) that no
-#                           OHLCV re-fetch would ever produce — needs a new
-#                           provider integration, not more of the same one
+#   REQUIRES_PROVIDER    — a genuinely different kind of data with NO
+#                           working fetch/compute pipeline anywhere in this
+#                           repo (orderbook_depth_history, options_flow,
+#                           liquidation_data, social_sentiment,
+#                           on_chain_data today) — needs a new provider
+#                           integration built from scratch.
 # `available` (bool) is kept as-is alongside `status` — every existing
 # reader of `.available`/`all_available` keeps working unchanged; `status`
 # is additive richness, not a replacement.
+#
+# claude code changed: new sixth state — Phase 2B, Step 2.
+#   REQUIRES_INTEGRATION — a real, tested fetch/compute pipeline EXISTS in
+#                           the repo (funding_rate, open_interest today —
+#                           see SOURCES_PENDING_RESEARCH_LAB_INTEGRATION
+#                           above) but has no Research Lab tool/spec-layer
+#                           bridge yet. Distinct from REQUIRES_PROVIDER
+#                           (no pipeline exists at all) and from
+#                           REQUIRES_DATASET (pipeline exists AND is
+#                           file-based/fetch-once, just hasn't been run
+#                           yet) — this data is live-fetched per-request by
+#                           its own engine, not read from a pre-fetched
+#                           local file, so "run fetch_all_symbols.py" is
+#                           not the right instruction for it either.
 AVAILABLE = "AVAILABLE"
 UNAVAILABLE = "UNAVAILABLE"
 REQUIRES_PROVIDER = "REQUIRES_PROVIDER"
 REQUIRES_ASSET_CLASS = "REQUIRES_ASSET_CLASS"
 REQUIRES_DATASET = "REQUIRES_DATASET"
+REQUIRES_INTEGRATION = "REQUIRES_INTEGRATION"
 
 
 @dataclass
@@ -140,6 +184,17 @@ def check_data_availability(spec: ResearchSpec) -> DataAvailabilityReport:
                 name=feature_name, available=False,
                 reason=f"'{feature_name}' is not ingested anywhere on this platform — no substitute dataset will be used",
                 status=REQUIRES_PROVIDER,
+            ))
+        elif feature_name in SOURCES_PENDING_RESEARCH_LAB_INTEGRATION:   # claude code changed: new — Phase 2B, Step 2
+            checks.append(DataRequirementCheck(
+                name=feature_name, available=False,
+                reason=(
+                    f"'{feature_name}' has a real, tested fetch pipeline "
+                    f"(bot.engines.derivatives_data / bot.research.derivatives_engine) "
+                    f"but is not yet wired into the Research Lab's tool/spec layer as a "
+                    f"testable feature — no substitute dataset will be used"
+                ),
+                status=REQUIRES_INTEGRATION,
             ))
         elif feature_name in DERIVABLE_FROM_OHLCV:
             checks.append(DataRequirementCheck(
