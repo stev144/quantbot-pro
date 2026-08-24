@@ -207,7 +207,22 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             category=VALIDATION, required_tier=PRO, risk_tier="HIGH", compute_tier="HIGH",
             backing_engine="bot.research.walk_forward_engine.WalkForwardEngine",
             engine_status=BLOCKED_BY_DEPENDENCY, has_tests=True,
-            status_note="Its full run() path depends on entry_exit_engine.py, which has zero automated test coverage. Already excluded from the Research Lab's tool allowlist for this exact reason.",
+            # claude code changed: status_note updated — Phase 1C (Blocker A)
+            # added bot/tests/test_entry_exit_engine.py (16 tests: pair
+            # identity across asset classes, cost-model integration,
+            # position-sizing/entry/exit math, security boundary), so the
+            # "zero automated test coverage" reason no longer holds. Still
+            # BLOCKED_BY_DEPENDENCY: it remains excluded from the Research
+            # Lab's tool allowlist, a separate wiring gap this phase
+            # deliberately did not touch (Phase 1C's own scope explicitly
+            # excludes exposing advanced capabilities). Re-evaluate
+            # engine_status once that wiring work happens.
+            status_note=(
+                "entry_exit_engine.py now has real test coverage (bot/tests/test_entry_exit_engine.py, "
+                "16 tests, added Phase 1C) — the prior 'zero automated test coverage' blocker is resolved. "
+                "Still excluded from the Research Lab's tool allowlist pending dedicated integration wiring, "
+                "which is a separate, not-yet-scheduled step."
+            ),
         ),
         ResearchCapability(
             id="permutation_robustness_testing",
@@ -216,7 +231,15 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             category=VALIDATION, required_tier=PRO, risk_tier="HIGH", compute_tier="HIGH",
             backing_engine="bot.research.permutation_test_engine",
             engine_status=BLOCKED_BY_DEPENDENCY, has_tests=True,
-            status_note="Its full run() path depends on entry_exit_engine.py, which has zero automated test coverage. Already excluded from the Research Lab's tool allowlist for this exact reason.",
+            # claude code changed: status_note updated — same reason as
+            # walk_forward_validation above; permutation_test_engine.py's
+            # full run() path also depends on entry_exit_engine.py.
+            status_note=(
+                "entry_exit_engine.py now has real test coverage (bot/tests/test_entry_exit_engine.py, "
+                "16 tests, added Phase 1C) — the prior 'zero automated test coverage' blocker is resolved. "
+                "Still excluded from the Research Lab's tool allowlist pending dedicated integration wiring, "
+                "which is a separate, not-yet-scheduled step."
+            ),
         ),
         ResearchCapability(
             id="parameter_sensitivity_analysis",

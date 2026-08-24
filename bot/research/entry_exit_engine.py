@@ -144,6 +144,14 @@ from scipy import stats                         # IC calculation for strategy va
 # level could be computed beyond a value the z-score can ever actually report
 from bot.research.kalman_filter_engine import ZSCORE_WINSOR_LIMIT
 
+# claude code changed: new import — Phase 1C, Blocker A/Step 3. Routes this
+# engine's transaction costs through the same asset-class-aware cost-model
+# boundary bot/config/cost_model.py already established (Phase 1A, STEP 8),
+# instead of the crypto-only FEE_RATE/SLIPPAGE_RATE module constants below.
+# See CostModel/get_cost_model usage in EntryExitEngine.__init__.
+from bot.config.cost_model import CostModel, UnsupportedAssetClassCostModel, get_cost_model
+from bot.instruments import ASSET_CLASS_CRYPTO
+
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings
 
 # claude code changed: new — same fix bot_runner.py/health_check.py/
@@ -391,6 +399,20 @@ MAX_POSITION_FRACTION: float = 0.30
 
 # Minimum position size — below this, skip the trade (not worth the fee)
 MIN_POSITION_USDT: float = 100.0
+
+# claude code changed: FEE_RATE/SLIPPAGE_RATE/TOTAL_TRANSACTION_COST below are
+# kept ONLY as the CRYPTO/binance reference values and as the fallback used if
+# get_cost_model() ever can't be reached — nothing in this module reads them
+# directly anymore. EntryExitEngine.__init__ now resolves costs per-instance
+# via bot.config.cost_model.get_cost_model(asset_class, venue_id).get_costs()
+# (Phase 1C, Blocker A/Step 3), so a differently-configured engine (a
+# different venue, or — once a real cost model exists — a non-crypto asset
+# class) gets its OWN fee/slippage rates instead of always this pair's
+# Binance-modeled numbers. The default (asset_class=CRYPTO, venue_id=
+# "binance") resolves to EXACTLY these same values today (get_venue_execution_
+# costs("binance") == {"fee_rate": FEE_RATE, "slippage_rate": SLIPPAGE_RATE}),
+# so the AVAX/ATOM baseline is unchanged — see model_governance_log.md for
+# the byte-identical regression check.
 
 # Fee rate per side — Binance maker fee for most accounts
 # Total round-trip cost = 2 × FEE_RATE
@@ -852,6 +874,9 @@ class EntryExitEngine:
         validated_half_life:   Optional[float] = None,   # claude code changed: new param
         validated_ic:          Optional[float] = None,   # claude code changed: new param
         validated_win_rate:    Optional[float] = None,   # claude code changed: new param
+        asset_class:           str             = ASSET_CLASS_CRYPTO,   # claude code changed: new param — Phase 1C, Blocker A/Step 3
+        venue_id:               str             = "binance",            # claude code changed: new param — Phase 1C, Blocker A/Step 3
+        cost_model:             Optional[CostModel] = None,             # claude code changed: new param — Phase 1C, Blocker A/Step 3
     ) -> None:
         """
         Initialise the entry/exit engine with all strategy parameters.
@@ -876,8 +901,26 @@ class EntryExitEngine:
             AVAX/ATOM's VALIDATED_IC / VALIDATED_WIN_RATE, which
             research_data/model_governance_log.md has since shown were
             never actually valid even for AVAX/ATOM itself.
+
+        asset_class / venue_id : str
+            Which bot.config.cost_model.get_cost_model() entry to resolve
+            fee_rate/slippage_rate from. Defaults to CRYPTO/"binance" —
+            the AVAX/ATOM reference pair's real venue — which resolves to
+            the exact same numeric values the old FEE_RATE/SLIPPAGE_RATE
+            module constants held, so existing callers see byte-identical
+            costs unless they explicitly ask for something else. Raises
+            bot.config.cost_model.UnsupportedAssetClassCostModel if asked
+            for an asset class with no real cost model yet (e.g. US_EQUITY,
+            FOREX) — this engine never guesses a crypto-shaped cost for a
+            market that has never had one.
+
+        cost_model : Optional[CostModel]
+            Escape hatch to inject a CostModel instance directly instead of
+            resolving one from asset_class/venue_id — e.g. for tests, or a
+            future caller with its own already-resolved cost model. When
+            given, asset_class/venue_id are ignored.
         """
-        # claude code changed: the six "pair_name / symbol_a / ... validated_win_rate" paragraphs above are a new docstring addition (no "#" possible inside the string itself)
+        # claude code changed: the six "pair_name / symbol_a / ... validated_win_rate" paragraphs above are a new docstring addition (no "#" possible inside the string itself); the asset_class/venue_id/cost_model paragraphs are also new, same reason
 
         # Store all strategy parameters
         self.entry_threshold   = entry_threshold       # |z| must exceed this to enter
@@ -895,6 +938,20 @@ class EntryExitEngine:
         self.require_confirm   = require_confirmation   # Require lag z-score confirmation
         self.output_dir        = Path(output_dir)       # Where to save results
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # claude code changed: new block — Phase 1C, Blocker A/Step 3. Resolve
+        # this engine's OWN fee_rate/slippage_rate through the cost-model
+        # boundary instead of reading the module-level FEE_RATE/SLIPPAGE_RATE
+        # crypto/Binance constants directly. Raises UnsupportedAssetClassCostModel
+        # (not caught here) if asset_class has no real cost model yet — fail
+        # loud at construction, not with a silently wrong number mid-simulation.
+        self.asset_class = asset_class                                            # claude code changed: new
+        self.venue_id     = venue_id                                              # claude code changed: new
+        resolved_cost_model = cost_model if cost_model is not None else get_cost_model(asset_class, venue_id)  # claude code changed: new
+        _costs = resolved_cost_model.get_costs()                                 # claude code changed: new
+        self.fee_rate      = _costs["fee_rate"]                                  # claude code changed: new
+        self.slippage_rate = _costs["slippage_rate"]                             # claude code changed: new
+        self.total_transaction_cost = 2 * (self.fee_rate + self.slippage_rate)   # claude code changed: new — replaces module-level TOTAL_TRANSACTION_COST at every use site below
 
         # claude code changed: new block (6 lines below) — stores the new pair-identity/validated-baseline params
         # Pair identity — resolved here if given, otherwise by run() from
@@ -934,7 +991,8 @@ class EntryExitEngine:
                     f"(reference half-life: {half_life_note})")                          # claude code changed: was f"(2 x half-life {VALIDATED_HALF_LIFE}h)"
         logger.info(f"  Partial exit      : 50% at |z| < {exit_partial_zscore}")
         logger.info(f"  Lag confirmation  : {require_confirmation}")
-        logger.info(f"  Transaction cost  : {TOTAL_TRANSACTION_COST:.2%} round trip")
+        logger.info(f"  Cost model        : {asset_class}/{venue_id} — fee {self.fee_rate:.4%} + slippage {self.slippage_rate:.4%} per side")   # claude code changed: was hardcoded module-constant read
+        logger.info(f"  Transaction cost  : {self.total_transaction_cost:.2%} round trip")   # claude code changed: was TOTAL_TRANSACTION_COST module constant
 
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1638,7 +1696,7 @@ class EntryExitEngine:
         gross_pnl = np.expm1(spread_move)
 
         # Transaction cost on the partial close (50% of position × round-trip cost)
-        partial_cost  = TOTAL_TRANSACTION_COST * self.exit_partial_frac
+        partial_cost  = self.total_transaction_cost * self.exit_partial_frac   # claude code changed: was TOTAL_TRANSACTION_COST module constant
         net_pnl       = gross_pnl - partial_cost
         partial_usdt  = trade.position_usdt * self.exit_partial_frac
 
@@ -1751,7 +1809,7 @@ class EntryExitEngine:
 
         # ── Apply transaction costs ───────────────────────────────────────────
         # Full round-trip cost: fee + slippage on both legs, entry + exit
-        fee_cost_pct  = TOTAL_TRANSACTION_COST
+        fee_cost_pct  = self.total_transaction_cost   # claude code changed: was TOTAL_TRANSACTION_COST module constant
         net_pnl_pct   = gross_pnl_pct - fee_cost_pct
 
         # ── Convert to USDT ───────────────────────────────────────────────────
@@ -1928,10 +1986,26 @@ class EntryExitEngine:
         # For pairs trading: each trade is independent, so we use trade returns
         # Annualisation: assume ~10 trades per week = 520 per year
         pnl_std   = trade_log["net_pnl_pct"].std()
-        trades_per_year = n_total / (
-            (pd.to_datetime(trade_log["exit_timestamp"].max()) -
-             pd.to_datetime(trade_log["entry_timestamp"].min())).days / 365.25
-        ) if n_total > 0 else 1
+        # claude code changed: was `.days` (integer truncation) — for any
+        # trade set spanning under 24h between the first entry and the last
+        # exit (this module's own governance log documents 2-9h median
+        # holds as common), `.days` truncates to 0 and this line raised
+        # ZeroDivisionError, crashing strategy-summary generation entirely.
+        # Found while adding entry_exit_engine.py's first test coverage
+        # (Phase 1C, Blocker A/Step 4). `.total_seconds() / 86400.0` gives
+        # the real fractional-day span instead — for any existing multi-day
+        # backtest span (e.g. the AVAX/ATOM 5-year reference run) this only
+        # adds back the fractional-day remainder `.days` was discarding, a
+        # negligible change to trades_per_year/Sharpe; for a short span it
+        # is the difference between a real number and a crash.
+        trade_span_days = (
+            pd.to_datetime(trade_log["exit_timestamp"].max()) -
+            pd.to_datetime(trade_log["entry_timestamp"].min())
+        ).total_seconds() / 86400.0
+        trades_per_year = (
+            n_total / (trade_span_days / 365.25)
+            if n_total > 0 and trade_span_days > 0 else 1
+        )
         sharpe = (
             (avg_pnl_pct / pnl_std) * np.sqrt(trades_per_year)
             if pnl_std > 0 else 0.0
@@ -2030,6 +2104,11 @@ class EntryExitEngine:
             "validated_ic":        self.validated_ic if self.validated_ic is not None else np.nan,             # claude code changed: was VALIDATED_IC
             "validated_win_rate":  self.validated_win_rate if self.validated_win_rate is not None else np.nan, # claude code changed: was VALIDATED_WIN_RATE
             "kelly_safety":        KELLY_SAFETY_FRACTION,
+            "asset_class":         self.asset_class,        # claude code changed: new — Phase 1C, Blocker A/Step 3
+            "venue_id":            self.venue_id,            # claude code changed: new
+            "fee_rate":            self.fee_rate,            # claude code changed: new
+            "slippage_rate":       self.slippage_rate,       # claude code changed: new
+            "total_transaction_cost": round(self.total_transaction_cost, 6),   # claude code changed: new
             "entry_threshold":     self.entry_threshold,
             "exit_target":         self.exit_target,
             "exit_stoploss":       self.exit_stoploss,        # claude code changed: no longer used to trigger exits — see module constant comment
@@ -2082,8 +2161,17 @@ class EntryExitEngine:
         # matches walk_forward_engine.py's pair_deserves_testing(), which
         # already tries this exact short-name pattern when looking for a
         # Missing-Piece-4 summary to gate on.
-        short_a = (self.symbol_a or SYMBOL_A).replace("_USDT", "")   # claude code changed: new
-        short_b = (self.symbol_b or SYMBOL_B).replace("_USDT", "")   # claude code changed: new
+        # claude code changed: ".replace('/', '-')" is new — found via Phase
+        # 1C's entry_exit_engine.py test coverage (Blocker A/Step 4). An FX
+        # symbol like "EUR/USD" (bot/instruments.py's own canonical_symbol
+        # example format) passed straight through into a filename made "/"
+        # get read as a path separator by pathlib, so
+        # output_dir/"EUR/USD_GBP/USD_trade_log.csv" tried to write into
+        # nonexistent subdirectories and crashed. Crypto symbols (no "/")
+        # are unaffected — this only changes behavior for a pair identity
+        # this engine could not previously save output for at all.
+        short_a = (self.symbol_a or SYMBOL_A).replace("_USDT", "").replace("/", "-")   # claude code changed: new
+        short_b = (self.symbol_b or SYMBOL_B).replace("_USDT", "").replace("/", "-")   # claude code changed: new
         prefix  = f"{short_a}_{short_b}"                             # claude code changed: new
 
         # Trade log — primary output

@@ -136,6 +136,7 @@ from scipy import stats                     # OLS regression, Spearman IC
 from statsmodels.tsa.stattools import adfuller, coint   # ADF test, cointegration test
 from statsmodels.regression.linear_model import OLS     # OLS for hedge ratio
 from statsmodels.tools import add_constant              # Add intercept to OLS
+from statsmodels.stats.multitest import multipletests   # claude code changed: restored — Phase B (P1-5) FDR correction across all tested pairs; accidentally dropped by commit de4fd8b, restored in Phase 1C (Blocker D) with the Phase 1B timeframe/half_life fields preserved
 
 from bot.instruments import candles_to_wall_clock  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. The single candles->wall-clock-time conversion, see bot/instruments.py
 
@@ -281,6 +282,8 @@ class PairResult:
         passes_filters:  bool,
         reject_reason:   str = "",
         timeframe:       str = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h" so every existing call site (all of which predate this parameter) keeps constructing byte-identical PairResults.
+        adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: restored — Phase B (P1-5); accidentally dropped by commit de4fd8b, restored in Phase 1C (Blocker D)
+        passes_fdr:      Optional[bool]  = None,   # claude code changed: restored — Phase B (P1-5); None until run_all()'s correction step assigns it
     ) -> None:
 
         self.symbol_a        = symbol_a         # First asset in pair
@@ -303,6 +306,14 @@ class PairResult:
         self.passes_filters  = passes_filters    # Did it pass half-life filters?
         self.reject_reason   = reject_reason     # Why was it rejected (if applicable)
         self.timeframe       = timeframe         # claude code changed: new — the candle resolution half_life was estimated on; see bot/instruments.py's candles_to_wall_clock()
+        # claude code changed: restored — Phase B (P1-5). Assigned by
+        # run_all()'s _apply_fdr_correction() after every pair in the
+        # universe has been tested, not by _test_pair() itself — multiple-
+        # testing correction needs the full cross-pair p-value array, same
+        # "provisional then corrected" pattern feature_validator.py uses.
+        # None until that step runs.
+        self.adf_pvalue_fdr  = adf_pvalue_fdr
+        self.passes_fdr      = passes_fdr
         # claude code changed: new — the actual physical-time conversion,
         # derived from the instrument/timeframe abstraction (bot/
         # instruments.py), never a hardcoded "×1 for hours" assumption.
@@ -318,6 +329,8 @@ class PairResult:
             "symbol_b":        self.symbol_b,
             "coint_pvalue":    round(self.coint_pvalue, 6),
             "adf_pvalue":      round(self.adf_pvalue, 6),
+            "adf_pvalue_fdr":  round(self.adf_pvalue_fdr, 6) if self.adf_pvalue_fdr is not None else None,   # claude code changed: restored — Phase B (P1-5)
+            "passes_fdr":      self.passes_fdr,   # claude code changed: restored — Phase B (P1-5)
             "hedge_ratio":     round(self.hedge_ratio, 6),
             "intercept":       round(self.intercept, 6),
             # claude code changed: half_life_hours is KEPT, unchanged in
@@ -493,6 +506,33 @@ class CointegrationEngine:
                 f"{status} | {filter_status}"
             )
 
+        # ── Step 2.5: FDR correction across every pair tested ─────────────────
+        # claude code changed: restored — Phase B remediation (forensic-audit
+        # finding P1-5). Each pair above was tested independently at a flat
+        # p < coint_threshold (0.05) with no correction across the
+        # C(20,2) = 190 pairs actually tested — at alpha=0.05 with 190
+        # independent tests, roughly 190*0.05 ≈ 9-10 pairs are expected to
+        # look "cointegrated" by chance alone even with zero real
+        # relationships. This step corrects for that AFTER every pair has
+        # been tested (needs the full cross-pair p-value array, same
+        # "provisional then corrected" pattern feature_validator.py uses —
+        # see apply_family_wide_correction() there for the sibling fix).
+        #
+        # Deliberately conservative, not loosened: a pair that was
+        # is_cointegrated=True under the raw threshold but fails FDR
+        # correction is DOWNGRADED (passes_filters set False, reject_reason
+        # updated) — this only ever removes pairs, never adds ones the raw
+        # test rejected. The goal stated in the remediation brief is fewer,
+        # more trustworthy pairs, not more pairs.
+        #
+        # This method was accidentally deleted by a later, unrelated commit
+        # (Academy module / derivatives engine / research pipeline addition)
+        # that clobbered this file — restored here in Phase 1C (Blocker D),
+        # verbatim from its original Phase B implementation, alongside the
+        # Phase 1B timeframe/half_life_candles fields that were added after
+        # the original FDR work and must be preserved.
+        self._apply_fdr_correction()
+
         # ── Step 3: Identify valid pairs ──────────────────────────────────────
         self.valid_pairs = [r for r in self.pair_results if r.passes_filters]
 
@@ -547,6 +587,61 @@ class CointegrationEngine:
         logger.info("=" * 70)
 
         return pairs_df, spread_data
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # FDR CORRECTION ACROSS ALL TESTED PAIRS
+    # claude code changed: restored — Phase B remediation (forensic-audit
+    # finding P1-5). See the call site in run_all() ("Step 2.5") for the
+    # full reasoning. Mutates self.pair_results in place: every PairResult
+    # gets adf_pvalue_fdr/passes_fdr assigned, and any pair that was
+    # is_cointegrated=True under the raw threshold but fails the corrected
+    # threshold has passes_filters downgraded to False with an updated
+    # reject_reason — never the reverse. Restored verbatim from commit
+    # 3dbcb1c (accidentally deleted by a later, unrelated commit) in
+    # Phase 1C (Blocker D).
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _apply_fdr_correction(self) -> None:
+        if not self.pair_results:
+            return
+
+        adf_pvalues = np.array([r.adf_pvalue for r in self.pair_results])
+        _, fdr_pvalues, _, _ = multipletests(
+            adf_pvalues, alpha=self.coint_threshold, method='fdr_bh'
+        )
+
+        n_pass_fdr = 0
+        n_downgraded = 0
+
+        for result, p_fdr in zip(self.pair_results, fdr_pvalues):
+            result.adf_pvalue_fdr = float(p_fdr)
+            result.passes_fdr = bool(p_fdr < self.coint_threshold)
+
+            if result.passes_fdr:
+                n_pass_fdr += 1
+
+            if result.is_cointegrated and not result.passes_fdr:
+                # Was cointegrated under the raw per-pair threshold, but
+                # doesn't survive correction across all pairs tested —
+                # downgrade the final decision, keep is_cointegrated as the
+                # historical record of what the raw test said.
+                result.passes_filters = False
+                result.reject_reason = (
+                    f"failed FDR-corrected significance "
+                    f"(p_fdr={p_fdr:.4f} >= {self.coint_threshold}, "
+                    f"raw ADF p={result.adf_pvalue:.4f} was < threshold "
+                    f"but did not survive correction across "
+                    f"{len(self.pair_results)} pairs tested)"
+                )
+                n_downgraded += 1
+
+        logger.info(
+            f"\nStep 2.5: FDR correction across {len(self.pair_results)} pairs — "
+            f"{n_pass_fdr} pass FDR at alpha={self.coint_threshold}, "
+            f"{n_downgraded} pair(s) downgraded (passed raw threshold, "
+            f"failed correction)"
+        )
 
 
     # ─────────────────────────────────────────────────────────────────────────
