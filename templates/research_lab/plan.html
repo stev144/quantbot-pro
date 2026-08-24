@@ -8,6 +8,8 @@
 
 <div class="term-body">
     <div class="term-section academy-step-card" style="max-width:640px; margin:0 auto;">
+        {% url 'research_lab_formalize' experiment_id=experiment.id as back_url %}
+        {% include "research_lab/_back_nav.html" with back_url=back_url %}
         <div class="term-section-head">
             <span class="term-section-title">Research Plan</span>
             <span class="term-section-meta">{{ experiment.status }}</span>

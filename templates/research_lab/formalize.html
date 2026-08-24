@@ -8,6 +8,8 @@
 
 <div class="term-body">
     <div class="term-section academy-step-card" style="max-width:640px; margin:0 auto;">
+        {% url 'research_lab_dashboard' as back_url %}
+        {% include "research_lab/_back_nav.html" with back_url=back_url %}
         <div class="term-section-head">
             <span class="term-section-title">Let's formalize your hypothesis</span>
             <span class="term-section-meta">{{ interpreter_name }} — a rules-based suggestion tool, not AI</span>

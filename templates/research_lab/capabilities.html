@@ -22,6 +22,8 @@
 
 <div class="term-body">
     <div class="term-section" style="max-width:960px; margin:0 auto;">
+        {% url 'research_lab_dashboard' as back_url %}
+        {% include "research_lab/_back_nav.html" with back_url=back_url %}
         <div class="term-section-head">
             <span class="term-section-title">Research Capabilities</span>
             <span class="term-section-meta">Core research is available to every account. Advanced capabilities require Pro Research.</span>

@@ -8,6 +8,9 @@
 
 <div class="term-body">
     <div class="term-section academy-step-card" style="max-width:720px; margin:0 auto;">
+        {% comment %}claude code changed: report is reachable from its own experiment's results page AND from another report's rerun_of chain — genuinely ambiguous parent, prefers browser history with results (this experiment) as the safe fallback.{% endcomment %}
+        {% url 'research_lab_results' experiment_id=experiment.id as back_url %}
+        {% include "research_lab/_back_nav.html" with back_url=back_url use_browser_history=True %}
         <div class="term-section-head">
             <span class="term-section-title">Research Report</span>
             <span class="term-section-meta mono">{{ experiment.id }}</span>

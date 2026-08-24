@@ -235,6 +235,162 @@ def fetch_agg_trades(symbol: str, since_ms: int, until_ms: Optional[int] = None)
     return df
 
 
+# ── Bulk historical acquisition: Binance's public data archive ───────────
+# claude code changed: new — Phase 2C, Step 4 (Data Acquisition Audit).
+# Phase 2B found that reaching even a minimally-powered research sample
+# (N=500 1h candles) via fetch_agg_trades()'s REST pagination needs
+# ~15,450 paginated calls for BTC/USDT alone — infeasible in a research
+# session. Investigated whether a more efficient LEGITIMATE acquisition
+# path already exists before building anything new: data.binance.vision
+# is Binance's own official, publicly documented historical-data archive
+# (S3/CloudFront-backed, no authentication, no API key) — confirmed live
+# (2026-08-24) that ONE daily file download replaces roughly 700+
+# paginated REST calls for a liquid symbol like BTC/USDT. This is not a
+# new architecture; it is a second, more efficient way to fill the exact
+# same TRADE_COLUMNS shape fetch_agg_trades() already produces, so it
+# slots into the existing storage/feature pipeline unchanged.
+#
+# VERIFIED, NOT ASSUMED (2026-08-24, live against the real archive):
+#   URL pattern: https://data.binance.vision/data/spot/daily/aggTrades/
+#                {SYMBOL}/{SYMBOL}-aggTrades-{YYYY-MM-DD}.zip
+#   Contains exactly one CSV, columns (no header row, confirmed by
+#   inspection): a,p,q,f,l,T,m,M — the SAME fields as the REST endpoint's
+#   JSON response, in the same order.
+#   ONE REAL DIFFERENCE FOUND: the archive's `T` column is in MICROSECONDS
+#   for recent dates (16 digits), while the REST endpoint's `T` field is
+#   in MILLISECONDS (13 digits) — confirmed by direct comparison against
+#   a live REST call for the same period. Silently treating archive
+#   timestamps as milliseconds would put every trade ~1000x further in
+#   the future than it actually occurred — exactly the kind of "verify,
+#   don't assume" schema trap this module's own docstring already warns
+#   about for the `m`/`M` fields. Handled by _normalize_archive_timestamp
+#   below, which detects the magnitude rather than hardcoding a unit,
+#   since Binance has changed this precision before and may again.
+
+ARCHIVE_BASE_URL = "https://data.binance.vision/data/spot/daily/aggTrades"
+ARCHIVE_REQUEST_TIMEOUT_S = 60
+
+
+def _normalize_archive_timestamp(raw_ts: pd.Series) -> pd.Series:
+    """
+    claude code changed: new. Detects whether the archive's T column is in
+    milliseconds (~13 digits for a modern timestamp) or microseconds
+    (~16 digits) by magnitude, rather than assuming one or the other —
+    the REST endpoint and the archive were confirmed to disagree on this
+    for the exact same real dates. Converts to milliseconds, matching
+    TRADE_COLUMNS' existing convention (and fetch_agg_trades()'s `T`-as-ms
+    handling) exactly, so archive-sourced and REST-sourced trades are
+    byte-comparable and safely mixable in one stored file.
+    """
+    sample = raw_ts.iloc[0] if len(raw_ts) else 0
+    if sample > 10**14:   # claude code changed: ms epoch today is ~1.7e12; anything past 1e14 can only be microseconds, never a plausible ms value
+        return (raw_ts // 1000).astype("int64")
+    return raw_ts.astype("int64")
+
+
+def fetch_agg_trades_from_archive(symbol: str, date: str) -> pd.DataFrame:
+    """
+    Downloads one UTC day of aggregated trades for `symbol` from Binance's
+    public historical archive. `date` is "YYYY-MM-DD" (UTC calendar day).
+
+    Returns the SAME TRADE_COLUMNS shape as fetch_agg_trades() — drop-in
+    compatible with every downstream consumer (trade_flow_engine.py,
+    update_stored_trades()'s storage layer). Empty DataFrame (never None,
+    never a raised exception for a plain "no data yet for this date" 404 —
+    e.g. today's file before Binance has published it) — matches this
+    module's existing missing-data convention. Raises for any OTHER HTTP
+    error (a real outage, a malformed request) rather than silently
+    returning empty and hiding a real problem.
+
+    This is a READ from a public, unauthenticated archive — no credentials,
+    no write access, no path toward execution. Confirmed by this module's
+    own security tests (bot/tests/test_trade_flow_engine.py's
+    SecurityBoundaryTest, extended to cover this function).
+    """
+    import zipfile
+    from io import BytesIO
+
+    import requests
+
+    market_symbol = symbol.replace("/", "")
+    url = f"{ARCHIVE_BASE_URL}/{market_symbol}/{market_symbol}-aggTrades-{date}.zip"
+
+    # claude code changed: new — bounded retry on a transient download
+    # failure, same MAX_TRANSIENT_RETRIES/linear-backoff discipline
+    # _with_retry() already applies to the REST-based fetcher. Found this
+    # was missing when a real ~24MB download broke mid-stream
+    # (requests.exceptions.ChunkedEncodingError, a genuine transient
+    # network hiccup, not a bug) during Phase 2C's actual data-acquisition
+    # run — without a retry, one bad connection killed an entire multi-day
+    # batch that had otherwise succeeded.
+    response = None
+    last_error = None
+    for attempt in range(1, MAX_TRANSIENT_RETRIES + 1):
+        try:
+            response = requests.get(url, timeout=ARCHIVE_REQUEST_TIMEOUT_S)
+            break
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < MAX_TRANSIENT_RETRIES:
+                logger.warning(f"fetch_agg_trades_from_archive({symbol}, {date}): transient error (attempt {attempt}/{MAX_TRANSIENT_RETRIES}): {e}")
+                time.sleep(1.5 * attempt)
+    if response is None:
+        raise last_error
+
+    if response.status_code == 404:
+        logger.warning(f"fetch_agg_trades_from_archive({symbol}, {date}): no archive file (404) — not yet published or no trading that day")
+        return pd.DataFrame(columns=TRADE_COLUMNS)
+    response.raise_for_status()
+
+    with zipfile.ZipFile(BytesIO(response.content)) as zf:
+        inner_name = zf.namelist()[0]
+        with zf.open(inner_name) as f:
+            raw = pd.read_csv(
+                f, header=None,
+                names=["trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "timestamp", "is_buyer_maker", "is_best_match"],
+            )
+
+    df = pd.DataFrame(columns=TRADE_COLUMNS)
+    if raw.empty:
+        return df
+
+    df["trade_id"] = raw["trade_id"].astype("int64")
+    df["timestamp"] = _normalize_archive_timestamp(raw["timestamp"])
+    df["price"] = pd.to_numeric(raw["price"], errors="coerce")
+    df["quantity"] = pd.to_numeric(raw["quantity"], errors="coerce")
+    df["is_buyer_maker"] = raw["is_buyer_maker"].astype(bool)
+    df["symbol"] = symbol
+    df["source"] = "binance"
+
+    df.drop_duplicates(subset=["trade_id"], inplace=True)
+    df.sort_values("timestamp", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+
+def fetch_agg_trades_from_archive_range(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Convenience wrapper: fetch_agg_trades_from_archive() for every UTC
+    calendar day from start_date to end_date (inclusive, both "YYYY-MM-DD"),
+    concatenated and re-deduplicated/sorted. A single missing day (404)
+    logs a warning and is skipped, not a hard failure — matches this
+    module's "skip, don't crash" convention for a genuinely missing
+    source, and lets a caller acquiring N days still get N-1 usable days
+    rather than nothing.
+    """
+    dates = pd.date_range(start_date, end_date, freq="D").strftime("%Y-%m-%d").tolist()
+    frames = [fetch_agg_trades_from_archive(symbol, d) for d in dates]
+    non_empty = [f for f in frames if not f.empty]
+    if not non_empty:
+        return pd.DataFrame(columns=TRADE_COLUMNS)
+
+    combined = pd.concat(non_empty, ignore_index=True)
+    combined.drop_duplicates(subset=["trade_id"], inplace=True)
+    combined.sort_values("timestamp", inplace=True)
+    combined.reset_index(drop=True, inplace=True)
+    return combined
+
+
 # ── Storage: incremental, deduplicated, per-symbol ───────────────────────
 
 def load_stored_trades(symbol: str) -> pd.DataFrame:

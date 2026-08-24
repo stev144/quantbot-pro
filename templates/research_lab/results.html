@@ -8,6 +8,9 @@
 
 <div class="term-body">
     <div class="term-section academy-step-card" style="max-width:680px; margin:0 auto;">
+        {% comment %}claude code changed: results is reachable from three different real pages (dashboard's recent-experiments list, history, and plan's own execution redirect) — genuinely ambiguous parent, so this prefers browser history with a safe explicit fallback rather than guessing one of the three.{% endcomment %}
+        {% url 'research_lab_history' as back_url %}
+        {% include "research_lab/_back_nav.html" with back_url=back_url use_browser_history=True %}
         <div class="term-section-head">
             <span class="term-section-title">Evidence &amp; Verdict</span>
             <span class="term-section-meta">{{ experiment.status }}</span>

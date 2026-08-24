@@ -25,7 +25,8 @@ from django.test import SimpleTestCase
 
 import bot.engines.trade_data as trade_data
 from bot.engines.trade_data import (
-    TRADE_COLUMNS, fetch_agg_trades, load_stored_trades,
+    TRADE_COLUMNS, fetch_agg_trades, fetch_agg_trades_from_archive,
+    fetch_agg_trades_from_archive_range, load_stored_trades,
     trade_csv_path, update_stored_trades,
 )
 
@@ -69,6 +70,53 @@ class FetchAggTradesLiveTest(SimpleTestCase):
         df = fetch_agg_trades("BTC/USDT", since_ms=since_ms, until_ms=now_ms)
         self.assertTrue(df["trade_id"].is_unique)
         self.assertTrue(df["timestamp"].is_monotonic_increasing)
+
+
+class ArchiveFetchLiveTest(SimpleTestCase):
+    """Real network calls against Binance's public historical data archive
+    (data.binance.vision) — Phase 2C, Step 4. One real full-day download
+    is unavoidable to genuinely verify the schema/timestamp-unit handling
+    (see fetch_agg_trades_from_archive's docstring on the real ms-vs-us
+    discrepancy this caught) — consistent with this project's established
+    no-mocking convention for API-touching code."""
+
+    def test_real_historical_day_has_correct_schema_and_ms_timestamps(self):
+        # claude code changed: a fixed, definitely-past date — avoids
+        # relying on "today" possibly not being published yet.
+        df = fetch_agg_trades_from_archive("BTC/USDT", "2026-08-20")
+
+        self.assertGreater(len(df), 0)
+        self.assertEqual(list(df.columns), TRADE_COLUMNS)
+        self.assertTrue(df["trade_id"].is_unique)
+        self.assertTrue(df["timestamp"].is_monotonic_increasing)
+
+        # claude code changed: THE regression test for the real ms-vs-us
+        # bug this module's docstring documents — every timestamp must sit
+        # within the requested UTC calendar day, not 1000x in the future.
+        day_start_ms = int(pd.Timestamp("2026-08-20", tz="UTC").timestamp() * 1000)
+        day_end_ms = int(pd.Timestamp("2026-08-21", tz="UTC").timestamp() * 1000)
+        self.assertTrue((df["timestamp"] >= day_start_ms).all())
+        self.assertTrue((df["timestamp"] < day_end_ms).all())
+
+        self.assertEqual(set(df["symbol"].unique()), {"BTC/USDT"})
+        self.assertEqual(set(df["source"].unique()), {"binance"})
+
+    def test_nonexistent_archive_file_returns_empty_not_raises(self):
+        # claude code changed: a symbol with no real archive returns empty
+        # (404), never a crash — same "skip, don't crash" convention as
+        # the rest of this module.
+        df = fetch_agg_trades_from_archive("NOT_A_REAL_SYMBOL/USDT", "2026-08-20")
+        self.assertEqual(list(df.columns), TRADE_COLUMNS)
+        self.assertEqual(len(df), 0)
+
+    def test_range_fetch_skips_a_missing_day_rather_than_failing_entirely(self):
+        # claude code changed: mixes one real day with one guaranteed-404
+        # (impossible symbol) inside a single range-style check — proves
+        # the "skip missing day, keep going" behavior without needing two
+        # separate full-day downloads.
+        df = fetch_agg_trades_from_archive_range("NOT_A_REAL_SYMBOL/USDT", "2026-08-20", "2026-08-21")
+        self.assertEqual(list(df.columns), TRADE_COLUMNS)
+        self.assertEqual(len(df), 0)   # claude code changed: both days 404 for a fake symbol — empty, not an exception
 
 
 class TradeCsvPathTest(SimpleTestCase):

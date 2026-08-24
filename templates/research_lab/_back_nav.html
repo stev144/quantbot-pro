@@ -1,0 +1,45 @@
+{% comment %}
+claude code changed: new file — Phase 2C, Step 12 (Research Lab navigation
+UX). One reusable back-navigation control, included at the top of every
+Research Lab page that participates in multi-page navigation, so a user
+is never forced to rely on the phone/browser physical Back button.
+
+Two usage modes, chosen per-page by whichever is actually true for that
+page's real inbound-link graph (audited against every {% url 'research_lab_...'
+%} reference in this app before writing this file — see the Phase 2C
+engineering report for the full link-graph audit):
+
+  1. UNAMBIGUOUS PARENT — only ONE real page ever links to this one.
+     Pass back_url as a plain, already-resolved URL string. Renders a
+     plain <a href> — no JS needed, works with JS disabled, never wrong.
+     Used by: capabilities, history, formalize (all only ever reached
+     from the dashboard), and plan (only ever reached from formalize for
+     the same experiment).
+
+  2. AMBIGUOUS PARENT — genuinely reachable from more than one real page
+     (results is linked from the dashboard's recent-experiments list,
+     from history, AND from plan's own execution redirect; report is
+     linked from results AND from another report's rerun_of chain).
+     Pass back_url as the safe fallback AND set use_browser_history=True.
+     Renders a real <a href="{{ back_url }}"> (so it always works, even
+     with JS off or no browser history entry) whose onclick prefers
+     window.history.back() when there is genuine same-origin history to
+     return to — never a hardcoded guess at which of several real parents
+     the user actually came from.
+
+Styling reuses this app's own existing back-link precedent
+(templates/academy/onboarding_step.html's "&larr; Back" pattern) — same
+"chart-caption mono" class, same arrow glyph — rather than inventing a
+second visual language for "go back" in the same product. Placed at the
+TOP of the page (unlike the Academy wizard's bottom placement) so it is
+visible without scrolling on a small screen, per this task's explicit
+mobile-usability requirement.
+{% endcomment %}
+<div class="term-back-nav mono" style="margin:4px 0 14px 0;">
+    {% if use_browser_history %}
+    <a href="{{ back_url }}" class="chart-caption mono" style="display:inline-block; padding:6px 0;"
+       onclick="if (window.history.length > 1 && document.referrer && document.referrer.indexOf(window.location.origin) === 0) { window.history.back(); return false; }">&larr; Back</a>
+    {% else %}
+    <a href="{{ back_url }}" class="chart-caption mono" style="display:inline-block; padding:6px 0;">&larr; Back</a>
+    {% endif %}
+</div>
