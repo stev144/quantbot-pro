@@ -446,6 +446,11 @@ class KalmanFilterEngine:
         zscore_window:           int   = ZSCORE_WINDOW,
         zscore_min_periods:      int   = ZSCORE_MIN_PERIODS,
         forward_horizons:        Dict  = None,
+        symbol_a:                Optional[str]   = None,   # claude code changed: new — Phase 1D, Objective 8 (Research Lab integration)
+        symbol_b:                Optional[str]   = None,   # claude code changed: new
+        ols_beta:                Optional[float] = None,   # claude code changed: new
+        ols_alpha:               Optional[float] = None,   # claude code changed: new
+        half_life_h:             Optional[float] = None,   # claude code changed: new
     ) -> None:
         """
         Initialise the Kalman filter engine for the specified pair.
@@ -494,25 +499,78 @@ class KalmanFilterEngine:
 
         forward_horizons : Dict[str, int]
             Forward return label names and periods for IC testing.
+
+        symbol_a / symbol_b / ols_beta / ols_alpha : Optional
+            Explicit-seed bypass — Phase 1D, Objective 8. When ALL FOUR are
+            given, __init__ skips load_pair_config() entirely: no
+            cointegration_pairs.csv lookup, no requirement that this exact
+            pair has ever been through a prior offline cointegration_engine.py
+            run. This is what a Research Lab tool call uses — it computes a
+            fresh OLS seed itself (via CointegrationEngine._test_pair() on
+            already-loaded price data, the same single-pair path
+            run_cointegration_test already uses) and hands it straight to
+            this constructor, instead of requiring a pre-existing CSV row.
+            Partial overrides (e.g. only symbol_a set) are treated as a
+            caller error, not silently patched — see the ValueError below.
+
+        half_life_h : Optional[float]
+            Only used for logging/reporting context alongside the explicit
+            seed above (same role load_pair_config()'s half_life_h plays in
+            the normal path). None = "not supplied," reported honestly as
+            such, never silently substituted.
         """
 
-        # Load this pair's config directly from cointegration_engine.py's
-        # own output — see load_pair_config() above for what this reads
-        # and why it replaced a hand-maintained dict.
-        self.pair_config    = load_pair_config(
-            pair_name,
-            cointegration_pairs_csv=cointegration_pairs_csv,
-            require_passes_filters=require_passes_filters,
-        )
-        self.pair_name      = pair_name                  # e.g. "AVAX_USDT/ATOM_USDT"
-        self.symbol_a       = self.pair_config["symbol_a"]   # AVAX_USDT
-        self.symbol_b       = self.pair_config["symbol_b"]   # ATOM_USDT
+        _explicit_seed_fields = (symbol_a, symbol_b, ols_beta, ols_alpha)   # claude code changed: new
+        if any(f is not None for f in _explicit_seed_fields) and not all(f is not None for f in _explicit_seed_fields):   # claude code changed: new
+            raise ValueError(   # claude code changed: new — fail loud on a partial override, never guess the missing piece
+                "symbol_a/symbol_b/ols_beta/ols_alpha must be supplied together "
+                "(explicit-seed bypass) or not at all (normal cointegration_pairs.csv lookup) — "
+                "got a partial set, which would silently mix an explicit value with a stale default."
+            )
 
-        # OLS seed values from cointegration_engine.py
-        # The Kalman filter is initialised with these values and then updates from there
-        self.ols_beta       = self.pair_config["ols_beta"]   # 1.4679
-        self.ols_alpha      = self.pair_config["ols_alpha"]  # 0.7916
-        self.half_life_h    = self.pair_config["half_life_h"] # 119.9h
+        if all(f is not None for f in _explicit_seed_fields):   # claude code changed: new — explicit-seed bypass path
+            self.pair_config = {   # claude code changed: new — same shape load_pair_config() returns, so nothing downstream needs to branch on which path was taken
+                "symbol_a": symbol_a, "symbol_b": symbol_b,
+                "ols_beta": ols_beta, "ols_alpha": ols_alpha,
+                "half_life_h": half_life_h if half_life_h is not None else float("nan"),
+                "adf_pvalue": float("nan"), "coint_pvalue": float("nan"),
+                "passes_filters": None,   # claude code changed: honestly "not evaluated by this construction path" — a fresh Research Lab call decides this itself via CointegrationEngine, not a lookup
+            }
+            self.symbol_a    = symbol_a
+            self.symbol_b    = symbol_b
+            self.ols_beta    = ols_beta
+            self.ols_alpha   = ols_alpha
+            self.half_life_h = self.pair_config["half_life_h"]
+            # claude code changed: new — if the caller left pair_name at its
+            # module default while supplying an explicit symbol_a/symbol_b
+            # seed, derive pair_name from the explicit symbols instead of
+            # silently keeping the stale "AVAX_USDT/ATOM_USDT" default — a
+            # real identity-mismatch bug this construction path would
+            # otherwise introduce (self.symbol_a/self.symbol_b would say
+            # one pair while self.pair_name said another). A caller that
+            # also explicitly customises pair_name to something other than
+            # the default is respected as-is.
+            if pair_name == "AVAX_USDT/ATOM_USDT":
+                pair_name = f"{symbol_a}/{symbol_b}"
+        else:
+            # Load this pair's config directly from cointegration_engine.py's
+            # own output — see load_pair_config() above for what this reads
+            # and why it replaced a hand-maintained dict.
+            self.pair_config    = load_pair_config(
+                pair_name,
+                cointegration_pairs_csv=cointegration_pairs_csv,
+                require_passes_filters=require_passes_filters,
+            )
+            self.symbol_a       = self.pair_config["symbol_a"]   # AVAX_USDT
+            self.symbol_b       = self.pair_config["symbol_b"]   # ATOM_USDT
+
+            # OLS seed values from cointegration_engine.py
+            # The Kalman filter is initialised with these values and then updates from there
+            self.ols_beta       = self.pair_config["ols_beta"]   # 1.4679
+            self.ols_alpha      = self.pair_config["ols_alpha"]  # 0.7916
+            self.half_life_h    = self.pair_config["half_life_h"] # 119.9h
+
+        self.pair_name      = pair_name                  # e.g. "AVAX_USDT/ATOM_USDT"
 
         # Kalman filter hyperparameters
         self.qb             = process_noise_beta    # Process noise for β
@@ -636,6 +694,67 @@ class KalmanFilterEngine:
         logger.info("KALMAN FILTER ENGINE — COMPLETE")
         logger.info("=" * 70)
 
+        return kalman_results
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PUBLIC: run_on_prices() — pure computation entry point
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def run_on_prices(
+        self,
+        price_a: pd.Series,
+        price_b: pd.Series,
+    ) -> pd.DataFrame:
+        """
+        claude code changed: new — Phase 1D, Objective 8 (Research Lab
+        integration). Runs the SAME dynamic-hedge-ratio/spread/z-score
+        computation as run(), on already-loaded close-price Series, instead
+        of reading CSVs from disk. This is the entry point a Research Lab
+        tool call uses (see bot/research_lab/tools/research_tools.py's
+        run_kalman_pairs_test) — it loads data itself via
+        bot.research_lab.tools._data.load_ohlcv() (which resolves through
+        bot.instruments.resolve_ohlcv_path(), never a raw filename guess),
+        exactly the same pattern run_cointegration_test already uses for
+        CointegrationEngine._test_pair().
+
+        Deliberately narrower than run(): only steps 2-7 (align, log,
+        initialise state, run filter, dynamic spread, dynamic z-score) —
+        it does NOT run step 8 (composite signal), step 9 (forward-return
+        labels), step 10 (OLS-vs-Kalman comparison print), or step 11 (save
+        outputs to research_data/). Those exist for the standalone,
+        backtestable-signal research pipeline; a single Research Lab
+        evidence call needs the current dynamic estimate, not a labelled
+        training set or a file write the caller didn't ask for.
+
+        Every step called here is an EXISTING, already-tested private
+        method (see bot/tests/test_kalman_filter_engine.py) — no new math,
+        same leakage-free pred/posterior split _run_filter/
+        _calculate_dynamic_spread already implement.
+
+        Parameters
+        ----------
+        price_a, price_b : pd.Series
+            Close prices, both with a DatetimeIndex, for symbol_a/symbol_b
+            respectively — the same shape _load_prices() would have handed
+            to _align_prices() internally.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per aligned candle: kalman_beta/kalman_alpha (posterior),
+            kalman_beta_pred/kalman_alpha_pred (leakage-free, pre-update —
+            use these for anything tradeable), kalman_spread, kalman_zscore,
+            kalman_zscore_lag1, is_warmup, plus the diagnostic columns
+            _run_filter already produces (prediction_error, beta_uncertainty,
+            alpha_uncertainty, kalman_gain_beta).
+        """
+        aligned = self._align_prices(price_a, price_b)
+        log_a, log_b = self._to_log_prices(aligned)
+        initial_state = self._initialise_state(log_a, log_b)
+        kalman_results = self._run_filter(log_a, log_b, initial_state)
+        kalman_results = self._calculate_dynamic_spread(kalman_results, log_a, log_b)
+        kalman_results = self._calculate_dynamic_zscore(kalman_results)
         return kalman_results
 
 

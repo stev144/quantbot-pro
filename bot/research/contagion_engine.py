@@ -104,6 +104,7 @@ from typing import Dict, List, Optional, Tuple   # Type hints
 import numpy as np                          # Numerical operations
 import pandas as pd                         # DataFrame operations
 from scipy import stats                     # Spearman IC calculation
+from statsmodels.stats.multitest import multipletests   # claude code changed: new — Phase 1D, Objective 10. Family-wide FDR correction across DivergenceICReporter.report()'s (symbol x feature) results, the same discipline cointegration_engine.py's _apply_fdr_correction() and feature_validator.py's apply_family_wide_correction() already use.
 
 warnings.filterwarnings('ignore')           # Suppress non-critical pandas warnings
 
@@ -1160,6 +1161,7 @@ class DivergenceICReporter:
         data:            Dict[str, pd.DataFrame],
         altcoin_symbols: List[str] = None,
         forward_col:     str       = "forward_return_2h",
+        fdr_alpha:       float     = 0.05,   # claude code changed: new — Phase 1D, Objective 10
     ) -> pd.DataFrame:
         """
         Calculate Spearman IC for all divergence features across all altcoins.
@@ -1175,11 +1177,25 @@ class DivergenceICReporter:
         forward_col : str
             Which forward return label to correlate against. Default: 2h.
 
+        fdr_alpha : float
+            claude code changed: new — Phase 1D, Objective 10 (capability_registry.py's
+            documented blocker for contagion_divergence_research: "flags results at a
+            raw p<0.05 threshold with no multiple-testing correction, despite naturally
+            producing many p-values per altcoin x horizon combination"). Benjamini-
+            Hochberg correction is applied once across every (symbol, feature) p-value
+            this call produces — the same family-wide, downgrade-only pattern
+            cointegration_engine.py's _apply_fdr_correction() and feature_validator.py's
+            apply_family_wide_correction() already use. `significant` (raw, uncorrected)
+            is KEPT for backward compatibility with any existing caller reading that
+            column — `significant_fdr`/`pvalue_fdr` are the new, honest fields; prefer
+            those for any real screening decision.
+
         Returns
         -------
         pd.DataFrame
-            Summary table with IC, p-value, and sample size for each
-            feature × symbol combination. Sorted by absolute IC descending.
+            Summary table with IC, raw p-value/significance, FDR-corrected
+            p-value/significance, and sample size for each feature x symbol
+            combination. Sorted by absolute IC descending.
         """
 
         symbols = altcoin_symbols or ALTCOIN_SYMBOLS
@@ -1239,9 +1255,31 @@ class DivergenceICReporter:
 
         # Build results DataFrame and sort by absolute IC
         results_df = pd.DataFrame(results)
+
+        # claude code changed: new block — Phase 1D, Objective 10. FDR
+        # correction across every (symbol, feature) p-value this call
+        # produced, AFTER the full family is known (same "provisional then
+        # corrected" pattern as cointegration_engine.py/feature_validator.py).
+        # Downgrade-only: a raw-significant result that fails correction is
+        # marked significant_fdr=False; correction never turns a
+        # raw-insignificant result significant.
+        _, fdr_pvalues, _, _ = multipletests(
+            results_df["pvalue"].values, alpha=fdr_alpha, method="fdr_bh"
+        )
+        results_df["pvalue_fdr"] = np.round(fdr_pvalues, 6)
+        results_df["significant_fdr"] = results_df["pvalue_fdr"] < fdr_alpha
+
         results_df["abs_ic"] = results_df["ic"].abs()
         results_df = results_df.sort_values("abs_ic", ascending=False)
         results_df = results_df.drop(columns=["abs_ic"])
+
+        n_raw_significant = int(results_df["significant"].sum())
+        n_fdr_significant = int(results_df["significant_fdr"].sum())
+        logger.info(
+            f"  FDR correction across {len(results_df)} (symbol, feature) results — "
+            f"{n_raw_significant} significant at raw p<{fdr_alpha}, "
+            f"{n_fdr_significant} survive FDR correction at alpha={fdr_alpha}"
+        )
 
         return results_df
 

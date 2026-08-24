@@ -21,10 +21,33 @@ from bot.research_lab.spec import ResearchSpec
 # Research Lab MVP may ever call, matching bot/research_lab/tools/ (task
 # 32). A tool name outside this set is rejected regardless of caller —
 # there is no path for the AI (or a bug) to request an unlisted tool.
-# kalman_filter_engine/walk_forward_engine/permutation_test_engine and
-# anything depending on entry_exit_engine.py are deliberately EXCLUDED —
-# per the implementation assessment, entry_exit_engine.py (their shared
-# dependency) has zero test coverage.
+# walk_forward_engine/permutation_test_engine (which construct
+# bot.research.entry_exit_engine.EntryExitEngine directly) and anything
+# else depending on entry_exit_engine.py's full run() path are deliberately
+# EXCLUDED here.
+#
+# claude code changed: comment corrected — Phase 1D (Kalman Research
+# Integration) audit. kalman_filter_engine.py does NOT import or depend on
+# entry_exit_engine.py at all (verified: zero import references, only
+# prose comments mentioning it as a downstream consumer of Kalman's own
+# output) — the entry_exit_engine.py test-coverage gap that originally
+# justified this exclusion never actually applied to Kalman, and is now
+# resolved for the other two anyway (bot/tests/test_entry_exit_engine.py,
+# added Phase 1C, 16 tests). kalman_filter_engine.py's own exclusion from
+# ALLOWED_TOOLS is a SEPARATE, still-real reason: it is classified
+# risk_tier="HIGH" in bot/research_lab/capability_registry.py
+# (kalman_dynamic_hedge_ratio) — a deliberate statistical-risk judgment
+# (dynamic per-candle state, more ways to be silently miscalibrated than a
+# static ADF test), not an implementation gap. is_tool_allowed() below
+# never reaches ANY tool at risk_tier="HIGH" by design — adding a Kalman
+# tool to this allowlist would additionally require deciding whether that
+# risk-tier judgment itself should change, which is a policy decision this
+# phase deliberately leaves alone (see capability_registry.py's
+# kalman_dynamic_hedge_ratio status_note for the full reasoning). A
+# bot.research_lab.tools.research_tools.run_kalman_pairs_test tool now
+# exists and is directly unit-tested, but is intentionally NOT in
+# ALLOWED_TOOLS/TOOLS_BY_RISK_TIER — it is reachable by tests calling it
+# directly, never by a real Research Lab request.
 ALLOWED_TOOLS = {
     "inspect_dataset",
     "calculate_feature",

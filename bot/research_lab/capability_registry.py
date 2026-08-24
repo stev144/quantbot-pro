@@ -167,13 +167,32 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             description="Track a pair's hedge ratio dynamically over time via a Kalman filter instead of a single fixed OLS estimate, and test whether the dynamic spread improves signal quality.",
             category=RELATIONSHIP_RESEARCH, required_tier=PRO, risk_tier="HIGH", compute_tier="HIGH",
             backing_engine="bot.research.kalman_filter_engine.KalmanFilterEngine",
-            engine_status=PARTIALLY_IMPLEMENTED, has_tests=True,
+            # claude code changed: PARTIALLY_IMPLEMENTED -> IMPLEMENTED_BUT_NEEDS_AUDIT —
+            # Phase 1D (Kalman Research Integration). Evidence for the change: a
+            # typed, arbitrary-pair tool-call now exists and is tested
+            # (bot.research_lab.tools.research_tools.run_kalman_pairs_test,
+            # bot/tests/test_kalman_research_lab_integration.py, 21 tests) — the
+            # specific gap the prior status_note named ("not the typed, arbitrary-
+            # pair tool-call shape every other capability uses") is resolved. NOT
+            # promoted to IMPLEMENTED_AND_READY: see status_note below for the two
+            # real reasons it still needs audit before real exposure.
+            engine_status=IMPLEMENTED_BUT_NEEDS_AUDIT, has_tests=True,
             status_note=(
                 "The filter math is real and tested — including a verified, regression-tested fix for a "
-                "posterior-state leakage bug in the tradeable spread. What's missing is Research Lab integration: "
-                "the engine currently runs as a file-I/O batch job hardcoded around one pre-calibrated pair "
-                "(seeded from a separate offline cointegration scan), not the typed, arbitrary-pair tool-call shape "
-                "every other capability uses. Undergoing integration engineering before this is offered."
+                "posterior-state leakage bug in the tradeable spread, and (Phase 1D) confirmed leakage-free "
+                "z-score normalisation (no center=True rolling windows). A typed, arbitrary-pair Research Lab "
+                "tool now exists (run_kalman_pairs_test) and reuses the fresh-OLS-seed pattern "
+                "run_cointegration_test already established — never a duplicate cointegration implementation. "
+                "Two real reasons this still needs audit, not exposure: (1) it is NOT in policy_gate.py's "
+                "ALLOWED_TOOLS/TOOLS_BY_RISK_TIER — risk_tier=HIGH is categorically unreachable by the Research "
+                "Lab MVP's own design (is_tool_allowed() rejects any risk_tier other than LOW/MEDIUM), so this "
+                "tool is directly callable/testable but not reachable through a real Research Lab request; "
+                "promoting it would require a deliberate decision about whether Kalman's risk_tier itself should "
+                "change, which this phase left alone. (2) OBSERVATION_NOISE's default (1e-3) was empirically "
+                "calibrated to AVAX/ATOM's own historical price variance and is never re-estimated per pair — "
+                "already configurable via a constructor override, but no data-driven estimation path exists yet "
+                "(Phase 1D evaluated several approaches and deliberately did not implement one pending its own "
+                "look-ahead-bias validation — see the Phase 1D engineering report, Objectives 2-3)."
             ),
         ),
         ResearchCapability(

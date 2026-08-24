@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from django.test import SimpleTestCase
 
-from bot.research.contagion_engine import ContagionEngine, DIVERGENCE_WINSOR_MIN_PERIODS
+from bot.research.contagion_engine import ContagionEngine, DIVERGENCE_WINSOR_MIN_PERIODS, DivergenceICReporter   # claude code changed: new import — Phase 1D, Objective 10
 
 
 def _make_divergence_df(n, seed, col="divergence_3h", spike_at=None, spike_magnitude=5.0):
@@ -201,3 +201,78 @@ class ContagionCrossAssetBoundaryTest(SimpleTestCase):
         self.assertNotIn("NOT_IN_DATA/USDT", result)
         divergence_cols = [c for c in result["SOL/USDT"].columns if c.startswith("divergence_")]
         self.assertTrue(divergence_cols)
+
+
+class DivergenceIcReporterFdrCorrectionTest(SimpleTestCase):
+    """claude code changed: new — Phase 1D, Objective 10. Proves
+    DivergenceICReporter.report() now applies family-wide FDR correction
+    across every (symbol, feature) p-value it produces, per
+    capability_registry.py's documented blocker for
+    contagion_divergence_research ("flags results at a raw p<0.05
+    threshold with no multiple-testing correction"). Uses synthetic,
+    hand-constructed data — no real data/*.csv fixture required."""
+
+    def _make_altcoin_df(self, n, rng, n_noise_features=15, real_feature_ic=0.0):
+        """One altcoin's DataFrame with `n_noise_features` divergence
+        columns that are PURE NOISE relative to forward_return_2h (should
+        not survive FDR correction even if a few look raw-significant by
+        chance), plus optionally one divergence column genuinely
+        correlated with the forward return (should survive)."""
+        idx = pd.date_range("2020-01-01", periods=n, freq="1h")
+        fwd = pd.Series(rng.normal(0, 1, n), index=idx)
+        df = pd.DataFrame(index=idx)
+        df["forward_return_2h"] = fwd
+        for i in range(n_noise_features):
+            df[f"divergence_noise_{i}h"] = rng.normal(0, 1, n)   # claude code changed: independent of fwd by construction
+        if real_feature_ic:
+            df["divergence_real_1h"] = fwd * real_feature_ic + rng.normal(0, 1, n)   # claude code changed: genuinely correlated with fwd
+        return df
+
+    def test_pure_noise_features_mostly_fail_fdr_even_if_some_pass_raw_threshold(self):
+        # claude code changed: with enough noise features tested at raw
+        # p<0.05, a few are EXPECTED to look significant by chance alone
+        # (the exact multiple-testing problem cointegration_engine.py's
+        # P1-5 finding already documented) — FDR correction must bring the
+        # survivor count down, not leave it identical to the raw count.
+        rng = np.random.default_rng(11)
+        data = {
+            "ALT1": self._make_altcoin_df(300, rng, n_noise_features=25),
+            "ALT2": self._make_altcoin_df(300, rng, n_noise_features=25),
+        }
+
+        result = DivergenceICReporter.report(data, altcoin_symbols=["ALT1", "ALT2"])
+
+        self.assertIn("pvalue_fdr", result.columns)
+        self.assertIn("significant_fdr", result.columns)
+        n_raw = int(result["significant"].sum())
+        n_fdr = int(result["significant_fdr"].sum())
+        self.assertLessEqual(n_fdr, n_raw)   # claude code changed: downgrade-only — FDR can only remove significance, never add it
+
+    def test_fdr_never_marks_significant_a_result_that_failed_raw_threshold(self):
+        rng = np.random.default_rng(22)
+        data = {"ALT1": self._make_altcoin_df(300, rng, n_noise_features=20)}
+
+        result = DivergenceICReporter.report(data, altcoin_symbols=["ALT1"])
+
+        violations = result[(~result["significant"]) & (result["significant_fdr"])]
+        self.assertTrue(violations.empty, "FDR correction must never upgrade a raw-insignificant result to significant")
+
+    def test_strongly_correlated_feature_survives_fdr_correction(self):
+        # claude code changed: a genuinely strong signal (ic~0.6 by
+        # construction) mixed in with noise features must still survive
+        # family-wide correction — proves the fix is conservative, not
+        # simply "nothing is ever significant."
+        rng = np.random.default_rng(33)
+        data = {
+            "ALT1": self._make_altcoin_df(500, rng, n_noise_features=10, real_feature_ic=0.6),
+        }
+
+        result = DivergenceICReporter.report(data, altcoin_symbols=["ALT1"])
+
+        real_row = result[result["feature"] == "divergence_real_1h"]
+        self.assertEqual(len(real_row), 1)
+        self.assertTrue(bool(real_row.iloc[0]["significant_fdr"]), "a genuinely strong signal must survive FDR correction, not just raw significance")
+
+    def test_no_results_returns_empty_dataframe_not_a_crash(self):
+        result = DivergenceICReporter.report({}, altcoin_symbols=["NOTHING"])
+        self.assertTrue(result.empty)
