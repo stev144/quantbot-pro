@@ -392,6 +392,20 @@ MAX_POSITION_FRACTION: float = 0.30
 # Minimum position size — below this, skip the trade (not worth the fee)
 MIN_POSITION_USDT: float = 100.0
 
+# claude code changed: Phase 1C, Step 3 — FEE_RATE/SLIPPAGE_RATE/
+# TOTAL_TRANSACTION_COST are KEPT as module constants (nothing outside
+# this file imports them, confirmed by grep, so removing them isn't
+# required for backward compatibility) but are no longer what
+# EntryExitEngine actually computes its transaction costs from — see
+# __init__'s new `cost_model` parameter below, which defaults to
+# bot.config.cost_model.CryptoCostModel() (venue="binance"), whose
+# fee_rate/slippage_rate resolve to these exact same numbers today
+# (verified: bot.config.execution_costs.FEE_RATE=0.001,
+# SLIPPAGE_RATE=0.0005 — the same single source of truth this file's
+# constants were always meant to mirror, now actually wired to it instead
+# of an independent copy). These constants remain only as the *documented
+# default value*, not the live source of truth.
+#
 # Fee rate per side — Binance maker fee for most accounts
 # Total round-trip cost = 2 × FEE_RATE
 FEE_RATE: float = 0.001    # 0.1% per side = 0.2% round trip
