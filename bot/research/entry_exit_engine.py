@@ -413,6 +413,11 @@ MIN_POSITION_USDT: float = 100.0
 # costs("binance") == {"fee_rate": FEE_RATE, "slippage_rate": SLIPPAGE_RATE}),
 # so the AVAX/ATOM baseline is unchanged — see model_governance_log.md for
 # the byte-identical regression check.
+# claude code changed: conflict resolution (cherry-pick of 7a49fef onto
+# master) — that commit independently documented this exact same fact from
+# an earlier vantage point (before this file's actual get_cost_model()
+# wiring existed on this line); dropped as a materially-duplicate comment
+# rather than kept alongside a more precise, already-accurate one.
 
 # Fee rate per side — Binance maker fee for most accounts
 # Total round-trip cost = 2 × FEE_RATE
