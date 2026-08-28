@@ -195,6 +195,39 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
                 "look-ahead-bias validation — see the Phase 1D engineering report, Objectives 2-3)."
             ),
         ),
+        # claude code changed: new entry — Phase 2D/Research Lab Completion
+        # audit, Step 9. capability_registry.py had NO entry at all for
+        # funding-rate/open-interest research — unlike every other real
+        # engine in this codebase (Kalman, cointegration, trade flow,
+        # contagion), which all have at least a registry entry documenting
+        # their real state, derivatives_engine.py/derivatives_data.py were
+        # simply absent from this file entirely. This is a factual gap
+        # correction (Step 9's own explicit instruction: "correct factual
+        # inconsistencies only"), not a readiness change — engine_status
+        # reflects exactly what's true today: a real, tested, live-fetched
+        # pipeline (see bot/tests/test_derivatives_data.py,
+        # test_derivatives_engine.py) with zero Research Lab tool wrapper,
+        # the same "engine works, not yet a typed tool-call" situation
+        # kalman_dynamic_hedge_ratio documents just above. Consistent with
+        # bot/research_lab/data_availability.py's REQUIRES_INTEGRATION
+        # status for funding_rate/open_interest (Phase 2B) — this entry is
+        # the capability-registry side of that same, already-documented gap.
+        ResearchCapability(
+            id="derivatives_research",
+            name="Funding Rate & Open Interest Research",
+            description="Test whether funding rate (crowd positioning/leverage cost) and open interest (aggregate leveraged exposure) carry information about forward price moves that spot OHLCV alone cannot.",
+            category=MARKET_STRUCTURE_RESEARCH, required_tier=PRO, risk_tier="MEDIUM", compute_tier="LOW",
+            backing_engine="bot.research.derivatives_engine.DerivativesEngine",
+            engine_status=PARTIALLY_IMPLEMENTED, has_tests=True,
+            status_note=(
+                "The fetch/compute pipeline (bot.engines.derivatives_data + bot.research.derivatives_engine) is "
+                "real, tested against the live Binance futures API, and look-ahead-safe (merge_asof(direction="
+                "'backward')). No Research Lab tool wrapper exists yet — the same 'engine works, not yet a typed "
+                "tool-call' gap kalman_dynamic_hedge_ratio has. Its own quick IC pre-screen (DerivativesICReporter) "
+                "also lacks FDR correction across the funding/OI feature family, the same gap contagion_divergence_"
+                "research's reporter has — withheld pending both fixes, not merely the tool-wrapper gap."
+            ),
+        ),
         ResearchCapability(
             id="cross_sectional_research",
             name="Cross-Sectional Relationship Research",

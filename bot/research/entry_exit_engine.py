@@ -647,7 +647,22 @@ class KalmanPositionSizer:
         # Compute base Kelly fraction from our validated win rate
         # Kelly formula: f = win_rate - (1 - win_rate) / win_loss_ratio
         # For mean-reversion pairs trading: win_loss_ratio ≈ win_rate / (1-win_rate)
-        # This gives: f* = 2 × win_rate - 1 = 2(0.69) - 1 = 0.38
+        # claude code changed: real algebra error found and fixed during
+        # Hardening Phase 2's independent metric re-derivation
+        # (bot/tests/test_analytics_independent_verification.py). The
+        # CODE below was always correct; this COMMENT's claimed
+        # simplification was not: substituting win_loss_ratio =
+        # win_rate/loss_rate into f = win_rate - loss_rate/win_loss_ratio
+        # gives f* = win_rate - loss_rate^2/win_rate = (2*win_rate - 1) /
+        # win_rate — NOT "2*win_rate - 1". At win_rate=0.69 the correct
+        # simplification gives 0.5507 (matching every real logged "Full
+        # Kelly" value this project has ever produced); "2*win_rate - 1"
+        # would give 0.38, a number that has never actually appeared in
+        # this codebase's real output. "2p-1" is the correct Kelly
+        # simplification only for an even-money bet (win_loss_ratio
+        # fixed at 1), which is a different assumption than the one this
+        # class actually uses.
+        # This gives: f* = (2 × win_rate - 1) / win_rate = (2×0.69 - 1) / 0.69 = 0.5507
         loss_rate         = 1.0 - self.win_rate          # 0.31
         win_loss_ratio    = self.win_rate / loss_rate     # 0.69/0.31 = 2.22
         self.base_kelly   = (

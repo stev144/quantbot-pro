@@ -21,6 +21,36 @@ from django.db import models
 
 
 # ─────────────────────────────────────────────────────────────
+# APPEND-ONLY / FAMILY-FREEZE ENFORCEMENT
+# claude code changed: new — Hardening Mission Section 4. The prior
+# platform audit's single biggest RED finding: "FDR family boundaries are
+# enforced by researcher discipline rather than by code." Re-verified
+# during this mission (not assumed): ResearchExperiment already existed
+# and already models most of a research ledger (hypothesis, spec, tool
+# log, results, verdict, code_version/git SHA, random_seed, rerun_of
+# self-FK) — but had NO save()/delete() override anywhere, and NO concept
+# of a hypothesis family at all. "Immutable" was a docstring promise plus
+# "orchestrator.py is the only mutator" as a comment, not a guarantee the
+# database itself enforces. These two exception types are what these
+# models' save()/delete() overrides below actually raise.
+# ─────────────────────────────────────────────────────────────
+
+class FamilyAlreadyFrozenError(Exception):
+    """Raised when code attempts to change a HypothesisFamily's frozen
+    scope (feature list / assets / horizons / venue / timeframe) after it
+    has already been frozen — the exact failure mode this mission's
+    Section 4 names explicitly: run experiment -> inspect results ->
+    expand/redefine family -> rerun FDR."""
+
+
+class ResearchRecordIsImmutableError(Exception):
+    """Raised when code attempts to modify or delete a ResearchExperiment
+    that has already reached a terminal status (COMPLETED/FAILED/BLOCKED).
+    Research records are append-only: a wrong or unwanted result gets a
+    NEW experiment (via rerun_of), never a silently edited old one."""
+
+
+# ─────────────────────────────────────────────────────────────
 # VERDICT TAXONOMY
 # Matches the Research Agent architecture study's §09 taxonomy exactly —
 # the two additions beyond the brief's own strawman (REGIME_DEPENDENT,
@@ -53,6 +83,96 @@ STATUS_CHOICES = [
     ("FAILED", "Failed"),
     ("BLOCKED", "Blocked"),
 ]
+
+
+class HypothesisFamily(models.Model):
+    """
+    claude code changed: new — Hardening Mission Section 4. A
+    machine-checkable declaration of exactly which (feature x asset x
+    horizon) hypotheses one multiple-testing correction pass covers,
+    declared and frozen BEFORE any statistical result exists for it.
+
+    The scope fields (feature_family/assets/horizons/venue/timeframe) are
+    write-once-then-locked: freeze() is the only sanctioned way to lock
+    them, and save() refuses any further change to a locked family's scope
+    — see FamilyAlreadyFrozenError. This is the concrete code enforcement
+    the prior audit found missing; every phase in this engagement
+    (trade-flow/derivatives/order-book) declared its family in a comment
+    and a print() statement, which is real discipline but not a guarantee.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=200, blank=True)
+
+    feature_family = models.JSONField(default=list)   # frozen list[str] — the exact candidates, nothing added later
+    assets = models.JSONField(default=list)            # e.g. ["BTC/USDT", "ETH/USDT"]
+    venue = models.CharField(max_length=40, blank=True)
+    timeframe = models.CharField(max_length=10, blank=True)
+    horizons = models.JSONField(default=list)           # e.g. ["forward_return_1h", "forward_return_4h"]
+    correction_method = models.CharField(max_length=40, default="fdr_bh")
+    alpha = models.FloatField(default=0.05)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="hypothesis_families"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # claude code changed: null = not yet frozen (scope may still be edited
+    # freely while the researcher is still designing the experiment,
+    # BEFORE any tool has run against it). Once set, save() enforces that
+    # the scope fields below can never change again.
+    frozen_at = models.DateTimeField(null=True, blank=True)
+
+    _SCOPE_FIELDS = ("feature_family", "assets", "venue", "timeframe", "horizons")
+
+    def freeze(self) -> None:
+        """The ONE sanctioned transition into the locked state. Idempotent —
+        freezing an already-frozen family is a no-op, not an error, so
+        callers don't need to check first."""
+        if self.frozen_at is None:
+            from django.utils import timezone
+            self.frozen_at = timezone.now()
+        self.save()
+
+    @property
+    def n_hypotheses(self) -> int:
+        """The exact family size this mission's Section 8 requires printed
+        before any FDR correction runs: |features| x |assets| x |horizons|."""
+        return len(self.feature_family) * len(self.assets) * len(self.horizons)
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            try:
+                previous = HypothesisFamily.objects.get(pk=self.pk)
+            except HypothesisFamily.DoesNotExist:
+                previous = None
+            if previous is not None and previous.frozen_at is not None:
+                for field in self._SCOPE_FIELDS:
+                    if getattr(previous, field) != getattr(self, field):
+                        raise FamilyAlreadyFrozenError(
+                            f"HypothesisFamily {self.pk} was frozen at {previous.frozen_at} — "
+                            f"'{field}' cannot change after freezing. Declare a NEW HypothesisFamily "
+                            f"instead of widening or redefining this one after seeing results."
+                        )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        # claude code changed: a family with any linked experiment is
+        # already protected at the DB level (ResearchExperiment.hypothesis_family
+        # uses on_delete=PROTECT below) — this blanket refusal additionally
+        # covers a frozen-but-not-yet-linked family, so "freeze, then delete
+        # before anything runs, then reuse the idea under a fresh family"
+        # can never quietly happen either.
+        if self.frozen_at is not None:
+            raise ResearchRecordIsImmutableError(
+                f"HypothesisFamily {self.pk} was frozen at {self.frozen_at} and cannot be deleted — "
+                f"failed/rejected families remain part of the research record, not silently removed."
+            )
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        frozen = "frozen" if self.frozen_at else "draft"
+        return f"{self.name or self.pk} ({frozen}, {self.n_hypotheses} hypotheses)"
 
 
 class ResearchExperiment(models.Model):
@@ -148,8 +268,54 @@ class ResearchExperiment(models.Model):
     # first-class reporting dimension of their own.
     capability_id = models.CharField(max_length=64, blank=True)
 
+    # ── Hardening Mission Sections 4/5 — added to the EXISTING model,
+    # never a parallel/duplicate table. Both nullable/blank for backward
+    # compatibility with every experiment created before these fields
+    # existed (this project's own established convention — see e.g.
+    # capability_id's comment above making the identical trade-off). ──
+    hypothesis_family = models.ForeignKey(
+        HypothesisFamily, on_delete=models.PROTECT, null=True, blank=True, related_name="experiments"
+    )   # claude code changed: PROTECT — a family with any linked experiment can never be deleted out from under it
+    data_fingerprint = models.CharField(max_length=64, blank=True)   # sha256 hex from bot.research_lab.data_fingerprint
+
+    # claude code changed: which terminal states make a row append-only.
+    # PENDING/PLANNED/RUNNING are still legitimately mutable — an
+    # experiment is only "the record" once it stops changing.
+    _TERMINAL_STATUSES = ("COMPLETED", "FAILED", "BLOCKED")
+
     class Meta:
         ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        # claude code changed: Hardening Mission Section 4 — this is the
+        # concrete code enforcement for what used to be only a file-header
+        # comment ("orchestrator.py is the ONLY place that mutates").
+        # Once a row has reached a terminal status, NO further save() may
+        # succeed, regardless of which fields changed — a wrong or
+        # unwanted result becomes a NEW experiment via rerun_of, never a
+        # silently corrected old one.
+        if self.pk is not None:
+            try:
+                previous_status = ResearchExperiment.objects.only("status").get(pk=self.pk).status
+            except ResearchExperiment.DoesNotExist:
+                previous_status = None
+            if previous_status in self._TERMINAL_STATUSES:
+                raise ResearchRecordIsImmutableError(
+                    f"ResearchExperiment {self.pk} already reached terminal status "
+                    f"'{previous_status}' and cannot be modified further — research records "
+                    f"are append-only. Create a new experiment (hypothesis_family stays linked, "
+                    f"set rerun_of=this experiment) instead of editing this one."
+                )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        # claude code changed: Hardening Mission Section 4 — "failed
+        # experiments must never disappear." No ResearchExperiment may
+        # ever be deleted, full stop, regardless of status.
+        raise ResearchRecordIsImmutableError(
+            f"ResearchExperiment {self.pk} cannot be deleted — research records (including "
+            f"failed/rejected ones) are permanent, append-only institutional knowledge."
+        )
 
     def __str__(self):
         return f"{self.student.username} — {self.hypothesis_text[:60]}"

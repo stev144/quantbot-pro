@@ -108,6 +108,27 @@
         }
 
         document.addEventListener("DOMContentLoaded", syncThemeSelect);
+
+        // claude code changed: new — the topbar's "Research" / "Risk &
+        // Execution" nav groups (templates/partials/_topbar.html) are
+        // native HTML <details>/<summary> elements. A native <details>
+        // has NO built-in "close on outside click" behavior — it only
+        // ever closes when its own <summary> is clicked again, which is
+        // exactly the reported bug (a dropdown left open blocks/covers
+        // the rest of the page until the user finds and re-clicks the
+        // exact same toggle). This closes every OPEN .term-nav-group on
+        // any click whose target is outside that specific element,
+        // clicking-toggle behavior itself untouched (the browser's native
+        // <summary> click handling still opens/closes it as before — this
+        // only ever CLOSES an open one from elsewhere on the page, never
+        // interferes with opening).
+        document.addEventListener("click", function (event) {
+            document.querySelectorAll(".term-nav-group[open]").forEach(function (details) {
+                if (!details.contains(event.target)) {
+                    details.removeAttribute("open");
+                }
+            });
+        });
     </script>
 </body>
 

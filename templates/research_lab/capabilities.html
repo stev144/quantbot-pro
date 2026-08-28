@@ -14,6 +14,16 @@
 .cap-badge.unavailable{ background:rgba(200,80,80,.15); color:#c85050; }
 .cap-desc{ font-size:13px; opacity:.85; flex-grow:1; }
 .cap-note{ font-size:12px; opacity:.7; font-style:italic; }
+/* claude code changed: Research Capabilities Discoverability & Navigation
+   Refactor — additions only, same scoped-on-top-of-academy.css approach
+   as the block above, no new design system. */
+.cap-intro{ max-width:70ch; margin-bottom:24px; }
+.cap-status-row{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.cap-status{ font-size:10px; padding:1px 7px; border-radius:3px; white-space:nowrap; font-family:monospace; opacity:.85; border:1px solid currentColor; }
+.cap-status.ready{ color:#3cb464; }
+.cap-status.needs-work{ color:#c8a028; }
+.cap-status.not-ready{ color:#888; }
+.cap-action-label{ font-size:12px; opacity:.6; font-style:italic; margin-top:4px; }
 </style>
 {% endblock %}
 {% block content %}
@@ -29,6 +39,18 @@
             <span class="term-section-meta">Core research is available to every account. Advanced capabilities require Pro Research.</span>
         </div>
         <div class="term-section-body">
+
+            {# claude code changed: Research Capabilities Discoverability &
+            # Navigation Refactor — short "research-first" framing so this
+            # page can now serve as the Research Lab group's primary
+            # landing surface (reached directly from the top-level nav,
+            # not just a link at the bottom of the hypothesis form). Pure
+            # copy addition — no new data, no new gating, nothing here
+            # changes what any capability card below actually shows. #}
+            <div class="cap-intro">
+                <p class="chart-caption mono">Quant Bot Pro is research-first. Every strategy candidate has to clear a real, evidence-backed research engine before it's eligible for anything else. This page is the full catalog — what each engine actually researches, its real implementation state, and whether your account can run it today.</p>
+                <p class="chart-caption mono">Ready to test a hypothesis yourself? <a href="{% url 'research_lab_dashboard' %}">Start in Research Lab &rarr;</a></p>
+            </div>
 
             {% for category in categories %}
             <div class="chart-caption mono" style="margin:24px 0 12px; text-transform:uppercase; letter-spacing:.05em;">{{ category.name }}</div>
@@ -47,12 +69,50 @@
                         <span class="cap-badge unavailable">⚠️ UNAVAILABLE</span>
                         {% endif %}
                     </div>
+                    {# claude code changed: Research Capabilities Discoverability
+                    # & Navigation Refactor — the badge above is the ACCESS
+                    # decision (subscription x readiness, computed by
+                    # ResearchEntitlementService.capability_ui_state() —
+                    # unchanged, still the only place that logic lives).
+                    # This row separately surfaces the registry's OWN raw
+                    # engine_status taxonomy verbatim (capability_registry.py's
+                    # six real values), per the spec's explicit "current
+                    # implementation state" requirement distinct from
+                    # "access level" — reads capability.engine_status
+                    # directly, no second status vocabulary invented. #}
+                    <div class="cap-status-row">
+                        {% if row.capability.engine_status == "IMPLEMENTED_AND_READY" %}
+                        <span class="cap-status ready mono">IMPLEMENTED &amp; READY</span>
+                        {% elif row.capability.engine_status == "IMPLEMENTED_BUT_NEEDS_TESTS" %}
+                        <span class="cap-status needs-work mono">NEEDS TESTS</span>
+                        {% elif row.capability.engine_status == "IMPLEMENTED_BUT_NEEDS_AUDIT" %}
+                        <span class="cap-status needs-work mono">NEEDS AUDIT</span>
+                        {% elif row.capability.engine_status == "PARTIALLY_IMPLEMENTED" %}
+                        <span class="cap-status needs-work mono">PARTIALLY IMPLEMENTED</span>
+                        {% elif row.capability.engine_status == "BLOCKED_BY_DEPENDENCY" %}
+                        <span class="cap-status needs-work mono">BLOCKED BY DEPENDENCY</span>
+                        {% else %}
+                        <span class="cap-status not-ready mono">NOT IMPLEMENTED</span>
+                        {% endif %}
+                        <span class="cap-status mono" style="opacity:.6;">{{ row.capability.required_tier }}</span>
+                    </div>
                     <div class="cap-desc">{{ row.capability.description }}</div>
                     <div class="cap-note mono">{{ row.ui_state.message }}</div>
                     {% if row.ui_state.badge == "LOCKED" %}
                     <a href="{% url 'research_lab_dashboard' %}" class="term-btn mono" style="align-self:flex-start; margin-top:4px;">Upgrade to unlock</a>
                     {% elif row.ui_state.badge == "AVAILABLE" %}
                     <a href="{% url 'research_lab_dashboard' %}" class="term-btn mono" style="align-self:flex-start; margin-top:4px;">Start a hypothesis</a>
+                    {% elif row.ui_state.badge == "COMING_SOON" %}
+                    {# claude code changed: explicit, clearly non-interactive
+                    # action text — per spec, a card must never show an
+                    # executable CTA for something that isn't, but it
+                    # should still state the real action plainly rather
+                    # than showing nothing. #}
+                    <span class="cap-action-label">Coming soon</span>
+                    {% elif row.capability.engine_status == "IMPLEMENTED_BUT_NEEDS_AUDIT" or row.capability.engine_status == "IMPLEMENTED_BUT_NEEDS_TESTS" %}
+                    <span class="cap-action-label">Under audit</span>
+                    {% else %}
+                    <span class="cap-action-label">Not yet ready</span>
                     {% endif %}
                 </div>
                 {% endfor %}

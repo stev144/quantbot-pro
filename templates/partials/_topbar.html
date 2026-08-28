@@ -19,6 +19,30 @@
 {% endcomment %}
 <div class="term-topbar">
     <div class="term-brand">
+        {% if active != 'dashboard' and active != 'research_lab_mvp' %}
+        {# claude code changed: new — universal back-navigation arrow, present on every
+           page that includes this shared partial (i.e. every page in the app) except:
+           (a) the main dashboard itself (the app's own root — nothing to go back to),
+           and (b) Research Lab pages (active="research_lab_mvp" on all 7 of them),
+           which already carry their own more precise, per-page-audited back link
+           (templates/research_lab/_back_nav.html) — showing both here would be two
+           back arrows on one page, confusing especially on a small mobile screen,
+           exactly the problem this control exists to avoid.
+
+           Unlike Research Lab's tightly-audited wizard flow (where each page has one
+           real, known parent), this app's ~20 other pages are all independently
+           reachable from this same topbar's own nav links/dropdowns from many
+           different starting points — there is no single correct "known parent" for
+           e.g. Backtesting or Portfolio & Risk. Browser history is therefore the
+           actually-correct behavior here (preferred via history.back() when there is
+           real same-origin history to return to), with a real <a href> to the main
+           dashboard as the fallback — so this always works even with JS disabled or
+           no history entry (e.g. a bookmarked/shared link opened fresh), never a dead
+           or confusing destination. #}
+        <a href="{% url 'dashboard' %}" class="term-back-arrow mono" aria-label="Back"
+           style="display:inline-flex; align-items:center; justify-content:center; align-self:center; width:36px; height:36px; min-width:36px; margin-right:4px; font-size:18px; text-decoration:none; flex-shrink:0;"
+           onclick="if (window.history.length > 1 && document.referrer && document.referrer.indexOf(window.location.origin) === 0) { window.history.back(); return false; }">&larr;</a>
+        {% endif %}
         <a href="{% url 'dashboard' %}" class="term-brand-link">
             <span class="term-brand-name">STEPH QUANT TECHNOLOGIES</span>
             {# claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies #}
@@ -41,14 +65,36 @@
            {% if active == 'academy' %}aria-current="page"{% endif %}
            href="{% url 'academy_dashboard' %}">Academy</a>
 
-        {# claude code changed: new -- Research Lab MVP entry, same #}
-        {# single-<a> top-level pattern as Academy above. Named #}
-        {# 'research_lab_mvp' for the active-state check to avoid #}
-        {# colliding with the pre-existing 'research_lab' slug used by #}
-        {# the Research menu's dropdown item below. #}
-        <a class="term-nav-link {% if active == 'research_lab_mvp' %}active{% endif %}"
-           {% if active == 'research_lab_mvp' %}aria-current="page"{% endif %}
-           href="{% url 'research_lab_dashboard' %}">Research Lab</a>
+        {# claude code changed: Research Capabilities Discoverability & Navigation Refactor — #}
+        {# was a single top-level <a> straight into the hypothesis-formalization form, with #}
+        {# Research Capabilities reachable only via a small text link at the bottom of that #}
+        {# page (templates/research_lab/dashboard.html), i.e. buried behind Research Lab #}
+        {# rather than directly discoverable. Now a <details> dropdown, same component/pattern #}
+        {# as the sibling "Research" group immediately below — Capabilities listed FIRST (the #}
+        {# new primary discovery surface), "New Hypothesis" second (what used to be the only #}
+        {# destination), History third. Still named 'research_lab_mvp' for the outer active/open #}
+        {# check (unchanged — every one of the 7 Research Lab MVP page templates still passes #}
+        {# active="research_lab_mvp" and none of them needed editing), avoiding the same #}
+        {# pre-existing 'research_lab' slug collision the original comment flagged (the OTHER #}
+        {# "Research" dropdown's own first item is, confusingly, ALSO labeled "Research Lab" but #}
+        {# points at a completely different, older /research/ view — a real, pre-existing naming #}
+        {# collision, not introduced or fixed here; out of this refactor's scope). #}
+        <details class="term-nav-group" {% if active == 'research_lab_mvp' %}open{% endif %}>
+            <summary class="term-nav-link {% if active == 'research_lab_mvp' %}active{% endif %}"
+                     {% if active == 'research_lab_mvp' %}aria-current="page"{% endif %}>Research Lab</summary>
+            <div class="term-nav-dropdown">
+                {# claude code changed: sub-item active-highlighting uses request.resolver_match.url_name #}
+                {# (the request context processor is already enabled — confirmed via request.user's #}
+                {# existing use just above in this same file) rather than a new per-page `active=` value, #}
+                {# so none of the 7 existing Research Lab MVP templates needed to change their include call. #}
+                <a class="{% if request.resolver_match.url_name == 'research_lab_capabilities' %}active{% endif %}"
+                   href="{% url 'research_lab_capabilities' %}">Capabilities</a>
+                <a class="{% if request.resolver_match.url_name == 'research_lab_dashboard' %}active{% endif %}"
+                   href="{% url 'research_lab_dashboard' %}">New Hypothesis</a>
+                <a class="{% if request.resolver_match.url_name == 'research_lab_history' %}active{% endif %}"
+                   href="{% url 'research_lab_history' %}">History</a>
+            </div>
+        </details>
 
         <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
             <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>

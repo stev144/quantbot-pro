@@ -223,6 +223,103 @@ class MultiSymbolBehaviorTest(SimpleTestCase):
         self.assertEqual(btc_features["sell_volume"].iloc[0], 0.0)   # claude code changed: BTC's own sell_volume unaffected by ETH's separate call
 
 
+class ChunkedProcessingSafetyTest(SimpleTestCase):
+    """claude code changed: new — Phase 2D (multi-month scaling requires
+    processing trades day-by-day rather than holding the full raw history
+    in memory at once, since e.g. 6 months of BTC/USDT aggTrades is
+    ~100M+ rows). Proves, using ONLY the existing, already-committed
+    TradeFlowEngine methods (no new production code needed for this
+    proof), exactly which columns are safe to compute per-day-chunk and
+    which are NOT — the property Phase 2D's acquisition script relies on.
+    Per-candle aggregations (buy_volume, sell_volume, delta, trade_intensity,
+    avg_trade_size, buy_sell_ratio) depend ONLY on trades within that one
+    candle's own window, so chunking by day cannot change them. cvd (a
+    running cumulative sum) and anything derived from it MUST be
+    recomputed on the full concatenated series after chunked processing,
+    or it silently resets at every chunk boundary."""
+
+    def _two_day_trades(self):
+        # claude code changed: trades spanning a day boundary — day 1 has
+        # 2 candles (22:00, 23:00), day 2 has 2 candles (00:00, 01:00) of
+        # the NEXT day, deliberately with nonzero delta in every candle so
+        # a day-boundary CVD reset is numerically distinguishable from the
+        # correct continuous value.
+        rows = [
+            (1, "2024-01-01 22:10", 5.0, False),   # day 1, candle 22:00, buy
+            (2, "2024-01-01 23:10", 2.0, True),    # day 1, candle 23:00, sell
+            (3, "2024-01-02 00:10", 4.0, False),   # day 2, candle 00:00, buy
+            (4, "2024-01-02 01:10", 1.0, True),    # day 2, candle 01:00, sell
+        ]
+        return pd.DataFrame({
+            "trade_id": [r[0] for r in rows],
+            "timestamp": [pd.Timestamp(r[1], tz="UTC").value // 10**6 for r in rows],
+            "price": [100.0] * len(rows),
+            "quantity": [r[2] for r in rows],
+            "is_buyer_maker": [r[3] for r in rows],
+            "symbol": ["BTC/USDT"] * len(rows),
+            "source": ["binance"] * len(rows),
+        })
+
+    def test_per_candle_columns_are_identical_whether_chunked_by_day_or_computed_in_one_call(self):
+        trades = self._two_day_trades()
+        full_candle_index = pd.DatetimeIndex(
+            ["2024-01-01 22:00", "2024-01-01 23:00", "2024-01-02 00:00", "2024-01-02 01:00"], tz="UTC"
+        )
+        engine = TradeFlowEngine(timeframe="1h")
+
+        # ── Single, non-chunked call (the "ground truth") ──────────────
+        single_call = engine.compute_features(trades, full_candle_index)
+
+        # ── Chunked: one compute_features() call per UTC day ───────────
+        day1_index = full_candle_index[full_candle_index < pd.Timestamp("2024-01-02", tz="UTC")]
+        day2_index = full_candle_index[full_candle_index >= pd.Timestamp("2024-01-02", tz="UTC")]
+        day1_chunk = engine.compute_features(trades, day1_index)
+        day2_chunk = engine.compute_features(trades, day2_index)   # claude code changed: full trades_df passed each time — align_trades_to_candles() itself filters to only the trades that actually fall in that chunk's window, exactly like a real per-day archive file would only ever contain that day's trades
+        chunked = pd.concat([day1_chunk, day2_chunk])
+
+        # claude code changed: THE property this whole chunking strategy
+        # depends on — per-candle columns must be byte-identical whether
+        # computed in one call or two, since each candle's own value never
+        # depends on any other candle.
+        for col in ("buy_volume", "sell_volume", "delta", "trade_intensity", "avg_trade_size", "buy_sell_ratio"):
+            pd.testing.assert_series_equal(
+                single_call[col].reset_index(drop=True), chunked[col].reset_index(drop=True),
+                check_names=False, obj=f"chunked vs single-call must match for '{col}'",
+            )
+
+    def test_cvd_silently_resets_at_chunk_boundary_unless_recomputed_on_the_full_series(self):
+        # claude code changed: THE negative proof — demonstrates exactly
+        # the bug Phase 2D's acquisition script must avoid. Naively
+        # concatenating each day's own "cvd" column (each restarting at 0,
+        # per compute_features' own documented convention) produces a
+        # WRONG result at the day-2 candles compared to the true
+        # continuous cumulative sum.
+        trades = self._two_day_trades()
+        full_candle_index = pd.DatetimeIndex(
+            ["2024-01-01 22:00", "2024-01-01 23:00", "2024-01-02 00:00", "2024-01-02 01:00"], tz="UTC"
+        )
+        engine = TradeFlowEngine(timeframe="1h")
+
+        single_call = engine.compute_features(trades, full_candle_index)
+        true_cvd = single_call["cvd"].reset_index(drop=True)
+
+        day1_index = full_candle_index[full_candle_index < pd.Timestamp("2024-01-02", tz="UTC")]
+        day2_index = full_candle_index[full_candle_index >= pd.Timestamp("2024-01-02", tz="UTC")]
+        day1_chunk = engine.compute_features(trades, day1_index)
+        day2_chunk = engine.compute_features(trades, day2_index)
+        naive_chunked_cvd = pd.concat([day1_chunk["cvd"], day2_chunk["cvd"]]).reset_index(drop=True)
+
+        # claude code changed: the naive per-chunk cvd is WRONG from candle
+        # 2 (day 2's first candle) onward — proves recomputation is required,
+        # not optional.
+        self.assertFalse(true_cvd.equals(naive_chunked_cvd), "if this now passes, compute_features' CVD convention changed and Phase 2D's acquisition script assumption must be re-verified")
+
+        # ── The FIX: recompute cvd on the concatenated delta series ─────
+        chunked_delta = pd.concat([day1_chunk["delta"], day2_chunk["delta"]]).reset_index(drop=True)
+        fixed_cvd = chunked_delta.cumsum()
+        pd.testing.assert_series_equal(true_cvd, fixed_cvd, check_names=False, obj="recomputing cvd from the concatenated delta series must match the true continuous value")
+
+
 class SecurityBoundaryTest(SimpleTestCase):
     """Phase 2B, Step 10: trade-data ingestion and the trade-flow research
     engine must remain completely outside order placement, execution,

@@ -483,9 +483,27 @@ class FeatureCalculator:
             up = high.diff()
             down = -low.diff()
             
-            plus_dm = pd.Series(0, index=df.index)
-            minus_dm = pd.Series(0, index=df.index)
-            
+            # claude code changed: real bug found during the Hardening
+            # Mission's Section 10 audit — this was `pd.Series(0, ...)`,
+            # an int64-dtype Series. Boolean-mask-assigning up/down's float
+            # values into it (up[up > down], etc.) raised TypeError under
+            # pandas>=2.x/3.x's stricter dtype rules (older pandas silently
+            # upcast int64->float64 on this exact pattern; this project
+            # pins pandas==3.0.2, which does not). That TypeError was
+            # caught by this method's own blanket `except Exception` below
+            # and silently returned an all-NaN Series — this IS the
+            # previously-reported "adx is 100% NaN on real data" defect,
+            # confirmed by reproducing the exact exception against real
+            # OHLCV data before writing this fix. Root cause was purely
+            # this dtype mismatch, not the input data, not a warmup period,
+            # and not RegimeDetector.detect() (bot/engines/regime_detector.py
+            # has its own, separately-implemented ADX using np.where(),
+            # which numpy already upcasts to float64 regardless — verified
+            # unaffected, live trading's regime detection never used this
+            # method at all).
+            plus_dm = pd.Series(0.0, index=df.index)
+            minus_dm = pd.Series(0.0, index=df.index)
+
             plus_dm[up > down] = up[up > down]
             minus_dm[down > up] = down[down > up]
             

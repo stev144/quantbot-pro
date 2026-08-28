@@ -139,7 +139,24 @@ class RealDataEndToEndTest(SimpleTestCase):
         # Funding history goes back years, so as long as the OHLCV rows
         # fall after the funding series' start, every row should get a
         # real (non-NaN) funding_rate via the backward merge_asof.
-        recent_rows = enriched[enriched["timestamp"] >= funding["timestamp"].astype("int64").min() // 10**6]
+        #
+        # claude code changed: real, previously-latent bug found and fixed
+        # during Hardening Phase 2 (only ever surfaced once data/BTC_USDT_1h.csv
+        # existed for this line to actually run against — it always
+        # crashed earlier on FileNotFoundError before this comparison had
+        # a chance to execute). funding["timestamp"] is already real
+        # millisecond-epoch int64 (see derivatives_data.py's
+        # fetch_funding_rate_history — it stores ccxt's raw `ts` directly,
+        # never converts to datetime64), so `.astype("int64").min() //
+        # 10**6` was both a no-op cast AND a wrong unit conversion
+        # (shrinking an already-correct ms value ~1e6x), and the result
+        # was then compared against enriched["timestamp"] (a real
+        # datetime64[ns, UTC] column, per DerivativesEngine's
+        # _to_utc_datetime()) — an int-vs-datetime comparison pandas
+        # correctly refuses to do at all. Converting the funding minimum
+        # to a real UTC Timestamp is the actual fix, not a unit tweak.
+        funding_start = pd.to_datetime(funding["timestamp"].min(), unit="ms", utc=True)
+        recent_rows = enriched[enriched["timestamp"] >= funding_start]
         if not recent_rows.empty:
             self.assertTrue(recent_rows["funding_rate"].notna().any())
 
@@ -203,3 +220,133 @@ class RunDerivativesResearchEndToEndTest(SimpleTestCase):
 
             self.assertTrue((Path(tmp_output) / "BTC_USDT_derivatives.csv").exists())
             self.assertTrue((Path(tmp_output) / "ETH_USDT_derivatives.csv").exists())
+
+
+class OpenInterestNoLookaheadTest(SimpleTestCase):
+    """claude code changed: new — Phase 2E Step 2 (causality/data-integrity
+    gate for the OI feature family, ahead of the derivatives re-test).
+    MergeFundingNoLookaheadTest above proves this property for funding_rate;
+    no equivalent existed for open_interest_amount/oi_change_1h/oi_change_24h/
+    oi_price_interaction. Reuses the exact same deterministic-synthetic-
+    timestamp technique (value-as-index, so "which print produced this
+    candle's value" is directly checkable) — no new test framework."""
+
+    def _make_ohlcv(self, n):
+        return pd.DataFrame({
+            "timestamp": pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC"),
+            "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1000.0,
+        })
+
+    def test_assigned_oi_never_comes_from_the_future(self):
+        n = MIN_CANDLES + 10
+        ohlcv = self._make_ohlcv(n)
+        # claude code changed: OI prints offset 30 minutes INTO each hour —
+        # mirrors real-world OI reporting lag (a print is not available at
+        # the instant its own hour begins). oi value = print index, so the
+        # print that produced any given candle's value is directly checkable.
+        oi_timestamps = pd.date_range("2024-01-01 00:30", periods=n, freq="1h", tz="UTC")
+        oi = pd.DataFrame({
+            "timestamp": oi_timestamps,
+            "open_interest_amount": range(n),
+            "open_interest_value": range(n),
+        })
+
+        engine = DerivativesEngine()
+        enriched = engine.calculate_all(ohlcv, None, oi)
+
+        merged_back = enriched.merge(
+            oi.rename(columns={"timestamp": "oi_ts"}),
+            left_on="open_interest_amount", right_on="open_interest_amount", how="left", suffixes=("", "_src"),
+        )
+        valid = merged_back["open_interest_amount"].notna()
+        self.assertTrue((merged_back.loc[valid, "timestamp"] >= merged_back.loc[valid, "oi_ts"]).all())
+
+        # claude code changed: THE specific leakage this targets — candle H
+        # (timestamp H:00) must NOT see print H (timestamp H:30, printed 30
+        # minutes AFTER candle H opens); it must see print H-1 (printed at
+        # (H-1):30, already available by H:00).
+        row_h = enriched.iloc[5]
+        self.assertEqual(row_h["open_interest_amount"], 4)  # print 4, not print 5
+
+    def test_oi_derived_columns_unaffected_by_a_later_oi_print(self):
+        """claude code changed: mutation-invariance proof covering
+        pct_change(1)/pct_change(24)/oi_price_interaction in one test — the
+        real risk for these three, as opposed to the raw merge tested above.
+        Perturbing ONE mid-series OI print must never change any candle
+        BEFORE that print's own timestamp; and (so this isn't a vacuously
+        passing test) must actually change something AT/AFTER it."""
+        n = MIN_CANDLES + 30
+        ohlcv = self._make_ohlcv(n)
+        rng = np.random.default_rng(7)
+        oi_timestamps = pd.date_range("2024-01-01 00:30", periods=n, freq="1h", tz="UTC")
+        base_values = 1000 + np.cumsum(rng.normal(size=n))
+        oi = pd.DataFrame({
+            "timestamp": oi_timestamps,
+            "open_interest_amount": base_values,
+            "open_interest_value": base_values * 100,
+        })
+
+        engine = DerivativesEngine()
+        enriched_original = engine.calculate_all(ohlcv, None, oi)
+
+        mutate_idx = n // 2
+        oi_mutated = oi.copy()
+        oi_mutated.loc[mutate_idx, "open_interest_amount"] *= 5.0
+        enriched_mutated = engine.calculate_all(ohlcv, None, oi_mutated)
+
+        cutoff_ts = oi.loc[mutate_idx, "timestamp"]
+        cols = ["open_interest_amount", "oi_change_1h", "oi_change_24h", "oi_price_interaction"]
+
+        before_mask = enriched_original["timestamp"] < cutoff_ts
+        pd.testing.assert_frame_equal(
+            enriched_original.loc[before_mask, cols].reset_index(drop=True),
+            enriched_mutated.loc[before_mask, cols].reset_index(drop=True),
+        )
+
+        # claude code changed: prove the test setup isn't vacuous — the
+        # mutation DOES change something from the print's own timestamp
+        # onward, so the "before" equality above is a real causality proof,
+        # not an artifact of the mutation never mattering anywhere.
+        after_mask = ~before_mask
+        self.assertFalse(
+            enriched_original.loc[after_mask, "open_interest_amount"].reset_index(drop=True).equals(
+                enriched_mutated.loc[after_mask, "open_interest_amount"].reset_index(drop=True)
+            )
+        )
+
+    def test_candles_before_earliest_oi_print_are_nan_not_backfilled(self):
+        """claude code changed: proves Binance's real ~30-day OI history cap
+        (fetch_open_interest_history's MAX_OPEN_INTEREST_HISTORY_DAYS,
+        already tested in test_derivatives_data.py) shows up here as honest
+        NaN, never a value fabricated/backfilled from the first available
+        (future, relative to the candle) print."""
+        n = MIN_CANDLES + 10
+        ohlcv = self._make_ohlcv(n)
+        oi_start_idx = 50   # OI history only starts 50 hours into the OHLCV window
+        oi_timestamps = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")[oi_start_idx:]
+        remaining = n - oi_start_idx
+        oi = pd.DataFrame({
+            "timestamp": oi_timestamps,
+            "open_interest_amount": range(remaining),
+            "open_interest_value": range(remaining),
+        })
+
+        engine = DerivativesEngine()
+        enriched = engine.calculate_all(ohlcv, None, oi)
+
+        self.assertTrue(enriched["open_interest_amount"].iloc[:oi_start_idx].isna().all())
+        self.assertTrue(enriched["oi_change_1h"].iloc[:oi_start_idx].isna().all())
+
+    def test_none_and_empty_oi_produce_nan_for_every_oi_derived_column(self):
+        """claude code changed: extends MissingDataGracefulDegradationTest's
+        existing open_interest_amount-only check to the DERIVED oi_ columns
+        too — a missing OI history must not silently produce a zero (rather
+        than NaN) rate-of-change, which would read as "no change" instead of
+        "unknown"."""
+        ohlcv = self._make_ohlcv(MIN_CANDLES + 10)
+        engine = DerivativesEngine()
+
+        for oi_input in (None, pd.DataFrame(columns=["timestamp", "open_interest_amount", "open_interest_value"])):
+            enriched = engine.calculate_all(ohlcv, None, oi_input)
+            for col in ("oi_change_1h", "oi_change_24h", "oi_price_interaction"):
+                self.assertTrue(enriched[col].isna().all(), f"{col} should be all-NaN when OI is unavailable")
