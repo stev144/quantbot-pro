@@ -166,3 +166,42 @@ def record_research_trial(
     experiment.status = "COMPLETED"
     experiment.save()   # claude code changed: the ONE sanctioned transition into terminal state — every subsequent save()/delete() on this row is now enforced-immutable (bot/research_lab/models.py)
     return experiment
+
+
+def record_oos_trial(
+    hypothesis_family: HypothesisFamily,
+    oos_result,   # bot.research.oos_validator.OOSResult — typed as untyped param to avoid a hard import cycle (oos_validator.py does not import trial_service.py)
+    hypothesis_text: str,
+    dataset_identities: List[DatasetIdentity],
+    verdict: str,
+    code_version: str = "",
+    student=None,
+) -> ResearchExperiment:
+    """
+    claude code changed: new — OOS/Walk-Forward Validation Infrastructure
+    mission. THE integration point between bot/research/oos_validator.py
+    and the existing governance ledger (Section 8/13 of that mission:
+    "integrate with ResearchTrial/HypothesisFamily... reuse, do not
+    duplicate"). Deliberately a thin wrapper around record_research_trial()
+    above, not a parallel code path — an OOS trial is still just a
+    ResearchExperiment row; the only thing specific to it is that
+    `statistical_results` is OOSResult.to_dict() (fold-level detail
+    included, per that mission's Section 6 requirement that fold-level
+    results are never discarded even once persisted) and `code_version`
+    defaults to the engine's own methodology_version if the caller
+    didn't pass one, so a stored experiment is traceable to the exact
+    fold/purge/embargo semantics that produced it even if the caller
+    forgets to pass code_version explicitly.
+    """
+    statistical_results = oos_result.to_dict()
+    resolved_code_version = code_version or oos_result.methodology_version
+    return record_research_trial(
+        hypothesis_family=hypothesis_family,
+        hypothesis_text=hypothesis_text,
+        dataset_identities=dataset_identities,
+        statistical_results=statistical_results,
+        verdict=verdict,
+        code_version=resolved_code_version,
+        structured_spec={"oos_run_id": oos_result.run_id, "evaluation_type": oos_result.evaluation_type},
+        student=student,
+    )

@@ -117,6 +117,15 @@ class Trade:
             "r_multiple":      round(self.r_multiple, 4) if self.r_multiple is not None else 0,
             "holding_candles": self.holding_candles if self.holding_candles is not None else 0,
 
+            # claude code changed: new — purely additive keys (Type B OOS evaluator mission).
+            # Positions within whatever DataFrame slice the caller ran, e.g.
+            # for indexing back into a Backtester run's own df.index to
+            # recover real entry/exit timestamps. Nothing previously read
+            # this dict by an exact/exhaustive key set (checked before adding),
+            # so this cannot change any existing caller's behavior.
+            "entry_index": self.entry_index,
+            "exit_index":  self.exit_index,
+
             # IMPORTANT FOR ANALYTICS ENGINE
             "signal": self.direction,   # Unified with analytics expectations
             "rsi":    self.rsi,
