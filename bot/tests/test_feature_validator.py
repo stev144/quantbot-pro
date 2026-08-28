@@ -471,3 +471,66 @@ class ValidateAllFeaturesRawSplitTest(SimpleTestCase):
 
         self.assertIn("passes_fdr", final.columns)
         self.assertIn("recommendation", final.columns)
+
+
+# claude code changed: new — Multi-Asset Foundation Refactor Phase 1B
+# hardening. FeatureValidator's Sharpe-contribution metric had its OWN
+# independent hardcoded sqrt(252) — a second, unrelated occurrence of the
+# exact bug already fixed in feature_calculator.py's realized_vol this
+# phase. `sharpe_contribution = mean(returns)/std(returns) * sqrt(factor)`
+# means the ratio between two runs' sharpe_contribution on the SAME
+# returns is exactly sqrt(factor_a/factor_b) — that ratio is what these
+# tests hand-verify, rather than the full stack's every intermediate
+# number.
+from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_US_EQUITY, UnsupportedAnnualizationError  # noqa: E402
+
+
+class SharpeContributionAnnualizationTest(SimpleTestCase):
+
+    def _make_df(self, n=500, seed=21):
+        rng = np.random.default_rng(seed)
+        returns = rng.normal(0, 0.01, n)
+        return pd.DataFrame({
+            "feat_a": returns * 50 + rng.normal(0, 0.001, n),
+            "forward_return_4h": returns,
+        })
+
+    def _sharpe(self, timeframe="1h", asset_class=None, seed=21):
+        v = FeatureValidator(min_observations=30, alpha=0.05, random_seed=1, timeframe=timeframe, asset_class=asset_class)
+        raw = v.validate_all_features_raw(self._make_df(seed=seed), forward_return_col="forward_return_4h")
+        return float(raw.iloc[0]["sharpe_contrib"])
+
+    def test_no_asset_class_falls_back_to_legacy_252(self):
+        """Backward compatibility: every pre-Phase-1B caller (none of
+        which pass timeframe/asset_class) gets exactly the old behavior."""
+        default = self._sharpe(asset_class=None)
+        explicit_252_equivalent = self._sharpe(timeframe="1d", asset_class=ASSET_CLASS_US_EQUITY)
+        self.assertAlmostEqual(default, explicit_252_equivalent, places=8)
+
+    def test_1h_crypto_sharpe_scales_by_sqrt_ratio_vs_daily_equity(self):
+        """1h crypto (8760 periods/year) vs 1d equity (252 periods/year) —
+        the sharpe_contribution ratio must equal exactly sqrt(8760/252),
+        since both runs share the same underlying returns/seed."""
+        crypto_1h = self._sharpe(timeframe="1h", asset_class=ASSET_CLASS_CRYPTO)
+        equity_1d = self._sharpe(timeframe="1d", asset_class=ASSET_CLASS_US_EQUITY)
+        self.assertAlmostEqual(crypto_1h / equity_1d, np.sqrt(8760 / 252), places=6)
+
+    def test_intraday_equity_has_no_session_model_falls_back_honestly(self):
+        """No market-session-length model exists for intraday equities —
+        must fall back to the legacy 252 constant (logged), never guess."""
+        result = self._sharpe(timeframe="1h", asset_class=ASSET_CLASS_US_EQUITY)
+        fallback_equivalent = self._sharpe(timeframe="1d", asset_class=ASSET_CLASS_US_EQUITY)
+        self.assertAlmostEqual(result, fallback_equivalent, places=8)
+
+    def test_annualization_never_raises_out_of_validate_all_features_raw(self):
+        """Even for a (timeframe, asset_class) pair that would raise
+        inside periods_per_year(), the caller must never see that
+        exception — it's caught and logged, with a safe fallback, exactly
+        like every other per-feature failure mode in this pipeline."""
+        with self.assertRaises(UnsupportedAnnualizationError):
+            from bot.instruments import periods_per_year
+            periods_per_year("1h", ASSET_CLASS_US_EQUITY)  # confirms this really would raise if not caught
+        # ...but going through the real validator path must not propagate it:
+        v = FeatureValidator(min_observations=30, alpha=0.05, random_seed=1, timeframe="1h", asset_class=ASSET_CLASS_US_EQUITY)
+        raw = v.validate_all_features_raw(self._make_df(), forward_return_col="forward_return_4h")
+        self.assertFalse(raw.empty)

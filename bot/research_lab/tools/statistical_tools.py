@@ -25,18 +25,23 @@ def _prepare(asset: str, horizon: int):
     # calculate_feature() for the identical fix and its rationale).
     instrument = df.attrs.get("instrument")
     timeframe = instrument.timeframe if instrument else "1h"
+    asset_class = instrument.asset_class if instrument else None
     enriched = calc.calculate_all_features(df, symbol=asset, timeframe=timeframe)
-    return enriched, SUPPORTED_HORIZONS[horizon]
+    return enriched, SUPPORTED_HORIZONS[horizon], timeframe, asset_class
 
 
 @register_tool("run_statistical_test")
 def run_statistical_test(asset: str, feature_name: str, horizon: int, random_seed: int = 42) -> dict:
-    enriched, forward_col = _prepare(asset, horizon)
+    enriched, forward_col, timeframe, asset_class = _prepare(asset, horizon)
     if feature_name not in enriched.columns:
         raise ValueError(f"'{feature_name}' is not a column feature_calculator.py produced")
 
     single_feature_df = enriched[[feature_name, forward_col]].copy()  # claude code changed: scope the validator to exactly the one feature under test — this call's own hypothesis family is size 1
-    validator = FeatureValidator(random_seed=random_seed)
+    # claude code changed: Phase 1B hardening, section 7 — pass the real
+    # timeframe/asset_class through so FeatureValidator's Sharpe-
+    # contribution annualization (see that module) is correct, not the
+    # legacy 252 fallback.
+    validator = FeatureValidator(random_seed=random_seed, timeframe=timeframe, asset_class=asset_class)
     raw_results = validator.validate_all_features_raw(single_feature_df, forward_return_col=forward_col)
 
     if raw_results.empty:
@@ -64,12 +69,12 @@ def run_fdr_correction(asset: str, feature_name: str, horizon: int, random_seed:
     of apply_family_wide_correction()'s real contract (it's generic over
     however many symbols/features are passed, not hardcoded to many).
     """
-    enriched, forward_col = _prepare(asset, horizon)
+    enriched, forward_col, timeframe, asset_class = _prepare(asset, horizon)
     if feature_name not in enriched.columns:
         raise ValueError(f"'{feature_name}' is not a column feature_calculator.py produced")
 
     single_feature_df = enriched[[feature_name, forward_col]].copy()
-    validator = FeatureValidator(random_seed=random_seed)
+    validator = FeatureValidator(random_seed=random_seed, timeframe=timeframe, asset_class=asset_class)
     raw_results = validator.validate_all_features_raw(single_feature_df, forward_return_col=forward_col)
 
     corrected_by_symbol, pooled = apply_family_wide_correction({asset: raw_results}, alpha=0.05)

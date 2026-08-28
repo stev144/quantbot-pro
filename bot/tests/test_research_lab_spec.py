@@ -146,6 +146,23 @@ class TimeframeHorizonSeparationTest(SimpleTestCase):
         self.assertFalse(result.is_valid)
         self.assertTrue(any("timeframe" in e for e in result.errors))
 
+    def test_unsupported_horizon_on_a_valid_timeframe_is_rejected_not_coerced(self):
+        """claude code changed: new — Phase 1B hardening, section 8. The
+        exact historical bug spec.py's own module docstring references
+        (Bug 4): a horizon that isn't one of the real supported values
+        (1/4/24 candles for 1h) but names an otherwise-valid timeframe
+        must fail validation explicitly here — never silently pass
+        through and only fail later, deep inside a tool call, and never
+        get silently rounded/coerced to the nearest supported horizon."""
+        spec = _valid_spec(timeframe="1h", target={"type": "forward_return", "horizon": 12})
+        result = validate_spec(spec)
+        self.assertFalse(result.is_valid)
+        self.assertTrue(any("horizon" in e and "12" in e for e in result.errors))
+        # claude code changed: the spec itself must retain exactly what
+        # was asked (12) — validate_spec() never mutates its input to
+        # silently substitute the nearest supported horizon (4 or 24).
+        self.assertEqual(spec.target["horizon"], 12)
+
     def test_a_24_candle_horizon_is_never_represented_as_a_24h_timeframe(self):
         """The refactor brief's own required distinction: timeframe='1h' +
         target.horizon=24 means 24 CANDLES forward on 1h data, never a

@@ -30,6 +30,7 @@ from __future__ import annotations
 import numpy as np
 from scipy import stats as scipy_stats
 
+from bot.instruments import candles_per_calendar_day  # claude code changed: new — Phase 1B hardening (Rule 3)
 from bot.research.feature_calculator import FeatureCalculator
 from bot.research_lab.spec import SUPPORTED_HORIZONS
 from bot.research_lab.tools._data import load_ohlcv
@@ -95,18 +96,26 @@ def _count_episodes(condition_mask: np.ndarray) -> int:
     return int(len(starts))
 
 
-def _block_permutation_pvalue(condition_mask: np.ndarray, forward_returns: np.ndarray, observed_diff: float, seed: int) -> float:
+def _block_permutation_pvalue(condition_mask: np.ndarray, forward_returns: np.ndarray, observed_diff: float, seed: int, block_size_candles: int = BLOCK_SIZE_CANDLES) -> float:
     """
     Block-shuffles WHICH rows count as condition=True (preserving each
     block's internal contiguity, same as this codebase's other
     block-shuffle implementations), recomputes the true-vs-false mean
     difference on each shuffle, and returns the fraction of shuffles at
     least as extreme as the real, observed difference.
+
+    claude code changed: Phase 1B hardening (Rule 3) — block_size_candles
+    is now a parameter, defaulting to the old module constant only for
+    callers that don't pass one explicitly. run_conditional_test() below
+    now always passes a real, timeframe-derived value (bot.instruments.
+    candles_per_calendar_day()) instead of relying on this default, which
+    was hardcoded "one day of 1h candles" — correct only by coincidence
+    for the one timeframe this platform has ever had real data for.
     """
     rng = np.random.default_rng(seed)
     n = len(condition_mask)
-    n_blocks = int(np.ceil(n / BLOCK_SIZE_CANDLES))
-    block_bounds = [(i * BLOCK_SIZE_CANDLES, min((i + 1) * BLOCK_SIZE_CANDLES, n)) for i in range(n_blocks)]
+    n_blocks = int(np.ceil(n / block_size_candles))
+    block_bounds = [(i * block_size_candles, min((i + 1) * block_size_candles, n)) for i in range(n_blocks)]
 
     at_least_as_extreme = 0
     valid_shuffles = 0
@@ -190,7 +199,13 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
         true_returns, false_returns, alternative="two-sided",
     )
 
-    block_p = _block_permutation_pvalue(condition_mask, forward_returns, observed_diff, seed=random_seed)
+    # claude code changed: Phase 1B hardening (Rule 3) — was the module's
+    # hardcoded BLOCK_SIZE_CANDLES=24 default ("one day of 1h candles"),
+    # applied regardless of the data's actual timeframe. round() to the
+    # nearest whole candle; a fractional day-in-candles isn't meaningful
+    # as a block boundary.
+    block_size = round(candles_per_calendar_day(timeframe))
+    block_p = _block_permutation_pvalue(condition_mask, forward_returns, observed_diff, seed=random_seed, block_size_candles=block_size)
 
     # claude code changed: new — Statistical Integrity Hardening (gap #5).
     # Each experiment tests exactly one condition (m=1 hypothesis family).

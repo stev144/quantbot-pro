@@ -40,6 +40,7 @@ import hashlib                                 # Feature versioning via hash
 from datetime import datetime                  # Timestamps
 import concurrent.futures                      # Parallel processing (optional)
 from bot import data_fetcher
+from bot.instruments import UnsupportedAnnualizationError, UnsupportedTimeframeError, periods_per_year  # claude code changed: new — Phase 1B hardening, section 7
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -287,11 +288,24 @@ class FeatureValidator:
     """
     
     def __init__(self, min_observations: int = 30, alpha: float = 0.05,
-                 random_seed: Optional[int] = None):
-        """Initialize validator with institutional settings"""
+                 random_seed: Optional[int] = None,
+                 timeframe: str = "1h", asset_class: Optional[str] = None):
+        """Initialize validator with institutional settings
+
+        claude code changed: new — Phase 1B hardening, section 7. timeframe/
+        asset_class default to "1h"/None so every existing call site (none
+        of which pass these) keeps exactly its current behavior — see the
+        Sharpe-contribution block below for why they were added: this
+        class had its OWN independent hardcoded sqrt(252), a second copy
+        of the same bug fixed in feature_calculator.py's realized_vol this
+        phase, not caught by that earlier fix since the two are unrelated
+        code paths.
+        """
         self.min_observations = min_observations
         self.alpha = alpha
         self.results: List[InstitutionalValidationResult] = []
+        self.timeframe = timeframe
+        self.asset_class = asset_class
         # Initialize regime detector
         self.regime_detector = MarketRegimeDetector()
         # claude code changed: new — Phase B (P1-3). Isolated RNG for the
@@ -822,8 +836,34 @@ class FeatureValidator:
         try:
             # Simple Sharpe: return / volatility
             strategy_returns = returns_clean * np.sign(ic_overall)  # Trade in direction of correlation
-            sharpe_contribution = np.mean(strategy_returns) / (np.std(strategy_returns) + 1e-8) * np.sqrt(252)
-            
+            # claude code changed: Phase 1B hardening, section 7. Was
+            # np.sqrt(252) unconditionally — the same bug fixed in
+            # feature_calculator.py's realized_vol this phase, a second,
+            # independent occurrence here. `returns_clean` is per-candle,
+            # not per-day, so annualizing with the daily-bar convention
+            # regardless of self.timeframe/self.asset_class was wrong by
+            # the same class of error. Falls back to the legacy 252
+            # constant — loudly logged, never silent — only when
+            # asset_class can't be resolved (preserves exact behavior for
+            # every existing caller, none of which pass these yet).
+            if self.asset_class is None:
+                logger.warning(
+                    "Sharpe contribution: no asset_class provided — falling back to the legacy 252 "
+                    "(US-equity daily-bar) annualization constant"
+                )
+                annualization_factor = 252.0
+            else:
+                try:
+                    annualization_factor = periods_per_year(self.timeframe, self.asset_class)
+                except (UnsupportedTimeframeError, UnsupportedAnnualizationError) as exc:
+                    logger.warning(
+                        f"Sharpe contribution: cannot derive a correct annualization factor for "
+                        f"timeframe={self.timeframe!r}, asset_class={self.asset_class!r} ({exc}) — "
+                        f"falling back to the legacy 252 (US-equity daily-bar) annualization constant"
+                    )
+                    annualization_factor = 252.0
+            sharpe_contribution = np.mean(strategy_returns) / (np.std(strategy_returns) + 1e-8) * np.sqrt(annualization_factor)
+
             if sharpe_contribution > 1.5:
                 sharpe_rank = "excellent"
             elif sharpe_contribution > 1.0:
