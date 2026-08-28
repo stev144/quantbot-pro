@@ -20,25 +20,42 @@
 <div class="term-topbar">
     <div class="term-brand">
         {% if active != 'dashboard' and active != 'research_lab_mvp' %}
-        {# claude code changed: new — universal back-navigation arrow, present on every
-           page that includes this shared partial (i.e. every page in the app) except:
-           (a) the main dashboard itself (the app's own root — nothing to go back to),
-           and (b) Research Lab pages (active="research_lab_mvp" on all 7 of them),
-           which already carry their own more precise, per-page-audited back link
-           (templates/research_lab/_back_nav.html) — showing both here would be two
-           back arrows on one page, confusing especially on a small mobile screen,
-           exactly the problem this control exists to avoid.
+        {% comment %}
+            claude code changed: new — universal back-navigation arrow, present on every
+            page that includes this shared partial (i.e. every page in the app) except:
+            (a) the main dashboard itself (the app's own root — nothing to go back to),
+            and (b) Research Lab pages (active="research_lab_mvp" on all 7 of them),
+            which already carry their own more precise, per-page-audited back link
+            (templates/research_lab/_back_nav.html) — showing both here would be two
+            back arrows on one page, confusing especially on a small mobile screen,
+            exactly the problem this control exists to avoid.
 
-           Unlike Research Lab's tightly-audited wizard flow (where each page has one
-           real, known parent), this app's ~20 other pages are all independently
-           reachable from this same topbar's own nav links/dropdowns from many
-           different starting points — there is no single correct "known parent" for
-           e.g. Backtesting or Portfolio & Risk. Browser history is therefore the
-           actually-correct behavior here (preferred via history.back() when there is
-           real same-origin history to return to), with a real <a href> to the main
-           dashboard as the fallback — so this always works even with JS disabled or
-           no history entry (e.g. a bookmarked/shared link opened fresh), never a dead
-           or confusing destination. #}
+            Unlike Research Lab's tightly-audited wizard flow (where each page has one
+            real, known parent), this app's ~20 other pages are all independently
+            reachable from this same topbar's own nav links/dropdowns from many
+            different starting points — there is no single correct "known parent" for
+            e.g. Backtesting or Portfolio & Risk. Browser history is therefore the
+            actually-correct behavior here (preferred via history.back() when there is
+            real same-origin history to return to), with a real <a href> to the main
+            dashboard as the fallback — so this always works even with JS disabled or
+            no history entry (e.g. a bookmarked/shared link opened fresh), never a dead
+            or confusing destination.
+
+            claude code changed: bug found live on the Railway deployment — this block
+            was originally written using Django's single-line hash-style comment
+            delimiter, which does NOT support multi-line content (its regex match
+            cannot cross a newline), so the opening delimiter on one line with its
+            closing delimiter several lines later never matched at all, and the
+            entire block rendered as literal visible text on every page. Converted
+            to the comment BLOCK tag (open/close keyword pair) this same file
+            already uses correctly at the top for its own multi-line documentation —
+            the only Django construct that actually supports multi-line comments.
+            Note for future editors: never write the literal tag delimiters for
+            either comment style INSIDE a comment body — Django's tokenizer scans
+            the whole template for tag syntax before it knows what's "inside" a
+            comment, so literal delimiter characters in prose close the comment
+            early, exactly the bug this note itself had to be reworded to avoid.
+        {% endcomment %}
         <a href="{% url 'dashboard' %}" class="term-back-arrow mono" aria-label="Back"
            style="display:inline-flex; align-items:center; justify-content:center; align-self:center; width:36px; height:36px; min-width:36px; margin-right:4px; font-size:18px; text-decoration:none; flex-shrink:0;"
            onclick="if (window.history.length > 1 && document.referrer && document.referrer.indexOf(window.location.origin) === 0) { window.history.back(); return false; }">&larr;</a>

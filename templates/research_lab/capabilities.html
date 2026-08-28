@@ -40,13 +40,17 @@
         </div>
         <div class="term-section-body">
 
-            {# claude code changed: Research Capabilities Discoverability &
-            # Navigation Refactor — short "research-first" framing so this
-            # page can now serve as the Research Lab group's primary
-            # landing surface (reached directly from the top-level nav,
-            # not just a link at the bottom of the hypothesis form). Pure
-            # copy addition — no new data, no new gating, nothing here
-            # changes what any capability card below actually shows. #}
+            {# claude code changed: Research Capabilities Discoverability & Navigation Refactor — #}
+            {# short "research-first" framing so this page can now serve as the Research Lab #}
+            {# group's primary landing surface (reached directly from the top-level nav, not #}
+            {# just a link at the bottom of the hypothesis form). Pure copy addition — no new #}
+            {# data, no new gating, nothing here changes what any capability card below shows. #}
+            {# claude code changed: bug found live on Railway — this and two other blocks below #}
+            {# were originally written as one Django comment tag spanning multiple physical #}
+            {# lines, which Django does not support (the comment tag's regex cannot cross a #}
+            {# newline) — the whole block rendered as literal visible text on the page. Fixed #}
+            {# to this file's own established convention: one self-contained comment tag per #}
+            {# physical line, never spanning more than one line. #}
             <div class="cap-intro">
                 <p class="chart-caption mono">Quant Bot Pro is research-first. Every strategy candidate has to clear a real, evidence-backed research engine before it's eligible for anything else. This page is the full catalog — what each engine actually researches, its real implementation state, and whether your account can run it today.</p>
                 <p class="chart-caption mono">Ready to test a hypothesis yourself? <a href="{% url 'research_lab_dashboard' %}">Start in Research Lab &rarr;</a></p>
@@ -69,17 +73,15 @@
                         <span class="cap-badge unavailable">⚠️ UNAVAILABLE</span>
                         {% endif %}
                     </div>
-                    {# claude code changed: Research Capabilities Discoverability
-                    # & Navigation Refactor — the badge above is the ACCESS
-                    # decision (subscription x readiness, computed by
-                    # ResearchEntitlementService.capability_ui_state() —
-                    # unchanged, still the only place that logic lives).
-                    # This row separately surfaces the registry's OWN raw
-                    # engine_status taxonomy verbatim (capability_registry.py's
-                    # six real values), per the spec's explicit "current
-                    # implementation state" requirement distinct from
-                    # "access level" — reads capability.engine_status
-                    # directly, no second status vocabulary invented. #}
+                    {# claude code changed: Research Capabilities Discoverability & Navigation #}
+                    {# Refactor — the badge above is the ACCESS decision (subscription x #}
+                    {# readiness, computed by ResearchEntitlementService.capability_ui_state() — #}
+                    {# unchanged, still the only place that logic lives). This row separately #}
+                    {# surfaces the registry's OWN raw engine_status taxonomy verbatim #}
+                    {# (capability_registry.py's six real values), per the spec's explicit #}
+                    {# "current implementation state" requirement distinct from "access level" — #}
+                    {# reads capability.engine_status directly, no second status vocabulary #}
+                    {# invented. #}
                     <div class="cap-status-row">
                         {% if row.capability.engine_status == "IMPLEMENTED_AND_READY" %}
                         <span class="cap-status ready mono">IMPLEMENTED &amp; READY</span>
@@ -103,11 +105,10 @@
                     {% elif row.ui_state.badge == "AVAILABLE" %}
                     <a href="{% url 'research_lab_dashboard' %}" class="term-btn mono" style="align-self:flex-start; margin-top:4px;">Start a hypothesis</a>
                     {% elif row.ui_state.badge == "COMING_SOON" %}
-                    {# claude code changed: explicit, clearly non-interactive
-                    # action text — per spec, a card must never show an
-                    # executable CTA for something that isn't, but it
-                    # should still state the real action plainly rather
-                    # than showing nothing. #}
+                    {# claude code changed: explicit, clearly non-interactive action text — per #}
+                    {# spec, a card must never show an executable CTA for something that isn't, #}
+                    {# but it should still state the real action plainly rather than showing #}
+                    {# nothing. #}
                     <span class="cap-action-label">Coming soon</span>
                     {% elif row.capability.engine_status == "IMPLEMENTED_BUT_NEEDS_AUDIT" or row.capability.engine_status == "IMPLEMENTED_BUT_NEEDS_TESTS" %}
                     <span class="cap-action-label">Under audit</span>
