@@ -53,8 +53,21 @@ def get_dataset_explorer():
         try:
             df = pd.read_csv(path, usecols=["timestamp"])
             n = len(df)
-            start = df["timestamp"].iloc[0] if n else None
-            end = df["timestamp"].iloc[-1] if n else None
+            # claude code changed: real bug found live — was passing
+            # df["timestamp"].iloc[0]/[-1] straight into the template,
+            # which does {{ ...|slice:":10" }} assuming an ISO date
+            # STRING. If a given data/*.csv's timestamp column happens to
+            # be read by pandas as numeric (not every symbol's CSV is
+            # guaranteed to have the same column formatting), .iloc[0]
+            # returns a numpy scalar (np.int64/np.float64) instead of a
+            # str, and slicing a numpy scalar raises "IndexError: invalid
+            # index to scalar variable" — a real exception Django's own
+            # slice filter does NOT catch (it only swallows ValueError/
+            # TypeError/KeyError), crashing the whole page. str(...) here
+            # guarantees the template always receives something sliceable
+            # regardless of the CSV's actual dtype.
+            start = str(df["timestamp"].iloc[0]) if n else None
+            end = str(df["timestamp"].iloc[-1]) if n else None
             rows.append({"symbol": symbol, "candles": n, "start": start, "end": end})
         except Exception as e:
             rows.append({"symbol": symbol, "candles": None, "start": None, "end": None, "error": str(e)[:60]})
@@ -68,8 +81,15 @@ def get_dataset_explorer():
                 "available": True,
                 "total_rows": len(obs_df),
                 "n_symbols": obs_df["symbol"].nunique(),
-                "start": obs_df["timestamp"].min(),
-                "end": obs_df["timestamp"].max(),
+                # claude code changed: same real bug, same fix — see the
+                # str(...) comment above. .min()/.max() on a numeric-dtype
+                # timestamp column returns a numpy scalar just as easily
+                # as .iloc[0] does; this is exactly the code path the
+                # actual production traceback (GET /research/ -> 500,
+                # IndexError: invalid index to scalar variable) came
+                # through.
+                "start": str(obs_df["timestamp"].min()),
+                "end": str(obs_df["timestamp"].max()),
             }
         except Exception as e:
             observations = {"available": False, "reason": str(e)[:80]}
