@@ -1,27 +1,48 @@
 # fetch_all_symbols.py
 #
-# Downloads OHLCV data for all 7 symbols using the project's data_fetcher module.
+# Downloads OHLCV data for the tracked symbol universe using the project's
+# data_fetcher module.
 #
 # What this does vs the old version:
 #   OLD: ccxt, no pagination, ~500-1000 candles max, no cleaning, no normalisation
-#   NEW: project data_fetcher, full pagination, 2020→today (~45,000 candles),
-#        deduplication, NaN removal, rate-limit handling, caching, symbol normalisation
+#   NEW: project data_fetcher, full pagination, deduplication, NaN removal,
+#        rate-limit handling, caching, symbol normalisation
 #
 # Output: data/{SYMBOL}_1h.csv  (same filenames as before — nothing downstream breaks)
 
+import logging
+import sys
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# claude code changed: new — real bug, not introduced by this mission but
+# hit while running this script for the first time under a redirected
+# (non-console) stdout: Windows' default stdout codec is cp1252, which
+# can't encode the ✓/✗ characters this script prints, and crashes with
+# UnicodeEncodeError partway through a run. reconfigure() is a no-op on a
+# stream that's already UTF-8 capable, so this doesn't change behavior in
+# a real UTF-8 terminal — it only fixes the redirected/piped case.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # ── Use the project data fetcher, not ccxt ──────────────────────────────────
-from bot.data_fetcher import get_klines_by_date
+from bot.data_fetcher import get_klines
+
+# claude code changed: new — the universe is now selected dynamically (see
+# bot/universe_selector.py) rather than being a single hand-typed list this
+# file alone maintained. Falls back to the original 20-symbol list if the
+# selector has never been run yet, so this script still works standalone.
+from bot.universe_selector import load_universe_symbols
+
+logger = logging.getLogger(__name__)
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 # Symbols in ccxt-style format — data_fetcher normalises these automatically
 # BTC/USDT  →  _normalize_symbol()  →  BTCUSDT  (Binance format)
 
-SYMBOLS = [
+_LEGACY_DEFAULT_SYMBOLS = [
     'BTC/USDT',
     'ETH/USDT',
     'BNB/USDT',
@@ -44,10 +65,44 @@ SYMBOLS = [
     'OP/USDT',
 ]
 
-INTERVAL        = '1h'
-START_DATE      = datetime(2020, 1, 1, tzinfo=timezone.utc)   # Full history from 2020
-END_DATE        = datetime.now(tz=timezone.utc)               # Up to right now
-MAX_CANDLES     = 50_000   # Safety ceiling — data_fetcher will paginate automatically
+SYMBOLS = load_universe_symbols() or _LEGACY_DEFAULT_SYMBOLS
+
+INTERVAL = '1h'
+
+# claude code changed: real bug fix. The old approach fetched FORWARD from a
+# fixed START_DATE=2020-01-01 up to a 50,000-candle safety ceiling
+# (MAX_ALLOWED_CANDLES in data_fetcher.py — a real emergency-protection
+# limit, not something to just raise). At 1h resolution, 2020-01-01 to today
+# is now well past 50,000 hours, so the forward fetch always exhausted its
+# candle budget before reaching the present — confirmed directly against
+# the real on-disk data, which stopped at 2025-09-15 regardless of when the
+# script was actually run. This gets WORSE every year, not better.
+#
+# Fixed by switching to a backward-from-now fetch of the most recent
+# HISTORY_CANDLES candles via data_fetcher.get_klines() (which already
+# exists and is already used elsewhere in this project, e.g.
+# bot/views/dashboard.py) instead of get_klines_by_date()'s forward
+# pagination. "Most recent N candles" is self-correcting forever — it
+# always means the latest data, regardless of how much time has passed
+# since this constant was chosen, with no date arithmetic to revisit.
+#
+# HISTORY_YEARS=5 x 365 x 24 = 43,800 candles, comfortably under the
+# 50,000 ceiling (leaving ~6,200 candles / ~258 days of headroom) while
+# giving far more runway than any current consumer needs — cointegration_engine.py's
+# own TRAINING_WINDOW is 10,000 candles (~417 days) and its ZSCORE_WINDOW
+# is 504 candles (~3 weeks). The trade-off, stated plainly: routine
+# re-fetches no longer carry the full 2020-era history — a one-time deep
+# backfill for research needing that specific window would need a
+# separate, explicit fetch, not this routine refresh path.
+HISTORY_YEARS   = 5
+HISTORY_CANDLES = int(HISTORY_YEARS * 365 * 24)   # 43,800 hourly candles
+
+# claude code changed: new — Step 3's explicit freshness requirement. Data
+# is only considered fresh if the most recent candle is within this many
+# days of "now" at the time the check runs (computed fresh every call,
+# never a hardcoded date).
+FRESHNESS_MAX_AGE_DAYS = 7
+
 OUTPUT_DIR      = Path('data')
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -127,9 +182,11 @@ def download_all_symbols() -> dict:
     """
     OUTPUT_DIR.mkdir(exist_ok=True)
 
+    now = datetime.now(tz=timezone.utc)
+
     print('\n' + '=' * 80)
-    print('DOWNLOADING DATA FOR 7 SYMBOLS')
-    print(f'Period  : {START_DATE.date()} → {END_DATE.date()}')
+    print(f'DOWNLOADING DATA FOR {len(SYMBOLS)} SYMBOLS')
+    print(f'History : most recent {HISTORY_CANDLES:,} candles ({HISTORY_YEARS} years) as of {now.isoformat()}')
     print(f'Interval: {INTERVAL}')
     print(f'Fetcher : project data_fetcher (paginated, cleaned, normalised)')
     print('=' * 80)
@@ -138,24 +195,21 @@ def download_all_symbols() -> dict:
 
     for symbol in SYMBOLS:
         print(f'\n[Downloading] {symbol}')
-        print(f'  Fetching {START_DATE.date()} → {END_DATE.date()} ...')
+        print(f'  Fetching the latest {HISTORY_CANDLES:,} candles ...')
 
         try:
             # ── Fetch via project data_fetcher ───────────────────────────────
-            # get_klines_by_date handles:
-            #   • Symbol normalisation  (BTC/USDT → BTCUSDT)
-            #   • Pagination            (loops until all candles retrieved)
-            #   • Rate-limit handling   (429 backoff, weight monitoring)
-            #   • Deduplication         (seen_timestamps set)
-            #   • NaN removal           (_build_ohlcv_dataframe)
-            #   • Sorting               (chronological order)
-            #   • Caching               (avoids re-downloading unchanged data)
-            df_raw = get_klines_by_date(
+            # claude code changed: was get_klines_by_date(start=START_DATE,
+            # end=END_DATE, max_candles=...) — forward pagination from a fixed
+            # historical start, which is exactly what caused the staleness
+            # bug (see HISTORY_CANDLES's comment above). get_klines() fetches
+            # the most recent N candles backward from now instead — already
+            # used elsewhere in this project (bot/views/dashboard.py) — and
+            # handles the same pagination/rate-limit/dedup/caching concerns.
+            df_raw = get_klines(
                 symbol=symbol,           # data_fetcher normalises this automatically
                 interval=INTERVAL,
-                start=START_DATE,
-                end=END_DATE,
-                max_candles=MAX_CANDLES,
+                total_candles=HISTORY_CANDLES,
                 use_cache=True,          # Cache to avoid re-downloading on re-runs
                 cache_ttl_seconds=3600,  # Cache valid for 1 hour
             )
@@ -175,7 +229,26 @@ def download_all_symbols() -> dict:
             df_clean.to_csv(filepath, index=False)
 
             candle_count = len(df_clean)
-            date_range   = f"{df_clean['timestamp'].iloc[0]} → {df_clean['timestamp'].iloc[-1]}"
+            last_timestamp = pd.Timestamp(df_clean['timestamp'].iloc[-1])
+            if last_timestamp.tzinfo is None:
+                last_timestamp = last_timestamp.tz_localize('UTC')
+            date_range = f"{df_clean['timestamp'].iloc[0]} → {df_clean['timestamp'].iloc[-1]}"
+
+            # claude code changed: new — Step 3's explicit freshness check.
+            # Logs a clear, named warning rather than silently proceeding if
+            # a symbol's data is staler than FRESHNESS_MAX_AGE_DAYS — this is
+            # exactly the condition that went unnoticed for months under the
+            # old forward-pagination bug.
+            staleness_days = (now - last_timestamp).total_seconds() / 86400
+            is_fresh = staleness_days <= FRESHNESS_MAX_AGE_DAYS
+            if not is_fresh:
+                warning_msg = (
+                    f"{symbol}: data is STALE — most recent candle is "
+                    f"{last_timestamp.isoformat()} ({staleness_days:.1f} days old), "
+                    f"exceeding the {FRESHNESS_MAX_AGE_DAYS}-day freshness threshold"
+                )
+                logger.warning(warning_msg)
+                print(f'  ⚠ STALE       : {warning_msg}')
 
             print(f'  ✓ Downloaded  : {candle_count:,} candles')
             print(f'  ✓ Date range  : {date_range}')
@@ -186,6 +259,9 @@ def download_all_symbols() -> dict:
                 'candles': candle_count,
                 'file': str(filepath),
                 'error': None,
+                'last_timestamp': last_timestamp.isoformat(),
+                'staleness_days': round(staleness_days, 2),
+                'is_fresh': is_fresh,
             }
 
         except Exception as e:
@@ -195,6 +271,9 @@ def download_all_symbols() -> dict:
                 'candles': 0,
                 'file': None,
                 'error': str(e),
+                'last_timestamp': None,
+                'staleness_days': None,
+                'is_fresh': False,
             }
 
     # ── Print final summary ──────────────────────────────────────────────────

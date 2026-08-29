@@ -87,6 +87,8 @@ from typing import Dict, List, Optional     # Type hints for function signatures
 import numpy as np                          # Numerical operations
 import pandas as pd                         # DataFrame operations
 
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — universe expansion mission, see cointegration_engine.py's identical change for the full rationale
+
 # Suppress noisy pandas warnings that don't affect correctness
 warnings.filterwarnings('ignore')
 
@@ -109,28 +111,12 @@ if not logger.handlers:
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# The 7 symbols this engine is designed to work with
+# claude code changed: was an independent hand-typed 20-symbol list — see
+# cointegration_engine.py's identical change for the full rationale. Now
+# derived from bot.instruments' single registry, converted to this
+# module's pre-existing underscore convention.
 UNIVERSE: List[str] = [
-    'BTC_USDT',
-    'ETH_USDT',
-    'BNB_USDT',
-    'SOL_USDT',
-    'ADA_USDT',
-    'AVAX_USDT',
-    'DOT_USDT',
-    'MATIC_USDT',
-    'ARB_USDT',
-    'LINK_USDT',
-    'UNI_USDT',
-    'AAVE_USDT',
-    'XRP_USDT',
-    'XLM_USDT',
-    'DOGE_USDT',
-    'SHIB_USDT',
-    'ATOM_USDT',
-    'FIL_USDT',
-    'APT_USDT',
-    'OP_USDT',
+    s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)
 ]
 
 # Winsorisation percentiles — caps extreme returns before ranking

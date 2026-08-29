@@ -139,6 +139,7 @@ from statsmodels.tools import add_constant              # Add intercept to OLS
 from statsmodels.stats.multitest import multipletests   # claude code changed: restored — Phase B (P1-5) FDR correction across all tested pairs; accidentally dropped by commit de4fd8b, restored in Phase 1C (Blocker D) with the Phase 1B timeframe/half_life fields preserved
 
 from bot.instruments import candles_to_wall_clock  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. The single candles->wall-clock-time conversion, see bot/instruments.py
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — universe expansion mission. Derives UNIVERSE from the single instrument registry instead of an independent hand-typed copy (bot/instruments.py's own module docstring already flagged this file's independent list as a known drift risk vs. fetch_all_symbols.SYMBOLS)
 
 warnings.filterwarnings('ignore')           # Suppress statsmodels convergence warnings
 
@@ -161,31 +162,25 @@ if not logger.handlers:
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# All 7 symbols in the research universe
-# Every possible pair combination will be tested for cointegration
-# 7 symbols → 21 unique pairs (7 choose 2 = 21)
+# claude code changed: was a hand-typed 20-symbol list (underscore format,
+# e.g. 'BTC_USDT') independent from bot.instruments.INSTRUMENT_REGISTRY —
+# a real drift risk bot/instruments.py's own module docstring already
+# flagged. Now derived from the single instrument registry (which is
+# itself derived from bot/fetch_all_symbols.SYMBOLS, in turn driven by
+# bot/universe_selector.py's dynamic 50-symbol selection) — converting
+# "/" to "_" only to match this module's own pre-existing internal
+# convention (every downstream reference here, e.g. run_cointegration_research's
+# f"{symbol}_{interval}.csv", expects underscore form). Recomputed at
+# import time, so a re-run of universe_selector.py + fetch_all_symbols.py
+# automatically flows through here with no manual list edit.
 UNIVERSE: List[str] = [
-    'BTC_USDT',
-    'ETH_USDT',
-    'BNB_USDT',
-    'SOL_USDT',
-    'ADA_USDT',
-    'AVAX_USDT',
-    'DOT_USDT',
-    'MATIC_USDT',
-    'ARB_USDT',
-    'LINK_USDT',
-    'UNI_USDT',
-    'AAVE_USDT',
-    'XRP_USDT',
-    'XLM_USDT',
-    'DOGE_USDT',
-    'SHIB_USDT',
-    'ATOM_USDT',
-    'FIL_USDT',
-    'APT_USDT',
-    'OP_USDT',
+    s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)
 ]
+
+# claude code changed: new — universe expansion mission, Step 4. See
+# CointegrationEngine.__init__'s enable_correlation_prefilter comment for
+# the full rationale on why this is off by default and deliberately weak.
+CORRELATION_PREFILTER_THRESHOLD: float = 0.5
 
 # Cointegration test significance threshold
 # Pairs with ADF p-value below this threshold are considered cointegrated
@@ -391,6 +386,8 @@ class CointegrationEngine:
         min_half_life:         float            = MIN_HALF_LIFE_HOURS,
         forward_horizons:      Dict[str, int]   = None,
         timeframe:             str              = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h", this engine's only real dataset today — every existing construction site (none of which pass this parameter) is unaffected. MAX/MIN_HALF_LIFE_HOURS/TRAINING_WINDOW/ZSCORE_WINDOW stay expressed in raw candles — this parameter affects ONLY how half-life is REPORTED (half_life_time/half_life_time_unit), not the filter thresholds themselves; see the module-level note on why that's the correct, minimal scope for this fix.
+        enable_correlation_prefilter: bool = False,   # claude code changed: new — universe expansion mission, Step 4. Off by default — every existing construction site is unaffected. See CORRELATION_PREFILTER_THRESHOLD below for why this exists and why it's deliberately weak.
+        correlation_prefilter_threshold: float = None,  # claude code changed: new — defaults to CORRELATION_PREFILTER_THRESHOLD when None; exposed as a constructor param for sensitivity analysis, matching every other threshold in this class.
     ) -> None:
         """
         Initialise with research configuration.
@@ -408,6 +405,26 @@ class CointegrationEngine:
         self.min_half_life      = min_half_life       # Min acceptable half-life (candles — see timeframe note above)
         self.forward_horizons   = forward_horizons or FORWARD_HORIZONS
         self.timeframe          = timeframe           # claude code changed: new — candle resolution of the data this engine instance will receive; threaded into every PairResult so half-life is reported honestly
+
+        # claude code changed: new — universe expansion mission, Step 4.
+        # 50 symbols -> C(50,2)=1225 pairs, each requiring an OLS fit + ADF
+        # test; a cheap correlation check (already-loaded price series, no
+        # extra I/O) can skip pairs that are obviously unrelated before
+        # paying for the expensive test. Off by default because it's a
+        # real trade-off, not a pure win: correlation and cointegration are
+        # different properties (see this module's own docstring on why —
+        # "Low correlation + cointegrated -> wander independently but
+        # always revert" is a real, valid case this prefilter would skip).
+        # When enabled, the threshold is deliberately weak (0.5, not e.g.
+        # 0.8) specifically so it only screens out pairs with essentially
+        # no linear relationship at all, minimizing the risk of discarding
+        # a real low-correlation cointegrated pair.
+        self.enable_correlation_prefilter = enable_correlation_prefilter
+        self.correlation_prefilter_threshold = (
+            correlation_prefilter_threshold
+            if correlation_prefilter_threshold is not None
+            else CORRELATION_PREFILTER_THRESHOLD
+        )
 
         # Results storage — populated during run_all()
         self.pair_results: List[PairResult] = []      # All pair test results
@@ -486,6 +503,28 @@ class CointegrationEngine:
                     f"price data missing for one or both symbols"
                 )
                 continue
+
+            # claude code changed: new — universe expansion mission, Step 4.
+            # Off by default (self.enable_correlation_prefilter); see
+            # __init__'s comment for why this is deliberately weak and
+            # opt-in rather than always-on.
+            if self.enable_correlation_prefilter:
+                # claude code changed: correlation on log-price RETURNS
+                # (diff), not raw log-price levels. Two trending series are
+                # almost always highly "correlated" in level regardless of
+                # any real relationship (classic spurious-regression
+                # territory — exactly the failure mode cointegration
+                # testing exists to guard against), which would make a
+                # level-based prefilter a near no-op. Returns correlation
+                # is the standard, meaningful measure for "do these two
+                # assets actually move together."
+                pair_corr = prices[symbol_a].diff().corr(prices[symbol_b].diff())
+                if pd.notna(pair_corr) and abs(pair_corr) < self.correlation_prefilter_threshold:
+                    logger.info(
+                        f"  {symbol_a}/{symbol_b}: SKIPPED — "
+                        f"|correlation|={abs(pair_corr):.3f} < {self.correlation_prefilter_threshold} prefilter threshold"
+                    )
+                    continue
 
             # Test this pair for cointegration
             result = self._test_pair(

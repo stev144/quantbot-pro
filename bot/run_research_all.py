@@ -22,30 +22,22 @@ from multiprocessing import Pool
 from bot.research.feature_calculator import FeatureCalculator
 from bot.research.feature_validator import FeatureValidator, apply_family_wide_correction
 from bot.research.feature_stability_analyzer import FeatureStabilityAnalyzer   # claude code changed: new — Phase B (P1-4)
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — universe expansion mission
 
 # ── Symbols ───────────────────────────────────────────────────────────────────
 
+# claude code changed: was an independent hand-typed 20-symbol list — a
+# FOURTH copy of the universe alongside cointegration_engine.py's and
+# cross_section_engine.py's own former copies (see those files' identical
+# fix for the full rationale). This one mattered most for the universe
+# expansion mission specifically: this file is the orchestrator that runs
+# feature_calculator/feature_validator across "all symbols" per its own
+# module docstring — left hardcoded at 20, it would have silently never
+# processed the 30 newly-added symbols' data at all. Now derived from the
+# single instrument registry, converted to this module's pre-existing
+# underscore convention.
 SYMBOLS = [
-    'BTC_USDT',
-    'ETH_USDT',
-    'BNB_USDT',
-    'SOL_USDT',
-    'ADA_USDT',
-    'AVAX_USDT',
-    'DOT_USDT',
-    'MATIC_USDT',
-    'ARB_USDT',
-    'LINK_USDT',
-    'UNI_USDT',
-    'AAVE_USDT',
-    'XRP_USDT',
-    'XLM_USDT',
-    'DOGE_USDT',
-    'SHIB_USDT',
-    'ATOM_USDT',
-    'FIL_USDT',
-    'APT_USDT',
-    'OP_USDT',
+    s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)
 ]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

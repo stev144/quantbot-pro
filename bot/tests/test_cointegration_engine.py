@@ -6,6 +6,8 @@
 # against synthetic PairResult objects, avoiding the cost of real
 # OLS/ADF computation over actual price data for this unit-level check.
 
+import numpy as np
+import pandas as pd
 from django.test import SimpleTestCase
 
 from bot.instruments import UnsupportedTimeframeError
@@ -90,14 +92,17 @@ class FdrCorrectionTest(SimpleTestCase):
             self.assertIsNotNone(r.passes_fdr)
 
     def test_universe_matches_pair_count_documented_in_comments(self):
-        # Direct regression check for the stale "7 symbols -> 21 pairs"
-        # comment this fix also corrected — the real universe/pair count
-        # must match what the corrected comments now claim.
+        # claude code changed: was a hardcoded len(engine.universe)==20 /
+        # expected_pairs==190 assertion — the universe is now dynamically
+        # sized (bot/universe_selector.py, expansion to 50 symbols), so
+        # this checks the general C(n, 2) relationship instead of a fixed
+        # historical count. See test_universe_selection.py for the actual
+        # "exactly 50 symbols" assertion against the persisted selection.
         engine = self._engine()
-        self.assertEqual(len(engine.universe), 20)
-        expected_pairs = (20 * 19) // 2   # C(20, 2)
+        n = len(engine.universe)
+        self.assertGreater(n, 0)
+        expected_pairs = (n * (n - 1)) // 2   # C(n, 2)
         self.assertEqual(len(engine.all_pairs), expected_pairs)
-        self.assertEqual(expected_pairs, 190)
 
     def test_empty_results_is_a_no_op(self):
         engine = self._engine()
@@ -208,3 +213,62 @@ class HalfLifeTimeframeTest(SimpleTestCase):
         engine = CointegrationEngine()
         self.assertEqual(engine.max_half_life, 120)
         self.assertEqual(engine.min_half_life, 2.0)
+
+
+class CorrelationPrefilterTest(SimpleTestCase):
+    """
+    claude code changed: new — universe expansion mission, Step 4's
+    optional correlation pre-filter. Uses real run_all() with small
+    synthetic price series (independent random walks — no real relationship,
+    so returns correlation should be near zero) rather than mocking, per
+    this project's own testing convention; MIN_CANDLES=1000 is respected
+    with training_window/zscore params shrunk to fit a fast unit test.
+    """
+
+    def _synthetic_data(self, n=1200, seed=0):
+        rng = np.random.default_rng(seed)
+        idx = pd.date_range("2020-01-01", periods=n, freq="1h", tz="UTC")
+
+        # Independent random walks in log-price space -> near-zero returns
+        # correlation between the two, by construction.
+        log_price_a = np.cumsum(rng.normal(0, 0.001, n)) + 4.0   # ~exp(4) ≈ 55
+        log_price_b = np.cumsum(rng.normal(0, 0.001, n)) + 2.0   # ~exp(2) ≈ 7.4
+
+        df_a = pd.DataFrame({"close": np.exp(log_price_a)}, index=idx)
+        df_b = pd.DataFrame({"close": np.exp(log_price_b)}, index=idx)
+        return {"SYM_A_USDT": df_a, "SYM_B_USDT": df_b}
+
+    def _engine(self, **overrides):
+        defaults = dict(
+            universe=["SYM_A_USDT", "SYM_B_USDT"],
+            training_window=800,
+            zscore_window=100,
+            zscore_min_periods=50,
+        )
+        defaults.update(overrides)
+        return CointegrationEngine(**defaults)
+
+    def test_off_by_default(self):
+        engine = self._engine()
+        self.assertFalse(engine.enable_correlation_prefilter)
+
+    def test_disabled_prefilter_still_tests_the_low_correlation_pair(self):
+        data = self._synthetic_data()
+        engine = self._engine(enable_correlation_prefilter=False)
+        engine.run_all(data)
+        self.assertEqual(len(engine.pair_results), 1)
+
+    def test_enabled_prefilter_skips_the_low_correlation_pair(self):
+        data = self._synthetic_data()
+        engine = self._engine(enable_correlation_prefilter=True, correlation_prefilter_threshold=0.5)
+        engine.run_all(data)
+        self.assertEqual(len(engine.pair_results), 0)
+
+    def test_threshold_of_zero_never_skips_anything(self):
+        # claude code changed: a sanity bound — any real correlation value
+        # is >= 0 in absolute terms, so a threshold of exactly 0 must never
+        # discard a pair purely from the prefilter.
+        data = self._synthetic_data()
+        engine = self._engine(enable_correlation_prefilter=True, correlation_prefilter_threshold=0.0)
+        engine.run_all(data)
+        self.assertEqual(len(engine.pair_results), 1)
