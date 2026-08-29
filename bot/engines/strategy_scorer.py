@@ -131,7 +131,20 @@ class StrategyScorer:
         self.gross_profit, self.gross_loss = self._resolve_gross_pnl()
         self.profit_factor  = self._resolve_profit_factor()
 
-        self.max_drawdown = self._as_float(self.results.get("max_drawdown", 100.0), 100.0)
+        # claude code changed: real bug fix. Was `self.results.get("max_drawdown",
+        # 100.0)` unconditionally — a genuinely empty backtest (0 trades, equity
+        # curve never moves) has 0% drawdown, not the worst-case 100.0% this
+        # silently substituted whenever the results dict didn't carry the key.
+        # That false 100.0 alone was enough to trip _resolve_strategy_health()'s
+        # "HIGH RISK" branch for a symbol/period that simply never traded,
+        # presenting "no evidence either way" as "confirmed bad strategy."
+        # Still defaults to the conservative 100.0 when trades DID happen but
+        # the reported dict is genuinely missing the field (a real, different
+        # failure mode worth failing safe on) — only the 0-trade case changes.
+        self.max_drawdown = (
+            0.0 if not self.trades
+            else self._as_float(self.results.get("max_drawdown", 100.0), 100.0)
+        )
         self.loss_streak = self._resolve_loss_streak()
 
         self.sharpe = self._as_float(self.results.get("sharpe_ratio", 0.0), 0.0)
@@ -261,8 +274,22 @@ class StrategyScorer:
     def _resolve_loss_streak(self) -> int:
         """Resolves max consecutive loss streak from trade list."""
 
+        # claude code changed: real bug fix. `results.get("max_consecutive_losses",
+        # 999) or 999` used `or` as the fallback, which treats a legitimate
+        # value of 0 the same as "key missing" (0 is falsy in Python) and
+        # silently substitutes the 999 sentinel instead — exactly what a
+        # genuinely empty (0-trade) backtest should report (0 trades means
+        # 0 consecutive losses, by definition), not a fabricated "worst
+        # possible streak." That false 999 alone was enough to trip
+        # _resolve_strategy_health()'s "HIGH RISK" branch (loss_streak >
+        # LOSS_STREAK_MARGINAL) for a symbol/period that simply never
+        # traded. If results genuinely carries a real reported streak
+        # (e.g. a non-empty upstream summary reporting 0 real trades some
+        # other way), that real value is still honored — only an actually-
+        # missing key falls back to the sentinel now.
         if not self.trades:
-            return int(self.results.get("max_consecutive_losses", 999) or 999)
+            reported = self.results.get("max_consecutive_losses")
+            return int(reported) if reported is not None else 0
 
         current = 0    # Current streak counter
         worst   = 0    # Worst streak seen
