@@ -9,17 +9,21 @@
 // real implementation: self-contained, loaded explicitly by the
 // dashboard template.
 //
-// Content: claude code changed — replaced with the tagline set supplied
-// directly by the user. Most lines describe real, wired capabilities
-// (regime detection, Kalman-filtered pairs, feature stability testing,
-// rejection tracking, backtesting cost modeling); a couple lean more
-// aspirational/marketing than the previous strictly-literal set (e.g.
-// "200+ crypto pairs" — the real universe is 20 symbols / 190 pairs;
-// "monitor crash and liquidation risk" — contagion_engine.py exists but
-// has no persisted output and isn't wired into anything yet, per the
-// architecture audit). Flagged to the user, not altered — this is
-// display copy, not a computed metric, so the "never fabricate
-// metrics" rule doesn't block it, but worth knowing.
+// Content: claude code changed — corrected per direct user request
+// ("remove only the parts that are unrealistic, leave the ones that are
+// real, add animated sentences our platform actually does"). Two lines
+// were removed outright: "Research 200+ crypto pairs simultaneously"
+// (the real tracked universe is 20 symbols / 190 pairs — verified
+// against bot/fetch_all_symbols.py's SYMBOLS list) and "Monitor
+// crypto-wide crash and liquidation risk" (bot/research/contagion_engine.py
+// exists but bot/views/terminal_data.py's own crash_risk field explicitly
+// reports {"available": False, "reason": "...not wired into any
+// pipeline"} — the UI itself already tells the truth here, the tagline
+// should too). One line was reworded, not cut, to drop the marketing
+// voice ("Use our Cross-Section Engine to...") while keeping the real
+// capability. Every remaining and newly-added line maps to a real,
+// registered capability (bot/research_lab/capability_registry.py) or a
+// real, tested module — see the inline citations below.
 // ============================================================
 
 (function () {
@@ -28,16 +32,18 @@
         "Detect market regimes before they shift.",
         "Measure trading edge, not emotions.",
 
-        "Research 200+ crypto pairs simultaneously.",
-        "Analyze cross-sectional opportunities across the market.",
-        "Use our Cross-Section Engine to identify relative-value opportunities.",
-        "Model dynamic relationships between assets with Kalman Filters.",
-        "Measure cross-asset contagion and systemic market risk.",
+        "Track structure and regime across 20 tracked crypto assets.",   // bot/fetch_all_symbols.py
+        "Identify relative-value opportunities across correlated assets.",   // cross_sectional_research
+        "Score cointegrated pairs with a Kalman-filtered hedge ratio.",   // kalman_dynamic_hedge_ratio
 
-        "Test features for stability across market regimes.",
+        "Test features for stability across market regimes.",   // feature_stability_research
         "Separate genuine alpha from noise and overfitting.",
         "Prove whether indicators contain predictive information.",
         "Challenge trading ideas with statistics, mathematics and data science.",
+
+        "Validate every hypothesis out-of-sample before it's trusted.",   // bot/research/oos_validator.py
+        "Run permutation tests to separate skill from luck.",   // permutation_robustness_testing
+        "Never let a strategy see the data it's tested against.",   // walk_forward_validation / oos_validator purge-embargo
 
         "Track why trades were rejected.",
         "Turn rejected trades into intelligence.",
@@ -45,8 +51,10 @@
 
         "Backtest with realistic fees, slippage and risk constraints.",
         "Measure expectancy, drawdown, profit factor and R-multiples.",
-        "Monitor crypto-wide crash and liquidation risk.",
-        "Adapt exposure when market conditions become dangerous.",
+        "Adapt exposure when market conditions become dangerous.",   // bot/risk/drawdown_guard.py
+        "Route orders through Binance and Kraken at venue-real cost.",   // bot/engines/exchange_adapter.py + siblings
+
+        "Keep every experiment on an append-only research ledger.",   // bot/research_lab/models.py HypothesisFamily/ResearchExperiment
 
         "Research first.",
         "Validate second.",

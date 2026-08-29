@@ -42,9 +42,10 @@
                     <label class="mono">
                         <input type="radio" name="hypothesis_type" value="pairs" id="type-pairs" {% if spec.hypothesis_type == "pairs" %}checked{% endif %} {% if pairs_ui_state.badge != "AVAILABLE" %}disabled{% endif %}>
                         Pairs / Cointegration (relationship between two assets)
-                        {% if pairs_ui_state.badge == "LOCKED" %}<span style="color:var(--verdict-warning)">🔒 Pro Research — {{ pairs_ui_state.message }}</span>
-                        {% elif pairs_ui_state.badge == "COMING_SOON" %}<span style="color:var(--verdict-warning)">🧪 Coming soon</span>
-                        {% elif pairs_ui_state.badge == "UNAVAILABLE" %}<span style="color:var(--verdict-warning)">⚠️ {{ pairs_ui_state.message }}</span>
+                        {# claude code changed: emoji removed — inconsistent with this app's emoji-free design system #}
+                        {% if pairs_ui_state.badge == "LOCKED" %}<span style="color:var(--verdict-warning)">Pro Research — {{ pairs_ui_state.message }}</span>
+                        {% elif pairs_ui_state.badge == "COMING_SOON" %}<span style="color:var(--verdict-warning)">Coming soon</span>
+                        {% elif pairs_ui_state.badge == "UNAVAILABLE" %}<span style="color:var(--verdict-warning)">{{ pairs_ui_state.message }}</span>
                         {% endif %}
                     </label>
                 </div>

@@ -8,6 +8,16 @@
     <title>{% block title %}Steph Quant Technologies — Research Terminal{% endblock %}</title>
     {# claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies #}
 
+    {# claude code changed: new — the page had no favicon at all (a blank/default #}
+    {# browser-tab icon reads as unfinished on an institutional platform). An #}
+    {# inline SVG data URI keeps the zero-external-asset discipline this file #}
+    {# already committed to above — no new static file, no extra request. A #}
+    {# simple three-bar chart glyph in the terminal's own accent blue on the #}
+    {# dark surface color (--bg-0/--accent from terminal.css, kept as literal #}
+    {# hex here since favicons render outside any theme context). #}
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Crect x='7' y='16' width='4' height='10' fill='%235b8dc9'/%3E%3Crect x='14' y='9' width='4' height='17' fill='%235b8dc9'/%3E%3Crect x='21' y='13' width='4' height='13' fill='%233fb87f'/%3E%3C/svg%3E">
+
+
     {# claude code changed: full rewrite — this used to load Bootstrap, FontAwesome, #}
     {# Google Fonts (Poppins), and AOS from four separate CDNs, plus contained a #}
     {# particle-effect canvas, rotating typed-text hero, glassmorphism navbar with #}

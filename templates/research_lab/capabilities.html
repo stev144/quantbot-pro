@@ -63,14 +63,19 @@
                 <div class="cap-card">
                     <div class="cap-card-head">
                         <strong class="mono">{{ row.capability.name }}</strong>
+                        {# claude code changed: emoji removed from all four badges — #}
+                        {# inconsistent with this app's otherwise emoji-free, semantic- #}
+                        {# color-only design system (terminal.css). The badge's border/ #}
+                        {# background color (.cap-badge.available/.locked/.coming_soon/ #}
+                        {# .unavailable, unchanged) already carries the meaning. #}
                         {% if row.ui_state.badge == "AVAILABLE" %}
-                        <span class="cap-badge available">✅ AVAILABLE</span>
+                        <span class="cap-badge available">AVAILABLE</span>
                         {% elif row.ui_state.badge == "LOCKED" %}
-                        <span class="cap-badge locked">🔒 PRO RESEARCH</span>
+                        <span class="cap-badge locked">PRO RESEARCH</span>
                         {% elif row.ui_state.badge == "COMING_SOON" %}
-                        <span class="cap-badge coming_soon">🧪 COMING SOON</span>
+                        <span class="cap-badge coming_soon">COMING SOON</span>
                         {% else %}
-                        <span class="cap-badge unavailable">⚠️ UNAVAILABLE</span>
+                        <span class="cap-badge unavailable">UNAVAILABLE</span>
                         {% endif %}
                     </div>
                     {# claude code changed: Research Capabilities Discoverability & Navigation #}
