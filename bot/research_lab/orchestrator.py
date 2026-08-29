@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 
 from django.utils import timezone
@@ -170,11 +171,36 @@ def _execute_planned_tools(experiment: ResearchExperiment, spec: ResearchSpec, a
         _execute_feature_hypothesis(experiment, spec, allowed_tools)
 
 
+def _json_safe(value):
+    """
+    claude code changed: new — real bug found by out-of-sample-audit
+    testing: cointegration_engine.py's PairResult.half_life is a genuine
+    float('inf') for any non-cointegrated pair (by design — "never
+    reverts" is meaningful, not an error). Python's json.dumps happily
+    emits the bare token "Infinity" for that, but Postgres's jsonb column
+    type follows the strict JSON spec and rejects it outright
+    ("Token 'Infinity' is invalid"), crashing experiment.save() the moment
+    ANY tool result reaching this function contains one — which every
+    genuinely-rejected pairs hypothesis does. Recursively replaces
+    inf/-inf/nan with None (JSON null) before anything is assigned to one
+    of ResearchExperiment's JSONField columns below; every other value
+    (including finite floats, which are the overwhelming majority) passes
+    through completely unchanged.
+    """
+    if isinstance(value, float):
+        return None if (math.isinf(value) or math.isnan(value)) else value
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def _finalize_experiment(experiment: ResearchExperiment, tool_log: list, warnings: list, evidence: dict, validation: dict, verdict_result) -> None:
-    experiment.tool_call_log = tool_log
-    experiment.warnings = warnings
-    experiment.statistical_results = evidence or {}
-    experiment.validation_results = validation or {}
+    experiment.tool_call_log = _json_safe(tool_log)
+    experiment.warnings = _json_safe(warnings)
+    experiment.statistical_results = _json_safe(evidence) or {}
+    experiment.validation_results = _json_safe(validation) or {}
     experiment.verdict = verdict_result.verdict
     experiment.robustness_results = {"verdict_explanation": verdict_result.explanation, "criteria_version": verdict_result.criteria_version}
     experiment.ai_interpretation = explain_evidence(experiment)  # claude code changed: reads experiment.research_plan['spec'] (the EXECUTED spec) via describe_executed_spec() — never the stale original hypothesis_text, see interpreter.py

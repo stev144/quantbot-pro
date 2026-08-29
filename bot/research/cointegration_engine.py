@@ -247,6 +247,15 @@ MIN_PRICE: float = 1e-8
 # Minimum data required per symbol before testing
 MIN_CANDLES: int = 1_000   # At least 1,000 candles
 
+# claude code changed: new — out-of-sample persistence check (see module
+# docstring / OUT-OF-SAMPLE PERSISTENCE section below). Below this many
+# held-out candles, an ADF test is too underpowered to trust either way —
+# the pair is rejected with an honest "insufficient OOS data" reason
+# rather than silently skipping the check (which would let a
+# barely-longer-than-TRAINING_WINDOW pair pass on the in-sample result
+# alone, exactly the gap this fix exists to close).
+MIN_OOS_CANDLES: int = 1_000
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAIR RESULT DATACLASS
@@ -279,6 +288,9 @@ class PairResult:
         timeframe:       str = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h" so every existing call site (all of which predate this parameter) keeps constructing byte-identical PairResults.
         adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: restored — Phase B (P1-5); accidentally dropped by commit de4fd8b, restored in Phase 1C (Blocker D)
         passes_fdr:      Optional[bool]  = None,   # claude code changed: restored — Phase B (P1-5); None until run_all()'s correction step assigns it
+        oos_adf_pvalue:      Optional[float] = None,   # claude code changed: new — out-of-sample persistence check, see module docstring update
+        oos_adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: new — same "provisional then corrected" pattern as adf_pvalue_fdr
+        passes_oos_persistence: Optional[bool] = None,   # claude code changed: new — None until _apply_oos_persistence_filter() assigns it
     ) -> None:
 
         self.symbol_a        = symbol_a         # First asset in pair
@@ -309,6 +321,22 @@ class PairResult:
         # None until that step runs.
         self.adf_pvalue_fdr  = adf_pvalue_fdr
         self.passes_fdr      = passes_fdr
+        # claude code changed: new — real bug found by out-of-sample audit
+        # (see module docstring): a pair being stationary within the fixed
+        # TRAINING_WINDOW never meant the relationship actually persisted.
+        # Empirically, 76 of 84 pairs that passed the training-window-only
+        # ADF test (90.5%) failed a second ADF test on the untouched
+        # out-of-sample holdout using the SAME frozen hedge ratio/intercept
+        # — a genuine, permanent structural break in most cases (spread
+        # means shifting by 6+ training-period standard deviations), not
+        # noise. oos_adf_pvalue is the raw result; oos_adf_pvalue_fdr/
+        # passes_oos_persistence follow the same "provisional then
+        # corrected" pattern as adf_pvalue_fdr/passes_fdr above — assigned
+        # by _apply_oos_persistence_filter() after every candidate pair
+        # tested, not by _test_pair() itself.
+        self.oos_adf_pvalue         = oos_adf_pvalue
+        self.oos_adf_pvalue_fdr     = oos_adf_pvalue_fdr
+        self.passes_oos_persistence = passes_oos_persistence
         # claude code changed: new — the actual physical-time conversion,
         # derived from the instrument/timeframe abstraction (bot/
         # instruments.py), never a hardcoded "×1 for hours" assumption.
@@ -346,6 +374,10 @@ class PairResult:
             "is_cointegrated": self.is_cointegrated,
             "passes_filters":  self.passes_filters,
             "reject_reason":   self.reject_reason,
+            # claude code changed: new — see PairResult.__init__'s comment
+            "oos_adf_pvalue":     round(self.oos_adf_pvalue, 6) if self.oos_adf_pvalue is not None else None,
+            "oos_adf_pvalue_fdr": round(self.oos_adf_pvalue_fdr, 6) if self.oos_adf_pvalue_fdr is not None else None,
+            "passes_oos_persistence": self.passes_oos_persistence,
         }
 
 
@@ -388,6 +420,7 @@ class CointegrationEngine:
         timeframe:             str              = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h", this engine's only real dataset today — every existing construction site (none of which pass this parameter) is unaffected. MAX/MIN_HALF_LIFE_HOURS/TRAINING_WINDOW/ZSCORE_WINDOW stay expressed in raw candles — this parameter affects ONLY how half-life is REPORTED (half_life_time/half_life_time_unit), not the filter thresholds themselves; see the module-level note on why that's the correct, minimal scope for this fix.
         enable_correlation_prefilter: bool = False,   # claude code changed: new — universe expansion mission, Step 4. Off by default — every existing construction site is unaffected. See CORRELATION_PREFILTER_THRESHOLD below for why this exists and why it's deliberately weak.
         correlation_prefilter_threshold: float = None,  # claude code changed: new — defaults to CORRELATION_PREFILTER_THRESHOLD when None; exposed as a constructor param for sensitivity analysis, matching every other threshold in this class.
+        min_oos_candles:       int              = MIN_OOS_CANDLES,   # claude code changed: new — out-of-sample persistence check, exposed for sensitivity analysis/fast tests matching every other threshold in this class.
     ) -> None:
         """
         Initialise with research configuration.
@@ -419,6 +452,8 @@ class CointegrationEngine:
         # 0.8) specifically so it only screens out pairs with essentially
         # no linear relationship at all, minimizing the risk of discarding
         # a real low-correlation cointegrated pair.
+        self.min_oos_candles = min_oos_candles   # claude code changed: new — see MIN_OOS_CANDLES module comment
+
         self.enable_correlation_prefilter = enable_correlation_prefilter
         self.correlation_prefilter_threshold = (
             correlation_prefilter_threshold
@@ -572,6 +607,16 @@ class CointegrationEngine:
         # the original FDR work and must be preserved.
         self._apply_fdr_correction()
 
+        # ── Step 2.6: Out-of-sample persistence correction ────────────────────
+        # claude code changed: new — see PairResult.__init__/_test_pair()'s
+        # comments for the full finding. FDR-corrects the OOS ADF p-values
+        # across every candidate pair still standing after Step 2.5 (the
+        # in-sample FDR correction) — a second, genuine multiple-testing
+        # problem, since confirming persistence across ~80-500 candidate
+        # pairs simultaneously has the same false-positive risk the Step
+        # 2.5 correction exists to control for the in-sample test.
+        self._apply_oos_persistence_filter()
+
         # ── Step 3: Identify valid pairs ──────────────────────────────────────
         self.valid_pairs = [r for r in self.pair_results if r.passes_filters]
 
@@ -680,6 +725,70 @@ class CointegrationEngine:
             f"{n_pass_fdr} pass FDR at alpha={self.coint_threshold}, "
             f"{n_downgraded} pair(s) downgraded (passed raw threshold, "
             f"failed correction)"
+        )
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # OUT-OF-SAMPLE PERSISTENCE CORRECTION ACROSS ALL CANDIDATE PAIRS
+    # claude code changed: new — see _test_pair()'s "OUT-OF-SAMPLE PERSISTENCE
+    # CHECK" comment for the full finding (76/84 previously-valid pairs, 90.5%,
+    # failed a second ADF test on untouched holdout data using the same frozen
+    # hedge ratio). Same "provisional then corrected" pattern as
+    # _apply_fdr_correction() immediately above, applied to oos_adf_pvalue
+    # instead of adf_pvalue: mutates self.pair_results in place, only ever
+    # downgrading passes_filters, never upgrading it.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _apply_oos_persistence_filter(self) -> None:
+        # Only pairs that actually reached the OOS-testing stage in
+        # _test_pair() (is_cointegrated=True, oos_adf_pvalue computed) enter
+        # this correction — pairs rejected earlier (failed in-sample ADF,
+        # OLS failure) never had a real out-of-sample test run at all.
+        candidates = [r for r in self.pair_results if r.oos_adf_pvalue is not None]
+        if not candidates:
+            return
+
+        oos_pvalues = np.array([r.oos_adf_pvalue for r in candidates])
+        _, oos_fdr_pvalues, _, _ = multipletests(
+            oos_pvalues, alpha=self.coint_threshold, method='fdr_bh'
+        )
+
+        n_pass_oos_fdr = 0
+        n_downgraded = 0
+
+        for result, p_fdr in zip(candidates, oos_fdr_pvalues):
+            result.oos_adf_pvalue_fdr = float(p_fdr)
+            result.passes_oos_persistence = bool(p_fdr < self.coint_threshold)
+
+            if result.passes_oos_persistence:
+                n_pass_oos_fdr += 1
+
+            if result.passes_filters and not result.passes_oos_persistence:
+                # Passed every prior filter (in-sample ADF, in-sample FDR,
+                # half-life, raw OOS threshold) but the relationship's
+                # persistence doesn't survive correction across every
+                # candidate pair tested for it — downgrade the final
+                # decision. Pairs the raw OOS check already rejected inside
+                # _test_pair() are left alone here (their reject_reason
+                # already explains why; FDR-adjusted p-values are always >=
+                # raw p-values under BH, so they could never have passed
+                # this correction either).
+                result.passes_filters = False
+                result.reject_reason = (
+                    f"failed FDR-corrected out-of-sample persistence "
+                    f"(oos_p_fdr={p_fdr:.4f} >= {self.coint_threshold}, "
+                    f"raw OOS ADF p={result.oos_adf_pvalue:.4f} was < threshold "
+                    f"but did not survive correction across "
+                    f"{len(candidates)} candidate pairs tested)"
+                )
+                n_downgraded += 1
+
+        logger.info(
+            f"\nStep 2.6: Out-of-sample persistence correction across "
+            f"{len(candidates)} candidate pairs — {n_pass_oos_fdr} pass "
+            f"FDR-corrected OOS persistence at alpha={self.coint_threshold}, "
+            f"{n_downgraded} pair(s) downgraded (passed every prior filter, "
+            f"failed OOS persistence)"
         )
 
 
@@ -917,6 +1026,51 @@ class CointegrationEngine:
                 f"(spread reverts too fast for {self.timeframe} candles)"
             )
 
+        # ── OUT-OF-SAMPLE PERSISTENCE CHECK ───────────────────────────────────
+        # claude code changed: new — real bug found by out-of-sample audit.
+        # Being stationary WITHIN the training window (above) never proved
+        # the relationship actually persists — a pair can pass that test by
+        # chance or a temporary regime, then break down permanently right
+        # after. Applies the SAME frozen hedge_ratio/intercept (no
+        # re-fitting — this is a pure persistence check, not a second
+        # estimation) to the untouched holdout candles and re-runs ADF.
+        # Empirically this rejected 76 of 84 pairs (90.5%) that had passed
+        # the training-window-only test — most by a permanent, multi-sigma
+        # mean shift, not noise. oos_adf_pvalue is recorded here at its raw
+        # (pre-FDR) value; _apply_oos_persistence_filter() (run_all(), Step
+        # 2.6) applies FDR correction across every candidate pair and does
+        # the final gating — this raw check can only ever DOWNGRADE
+        # passes_filters, mirroring how the half-life filters above and the
+        # existing ADF-FDR correction already behave.
+        oos = aligned.iloc[train_end:]
+        oos_adf_pvalue = 1.0   # Fail-closed default if the OOS check can't run at all
+        if len(oos) < self.min_oos_candles:
+            passes_filters = False
+            reject_reason  = reject_reason or (
+                f"insufficient out-of-sample data ({len(oos)} candles < "
+                f"{self.min_oos_candles} minimum) to confirm persistence"
+            )
+        else:
+            spread_oos = oos["price_a"] - intercept - hedge_ratio * oos["price_b"]
+            try:
+                oos_adf_result = adfuller(
+                    spread_oos.dropna(), maxlag=20, autolag="AIC", regression="c",
+                )
+                oos_adf_pvalue = float(oos_adf_result[1])
+            except Exception as e:
+                passes_filters = False
+                reject_reason  = reject_reason or f"out-of-sample ADF test failed: {e}"
+                oos_adf_pvalue = 1.0
+
+            if oos_adf_pvalue >= self.coint_threshold:
+                passes_filters = False
+                reject_reason  = reject_reason or (
+                    f"out-of-sample ADF p={oos_adf_pvalue:.4f} >= {self.coint_threshold} "
+                    f"— stationary in training window but relationship did not persist "
+                    f"out-of-sample (likely a training-window-only artifact, not "
+                    f"genuine long-run cointegration)"
+                )
+
         return PairResult(
             symbol_a=symbol_a, symbol_b=symbol_b,
             coint_pvalue=coint_pvalue, hedge_ratio=hedge_ratio,
@@ -925,6 +1079,7 @@ class CointegrationEngine:
             is_cointegrated=True, passes_filters=passes_filters,
             reject_reason=reject_reason,
             timeframe=self.timeframe,
+            oos_adf_pvalue=oos_adf_pvalue,
         )
 
 

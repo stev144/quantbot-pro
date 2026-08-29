@@ -235,15 +235,24 @@ class ComputeVerdictPairsTest(TestCase):
         self.assertEqual(result.verdict, "INVALID_RESEARCH")
 
     def test_not_cointegrated_is_rejected(self):
-        """claude code changed: real evidence shape, BNB/SOL (verified
-        this pass — see SubscriptionNeverAltersStatisticsTest)."""
-        result = compute_verdict_pairs(run_cointegration_test(asset_a="BNB/USDT", asset_b="SOL/USDT"))
+        """claude code changed: real evidence shape, AVAX/ATOM — re-verified
+        against the expanded 50-symbol/5-year universe (was BNB/SOL against
+        the old 20-symbol universe; real cointegration test outcomes are
+        universe/data-dependent and were re-checked directly, not assumed,
+        when this test started failing after the universe expansion:
+        AVAX/ATOM is genuinely NOT cointegrated on the current data,
+        adf_pvalue=0.23 — and BNB/SOL, which used to demonstrate this
+        branch, is now the pair used by the PARTIALLY_SUPPORTED test below)."""
+        result = compute_verdict_pairs(run_cointegration_test(asset_a="AVAX/USDT", asset_b="ATOM/USDT"))
         self.assertEqual(result.verdict, "REJECTED")
 
     def test_cointegrated_but_half_life_too_long_is_partially_supported(self):
-        """claude code changed: real evidence shape, AVAX/ATOM (verified
-        this pass: is_cointegrated=True, passes_filters=False on half-life)."""
-        result = compute_verdict_pairs(run_cointegration_test(asset_a="AVAX/USDT", asset_b="ATOM/USDT"))
+        """claude code changed: real evidence shape, BNB/SOL — re-verified
+        against the expanded 50-symbol/5-year universe (was AVAX/ATOM
+        against the old 20-symbol universe; see test_not_cointegrated_is_rejected's
+        comment for why these two pairs swapped roles): is_cointegrated=True,
+        passes_filters=False (half-life 252 candles > 120 max)."""
+        result = compute_verdict_pairs(run_cointegration_test(asset_a="BNB/USDT", asset_b="SOL/USDT"))
         self.assertEqual(result.verdict, "PARTIALLY_SUPPORTED")
 
     def test_cointegrated_and_passes_filters_is_supported(self):

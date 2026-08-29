@@ -272,3 +272,157 @@ class CorrelationPrefilterTest(SimpleTestCase):
         engine = self._engine(enable_correlation_prefilter=True, correlation_prefilter_threshold=0.0)
         engine.run_all(data)
         self.assertEqual(len(engine.pair_results), 1)
+
+
+class OutOfSamplePersistenceTest(SimpleTestCase):
+    """
+    claude code changed: new — real bug fix. A pair being stationary WITHIN
+    cointegration_engine.py's fixed TRAINING_WINDOW never proved the
+    relationship persists: empirically, 76 of 84 pairs (90.5%) that passed
+    the old training-window-only ADF test failed a second ADF test on the
+    untouched out-of-sample holdout using the SAME frozen hedge ratio — a
+    genuine, permanent structural break in most cases, not noise. These
+    tests build synthetic series where the true generating process is
+    known and controlled, so the pass/fail outcome can be asserted exactly
+    rather than relied on to "look right" against real market data.
+    """
+
+    def _engine(self, **overrides):
+        defaults = dict(training_window=600, min_oos_candles=200, zscore_window=100, zscore_min_periods=50)
+        defaults.update(overrides)
+        return CointegrationEngine(**defaults)
+
+    def _ou_spread(self, rng, n, phi=0.85, noise_std=0.01):
+        """A genuinely mean-reverting AR(1) (Ornstein-Uhlenbeck-style) series — stationary by construction."""
+        spread = np.zeros(n)
+        for t in range(1, n):
+            spread[t] = phi * spread[t - 1] + rng.normal(0, noise_std)
+        return spread
+
+    def test_relationship_persisting_through_both_windows_passes(self):
+        rng = np.random.default_rng(1)
+        n_train, n_oos = 600, 500
+        n = n_train + n_oos
+        log_b = np.cumsum(rng.normal(0, 0.002, n)) + 3.0
+        spread = self._ou_spread(rng, n)   # Mean-reverting for the ENTIRE series — train AND oos
+        intercept, beta = 1.0, 0.5
+        log_a = intercept + beta * log_b + spread
+
+        price_a = pd.Series(np.exp(log_a))
+        price_b = pd.Series(np.exp(log_b))
+        engine = self._engine()
+        result = engine._test_pair("SYM_A", "SYM_B", np.log(price_a), np.log(price_b))
+
+        self.assertTrue(result.is_cointegrated)
+        self.assertIsNotNone(result.oos_adf_pvalue)
+        self.assertLess(result.oos_adf_pvalue, 0.05)
+        self.assertTrue(result.passes_filters)
+
+    def test_training_window_only_artifact_is_rejected(self):
+        # Same OU-mean-reverting construction for TRAIN, but the spread
+        # becomes a pure random walk (unit root — genuinely non-stationary)
+        # for the OOS portion, simulating exactly the real-world failure
+        # mode this fix was built to catch: looks cointegrated in-sample,
+        # breaks down permanently right after.
+        rng = np.random.default_rng(2)
+        n_train, n_oos = 600, 500
+        n = n_train + n_oos
+        log_b = np.cumsum(rng.normal(0, 0.002, n)) + 3.0
+
+        train_spread = self._ou_spread(rng, n_train)
+        oos_random_walk = np.cumsum(rng.normal(0, 0.01, n_oos))   # Unit root — no reversion at all
+        spread = np.concatenate([train_spread, train_spread[-1] + oos_random_walk])
+
+        intercept, beta = 1.0, 0.5
+        log_a = intercept + beta * log_b + spread
+
+        price_a = pd.Series(np.exp(log_a))
+        price_b = pd.Series(np.exp(log_b))
+        engine = self._engine()
+        result = engine._test_pair("SYM_A", "SYM_B", np.log(price_a), np.log(price_b))
+
+        self.assertTrue(result.is_cointegrated)   # Training window alone still looks cointegrated
+        self.assertIsNotNone(result.oos_adf_pvalue)
+        self.assertGreaterEqual(result.oos_adf_pvalue, 0.05)   # But the OOS holdout is genuinely non-stationary
+        self.assertFalse(result.passes_filters)   # And the pair must be rejected overall
+        self.assertIn("out-of-sample", result.reject_reason)
+
+    def test_insufficient_oos_data_is_rejected_not_silently_skipped(self):
+        # Total data comfortably clears MIN_CANDLES (1000), but leaves less
+        # than min_oos_candles (200) after the training window — must fail
+        # loudly with an honest reason, never silently pass on the
+        # in-sample result alone.
+        rng = np.random.default_rng(3)
+        n_train, n_oos = 900, 150   # 1050 total clears MIN_CANDLES; oos=150 < min_oos_candles=200
+        n = n_train + n_oos
+        log_b = np.cumsum(rng.normal(0, 0.002, n)) + 3.0
+        spread = self._ou_spread(rng, n)
+        intercept, beta = 1.0, 0.5
+        log_a = intercept + beta * log_b + spread
+
+        price_a = pd.Series(np.exp(log_a))
+        price_b = pd.Series(np.exp(log_b))
+        engine = self._engine(training_window=n_train)   # claude code changed: override the class default (600) so train_end lands exactly at n_train, leaving exactly n_oos=150 held out
+        result = engine._test_pair("SYM_A", "SYM_B", np.log(price_a), np.log(price_b))
+
+        self.assertFalse(result.passes_filters)
+        self.assertIn("insufficient out-of-sample data", result.reject_reason)
+
+    def test_pair_rejected_at_in_sample_stage_never_gets_an_oos_pvalue(self):
+        # A pair that fails the training-window ADF test outright must
+        # never reach the OOS section at all — oos_adf_pvalue stays None,
+        # not a default 1.0 that could be mistaken for "a real test ran and
+        # failed."
+        rng = np.random.default_rng(4)
+        n = 1100
+        log_a = np.cumsum(rng.normal(0, 0.01, n)) + 4.0   # Independent random walk
+        log_b = np.cumsum(rng.normal(0, 0.01, n)) + 2.0   # Independent random walk — no real relationship at all
+        engine = self._engine()
+        result = engine._test_pair("SYM_A", "SYM_B", pd.Series(log_a), pd.Series(log_b))
+
+        self.assertFalse(result.is_cointegrated)
+        self.assertIsNone(result.oos_adf_pvalue)
+        self.assertFalse(result.passes_filters)
+
+    def test_apply_oos_persistence_filter_downgrades_via_fdr(self):
+        # Direct unit test of _apply_oos_persistence_filter()'s FDR logic,
+        # mirroring FdrCorrectionTest's pattern for _apply_fdr_correction()
+        # — synthetic PairResult objects, no real OLS/ADF computation needed.
+        engine = self._engine()
+
+        def _result(oos_p, passes_so_far=True):
+            r = PairResult(
+                symbol_a="A", symbol_b="B", coint_pvalue=0.01, hedge_ratio=1.0,
+                intercept=0.0, half_life=24.0, adf_pvalue=0.01,
+                is_cointegrated=True, passes_filters=passes_so_far,
+                oos_adf_pvalue=oos_p,
+            )
+            return r
+
+        # One borderline-real pair (oos_p=0.03) pooled with 30 pairs whose
+        # OOS test clearly failed (p in [0.3, 0.9]) — the real scale this
+        # fix addresses (most candidate pairs fail persistence).
+        borderline = _result(0.03)
+        engine.pair_results = [borderline] + [
+            _result(0.3 + (i % 6) * 0.1) for i in range(30)
+        ]
+
+        engine._apply_oos_persistence_filter()
+
+        self.assertFalse(borderline.passes_oos_persistence)
+        self.assertFalse(borderline.passes_filters)
+        self.assertIn("out-of-sample persistence", borderline.reject_reason)
+
+    def test_pair_never_reaching_oos_stage_is_untouched_by_correction(self):
+        engine = self._engine()
+        never_tested = PairResult(
+            symbol_a="A", symbol_b="B", coint_pvalue=0.9, hedge_ratio=0.0,
+            intercept=0.0, half_life=float("inf"), adf_pvalue=0.9,
+            is_cointegrated=False, passes_filters=False,
+            oos_adf_pvalue=None,
+        )
+        engine.pair_results = [never_tested]
+        engine._apply_oos_persistence_filter()
+
+        self.assertIsNone(never_tested.passes_oos_persistence)
+        self.assertIsNone(never_tested.oos_adf_pvalue_fdr)
