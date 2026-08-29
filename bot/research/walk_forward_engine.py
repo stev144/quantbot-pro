@@ -145,6 +145,22 @@ from bot.research.entry_exit_engine import (
     VALIDATED_HALF_LIFE,                        # Reference half-life, used to sanity-check each fold's re-estimate
 )
 
+# claude code changed: new — per-fold Kalman refit. Previously every fold
+# sliced train/test windows out of ONE Kalman filter run over the pair's
+# entire history — meaning a fold's "test" window always got a more
+# converged, longer-warmed-up filter than its own "train" window (test is
+# always the later, more mature portion of that single continuous run).
+# That's not a strict look-ahead (beta_t only ever depends on data <= t),
+# but it made train-vs-test comparisons within a fold structurally
+# unfair, and is consistent with the anomaly found by hand: OOS Sharpe
+# beat train Sharpe in every fold, by a similar margin each time. Fixing
+# this means refitting a FRESH Kalman filter per fold, seeded from a
+# FRESH OLS fit on ONLY that fold's train window, run only across that
+# fold's own train+test span — so a fold's test period never benefits
+# from convergence time outside what its own train window provided.
+from bot.research.kalman_filter_engine import KalmanFilterEngine, MIN_PRICE as KALMAN_MIN_PRICE
+from bot.research.cointegration_engine import CointegrationEngine
+
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings, matching project convention
 
 
@@ -469,6 +485,7 @@ class WalkForwardEngine:
         kelly_safety:         float = KELLY_SAFETY_FRACTION,
         output_dir:           str   = WALK_FORWARD_OUTPUT_DIR,
         resample_hours:        Optional[int] = None,   # claude code changed: new — threaded into the full-history loader; folds are then sliced from already-resampled data
+        data_dir:               str   = "data",   # claude code changed: new — raw OHLCV CSVs for the per-fold Kalman refit (fetch_all_symbols.py's output folder)
     ) -> None:
         """
         Initialise the walk-forward engine with fold-construction and
@@ -493,6 +510,7 @@ class WalkForwardEngine:
         self.kelly_safety      = kelly_safety                # Quarter-Kelly safety factor, passed straight through
         self.output_dir        = Path(output_dir)             # Root directory for this engine's outputs
         self.output_dir.mkdir(parents=True, exist_ok=True)     # Ensure it exists before we try to write to it
+        self.data_dir          = Path(data_dir)               # claude code changed: new — raw OHLCV source for per-fold Kalman refits
 
         logger.info("WalkForwardEngine initialised")
         logger.info(f"  Min train window   : {min_train_years} year(s), anchored at data start")
@@ -577,7 +595,6 @@ class WalkForwardEngine:
             result, oos_trades = self._run_single_fold(
                 fold_id      = i,
                 pair_name    = pair_name,
-                df_full      = df_full,
                 train_start  = train_start,
                 train_end    = train_end,
                 test_start   = test_start,
@@ -671,6 +688,95 @@ class WalkForwardEngine:
 
 
     # ─────────────────────────────────────────────────────────────────────────
+    # PER-FOLD KALMAN REFIT
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_raw_close(symbol: str, data_dir: Path) -> pd.Series:
+        """
+        Load one symbol's raw close price series from fetch_all_symbols.py's
+        output CSV, with a UTC DatetimeIndex — same read/clean pattern
+        KalmanFilterEngine._load_prices() and CointegrationEngine use
+        elsewhere, kept minimal here since only 'close' is needed.
+        """
+        path = data_dir / f"{symbol}_1h.csv"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{symbol} CSV not found at {path}. Run fetch_all_symbols.py first."
+            )
+        df = pd.read_csv(path)
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            df.set_index("timestamp", inplace=True)
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df.dropna(subset=["close"], inplace=True)
+        df.sort_index(inplace=True)
+        return df["close"]
+
+    def _refit_kalman_for_fold(
+        self,
+        pair_name:    str,
+        symbol_a:      str,
+        symbol_b:       str,
+        train_start:     pd.Timestamp,
+        train_end:        pd.Timestamp,
+        test_end:          pd.Timestamp,
+        fold_dir:           Path,
+    ) -> pd.DataFrame:
+        """
+        Build a FRESH Kalman filter output for exactly one fold, covering
+        only [train_start, test_end] — never touching data before
+        train_start or after test_end.
+
+        Two things happen here that never happened before this fix:
+          1. The OLS hedge-ratio/intercept seed is refit on THIS fold's own
+             train window only (via CointegrationEngine._test_pair(), the
+             same Engle-Granger OLS step cointegration_engine.py's global
+             screening run uses), instead of reusing the pair's single
+             whole-history OLS fit from cointegration_pairs.csv.
+          2. The Kalman filter itself runs starting fresh at train_start
+             (state reset, warmup restarts), instead of being a slice cut
+             out of one continuous filter run that started years earlier.
+
+        Both together mean this fold's test period gets exactly the same
+        amount of filter convergence time its own train period had to
+        build up — no fold borrows convergence from data before its own
+        train window began.
+        """
+        close_a = self._load_raw_close(symbol_a, self.data_dir)
+        close_b = self._load_raw_close(symbol_b, self.data_dir)
+
+        # ── Fresh OLS seed from THIS fold's train window only ─────────────
+        log_a_train = np.log(close_a.loc[train_start:train_end].clip(lower=KALMAN_MIN_PRICE))
+        log_b_train = np.log(close_b.loc[train_start:train_end].clip(lower=KALMAN_MIN_PRICE))
+        coint_engine = CointegrationEngine()   # No I/O at construction — just builds config + pair list
+        pair_result = coint_engine._test_pair(symbol_a, symbol_b, log_a_train, log_b_train)
+
+        # ── Write this fold's own [train_start, test_end] price slice ────
+        # Minimal CSVs (timestamp + close only) — all KalmanFilterEngine's
+        # loader actually reads.
+        kalman_scratch = fold_dir / "kalman_refit"
+        kalman_scratch.mkdir(parents=True, exist_ok=True)
+        for symbol, close in ((symbol_a, close_a), (symbol_b, close_b)):
+            sliced = close.loc[train_start:test_end]
+            out = sliced.rename("close").reset_index()
+            out.columns = ["timestamp", "close"]
+            out.to_csv(kalman_scratch / f"{symbol}_1h.csv", index=False)
+
+        half_life_h = None if np.isinf(pair_result.half_life) else float(pair_result.half_life)
+        fold_engine = KalmanFilterEngine(
+            pair_name = pair_name,
+            symbol_a  = symbol_a,
+            symbol_b  = symbol_b,
+            ols_beta  = pair_result.hedge_ratio,
+            ols_alpha = pair_result.intercept,
+            half_life_h = half_life_h,
+        )
+        fold_kalman_df = fold_engine.run(data_dir=str(kalman_scratch), output_dir=str(kalman_scratch))
+        return fold_kalman_df
+
+
+    # ─────────────────────────────────────────────────────────────────────────
     # RUN ONE FOLD (TRAIN → DERIVE PARAMS → TEST OUT-OF-SAMPLE)
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -678,7 +784,6 @@ class WalkForwardEngine:
         self,
         fold_id:          int,
         pair_name:         str,
-        df_full:            pd.DataFrame,
         train_start:         pd.Timestamp,
         train_end:            pd.Timestamp,
         test_start:            pd.Timestamp,
@@ -687,7 +792,7 @@ class WalkForwardEngine:
     ) -> Tuple[FoldResult, Optional[pd.DataFrame]]:
         """
         Execute one walk-forward fold end to end:
-            1. Slice TRAIN and TEST from the full dataset
+            1. Refit a fresh Kalman filter for THIS fold's own [train, test] span
             2. Simulate TRAIN to derive win rate / entry IC
             3. Re-calibrate half-life from TRAIN's spread only
             4. Simulate TEST using ONLY the parameters TRAIN produced
@@ -703,9 +808,22 @@ class WalkForwardEngine:
         fold_dir = pair_output_dir / f"fold_{fold_id:02d}"              # Per-fold scratch/output directory
         fold_dir.mkdir(parents=True, exist_ok=True)                     # Ensure it exists
 
+        # ── Refit a fresh Kalman filter for THIS fold only ────────────────────
+        # claude code changed: was `df_full.loc[...]` — a slice of ONE Kalman
+        # filter run over the pair's entire history, which gave every fold's
+        # test window strictly more filter-convergence time than its own
+        # train window (test is always the later, more mature part of that
+        # single continuous run). See _refit_kalman_for_fold()'s docstring.
+        symbol_a, symbol_b = pair_name.split("/")
+        fold_kalman_df = self._refit_kalman_for_fold(
+            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,
+            train_start=train_start, train_end=train_end, test_end=test_end,
+            fold_dir=fold_dir,
+        )
+
         # ── Slice the data ──────────────────────────────────────────────────────
-        train_df = df_full.loc[train_start:train_end]                   # Everything TRAIN is allowed to see
-        test_df  = df_full.loc[test_start:test_end]                     # Everything TEST will be scored on
+        train_df = fold_kalman_df.loc[train_start:train_end]             # Everything TRAIN is allowed to see
+        test_df  = fold_kalman_df.loc[test_start:test_end]               # Everything TEST will be scored on
 
         if len(train_df) < self.min_train_trades or len(test_df) < self.min_test_candles:
             result.skipped     = True                                   # Not enough data to trust this fold at all
@@ -999,18 +1117,33 @@ class WalkForwardEngine:
     ) -> None:
         """Persist the fold report, stitched OOS trade log, and OOS equity curve to disk."""
 
+        # claude code changed: real bug fix. pair_name is the human-readable
+        # "SYMBOL_A_USDT/SYMBOL_B_USDT" form (a literal "/" in it) — used
+        # directly inside an f-string filename below, pathlib silently
+        # interpreted that embedded "/" as a real directory separator,
+        # producing a path with an extra, never-created subdirectory (e.g.
+        # ".../FET_USDT/BCH_USDT/FET_USDT/BCH_USDT_walk_forward_folds.csv")
+        # and crashing with "Cannot save file into a non-existent
+        # directory." This had never been hit before for ANY pair — no
+        # per-pair walk-forward output directory existed on disk prior to
+        # this fix, confirming the fold-level save step had never actually
+        # completed successfully, for AVAX/ATOM or otherwise. Sanitized
+        # only for the filename; pair_output_dir/pair_name elsewhere (logs,
+        # verdict text) stay in the original slash form.
+        pair_name_safe = pair_name.replace("/", "_")
+
         if not fold_df.empty:                                                     # Only write if we actually have folds
-            p = pair_output_dir / f"{pair_name}_walk_forward_folds.csv"           # Per-fold summary report
+            p = pair_output_dir / f"{pair_name_safe}_walk_forward_folds.csv"      # Per-fold summary report
             fold_df.to_csv(p, index=False)                                        # Save it
             logger.info(f"  Saved fold report   : {p}")
 
         if not oos_trades_df.empty:                                               # Only write if OOS trades exist
-            p = pair_output_dir / f"{pair_name}_walk_forward_oos_trades.csv"      # Stitched OOS trade log
+            p = pair_output_dir / f"{pair_name_safe}_walk_forward_oos_trades.csv" # Stitched OOS trade log
             oos_trades_df.to_csv(p, index=False)                                  # Save it
             logger.info(f"  Saved OOS trades    : {p}")
 
         if not oos_equity_df.empty:                                               # Only write if an equity curve exists
-            p = pair_output_dir / f"{pair_name}_walk_forward_oos_equity.csv"      # Stitched OOS equity curve
+            p = pair_output_dir / f"{pair_name_safe}_walk_forward_oos_equity.csv" # Stitched OOS equity curve
             oos_equity_df.to_csv(p, index=False)                                  # Save it
             logger.info(f"  Saved OOS equity    : {p}")
 

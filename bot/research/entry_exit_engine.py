@@ -1893,6 +1893,34 @@ class EntryExitEngine:
 
 
     # ─────────────────────────────────────────────────────────────────────────
+    # SHARPE RATIO FROM THE EQUITY CURVE
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _compute_sharpe_from_equity_curve(equity_curve: pd.DataFrame) -> float:
+        """
+        claude code changed: new — real bug fix, see _build_strategy_summary()'s
+        Sharpe comment for the full story. Standard institutional Sharpe:
+        annualised from DAILY returns on the actual equity curve, not from
+        per-trade statistics scaled by trade frequency. Crypto trades 24/7,
+        so every calendar day counts — no trading-day-calendar adjustment
+        (e.g. 252) is needed, unlike equities.
+        """
+        if equity_curve.empty or len(equity_curve) < 2:
+            return 0.0
+
+        daily = equity_curve.set_index(pd.to_datetime(equity_curve["timestamp"]))["cumulative_usdt"]
+        daily = daily.sort_index()
+        daily = daily.resample("D").last().ffill()   # One NAV per calendar day; flat on days with no trade exit
+        daily_returns = daily.pct_change().dropna()
+
+        if len(daily_returns) < 2 or daily_returns.std() == 0:
+            return 0.0
+
+        return float((daily_returns.mean() / daily_returns.std()) * np.sqrt(365))
+
+
+    # ─────────────────────────────────────────────────────────────────────────
     # STEP 6: BUILD STRATEGY SUMMARY
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -1938,18 +1966,23 @@ class EntryExitEngine:
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.inf
 
         # ── Sharpe ratio ──────────────────────────────────────────────────────
-        # Annualised Sharpe on per-trade returns
-        # For pairs trading: each trade is independent, so we use trade returns
-        # Annualisation: assume ~10 trades per week = 520 per year
-        pnl_std   = trade_log["net_pnl_pct"].std()
-        trades_per_year = n_total / (
-            (pd.to_datetime(trade_log["exit_timestamp"].max()) -
-             pd.to_datetime(trade_log["entry_timestamp"].min())).days / 365.25
-        ) if n_total > 0 else 1
-        sharpe = (
-            (avg_pnl_pct / pnl_std) * np.sqrt(trades_per_year)
-            if pnl_std > 0 else 0.0
-        )
+        # claude code changed: real bug fix. Was `(avg_pnl_pct / pnl_std) *
+        # sqrt(trades_per_year)` — treating each trade's OWN return (scaled
+        # against its own Kelly-sized position, not total capital) as one
+        # independent annual sub-period, then scaling by sqrt(trade count),
+        # the same math used to annualise a genuinely daily Sharpe. That's
+        # only valid for fixed-size, fixed-frequency periodic returns.
+        # Verified by hand: a perfectly modest, believable per-trade
+        # reward/variability ratio (~0.92) was getting multiplied by
+        # sqrt(~118 trades/year) =~ 10.9, mechanically producing "Sharpe
+        # ~10" — and this held almost identically for permutation-test
+        # shuffles of the same data, which is what originally exposed it
+        # (real edge or not, any strategy trading this often would show
+        # this same inflated number). Fixed to the standard convention:
+        # Sharpe from the actual EQUITY CURVE's returns over fixed
+        # calendar periods (daily — crypto trades 24/7, no calendar-day
+        # adjustment needed), not per-trade stats annualised by trade count.
+        sharpe = self._compute_sharpe_from_equity_curve(equity_curve)
 
         # ── Drawdown ──────────────────────────────────────────────────────────
         max_drawdown_pct = equity_curve["drawdown_pct"].min() if not equity_curve.empty else 0.0
