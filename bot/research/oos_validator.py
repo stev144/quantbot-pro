@@ -59,7 +59,7 @@ from scipy import stats
 
 logger = logging.getLogger(__name__)
 
-METHODOLOGY_VERSION = "oos_validator/1.1.0"   # claude code changed: bumped 1.0.0 -> 1.1.0 for the Type B strategy-outcome evaluator (evaluate_strategy_oos) and its own aggregation methodology (OOSResult.aggregate's "strategy_to_outcome" branch, below) — a purely additive capability, Type A's fold/purge/embargo/scoring semantics are byte-for-byte unchanged (see the 33 pre-existing tests, still green). Per Section 17 of the Type B mission: "if... aggregation methodology changes materially, the methodology version must change" — this counts, since a NEW aggregation methodology now exists in this file, even though the OLD one (feature_to_return) is untouched. Bump again only on a further real semantic change.
+METHODOLOGY_VERSION = "oos_validator/1.2.0"   # claude code changed: bumped 1.1.0 -> 1.2.0 for the Type C cross-sectional ranking evaluator (evaluate_cross_sectional_oos) and its own aggregation methodology ("cross_sectional_ranking" branch) — again purely additive; Type A and Type B's own semantics are byte-for-byte unchanged (see their pre-existing, still-green tests). Bump again only on a further real semantic change.
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -368,6 +368,8 @@ class OOSResult:
         # per-metric methodology).
         if self.evaluation_type == "strategy_to_outcome":
             return _aggregate_strategy_outcome(self.folds)
+        if self.evaluation_type == "cross_sectional_ranking":
+            return _aggregate_cross_sectional(self.folds)
 
         valid = [f for f in self.folds if not f.skipped and f.ic is not None and not np.isnan(f.ic)]
         ics = np.array([f.ic for f in valid])
@@ -927,6 +929,270 @@ def evaluate_strategy_oos(
         evaluation_type="strategy_to_outcome",
         config=config,
         folds=fold_results,
+        strategy_name=strategy_name, strategy_version=strategy_version,
+        data_fingerprint=data_fingerprint,
+        random_seed=config.seed,
+        n_folds_total=len(fold_results),
+        n_folds_evaluated=n_evaluated,
+        n_folds_skipped=len(fold_results) - n_evaluated,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TYPE C EVALUATOR: cross-sectional ranking -> long/short portfolio
+#
+# claude code changed: new section. Reuses Type A's own long-format
+# cross-sectional data shape (timestamp/asset/feature/forward_return —
+# exactly evaluate_feature_oos()'s asset_col convention) and turns it
+# into an actual tradeable ranking portfolio: rank all assets by a
+# feature at each TEST timestamp, hold an equal-weight long-top-K /
+# short-bottom-K portfolio for one period, realize the ALREADY-KNOWN
+# forward_return_col (the same causal label convention Type A already
+# uses), net of an explicit turnover cost. This is deliberately the
+# SMALL, disciplined version of "cross-sectional strategy OOS" — real
+# long/short ranking mechanics, not a full portfolio optimizer.
+#
+# SCOPE DECISIONS, stated explicitly rather than silently chosen:
+#   - Rebalance frequency = every TEST timestamp (the fold's own
+#     granularity). A caller wanting a lower-frequency rebalance should
+#     resample/thin their input df upstream — a separate rebalance-
+#     schedule abstraction was judged out of scope for this pass (the
+#     mission's own "small, rigorously tested... more valuable than
+#     large... ambiguous" principle).
+#   - Cost model: FULL turnover every period (the entire long+short
+#     book is assumed closed and reopened each rebalance) — the
+#     conservative, standard assumption when the holding period equals
+#     the rebalance interval exactly, which is true here by
+#     construction. `cost_rate` is a round-trip fraction of notional.
+#   - No warmup-context concept (unlike Type B): Type C, like Type A,
+#     consumes PRECOMPUTED feature values directly rather than
+#     computing them online inside a stateful simulation loop, so there
+#     is no indicator state to prime across a fold boundary.
+#   - fit_fn (optional) sees only the purged TRAIN long-format rows,
+#     identical rule to Type A/B, and is used to derive cross-sectional
+#     normalization parameters (e.g. train mean/std of the feature) —
+#     never to see TEST-period values.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _default_cross_sectional_fit_fn(train_df: pd.DataFrame, feature_col: str) -> Dict:
+    return {"mean": float(train_df[feature_col].mean()), "std": float(train_df[feature_col].std()) or 1.0}
+
+
+def _rank_and_form_portfolio(
+    period_df: pd.DataFrame, feature_col: str, forward_return_col: str,
+    fitted_params: Dict, top_k: int, long_short: bool,
+) -> Optional[Dict]:
+    """
+    One rebalance period's portfolio construction and realized return —
+    a pure function of that period's own cross-sectional slice (every
+    asset's feature + already-known forward_return at this ONE
+    timestamp). Standardizes the feature using TRAIN-derived mean/std
+    (fitted_params) purely for a stable ranking scale — the RANK itself
+    (not the standardized value) is what selects the long/short legs, so
+    this is not sensitive to the scaling choice, only to relative order.
+    """
+    valid = period_df.dropna(subset=[feature_col, forward_return_col])
+    if len(valid) < 2 * top_k:
+        return None   # not enough assets this period to form both legs cleanly
+
+    mean, std = fitted_params.get("mean", 0.0), fitted_params.get("std", 1.0) or 1.0
+    valid = valid.copy()
+    valid["_z"] = (valid[feature_col] - mean) / std
+    ranked = valid.sort_values("_z", ascending=False)
+
+    long_leg = ranked.iloc[:top_k]
+    short_leg = ranked.iloc[-top_k:] if long_short else None
+
+    long_return = float(long_leg[forward_return_col].mean())
+    short_return = float(short_leg[forward_return_col].mean()) if long_short else 0.0
+    gross_return = (long_return - short_return) if long_short else long_return
+
+    return {
+        "n_long": len(long_leg), "n_short": len(short_leg) if long_short else 0,
+        "long_return": long_return, "short_return": short_return, "gross_return": gross_return,
+    }
+
+
+def _compute_cross_sectional_fold_metrics(period_records: List[Dict], cost_rate: float, initial_balance: float, periods_per_year: Optional[float]) -> Dict:
+    """
+    claude code changed: new. Builds a REAL, sequential compounding
+    equity curve from one fold's own period-by-period portfolio returns
+    (a genuinely continuous series within a fold, unlike Type B's fresh-
+    capital-per-trade convention) — so max_drawdown here is a true,
+    meaningful statistic, not a "worst single trade" proxy.
+    """
+    if not period_records:
+        return {"n_periods": 0}
+
+    for r in period_records:
+        r["cost"] = round(cost_rate * 2, 8)   # claude code changed: full round-trip turnover assumed every period — see module docstring
+        r["net_return"] = r["gross_return"] - r["cost"]
+
+    net_returns = np.array([r["net_return"] for r in period_records])
+    balance = initial_balance
+    peak = initial_balance
+    max_dd = 0.0
+    equity_curve = [balance]
+    for r in net_returns:
+        balance *= (1.0 + r)
+        peak = max(peak, balance)
+        dd = (peak - balance) / peak * 100 if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
+        equity_curve.append(balance)
+
+    mean_r, std_r = float(np.mean(net_returns)), float(np.std(net_returns, ddof=1)) if len(net_returns) >= 2 else 0.0
+    sharpe = (mean_r / std_r * np.sqrt(periods_per_year)) if std_r > 1e-12 and periods_per_year else None
+    hit_rate = float(np.mean(net_returns > 0))
+
+    return {
+        "n_periods": len(period_records), "mean_net_return": round(mean_r, 6), "std_net_return": round(std_r, 6),
+        "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None, "hit_rate_pct": round(hit_rate * 100, 2),
+        "total_compounded_return_pct": round((balance / initial_balance - 1) * 100, 4),
+        "max_drawdown_pct": round(max_dd, 4), "final_balance": round(balance, 2),
+        "total_cost_paid_pct": round(sum(r["cost"] for r in period_records) * 100, 4),
+    }
+
+
+def _aggregate_cross_sectional(folds: List[FoldEvalResult]) -> Dict:
+    """
+    claude code changed: new — same Section-10-style discipline as Type
+    B's _aggregate_strategy_outcome(): rate-style metrics (mean return,
+    Sharpe, hit rate) are RECOMPUTED from the POOLED period-return series
+    across all evaluated folds, never averaged per-fold; drawdown is the
+    WORST single fold (path-dependent, no single chained curve across
+    independently-capitalized folds), explicitly labelled as such.
+    """
+    evaluated = [f for f in folds if not f.skipped]
+    pooled_periods: List[Dict] = []
+    for f in evaluated:
+        pooled_periods.extend(f.trades)
+
+    fold_dds = [f.metrics.get("max_drawdown_pct") for f in evaluated if f.metrics.get("max_drawdown_pct") is not None]
+
+    if not pooled_periods:
+        return {
+            "n_folds_evaluated": len(evaluated), "n_periods": 0, "mean_net_return": None,
+            "sharpe_ratio": None, "hit_rate_pct": None, "worst_fold_max_drawdown_pct": max(fold_dds) if fold_dds else None,
+        }
+
+    net_returns = np.array([r["net_return"] for r in pooled_periods])
+    mean_r, std_r = float(np.mean(net_returns)), float(np.std(net_returns, ddof=1)) if len(net_returns) >= 2 else 0.0
+    total_periods_per_year = sum(
+        max((f.fold.test_end - f.fold.test_start).days / 365.25, 1e-6) for f in evaluated
+    )
+    periods_per_year = len(pooled_periods) / total_periods_per_year if total_periods_per_year > 0 else None
+    sharpe = (mean_r / std_r * np.sqrt(periods_per_year)) if std_r > 1e-12 and periods_per_year else None
+
+    return {
+        "n_folds_evaluated": len(evaluated), "n_periods": len(pooled_periods),
+        "mean_net_return": round(mean_r, 6), "std_net_return": round(std_r, 6),
+        "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
+        "hit_rate_pct": round(float(np.mean(net_returns > 0)) * 100, 2),
+        "worst_fold_max_drawdown_pct": max(fold_dds) if fold_dds else None,
+        "total_cost_paid_pct": round(sum(r["cost"] for r in pooled_periods) * 100, 4),
+    }
+
+
+def evaluate_cross_sectional_oos(
+    df: pd.DataFrame,
+    timestamp_col: str,
+    asset_col: str,
+    feature_col: str,
+    forward_return_col: str,
+    config: WalkForwardConfig,
+    top_k: int = 3,
+    long_short: bool = True,
+    cost_rate: float = 0.0,
+    fit_fn: Optional[Callable[[pd.DataFrame], Dict]] = None,
+    fold_initial_balance: float = 10_000.0,
+    strategy_name: str = "",
+    strategy_version: str = "",
+    data_fingerprint: Optional[str] = None,
+) -> OOSResult:
+    """
+    THE Type C evaluator (cross-sectional ranking -> long/short
+    portfolio). `df` is the SAME long-format shape evaluate_feature_oos()
+    already accepts via its asset_col parameter: one row per
+    timestamp x asset, with a feature column and an already-known
+    forward_return_col (the realized return over exactly one rebalance
+    period — the caller's own causal label, matching this project's
+    forward_return_Nh convention).
+
+    Per fold:
+      1. fit_fn(purged TRAIN long-format rows) -> fitted_params (default:
+         train mean/std of feature_col, used only to stabilize the
+         ranking scale — never to see TEST-period values).
+      2. For every TEST timestamp: rank all assets with valid data at
+         that instant by (feature - fitted mean)/std, form an equal-
+         weight top_k long / bottom_k short portfolio (long_short=False
+         for a long-only book), realize forward_return_col, net of a
+         full-round-trip cost_rate.
+      3. A real, compounding per-fold equity curve is built from that
+         fold's own period-by-period net returns (_compute_cross_sectional_fold_metrics).
+
+    LEAKAGE ENFORCEMENT: fit_fn is called with ONLY the purged
+    [train_start_pos, train_end_pos) slice of the shared, deduplicated
+    timestamp axis; assert_temporal_disjoint() runs before every fold's
+    fit/portfolio-construction pair, identical to Type A/B.
+    """
+    working = df[[timestamp_col, asset_col, feature_col, forward_return_col]].copy()
+    working[timestamp_col] = pd.to_datetime(working[timestamp_col])
+
+    unique_ts = pd.DatetimeIndex(sorted(working[timestamp_col].unique()))
+    folds = build_folds(unique_ts, config)
+    ts_to_pos = {ts: i for i, ts in enumerate(unique_ts)}
+    working["_pos"] = working[timestamp_col].map(ts_to_pos)
+
+    fold_results: List[FoldEvalResult] = []
+    for fold in folds:
+        if fold.skipped:
+            fold_results.append(FoldEvalResult(
+                fold=fold, n_train_obs=0, n_test_obs=0, ic=None, ic_pvalue=None, mean_label=None,
+                skipped=True, skip_reason=fold.skip_reason,
+            ))
+            continue
+
+        train_mask = (working["_pos"] >= fold.train_start_pos) & (working["_pos"] < fold.train_end_pos)
+        test_mask = (working["_pos"] >= fold.test_start_pos) & (working["_pos"] < fold.test_end_pos)
+        assert_temporal_disjoint(
+            working.loc[train_mask, "_pos"].unique().tolist(),
+            working.loc[test_mask, "_pos"].unique().tolist(),
+        )
+
+        train_slice = working.loc[train_mask]
+        fitted_params = fit_fn(train_slice) if fit_fn is not None else _default_cross_sectional_fit_fn(train_slice, feature_col)
+
+        test_slice = working.loc[test_mask]
+        period_records = []
+        for ts, period_df in test_slice.groupby(timestamp_col, sort=True):
+            record = _rank_and_form_portfolio(period_df, feature_col, forward_return_col, fitted_params, top_k, long_short)
+            if record is not None:
+                record["timestamp"] = ts
+                period_records.append(record)
+
+        periods_per_year_this_fold = len(period_records) / max((fold.test_end - fold.test_start).days / 365.25, 1e-6) if period_records else None
+        metrics = _compute_cross_sectional_fold_metrics(period_records, cost_rate, fold_initial_balance, periods_per_year_this_fold)
+
+        if not period_records:
+            fold_results.append(FoldEvalResult(
+                fold=fold, n_train_obs=len(train_slice), n_test_obs=len(test_slice), ic=None, ic_pvalue=None, mean_label=None,
+                fitted_params=fitted_params, skipped=True, skip_reason="no timestamp in this fold's TEST window had enough assets to form both portfolio legs",
+            ))
+            continue
+
+        fold_results.append(FoldEvalResult(
+            fold=fold, n_train_obs=len(train_slice), n_test_obs=len(test_slice),
+            ic=None, ic_pvalue=None, mean_label=None,
+            fitted_params=fitted_params, metrics=metrics, trades=period_records,
+        ))
+
+    n_evaluated = sum(1 for f in fold_results if not f.skipped)
+    return OOSResult(
+        evaluation_type="cross_sectional_ranking",
+        config=config,
+        folds=fold_results,
+        asset_universe=sorted(working[asset_col].unique().tolist()),
+        feature_name=feature_col, label_name=forward_return_col,
         strategy_name=strategy_name, strategy_version=strategy_version,
         data_fingerprint=data_fingerprint,
         random_seed=config.seed,
