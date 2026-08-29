@@ -486,6 +486,7 @@ class WalkForwardEngine:
         output_dir:           str   = WALK_FORWARD_OUTPUT_DIR,
         resample_hours:        Optional[int] = None,   # claude code changed: new — threaded into the full-history loader; folds are then sliced from already-resampled data
         data_dir:               str   = "data",   # claude code changed: new — raw OHLCV CSVs for the per-fold Kalman refit (fetch_all_symbols.py's output folder)
+        signal_source:           str   = "kalman",   # claude code changed: new — "kalman" or "ols", see entry_exit_engine.py's SIGNAL_SOURCE_COLUMNS. Threaded into every EntryExitEngine this class builds (the full-history loader and every fold's train/test engine).
     ) -> None:
         """
         Initialise the walk-forward engine with fold-construction and
@@ -511,6 +512,7 @@ class WalkForwardEngine:
         self.output_dir        = Path(output_dir)             # Root directory for this engine's outputs
         self.output_dir.mkdir(parents=True, exist_ok=True)     # Ensure it exists before we try to write to it
         self.data_dir          = Path(data_dir)               # claude code changed: new — raw OHLCV source for per-fold Kalman refits
+        self.signal_source     = signal_source                # claude code changed: new
 
         logger.info("WalkForwardEngine initialised")
         logger.info(f"  Min train window   : {min_train_years} year(s), anchored at data start")
@@ -564,9 +566,18 @@ class WalkForwardEngine:
         # Piece 4 already relies on, so walk-forward and the full-sample run
         # are always looking at identically cleaned data.
         scratch_dir = pair_output_dir / "_loader_scratch"            # Disposable dir, only used to init the loader
+        symbol_a, symbol_b = pair_name.split("/")                    # claude code changed: new — needed below, and by signal_source="ols" (load_pair_config() lookup inside _load_kalman_data())
         loader = EntryExitEngine(                                     # claude code changed: added resample_hours=
             capital_usdt=self.capital_usdt, output_dir=str(scratch_dir),
             resample_hours=self.resample_hours,                       # claude code changed: new — df_full (and every fold sliced from it) comes out already at this candle width
+            # claude code changed: new — pair identity + signal_source must be
+            # set BEFORE _load_kalman_data() is called directly below
+            # (bypassing run()'s own Step-0 identity resolution, which this
+            # class doesn't have); signal_source="ols" needs self.pair_name
+            # to look up the static hedge ratio via load_pair_config(),
+            # which would otherwise see the AVAX/ATOM module default here.
+            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,
+            signal_source=self.signal_source,
         )
         df_full = loader._load_kalman_data(kalman_csv)               # Load + clean the full history
         loader._validate_columns(df_full)                            # Confirm all required Kalman columns exist
@@ -854,6 +865,7 @@ class WalkForwardEngine:
             validated_ic       = VALIDATED_IC,                            # Bootstrap default — TRAIN hasn't taught us anything yet
             validated_win_rate  = VALIDATED_WIN_RATE,                      # Bootstrap default, same reasoning
             output_dir           = str(fold_dir / "train_run"),            # Keep train's own outputs isolated
+            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,     # claude code changed: new — needed for signal_source="ols"'s load_pair_config() lookup; train_slice_kalman.csv's filename can't be parsed for identity
         )
         train_trades, train_summary, _ = train_engine.run(kalman_csv=str(train_csv))
 
@@ -896,6 +908,7 @@ class WalkForwardEngine:
             validated_ic        = train_entry_ic,                            # TRAIN-derived — TEST never sees its own IC
             validated_win_rate   = train_win_rate,                            # TRAIN-derived — TEST never sees its own win rate
             output_dir            = str(fold_dir / "test_run"),               # Keep test's own outputs isolated
+            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,        # claude code changed: new — same reason as train_engine above
         )
         test_trades, test_summary, _ = test_engine.run(kalman_csv=str(test_csv))
 
@@ -1009,6 +1022,9 @@ class WalkForwardEngine:
         validated_ic:          float,
         validated_win_rate:     float,
         output_dir:              str,
+        pair_name:                Optional[str] = None,   # claude code changed: new
+        symbol_a:                  Optional[str] = None,   # claude code changed: new
+        symbol_b:                    Optional[str] = None,   # claude code changed: new
     ) -> EntryExitEngine:
         """
         Construct an EntryExitEngine configured for one fold's train or test
@@ -1029,6 +1045,8 @@ class WalkForwardEngine:
             exit_time_stop_hours    = exit_time_stop_h,                        # This fold's re-calibrated time stop
             kelly_safety              = self.kelly_safety,                       # Project-standard quarter-Kelly safety
             output_dir                  = output_dir,                             # Keep this run's files isolated
+            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,             # claude code changed: new
+            signal_source=self.signal_source,                                       # claude code changed: new
         )
 
         # Override the sizer with THIS fold's train-derived IC and win rate,
