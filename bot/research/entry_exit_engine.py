@@ -144,6 +144,11 @@ from scipy import stats                         # IC calculation for strategy va
 # level could be computed beyond a value the z-score can ever actually report
 from bot.research.kalman_filter_engine import ZSCORE_WINSOR_LIMIT
 
+# claude code changed: new import — signal_source="ols" needs the pair's
+# static, validated hedge ratio (see SIGNAL_SOURCE_COLUMNS' module comment
+# below for why)
+from bot.research.kalman_filter_engine import load_pair_config
+
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings
 
 # claude code changed: new — same fix bot_runner.py/health_check.py/
@@ -186,6 +191,46 @@ if not logger.handlers:                         # Prevent duplicate handlers on 
 SYMBOL_A: str   = "AVAX_USDT"    # The asset we go long or short
 SYMBOL_B: str   = "ATOM_USDT"    # The hedge asset
 PAIR_NAME: str  = "AVAX_USDT/ATOM_USDT"
+
+# claude code changed: new — signal_source selects which of kalman_filter_engine.py's
+# two signals this engine actually trades. Real bug found by direct
+# comparison on 5 of the strongest pairs from the 50-symbol cointegration
+# screening: the Kalman-ADAPTIVE signal (kalman_zscore/kalman_spread/etc.)
+# continuously re-fits its own hedge ratio to minimize its own prediction
+# error every candle — which mechanically manufactures apparent mean-
+# reversion almost regardless of whether the two assets have any real
+# relationship, and survives block-shuffle permutation testing because the
+# self-correcting property is preserved within any reordering. Every one
+# of the 5 pairs tested collapsed from an implausible Sharpe (4.9-8.4) to
+# near-zero-to-modest (0.08-1.24) the instant the STATIC (non-adaptive)
+# OLS signal was used instead — the same signal cointegration_engine.py's
+# own Engle-Granger test already validates and kalman_filter_engine.py
+# already computes as its "ols_*" baseline columns, just never wired in
+# as the actual trading signal before now. "kalman" is kept as the default
+# only for backward compatibility with every existing caller (walk-forward,
+# permutation testing, the standalone runner) — it should not be trusted
+# as a real trading signal per the finding above; new work should default
+# to "ols" once downstream callers are updated to expect it.
+SIGNAL_SOURCE_COLUMNS: Dict[str, Dict[str, str]] = {
+    "kalman": {
+        "zscore":           "kalman_zscore",
+        "zscore_lag1":      "kalman_zscore_lag1",
+        "signal":           "pair_signal_dynamic",
+        "spread":           "kalman_spread",
+        "beta":             "kalman_beta",
+        "prediction_error": "prediction_error",
+        "beta_uncertainty": "beta_uncertainty",
+    },
+    "ols": {
+        "zscore":           "ols_zscore",
+        "zscore_lag1":      "ols_zscore_lag1",       # derived in _load_kalman_data() — not in the raw CSV
+        "signal":           "pair_signal_ols",
+        "spread":           "ols_spread",
+        "beta":             "ols_beta",              # synthetic constant column — see _load_kalman_data()
+        "prediction_error": "ols_prediction_error",  # synthetic constant 0.0 — no adaptive-tracking concept for static OLS
+        "beta_uncertainty": "ols_beta_uncertainty",  # synthetic constant 0.0 — no adaptive-uncertainty concept for static OLS
+    },
+}
 
 # Validated research results from our pipeline (do not change without re-running research)
 VALIDATED_IC:        float = 0.5245    # IC confirmed by feature_validator
@@ -866,6 +911,7 @@ class EntryExitEngine:
         validated_half_life:   Optional[float] = None,   # claude code changed: new param
         validated_ic:          Optional[float] = None,   # claude code changed: new param
         validated_win_rate:    Optional[float] = None,   # claude code changed: new param
+        signal_source:         str  = "kalman",   # claude code changed: new param — "kalman" (adaptive, default, kept for backward-compat) or "ols" (static, validated — see SIGNAL_SOURCE_COLUMNS module comment)
     ) -> None:
         """
         Initialise the entry/exit engine with all strategy parameters.
@@ -919,6 +965,14 @@ class EntryExitEngine:
         self.validated_half_life = validated_half_life  # claude code changed: new — set by run_entry_exit_simulation() via load_pair_config()
         self.validated_ic        = validated_ic         # claude code changed: new — left unset unless a caller supplies a pair-specific value
         self.validated_win_rate  = validated_win_rate   # claude code changed: new — left unset unless a caller supplies a pair-specific value
+
+        # claude code changed: new — see SIGNAL_SOURCE_COLUMNS module comment
+        if signal_source not in SIGNAL_SOURCE_COLUMNS:
+            raise ValueError(
+                f"signal_source must be one of {list(SIGNAL_SOURCE_COLUMNS)}, got '{signal_source}'"
+            )
+        self.signal_source = signal_source
+        self.cols           = SIGNAL_SOURCE_COLUMNS[signal_source]
 
         # Initialise position sizer with our validated research parameters
         self.sizer = KalmanPositionSizer(
@@ -1082,6 +1136,31 @@ class EntryExitEngine:
                 f"({warmup_count / 24:.0f} days)"
             )
 
+        # claude code changed: new block — signal_source="ols" needs three
+        # columns the raw Kalman CSV never has, since a static OLS fit has
+        # no per-candle lag/beta/uncertainty concept the way an adaptive
+        # filter does. Derived/injected here, once, so every downstream
+        # step (cleanliness check, column validation, the scan loop) can
+        # treat self.cols[...] uniformly regardless of signal_source.
+        if self.signal_source == "ols":
+            if "ols_zscore" not in df.columns:
+                raise ValueError(
+                    f"signal_source='ols' requires 'ols_zscore' in the Kalman CSV "
+                    f"(produced by kalman_filter_engine.py) — not found in {kalman_csv}."
+                )
+            df["ols_zscore_lag1"] = df["ols_zscore"].shift(1).bfill()
+            # Static hedge ratio — the pair's own validated OLS fit from
+            # cointegration_engine.py, not kalman_beta's mean (which would
+            # just be a derived proxy for the same thing this already is).
+            pair_config = load_pair_config(self.pair_name, require_passes_filters=False)
+            df["ols_beta"] = pair_config["ols_beta"]
+            # No adaptive-tracking-error/uncertainty concept for a static
+            # fit — constant 0.0 gives every trade the full (uncapped)
+            # Kelly position size in size_position(), the correct behavior
+            # for a signal with no per-candle confidence measure to act on.
+            df["ols_prediction_error"] = 0.0
+            df["ols_beta_uncertainty"] = 0.0
+
         # ── Guard against corrupted tail/head rows ────────────────────────────
         # The Kalman engine's rolling/lag computations can leave NaN or inf
         # in the last row(s) of the file (e.g. a rolling window that hasn't
@@ -1092,10 +1171,7 @@ class EntryExitEngine:
         # reaches scipy.stats.spearmanr (its default nan_policy is
         # 'propagate', not 'omit'). Drop them here, at the source, so every
         # later step in the pipeline is working with clean data.
-        required_for_cleanliness = [
-            "kalman_zscore", "kalman_zscore_lag1", "pair_signal_dynamic",
-            "kalman_beta", "kalman_spread", "prediction_error", "beta_uncertainty",
-        ]
+        required_for_cleanliness = list(self.cols.values())   # claude code changed: was a hardcoded kalman-only list
         present = [c for c in required_for_cleanliness if c in df.columns]
         before_rows = len(df)
         df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=present)
@@ -1118,8 +1194,9 @@ class EntryExitEngine:
             before_resample = len(df)
             df = df.resample(f"{self.resample_hours}h").last()
             df = df.dropna(subset=present)
-            if "kalman_zscore" in df.columns:
-                df["kalman_zscore_lag1"] = df["kalman_zscore"].shift(1).bfill()
+            zscore_col, zscore_lag1_col = self.cols["zscore"], self.cols["zscore_lag1"]   # claude code changed: was hardcoded "kalman_zscore"/"kalman_zscore_lag1"
+            if zscore_col in df.columns:
+                df[zscore_lag1_col] = df[zscore_col].shift(1).bfill()
             logger.info(
                 f"  Resampled to {self.resample_hours}h candles: "
                 f"{before_resample:,} -> {len(df):,} candles"
@@ -1145,16 +1222,10 @@ class EntryExitEngine:
         If any are missing, the Kalman engine may be an older version.
         """
 
-        # Columns this engine absolutely requires from the Kalman output
-        required = [
-            "kalman_zscore",         # Primary signal — the z-score of the dynamic spread
-            "kalman_zscore_lag1",    # Confirmation filter — previous candle's z-score
-            "pair_signal_dynamic",   # Composite signal (inverted z-score + momentum)
-            "kalman_beta",           # Dynamic hedge ratio — needed for position sizing
-            "kalman_spread",         # Raw spread value — needed for P&L calculation
-            "prediction_error",      # Kalman health — needed for position sizing
-            "beta_uncertainty",      # Kalman confidence — needed for position sizing
-        ]
+        # claude code changed: was a hardcoded kalman-only list — now driven
+        # by self.cols so signal_source="ols" validates its own (derived)
+        # column set instead of the kalman one it never populates.
+        required = list(self.cols.values())
 
         missing = [c for c in required if c not in df.columns]
 
@@ -1220,14 +1291,17 @@ class EntryExitEngine:
 
         for i, (ts, row) in enumerate(df.iterrows()):
 
-            # ── Extract this candle's Kalman values ───────────────────────────
-            zscore       = float(row["kalman_zscore"])             # Current z-score
-            zscore_lag   = float(row["kalman_zscore_lag1"])        # Previous z-score
-            signal       = float(row["pair_signal_dynamic"])       # Composite signal
-            beta         = float(row["kalman_beta"])               # Dynamic hedge ratio
-            spread       = float(row["kalman_spread"])             # Raw spread value
-            pred_error   = float(row["prediction_error"])          # Filter prediction error
-            beta_uncert  = float(row["beta_uncertainty"])          # Filter uncertainty
+            # ── Extract this candle's signal values ───────────────────────────
+            # claude code changed: was hardcoded "kalman_*" column names —
+            # now driven by self.cols so signal_source="ols" reads its own
+            # (derived) columns instead. See SIGNAL_SOURCE_COLUMNS.
+            zscore       = float(row[self.cols["zscore"]])             # Current z-score
+            zscore_lag   = float(row[self.cols["zscore_lag1"]])        # Previous z-score
+            signal       = float(row[self.cols["signal"]])             # Composite signal
+            beta         = float(row[self.cols["beta"]])               # Hedge ratio (dynamic for kalman, static for ols)
+            spread       = float(row[self.cols["spread"]])             # Raw spread value
+            pred_error   = float(row[self.cols["prediction_error"]])   # Filter prediction error (0.0 for ols)
+            beta_uncert  = float(row[self.cols["beta_uncertainty"]])   # Filter uncertainty (0.0 for ols)
 
             # Record signal and z-score for the signal log
             signal_values[i] = signal
@@ -1386,8 +1460,8 @@ class EntryExitEngine:
         # This prevents open trades from being ignored in the analysis
         if self.current_trade is not None:
             last_ts     = df.index[-1]
-            last_zscore = float(df["kalman_zscore"].iloc[-1])
-            last_spread = float(df["kalman_spread"].iloc[-1])
+            last_zscore = float(df[self.cols["zscore"]].iloc[-1])   # claude code changed: was hardcoded "kalman_zscore"
+            last_spread = float(df[self.cols["spread"]].iloc[-1])   # claude code changed: was hardcoded "kalman_spread"
             self._execute_full_exit(
                 last_ts, last_zscore, last_spread, "DATA_END"
             )

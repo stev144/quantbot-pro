@@ -141,10 +141,11 @@ MIN_BLOCK_SIZE_CANDLES: int = 1               # Floor — as low as a single can
                                                # no longer a boundary-consistency reason to keep this artificially high
 MAX_BLOCK_SIZE_CANDLES: int = 48                # Ceiling — never let a very long average hold time push the
                                                  # block size back up toward the same failure mode this exists to avoid
-REQUIRED_KALMAN_COLUMNS = [                                           # Same seven columns EntryExitEngine requires —
-    "kalman_zscore", "kalman_zscore_lag1", "pair_signal_dynamic",       # shuffled together, in lockstep, so a given
-    "kalman_beta", "kalman_spread", "prediction_error", "beta_uncertainty",  # relocated candle's columns stay internally
-]                                                                          # consistent with each other
+# claude code changed: was a hardcoded module-level REQUIRED_KALMAN_COLUMNS
+# list (kalman-only) — now PermutationTestEngine.__init__ resolves this
+# per-instance as self._shuffle_columns from entry_exit_engine.py's
+# SIGNAL_SOURCE_COLUMNS, keyed by signal_source, so "ols" mode shuffles its
+# own (derived) column set instead of columns it never populates.
 
 # A result is only called "statistically real" if the actual, unshuffled
 # run beats at least this fraction of shuffled replicas. 0.95 is the
@@ -169,6 +170,7 @@ class PermutationTestEngine:
         output_dir:              str   = PERMUTATION_OUTPUT_DIR,
         random_seed:              Optional[int] = None,        # Set for a reproducible shuffle sequence
         resample_hours:            Optional[int] = None,        # claude code changed: new — threaded into the loader so df_real (and therefore every shuffle, which reshuffles df_real) is already at this candle width
+        signal_source:              str  = "kalman",        # claude code changed: new — "kalman" or "ols", see entry_exit_engine.py's SIGNAL_SOURCE_COLUMNS
     ) -> None:
         self.n_permutations     = n_permutations
         self.block_size          = block_size_candles       # May be None here — resolved to a real value in run()
@@ -177,6 +179,9 @@ class PermutationTestEngine:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.rng                        = np.random.default_rng(random_seed)   # Isolated RNG — doesn't disturb global numpy state
         self.resample_hours             = resample_hours       # claude code changed: new
+        self.signal_source               = signal_source       # claude code changed: new
+        from bot.research.entry_exit_engine import SIGNAL_SOURCE_COLUMNS   # claude code changed: new — local import avoids a module-level cycle risk with entry_exit_engine's own kalman_filter_engine import
+        self._shuffle_columns            = SIGNAL_SOURCE_COLUMNS[signal_source]   # claude code changed: new
 
         block_desc = f"{block_size_candles} candles (fixed override)" if block_size_candles is not None else "adaptive - derived from the real run's own avg hold time"
         logger.info("PermutationTestEngine initialised")
@@ -250,6 +255,15 @@ class PermutationTestEngine:
         loader = EntryExitEngine(                                                 # claude code changed: added resample_hours=
             capital_usdt=self.capital_usdt, output_dir=str(pair_dir / "_loader_scratch"),
             resample_hours=self.resample_hours,                                   # claude code changed: new — df_real (and every shuffle derived from it) comes out already at this candle width
+            # claude code changed: new — pair identity + signal_source must be
+            # set BEFORE _load_kalman_data() is called directly below (bypassing
+            # run()'s own Step-0 identity resolution); signal_source="ols"
+            # needs self.pair_name to look up the static hedge ratio via
+            # load_pair_config(), which would otherwise see None here.
+            pair_name=self._pair_identity.get("pair_name"),
+            symbol_a=self._pair_identity.get("symbol_a"),
+            symbol_b=self._pair_identity.get("symbol_b"),
+            signal_source=self.signal_source,
         )
         df_real = loader._load_kalman_data(kalman_csv)                    # Same cleaned loader as everywhere else
         loader._validate_columns(df_real)
@@ -358,9 +372,16 @@ class PermutationTestEngine:
             np.arange(start, end) for start, end in (block_bounds[i] for i in order)
         ])
 
+        # claude code changed: was REQUIRED_KALMAN_COLUMNS (hardcoded kalman-only
+        # list) — now driven by self._shuffle_columns so signal_source="ols"
+        # shuffles its own (derived) column set instead of columns it never
+        # populates. self._shuffle_columns is a dict {role: column_name}.
+        zscore_col      = self._shuffle_columns["zscore"]
+        zscore_lag1_col = self._shuffle_columns["zscore_lag1"]
+
         shuffled = df.copy()                                                      # Keep the original index/timestamps intact
-        for col in REQUIRED_KALMAN_COLUMNS:                                        # Shuffle every required column, in lockstep,
-            if col == "kalman_zscore_lag1":                                          # so a relocated candle's columns stay consistent —
+        for col in self._shuffle_columns.values():                                 # Shuffle every required column, in lockstep,
+            if col == zscore_lag1_col:                                               # so a relocated candle's columns stay consistent —
                 continue                                                              # EXCEPT lag1, which is derived below instead
             shuffled[col] = df[col].to_numpy()[shuffled_positions]
 
@@ -368,7 +389,7 @@ class PermutationTestEngine:
         # equals shuffled zscore[i-1] exactly — no boundary mismatch is
         # possible, at any block size. bfill() only ever touches the single
         # leading row, which has no real predecessor either way.
-        shuffled["kalman_zscore_lag1"] = shuffled["kalman_zscore"].shift(1).bfill()
+        shuffled[zscore_lag1_col] = shuffled[zscore_col].shift(1).bfill()
 
         return shuffled                                                             # Same shape, same timestamps, scrambled content
 
@@ -407,6 +428,7 @@ class PermutationTestEngine:
             "symbol_a":     identity.get("symbol_a"),
             "symbol_b":     identity.get("symbol_b"),
             "validated_half_life": identity.get("validated_half_life"),
+            "signal_source": self.signal_source,   # claude code changed: new
         }
         if identity.get("exit_time_stop_hours") is not None:
             engine_kwargs["exit_time_stop_hours"] = identity["exit_time_stop_hours"]
