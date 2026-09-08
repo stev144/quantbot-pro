@@ -30,6 +30,7 @@ AUTHENTICATION_REQUIRED = "AUTHENTICATION_REQUIRED"
 ENGINE_NOT_READY = "ENGINE_NOT_READY"
 SUBSCRIPTION_REQUIRED = "SUBSCRIPTION_REQUIRED"
 SUBSCRIPTION_EXPIRED = "SUBSCRIPTION_EXPIRED"
+ASSET_CLASS_NOT_SUPPORTED = "ASSET_CLASS_NOT_SUPPORTED"   # claude code changed: new — Forex Multi-Asset Integration
 OK = "OK"
 
 
@@ -74,7 +75,7 @@ class ResearchEntitlementService:
         return subscription.tier
 
     @staticmethod
-    def can_access(user, capability_id: str) -> EntitlementResult:
+    def can_access(user, capability_id: str, asset_class: Optional[str] = None) -> EntitlementResult:
         """
         claude code changed: new. The single hard backend gate (section 12
         — "the backend must reject unauthorized capability requests").
@@ -89,8 +90,18 @@ class ResearchEntitlementService:
              gates" (section 6) — an unready engine is denied to a PRO
              subscriber exactly as it is to a CORE user, never treated as
              "paid for, therefore approved"
-          4. the user's subscription tier must cover the capability's
+          4. (Forex Multi-Asset Integration) if the caller names a specific
+             `asset_class`, it must be in the capability's own
+             supported_asset_classes — same "structural gate before
+             paywall gate" placement as step 3, for the same reason: which
+             asset classes a capability actually supports is an
+             engineering fact, not something a subscription should bypass
+          5. the user's subscription tier must cover the capability's
              required_tier
+
+        `asset_class` defaults to None (skips step 4 entirely) — every
+        existing caller that doesn't pass it keeps its exact prior
+        behavior.
 
         Returns a single verdict for backend enforcement. See
         capability_ui_state() below for the richer, always-informative
@@ -107,6 +118,9 @@ class ResearchEntitlementService:
         if not capability.operationally_ready:
             note = capability.status_note or "This capability is not yet operational."
             return EntitlementResult(False, ENGINE_NOT_READY, note)
+
+        if asset_class is not None and asset_class not in capability.supported_asset_classes:
+            return EntitlementResult(False, ASSET_CLASS_NOT_SUPPORTED, f"{capability.name} does not yet support {asset_class}.")
 
         if capability.required_tier == "CORE":
             return EntitlementResult(True, OK, "Available.")
@@ -125,11 +139,11 @@ class ResearchEntitlementService:
         return EntitlementResult(False, SUBSCRIPTION_REQUIRED, f"{capability.name} is included in Pro Research. Upgrade to unlock it.")
 
     @staticmethod
-    def capability_ui_state(user, capability_id: str) -> dict:
+    def capability_ui_state(user, capability_id: str, asset_class: Optional[str] = None) -> dict:
         """
-        claude code changed: new — section 10/11's four-state catalog
-        badge, computed independently along BOTH axes (unlike can_access(),
-        which only needs one final verdict). Returns:
+        claude code changed: section 10/11's four-state catalog badge,
+        computed independently along BOTH axes (unlike can_access(), which
+        only needs one final verdict). Returns:
 
             {"badge": "AVAILABLE" | "LOCKED" | "COMING_SOON" | "UNAVAILABLE",
              "message": str}
@@ -137,7 +151,11 @@ class ResearchEntitlementService:
         AVAILABLE   — engine ready AND user entitled
         LOCKED      — engine ready, but user's subscription doesn't cover it (🔒)
         COMING_SOON — engine not implemented at all yet (🧪), regardless of subscription
-        UNAVAILABLE — engine implemented but not yet approved for use (⚠️), regardless of subscription — this is the exact "Pro subscription + untested engine" case section 10's own example describes
+        UNAVAILABLE — engine implemented but not yet approved for use (⚠️), regardless of subscription — this is the exact "Pro subscription + untested engine" case section 10's own example describes; ALSO now the badge for "implemented, but not for this asset_class" (Forex Multi-Asset Integration) — reported the same way, since both are "not offered here," not a subscription problem.
+
+        `asset_class` defaults to None (skips the asset-class check
+        entirely) — every existing caller that doesn't pass it keeps its
+        exact prior behavior.
         """
         capability = RESEARCH_CAPABILITIES.get(capability_id)
         if capability is None:
@@ -147,6 +165,9 @@ class ResearchEntitlementService:
             if capability.engine_status == "NOT_IMPLEMENTED":
                 return {"badge": "COMING_SOON", "message": capability.status_note or "Coming soon."}
             return {"badge": "UNAVAILABLE", "message": capability.status_note or "Temporarily unavailable."}
+
+        if asset_class is not None and asset_class not in capability.supported_asset_classes:
+            return {"badge": "UNAVAILABLE", "message": f"{capability.name} does not yet support {asset_class}."}
 
         if capability.required_tier == "CORE":
             return {"badge": "AVAILABLE", "message": "Available."}

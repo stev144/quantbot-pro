@@ -26,7 +26,7 @@
         <div class="term-section-body">
             {% if conclusions.available %}
             {% if conclusions.entries %}
-            <div class="chart-caption" style="margin-bottom:10px">{{ conclusions.n_entries }} line(s) of research killed after failing a significance test or filter — see Research Archive for the full history including what passed.</div>
+            <div class="chart-caption" style="margin-bottom:10px"><span class="stat-number" data-target="{{ conclusions.n_entries }}" data-decimals="0">0</span> line(s) of research killed after failing a significance test or filter — see Research Archive for the full history including what passed.</div>
             {% for e in conclusions.entries %}
             <div class="term-panel" style="margin-bottom:10px">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
@@ -50,4 +50,8 @@
 
 {% include "partials/_footer.html" with label="Rejected Research" note="what we tried and killed, and why" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

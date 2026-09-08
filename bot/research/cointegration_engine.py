@@ -291,6 +291,7 @@ class PairResult:
         oos_adf_pvalue:      Optional[float] = None,   # claude code changed: new — out-of-sample persistence check, see module docstring update
         oos_adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: new — same "provisional then corrected" pattern as adf_pvalue_fdr
         passes_oos_persistence: Optional[bool] = None,   # claude code changed: new — None until _apply_oos_persistence_filter() assigns it
+        training_window_candles: Optional[int] = None,   # claude code changed: new — real look-ahead-bias fix. The exact number of leading candles (train_end in _test_pair()) whose hedge_ratio/intercept were FIT on this data — downstream consumers (kalman_filter_engine.py) need this to exclude that same span from backtesting instead of only excluding their own short Kalman-convergence warmup. None only for the pre-train_end early-exit (insufficient aligned data), where no training window was ever established.
     ) -> None:
 
         self.symbol_a        = symbol_a         # First asset in pair
@@ -337,6 +338,7 @@ class PairResult:
         self.oos_adf_pvalue         = oos_adf_pvalue
         self.oos_adf_pvalue_fdr     = oos_adf_pvalue_fdr
         self.passes_oos_persistence = passes_oos_persistence
+        self.training_window_candles = training_window_candles   # claude code changed: new — see __init__'s param comment
         # claude code changed: new — the actual physical-time conversion,
         # derived from the instrument/timeframe abstraction (bot/
         # instruments.py), never a hardcoded "×1 for hours" assumption.
@@ -378,6 +380,12 @@ class PairResult:
             "oos_adf_pvalue":     round(self.oos_adf_pvalue, 6) if self.oos_adf_pvalue is not None else None,
             "oos_adf_pvalue_fdr": round(self.oos_adf_pvalue_fdr, 6) if self.oos_adf_pvalue_fdr is not None else None,
             "passes_oos_persistence": self.passes_oos_persistence,
+            # claude code changed: new — look-ahead-bias fix. Persists the
+            # exact candle count hedge_ratio/intercept were fit on, so any
+            # downstream consumer (kalman_filter_engine.py) can exclude
+            # this same span instead of independently guessing/hardcoding
+            # a warmup length that has nothing to do with the OLS fit.
+            "training_window_candles": self.training_window_candles,
         }
 
 
@@ -944,6 +952,7 @@ class CointegrationEngine:
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"OLS failed: {e}",
                 timeframe=self.timeframe,
+                training_window_candles=train_end,
             )
 
         # ── Calculate residuals (the spread) on training data ─────────────────
@@ -976,6 +985,7 @@ class CointegrationEngine:
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"ADF test failed: {e}",
                 timeframe=self.timeframe,
+                training_window_candles=train_end,
             )
 
         # ── Engle-Granger cointegration test (confirmation) ───────────────────
@@ -1003,6 +1013,7 @@ class CointegrationEngine:
                 is_cointegrated=False, passes_filters=False,
                 reject_reason=f"ADF p={adf_pvalue:.4f} > {self.coint_threshold}",
                 timeframe=self.timeframe,
+                training_window_candles=train_end,
             )
 
         # ── Half-life estimation (Ornstein-Uhlenbeck) ─────────────────────────
@@ -1080,6 +1091,7 @@ class CointegrationEngine:
             reject_reason=reject_reason,
             timeframe=self.timeframe,
             oos_adf_pvalue=oos_adf_pvalue,
+            training_window_candles=train_end,
         )
 
 

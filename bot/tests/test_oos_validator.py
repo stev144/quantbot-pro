@@ -10,6 +10,8 @@
 # ============================================================
 
 import os
+import shutil
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -18,6 +20,10 @@ from django.test import TestCase
 from bot.research.oos_validator import (
     WalkForwardConfig, FoldSpec, OOSResult,
     build_folds, assert_temporal_disjoint, evaluate_feature_oos,
+    evaluate_cross_sectional_oos, _compute_turnover, _hold_and_realize_portfolio,
+)
+from bot.research.cross_sectional_permutation_test import (
+    run_cross_sectional_permutation_test, run_topk_sweep,
 )
 from bot.research_lab.data_fingerprint import DatasetIdentity
 from bot.research_lab.trial_service import freeze_family_before_testing, record_oos_trial
@@ -474,3 +480,477 @@ class RealDatasetComparisonTest(TestCase):
         # to 0, p-value not significant) — this generic engine's fold-mean
         # IC should likewise stay small, which the assertion below checks.
         self.assertLess(abs(agg["mean_ic"]), 0.25, f"generic OOS mean IC ({agg['mean_ic']}) unexpectedly far from Phase 2E's own near-zero finding for rsi/forward_return_1h — investigate before trusting either result")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TYPE C — CROSS-SECTIONAL RANKING SYNTHETIC PROOF CASES
+#
+# claude code changed: new — statistics-infrastructure mission, Milestone
+# B3. evaluate_cross_sectional_oos() (Section 10's Type C evaluator) had
+# ZERO tests exercising it directly before this: the pre-existing
+# "CrossSectionalShapeTest" above tests evaluate_feature_oos()'s
+# multi-asset asset_col support, a different code path. Mirrors the
+# SyntheticProofCasesTest pattern above (A-E), adapted to the
+# cross-sectional-ranking question, plus shape/plumbing coverage.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _cross_sectional_panel(n_timestamps, n_assets, feature_fn, return_fn, seed=42, freq="h"):
+    """
+    Build a long-format (timestamp, asset, feature, fwd_return) panel.
+    feature_fn(rng, n_assets) -> array of this timestamp's feature values.
+    return_fn(feature_values, rng, n_assets) -> array of forward returns
+    for that SAME timestamp, as a function of its own feature values (so
+    callers can encode a real, known relationship — or none at all).
+    """
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2025-01-01", periods=n_timestamps, freq=freq)
+    assets = [f"ASSET_{i}" for i in range(n_assets)]
+    rows = []
+    for ts in idx:
+        feat = feature_fn(rng, n_assets)
+        ret = return_fn(feat, rng, n_assets)
+        for a, f, r in zip(assets, feat, ret):
+            rows.append({"ts": ts, "asset": a, "feature": f, "fwd_return": r})
+    return pd.DataFrame(rows)
+
+
+_CS_KNOWN_EDGE_RETURN_FN = lambda feat, rng, n: feat * 0.02 + rng.normal(scale=0.003, size=n)   # noqa: E731 — real, strong, monotonic feature->return relationship
+_CS_NO_EDGE_RETURN_FN = lambda feat, rng, n: rng.normal(scale=0.01, size=n)                       # noqa: E731 — return independent of feature
+
+
+class CrossSectionalOOSSyntheticProofTest(TestCase):
+
+    def test_case_a_known_cross_sectional_edge_is_recovered(self):
+        df = _cross_sectional_panel(200, 10, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=700)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=700)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, long_short=True)
+        agg = result.aggregate
+        self.assertIsNotNone(agg["sharpe_ratio"])
+        self.assertGreater(agg["sharpe_ratio"], 1.0, f"expected a clearly positive recovered Sharpe, got {agg['sharpe_ratio']}")
+        self.assertGreater(agg["hit_rate_pct"], 60.0)
+
+    def test_case_c_leakage_trap_fit_fn_never_sees_test_period_rows(self):
+        """fit_fn is called once per evaluated fold with ONLY that fold's
+        purged train slice — proven here by an independent, external check
+        (comparing recorded max train timestamp vs. min test timestamp per
+        fold), not by trusting assert_temporal_disjoint() not to have
+        raised (that's Section 5's own guarantee; this proves the DATA
+        fit_fn actually received honors it)."""
+        df = _cross_sectional_panel(150, 8, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=702)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=2, embargo_periods=1, min_test_periods=10, seed=702)
+
+        seen_train_max_ts = []
+
+        def _spy_fit_fn(train_slice):
+            seen_train_max_ts.append(train_slice["ts"].max())
+            return {"mean": float(train_slice["feature"].mean()), "std": float(train_slice["feature"].std()) or 1.0}
+
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, fit_fn=_spy_fit_fn)
+
+        evaluated = [f for f in result.folds if not f.skipped and f.trades]
+        self.assertGreaterEqual(len(evaluated), 2, "need multiple evaluated folds to prove the point")
+        self.assertEqual(len(seen_train_max_ts), len(evaluated), "fit_fn must be called exactly once per evaluated fold")
+        for fold_result, train_max in zip(evaluated, seen_train_max_ts):
+            test_min_ts = min(r["timestamp"] for r in fold_result.trades)
+            self.assertLess(train_max, test_min_ts, "fit_fn's train slice leaked a timestamp at or after this fold's own test window start")
+
+    def test_case_d_regime_reversal_visible_at_fold_level(self):
+        n_timestamps, n_assets = 200, 8
+        rng = np.random.default_rng(703)
+        idx = pd.date_range("2025-01-01", periods=n_timestamps, freq="h")
+        assets = [f"ASSET_{i}" for i in range(n_assets)]
+        midpoint = n_timestamps // 2
+        rows = []
+        for i, ts in enumerate(idx):
+            feat = rng.normal(size=n_assets)
+            sign = 1.0 if i < midpoint else -1.0
+            ret = sign * feat * 0.02 + rng.normal(scale=0.003, size=n_assets)
+            for a, f, r in zip(assets, feat, ret):
+                rows.append({"ts": ts, "asset": a, "feature": f, "fwd_return": r})
+        df = pd.DataFrame(rows)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=703)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2)
+        evaluated = [f for f in result.folds if not f.skipped]
+        self.assertGreaterEqual(len(evaluated), 4, "need multiple folds spanning the regime change to prove the point")
+        early_return = evaluated[0].metrics.get("mean_net_return")
+        late_return = evaluated[-1].metrics.get("mean_net_return")
+        self.assertIsNotNone(early_return)
+        self.assertIsNotNone(late_return)
+        self.assertGreater(early_return, 0, f"expected a clearly positive early-fold return, got {early_return}")
+        self.assertLess(late_return, 0, f"expected a clearly negative late-fold return (sign-reversed regime), got {late_return}")
+
+    def test_case_e_transaction_costs_reduce_net_return_by_expected_amount(self):
+        df = _cross_sectional_panel(150, 10, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=704)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=704)
+        cost_rate = 0.001
+        result_no_cost = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, cost_rate=0.0)
+        result_with_cost = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, cost_rate=cost_rate)
+        # _compute_cross_sectional_fold_metrics applies a flat `cost_rate * 2`
+        # (full round-trip) subtraction to every period's return — with
+        # identical fold structure (cost_rate doesn't affect which folds/
+        # periods exist), the pooled mean must shift by EXACTLY that amount.
+        diff = result_no_cost.aggregate["mean_net_return"] - result_with_cost.aggregate["mean_net_return"]
+        self.assertAlmostEqual(diff, cost_rate * 2, places=6)
+
+    def test_top_k_controls_leg_size_without_changing_core_evaluator(self):
+        df = _cross_sectional_panel(150, 12, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=705)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=705)
+        for k in (1, 3, 5):
+            result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=k)
+            evaluated = [f for f in result.folds if not f.skipped]
+            self.assertGreater(len(evaluated), 0)
+            for f in evaluated:
+                for r in f.trades:
+                    self.assertEqual(r["n_long"], k)
+                    self.assertEqual(r["n_short"], k)
+
+    def test_long_only_never_shorts(self):
+        df = _cross_sectional_panel(150, 10, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=706)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=706)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, long_short=False)
+        evaluated = [f for f in result.folds if not f.skipped]
+        self.assertGreater(len(evaluated), 0)
+        for f in evaluated:
+            for r in f.trades:
+                self.assertEqual(r["n_short"], 0)
+                self.assertEqual(r["short_return"], 0.0)
+
+    def test_point_in_time_missing_asset_data_excluded_not_crashed(self):
+        """A NaN feature at some (timestamp, asset) rows — simulating an
+        asset not yet listed / temporarily missing data — must be dropped
+        from THAT timestamp's ranking, never crash the evaluator or leak
+        a fabricated value."""
+        df = _cross_sectional_panel(150, 8, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=707)
+        rng = np.random.default_rng(999)
+        mask = rng.random(len(df)) < 0.1
+        df.loc[mask, "feature"] = np.nan
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=707)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2)   # must not raise
+        self.assertGreater(result.n_folds_evaluated, 0)
+
+
+class CrossSectionalPermutationSyntheticProofTest(TestCase):
+    """Proof cases for cross_sectional_permutation_test.py — the piece
+    Phase 1's audit found genuinely missing (no permutation testing
+    existed anywhere for the cross-sectional evaluator)."""
+
+    def test_known_edge_is_significant(self):
+        df = _cross_sectional_panel(150, 10, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=800)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=800)
+        result = run_cross_sectional_permutation_test(
+            df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, n_permutations=30, random_seed=800,
+        )
+        self.assertTrue(result["verdict"]["edge_appears_real"], result["verdict"])
+
+    def test_no_edge_is_not_significant(self):
+        df = _cross_sectional_panel(150, 10, lambda rng, n: rng.normal(size=n), _CS_NO_EDGE_RETURN_FN, seed=801)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=801)
+        result = run_cross_sectional_permutation_test(
+            df, "ts", "asset", "feature", "fwd_return", cfg, top_k=2, n_permutations=30, random_seed=801,
+        )
+        self.assertFalse(result["verdict"]["edge_appears_real"], result["verdict"])
+
+    def test_topk_sweep_known_edge_survives_fdr(self):
+        df = _cross_sectional_panel(150, 12, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=802)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=802)
+        sweep = run_topk_sweep(
+            df, "ts", "asset", "feature", "fwd_return", cfg,
+            top_k_values=(1, 3, 5), n_permutations=30, random_seed=802,
+        )
+        self.assertTrue(sweep["any_survivor"], sweep)
+        for k in sweep["top_k_values"]:
+            self.assertIn("sharpe_ratio_passes_fdr", sweep["per_config"][k]["verdict"])
+
+    def test_topk_sweep_no_edge_finds_no_survivor(self):
+        df = _cross_sectional_panel(150, 12, lambda rng, n: rng.normal(size=n), _CS_NO_EDGE_RETURN_FN, seed=803)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=803)
+        sweep = run_topk_sweep(
+            df, "ts", "asset", "feature", "fwd_return", cfg,
+            top_k_values=(1, 3, 5), n_permutations=30, random_seed=803,
+        )
+        self.assertFalse(sweep["any_survivor"], sweep)
+
+
+class TopkSweepCheckpointResumeTest(TestCase):
+    """claude code changed: new — real bug this directly guards against:
+    an overnight run_topk_sweep() call (4 top-K configs, ~100 permutations
+    each against the real 100-asset universe) was silently killed by a
+    machine sleep/reboot after 2 of 4 configs had already finished HOURS
+    of real compute, with nothing on disk to show for it — a full restart
+    from config 1 was the only option. checkpoint_dir exists specifically
+    so that never happens again; these tests prove it actually works, not
+    just that the parameter exists."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_completed_configs_are_not_recomputed_on_resume(self):
+        df = _cross_sectional_panel(150, 12, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=804)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=804)
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoints")
+
+        call_count = {"n": 0}
+        real_run_fn = run_cross_sectional_permutation_test
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count["n"] += 1
+            return real_run_fn(*args, **kwargs)
+
+        import bot.research.cross_sectional_permutation_test as cspt
+        original = cspt.run_cross_sectional_permutation_test
+        cspt.run_cross_sectional_permutation_test = _counting_wrapper
+        try:
+            # First "run" — simulates the process being killed after only
+            # the first 2 of 3 configs finished (never even attempts k=5).
+            for k in (1, 3):
+                result = _counting_wrapper(df, "ts", "asset", "feature", "fwd_return", cfg, top_k=k, n_permutations=20, random_seed=804)
+                cspt._save_checkpoint(checkpoint_dir, k, result)
+            self.assertEqual(call_count["n"], 2)
+
+            # "Resume" — a fresh run_topk_sweep() call, same checkpoint_dir,
+            # asking for all 3 configs again (exactly what a restarted
+            # standalone script does — it has no memory of how far the
+            # killed process got, only the checkpoint directory tells it).
+            sweep = run_topk_sweep(
+                df, "ts", "asset", "feature", "fwd_return", cfg,
+                top_k_values=(1, 3, 5), n_permutations=20, random_seed=804,
+                checkpoint_dir=checkpoint_dir,
+            )
+        finally:
+            cspt.run_cross_sectional_permutation_test = original
+
+        # Only k=5 should have triggered a real computation on resume —
+        # k=1 and k=3 must come from the checkpoint written above.
+        self.assertEqual(call_count["n"], 3, "expected exactly one NEW computation (k=5) on top of the 2 pre-seeded checkpoints")
+        for k in (1, 3, 5):
+            self.assertIn(k, sweep["per_config"])
+            self.assertIn("sharpe_ratio_passes_fdr", sweep["per_config"][k]["verdict"], f"FDR must still be computed fresh across ALL configs (including checkpoint-restored ones) on resume, k={k}")
+
+    def test_resumed_sweep_produces_the_same_final_verdict_as_an_uninterrupted_one(self):
+        df = _cross_sectional_panel(150, 12, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=805)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=805)
+
+        uninterrupted = run_topk_sweep(
+            df, "ts", "asset", "feature", "fwd_return", cfg,
+            top_k_values=(1, 3), n_permutations=20, random_seed=805,
+        )
+
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoints_b")
+        resumed_part1 = run_topk_sweep(
+            df, "ts", "asset", "feature", "fwd_return", cfg,
+            top_k_values=(1,), n_permutations=20, random_seed=805, checkpoint_dir=checkpoint_dir,
+        )
+        resumed_full = run_topk_sweep(
+            df, "ts", "asset", "feature", "fwd_return", cfg,
+            top_k_values=(1, 3), n_permutations=20, random_seed=805, checkpoint_dir=checkpoint_dir,
+        )
+
+        self.assertEqual(uninterrupted["any_survivor"], resumed_full["any_survivor"])
+        for k in (1, 3):
+            self.assertEqual(
+                uninterrupted["per_config"][k]["verdict"]["sharpe_ratio_p_value"],
+                resumed_full["per_config"][k]["verdict"]["sharpe_ratio_p_value"],
+                f"k={k}: resumed sweep's verdict must exactly match an uninterrupted run with the same seed",
+            )
+
+    def test_force_recompute_ignores_existing_checkpoint(self):
+        df = _cross_sectional_panel(150, 12, lambda rng, n: rng.normal(size=n), _CS_KNOWN_EDGE_RETURN_FN, seed=806)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=40, test_periods=20, purge_periods=0, embargo_periods=0, min_test_periods=10, seed=806)
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoints_c")
+
+        run_topk_sweep(df, "ts", "asset", "feature", "fwd_return", cfg, top_k_values=(1,), n_permutations=20, random_seed=806, checkpoint_dir=checkpoint_dir)
+
+        import bot.research.cross_sectional_permutation_test as cspt
+        call_count = {"n": 0}
+        original = cspt.run_cross_sectional_permutation_test
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count["n"] += 1
+            return original(*args, **kwargs)
+
+        cspt.run_cross_sectional_permutation_test = _counting_wrapper
+        try:
+            run_topk_sweep(df, "ts", "asset", "feature", "fwd_return", cfg, top_k_values=(1,), n_permutations=20, random_seed=806, checkpoint_dir=checkpoint_dir, force_recompute=True)
+        finally:
+            cspt.run_cross_sectional_permutation_test = original
+        self.assertEqual(call_count["n"], 1, "force_recompute=True must bypass the existing checkpoint and recompute")
+
+
+class ComputeTurnoverTest(TestCase):
+    """claude code changed: new — direct unit tests for _compute_turnover(),
+    the real bug fix (see oos_validator.py's evaluate_cross_sectional_oos
+    docstring: the old flat-cost-every-period assumption produced a
+    >10,000% cumulative cost and Sharpe ratios in the -20 to -70 range on
+    a real 100-asset run — this function is what replaces "assume 100%
+    turnover always" with an actually-measured fraction)."""
+
+    def test_first_rebalance_from_empty_book_is_full_turnover(self):
+        self.assertEqual(_compute_turnover([], [], ["A"], ["D"], top_k=1, long_short=True), 1.0)
+
+    def test_identical_book_is_zero_turnover(self):
+        self.assertEqual(_compute_turnover(["B"], ["C"], ["B"], ["C"], top_k=1, long_short=True), 0.0)
+
+    def test_completely_disjoint_book_is_full_turnover(self):
+        self.assertEqual(_compute_turnover(["A"], ["D"], ["B"], ["C"], top_k=1, long_short=True), 1.0)
+
+    def test_partial_overlap_is_a_fractional_value(self):
+        # book_size = 2*top_k = 4; old={A,B,C,D}, new={A,B,X,Y} -> symmetric diff = {C,D,X,Y} = 4 -> 4/4=1.0...
+        # use a case with real partial overlap: old long/short = {A},{B} (top_k=1, long_short=False semantics not used here)
+        # top_k=2: old_long={A,B}, old_short={C,D}; new_long={A,X}, new_short={C,Y}
+        # old_book={A,B,C,D}, new_book={A,X,C,Y}; symmetric_diff={B,D,X,Y} size=4; book_size=2*2=4 -> turnover=1.0 still full since B,D leaving and X,Y entering are 4 distinct changes
+        # for a genuinely partial case: old_long={A,B}, new_long={A,X} (only B->X changes, A stays); old_short=new_short={C,D} (unchanged)
+        turnover = _compute_turnover(["A", "B"], ["C", "D"], ["A", "X"], ["C", "D"], top_k=2, long_short=True)
+        # symmetric_diff({A,B,C,D}, {A,X,C,D}) = {B,X} size=2; book_size=2*2=4 -> 2/4=0.5
+        self.assertAlmostEqual(turnover, 0.5)
+
+    def test_long_only_uses_top_k_not_2x_as_book_size(self):
+        # long_short=False: book_size = top_k (not 2*top_k) — full disjoint long-only leg must still cap at 1.0, not exceed it
+        self.assertEqual(_compute_turnover(["A"], [], ["B"], [], top_k=1, long_short=False), 1.0)
+
+    def test_turnover_never_exceeds_one(self):
+        # defensive: even a pathological input can't produce turnover > 1.0 (min() cap)
+        turnover = _compute_turnover(["A"], ["B"], ["C", "D", "E"], ["F", "G", "H"], top_k=1, long_short=True)
+        self.assertLessEqual(turnover, 1.0)
+
+
+class HoldAndRealizePortfolioTest(TestCase):
+    """claude code changed: new — direct unit tests for
+    _hold_and_realize_portfolio(), the "no trade this period" path used
+    between rebalances when rebalance_frequency > 1."""
+
+    def test_normal_case_realizes_held_names_returns(self):
+        period_df = pd.DataFrame({"asset": ["A", "B", "C"], "fwd": [0.05, 0.02, -0.01]})
+        record = _hold_and_realize_portfolio(period_df, "asset", "fwd", ["A"], ["C"], long_short=True)
+        self.assertIsNotNone(record)
+        self.assertAlmostEqual(record["long_return"], 0.05)
+        self.assertAlmostEqual(record["short_return"], -0.01)
+        self.assertAlmostEqual(record["gross_return"], 0.06)
+        self.assertEqual(record["long_names"], ["A"])
+        self.assertEqual(record["short_names"], ["C"])
+
+    def test_one_missing_held_name_dropped_for_this_period_only(self):
+        # "A" is held but absent from this period's data (e.g. a real gap) — B is present in the long leg conceptually but here we test a 2-name long leg with one missing
+        period_df = pd.DataFrame({"asset": ["B", "C"], "fwd": [0.03, -0.02]})
+        record = _hold_and_realize_portfolio(period_df, "asset", "fwd", ["A", "B"], ["C"], long_short=True)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["n_long"], 1)   # only B contributed — A silently dropped for this period, not an error
+        self.assertAlmostEqual(record["long_return"], 0.03)
+
+    def test_all_held_names_missing_returns_none(self):
+        period_df = pd.DataFrame({"asset": ["X", "Y"], "fwd": [0.01, 0.02]})
+        record = _hold_and_realize_portfolio(period_df, "asset", "fwd", ["A"], ["C"], long_short=True)
+        self.assertIsNone(record)
+
+    def test_long_only_ignores_short_leg(self):
+        period_df = pd.DataFrame({"asset": ["A"], "fwd": [0.04]})
+        record = _hold_and_realize_portfolio(period_df, "asset", "fwd", ["A"], [], long_short=False)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["n_short"], 0)
+        self.assertAlmostEqual(record["gross_return"], 0.04)
+
+
+class RebalanceFrequencyIntegrationTest(TestCase):
+    """claude code changed: new — the end-to-end proof that
+    rebalance_frequency actually fixes the real bug: a fully
+    deterministic, hand-verified 6-period panel (2 rebalance cycles of 3
+    periods each, rebalance_frequency=2) where every turnover_fraction,
+    cost, and net_return is computed by hand ahead of time and checked
+    exactly, not just "runs without crashing"."""
+
+    def _deterministic_panel(self):
+        assets = ["A", "B", "C", "D"]
+        train_ts = pd.date_range("2025-01-01", periods=3, freq="h")
+        test_ts = pd.date_range("2025-01-01", periods=9, freq="h")[3:]   # 6 test timestamps, contiguous with train
+
+        rows = []
+        for ts in train_ts:
+            for i, a in enumerate(assets):
+                rows.append({"ts": ts, "asset": a, "feature": float(i), "fwd": 0.0})
+
+        # Period 0 (idx 0, REBALANCE): A highest (long), D lowest (short)
+        feats = {"A": 10, "B": 5, "C": 4, "D": 1}
+        fwds = {"A": 0.05, "B": 0.02, "C": 0.03, "D": 0.01}
+        for a in assets:
+            rows.append({"ts": test_ts[0], "asset": a, "feature": feats[a], "fwd": fwds[a]})
+
+        # Period 1 (idx 1, HOLD — still A long / D short): feature values
+        # DELIBERATELY REVERSED (D highest, A lowest) to prove a hold
+        # period does NOT re-rank — if it did, this would flip long/short.
+        feats = {"A": 1, "B": 5, "C": 4, "D": 10}
+        fwds = {"A": 0.02, "B": 0.10, "C": 0.10, "D": 0.005}
+        for a in assets:
+            rows.append({"ts": test_ts[1], "asset": a, "feature": feats[a], "fwd": fwds[a]})
+
+        # Period 2 (idx 2, REBALANCE): B highest (long), C lowest (short) — completely disjoint from {A,D}
+        feats = {"A": 5, "B": 10, "C": 1, "D": 4}
+        fwds = {"A": 0.10, "B": 0.03, "C": 0.01, "D": 0.10}
+        for a in assets:
+            rows.append({"ts": test_ts[2], "asset": a, "feature": feats[a], "fwd": fwds[a]})
+
+        # Period 3 (idx 3, HOLD — still B long / C short)
+        feats = {"A": 10, "B": 1, "C": 4, "D": 5}   # reversed again, proving no re-rank
+        fwds = {"A": 0.10, "B": 0.04, "C": 0.02, "D": 0.10}
+        for a in assets:
+            rows.append({"ts": test_ts[3], "asset": a, "feature": feats[a], "fwd": fwds[a]})
+
+        # Period 4 (idx 4, REBALANCE): SAME book as before — B highest, C lowest again -> zero turnover
+        feats = {"A": 4, "B": 10, "C": 1, "D": 5}
+        fwds = {"A": 0.10, "B": 0.05, "C": 0.01, "D": 0.10}
+        for a in assets:
+            rows.append({"ts": test_ts[4], "asset": a, "feature": feats[a], "fwd": fwds[a]})
+
+        # Period 5 (idx 5, HOLD — still B long / C short)
+        feats = {"A": 5, "B": 1, "C": 4, "D": 10}
+        fwds = {"A": 0.10, "B": 0.02, "C": 0.01, "D": 0.10}
+        for a in assets:
+            rows.append({"ts": test_ts[5], "asset": a, "feature": feats[a], "fwd": fwds[a]})
+
+        return pd.DataFrame(rows)
+
+    def test_turnover_cost_and_holding_are_computed_exactly_as_hand_derived(self):
+        df = self._deterministic_panel()
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=3, test_periods=6, purge_periods=0, embargo_periods=0, min_test_periods=6, seed=1)
+        cost_rate = 0.01   # round-trip = 0.02 at full turnover
+
+        result = evaluate_cross_sectional_oos(
+            df, "ts", "asset", "feature", "fwd", cfg, top_k=1, long_short=True,
+            cost_rate=cost_rate, rebalance_frequency=2,
+        )
+
+        evaluated = [f for f in result.folds if not f.skipped]
+        self.assertEqual(len(evaluated), 1, "expected exactly one fold covering all 6 test periods")
+        trades = evaluated[0].trades
+        self.assertEqual(len(trades), 6)
+
+        expected_turnover = [1.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        expected_long = [["A"], ["A"], ["B"], ["B"], ["B"], ["B"]]
+        expected_short = [["D"], ["D"], ["C"], ["C"], ["C"], ["C"]]
+        expected_cost = [0.02, 0.0, 0.02, 0.0, 0.0, 0.0]
+        expected_gross = [0.04, 0.015, 0.02, 0.02, 0.04, 0.01]
+
+        for i, r in enumerate(trades):
+            self.assertAlmostEqual(r["turnover_fraction"], expected_turnover[i], msg=f"period {i}")
+            self.assertEqual(r["long_names"], expected_long[i], msg=f"period {i} long leg")
+            self.assertEqual(r["short_names"], expected_short[i], msg=f"period {i} short leg")
+            self.assertAlmostEqual(r["cost"], expected_cost[i], places=6, msg=f"period {i} cost")
+            self.assertAlmostEqual(r["gross_return"], expected_gross[i], places=6, msg=f"period {i} gross_return")
+            self.assertAlmostEqual(r["net_return"], expected_gross[i] - expected_cost[i], places=6, msg=f"period {i} net_return")
+
+        # mean_turnover_pct: 2 of 6 periods at 100%, rest at 0% -> 33.3333%
+        self.assertAlmostEqual(evaluated[0].metrics["mean_turnover_pct"], 100 * 2 / 6, places=2)
+
+    def test_rebalance_frequency_1_pins_turnover_to_full_every_period(self):
+        """The default/backward-compatible path: even where periods 4
+        and 5 in the panel above have an IDENTICAL ranking to periods 2
+        and 3 (zero real turnover), rebalance_frequency<=1 must still
+        charge full cost every single period — proving the default
+        preserves the exact original (pre-fix) behavior for every
+        existing caller that never sets this parameter."""
+        df = self._deterministic_panel()
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=3, test_periods=6, purge_periods=0, embargo_periods=0, min_test_periods=6, seed=1)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd", cfg, top_k=1, long_short=True, cost_rate=0.01)   # rebalance_frequency omitted -> default 1
+        trades = [f for f in result.folds if not f.skipped][0].trades
+        self.assertTrue(all(r["turnover_fraction"] == 1.0 for r in trades), "default rebalance_frequency=1 must charge full turnover every period, matching pre-fix behavior exactly")

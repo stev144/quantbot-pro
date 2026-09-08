@@ -64,13 +64,13 @@
                             </td>
                             {% if row.available %}
                             <td><span class="badge {% if row.readiness == 'LIVE_READY' %}pos{% elif row.readiness == 'DRY_RUN_READY' %}neu{% else %}warn{% endif %}">{{ row.readiness }}</span></td>
-                            <td class="num">{{ row.best_bid }}</td>
-                            <td class="num">{{ row.best_ask }}</td>
-                            <td class="num">{{ row.spread_pct }}%</td>
-                            <td class="num">{{ row.fee_rate_pct }}%</td>
-                            <td class="num">{{ row.estimated_fill_price }}</td>
-                            <td class="num">{{ row.estimated_slippage_pct }}%</td>
-                            <td class="num">{{ row.estimated_total_cost_pct }}%</td>
+                            <td class="num stat-number" data-target="{{ row.best_bid }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ row.best_ask }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ row.spread_pct }}" data-decimals="4" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ row.fee_rate_pct }}" data-decimals="3" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ row.estimated_fill_price }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ row.estimated_slippage_pct }}" data-decimals="4" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ row.estimated_total_cost_pct }}" data-decimals="4" data-suffix="%">0%</td>
                             {% else %}
                             <td colspan="7" class="unavailable-inline">{{ row.unavailable_reason }}</td>
                             {% endif %}
@@ -89,4 +89,8 @@
 
 {% include "partials/_footer.html" with label="Venue Comparison" note="real order-book/fee data, live exchange calls — expect a few seconds to load" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

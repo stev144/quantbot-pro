@@ -18,7 +18,7 @@ from django.test import TestCase
 
 from bot.research.oos_validator import WalkForwardConfig, build_folds, evaluate_cross_sectional_oos
 from bot.research.feature_calculator import FeatureCalculator
-from bot.research_lab.data_fingerprint import DatasetIdentity
+from bot.research_lab.data_fingerprint import DatasetIdentity, fingerprint_dataset
 from bot.research_lab.trial_service import freeze_family_before_testing, record_oos_trial
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -301,3 +301,31 @@ class RecordOosTrialCrossSectionalIntegrationTest(TestCase):
         with self.assertRaises(Exception):
             experiment.verdict = "FAIL"
             experiment.save()
+
+
+class DataFingerprintThreadingTest(TestCase):
+    # claude code changed: new — Forensic Audit Milestone A item 6
+    # regression guard. fingerprint_dataset() was real and tested but
+    # dormant in every real cross-sectional run; this proves a caller-
+    # supplied fingerprint actually reaches OOSResult end-to-end through
+    # evaluate_cross_sectional_oos(), matching the wiring added to
+    # run_cross_sectional_oos.py's run_cross_sectional_research().
+
+    def test_data_fingerprint_is_stored_on_the_result(self):
+        fp = fingerprint_dataset(
+            source="binance_spot_klines_cross_sectional", symbol="A0,A1,A2",
+            venue="binance", timeframe="1h", start_date="2025-01-01", end_date="2025-01-05", row_count=300,
+        )
+        df = _synthetic_long_format(60, 6, seed=42)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=20, test_periods=10, horizon=1, min_test_periods=5, seed=1)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd", cfg, top_k=1, data_fingerprint=fp)
+        self.assertEqual(result.data_fingerprint, fp)
+
+    def test_omitted_data_fingerprint_defaults_to_none(self):
+        # claude code changed: guards the OTHER direction — every existing
+        # caller that does not pass data_fingerprint (all of this file's
+        # other tests) must keep working exactly as before.
+        df = _synthetic_long_format(60, 6, seed=43)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=20, test_periods=10, horizon=1, min_test_periods=5, seed=1)
+        result = evaluate_cross_sectional_oos(df, "ts", "asset", "feature", "fwd", cfg, top_k=1)
+        self.assertIsNone(result.data_fingerprint)

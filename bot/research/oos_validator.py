@@ -979,7 +979,7 @@ def _default_cross_sectional_fit_fn(train_df: pd.DataFrame, feature_col: str) ->
 
 
 def _rank_and_form_portfolio(
-    period_df: pd.DataFrame, feature_col: str, forward_return_col: str,
+    period_df: pd.DataFrame, asset_col: str, feature_col: str, forward_return_col: str,
     fitted_params: Dict, top_k: int, long_short: bool,
 ) -> Optional[Dict]:
     """
@@ -990,6 +990,13 @@ def _rank_and_form_portfolio(
     (fitted_params) purely for a stable ranking scale — the RANK itself
     (not the standardized value) is what selects the long/short legs, so
     this is not sensitive to the scaling choice, only to relative order.
+
+    claude code changed: added asset_col — now also returns "long_names"/
+    "short_names" (the actual selected asset identifiers), needed by
+    evaluate_cross_sectional_oos()'s rebalance_frequency>1 path to know
+    what to HOLD between rebalances and to measure real turnover at the
+    next one (see _compute_turnover()). Purely additive to the returned
+    dict — every existing key/behavior is unchanged.
     """
     valid = period_df.dropna(subset=[feature_col, forward_return_col])
     if len(valid) < 2 * top_k:
@@ -1010,7 +1017,79 @@ def _rank_and_form_portfolio(
     return {
         "n_long": len(long_leg), "n_short": len(short_leg) if long_short else 0,
         "long_return": long_return, "short_return": short_return, "gross_return": gross_return,
+        "long_names": long_leg[asset_col].tolist(),
+        "short_names": short_leg[asset_col].tolist() if long_short else [],
     }
+
+
+def _hold_and_realize_portfolio(
+    period_df: pd.DataFrame, asset_col: str, forward_return_col: str,
+    held_long_names: List, held_short_names: List, long_short: bool,
+) -> Optional[Dict]:
+    """
+    claude code changed: new — the "no trade this period" counterpart to
+    _rank_and_form_portfolio(), used between rebalances when
+    rebalance_frequency > 1 (see evaluate_cross_sectional_oos()). No
+    re-ranking happens here — the book composition is whatever the last
+    real rebalance decided; this only looks up THIS period's already-
+    realized forward_return_col for those already-decided names, at
+    zero trading cost (no trade happened).
+
+    A held name missing from period_df (or with a NaN forward_return_col
+    — a real data gap, or an asset that stopped trading) is dropped from
+    that leg for THIS PERIOD ONLY, matching this project's point-in-time-
+    availability convention elsewhere — the held set itself is not
+    mutated; a genuinely delisted asset simply drags that leg's count
+    down until the next real rebalance replaces it. If an entire leg's
+    held names are ALL unavailable this period, returns None (skipped),
+    the same shape as _rank_and_form_portfolio's "not enough assets" skip.
+    """
+    indexed = period_df.dropna(subset=[forward_return_col]).set_index(asset_col)
+
+    long_returns = [float(indexed.loc[n, forward_return_col]) for n in held_long_names if n in indexed.index]
+    if not long_returns:
+        return None
+    long_return = float(np.mean(long_returns))
+
+    if long_short:
+        short_returns = [float(indexed.loc[n, forward_return_col]) for n in held_short_names if n in indexed.index]
+        if not short_returns:
+            return None
+        short_return = float(np.mean(short_returns))
+    else:
+        short_returns = []
+        short_return = 0.0
+
+    gross_return = (long_return - short_return) if long_short else long_return
+
+    return {
+        "n_long": len(long_returns), "n_short": len(short_returns) if long_short else 0,
+        "long_return": long_return, "short_return": short_return, "gross_return": gross_return,
+        "long_names": list(held_long_names), "short_names": list(held_short_names) if long_short else [],
+    }
+
+
+def _compute_turnover(
+    old_long: List, old_short: List, new_long: List, new_short: List, top_k: int, long_short: bool,
+) -> float:
+    """
+    claude code changed: new — Phase 4's explicit "turnover measurement"
+    requirement. Standard equal-weight-book turnover: the fraction of
+    book POSITIONS that actually changed between the previously-held
+    portfolio and the newly-ranked one, in [0, 1]. On the very first
+    rebalance (old_long/old_short both empty — nothing was held before),
+    every new position is, by construction, a fresh trade — this
+    naturally computes to exactly 1.0 (100%) with no special-casing
+    needed, the same real cost a strategy pays to initially enter a
+    position from cash.
+    """
+    old_book = set(old_long) | (set(old_short) if long_short else set())
+    new_book = set(new_long) | (set(new_short) if long_short else set())
+    book_size = top_k * (2 if long_short else 1)
+    if book_size == 0:
+        return 0.0
+    changed = len(old_book.symmetric_difference(new_book))
+    return min(changed / book_size, 1.0)
 
 
 def _compute_cross_sectional_fold_metrics(period_records: List[Dict], cost_rate: float, initial_balance: float, periods_per_year: Optional[float]) -> Dict:
@@ -1020,12 +1099,31 @@ def _compute_cross_sectional_fold_metrics(period_records: List[Dict], cost_rate:
     (a genuinely continuous series within a fold, unlike Type B's fresh-
     capital-per-trade convention) — so max_drawdown here is a true,
     meaningful statistic, not a "worst single trade" proxy.
+
+    claude code changed: real bug fix. Cost used to be a FLAT
+    `cost_rate * 2` charged on every single period regardless of whether
+    the book actually changed — confirmed, on a real 100-asset/hourly
+    run, to produce a cumulative cost over 10,000% and Sharpe ratios in
+    the -20 to -70 range (economically impossible for any real strategy)
+    purely from this assumption, not from the underlying signal. Cost is
+    now `cost_rate * 2 * turnover_fraction` — `turnover_fraction`
+    defaults to 1.0 when a record doesn't carry one (the
+    rebalance_frequency<=1 default path in evaluate_cross_sectional_oos,
+    where the ENTIRE book really is closed and reopened every period by
+    construction, so 1.0 is the honest description of that mode, not an
+    approximation — every existing caller/test that never set
+    rebalance_frequency keeps IDENTICAL behavior). Records from the
+    rebalance_frequency>1 hold-aware path carry a REAL, measured
+    turnover_fraction (see _compute_turnover()): 1.0 at the first
+    rebalance, a real computed fraction at later rebalances, 0.0 on
+    hold-only periods where no trade happens at all.
     """
     if not period_records:
         return {"n_periods": 0}
 
     for r in period_records:
-        r["cost"] = round(cost_rate * 2, 8)   # claude code changed: full round-trip turnover assumed every period — see module docstring
+        turnover_fraction = r.get("turnover_fraction", 1.0)
+        r["cost"] = round(cost_rate * 2 * turnover_fraction, 8)
         r["net_return"] = r["gross_return"] - r["cost"]
 
     net_returns = np.array([r["net_return"] for r in period_records])
@@ -1043,6 +1141,7 @@ def _compute_cross_sectional_fold_metrics(period_records: List[Dict], cost_rate:
     mean_r, std_r = float(np.mean(net_returns)), float(np.std(net_returns, ddof=1)) if len(net_returns) >= 2 else 0.0
     sharpe = (mean_r / std_r * np.sqrt(periods_per_year)) if std_r > 1e-12 and periods_per_year else None
     hit_rate = float(np.mean(net_returns > 0))
+    mean_turnover = float(np.mean([r.get("turnover_fraction", 1.0) for r in period_records]))   # claude code changed: new — Phase 4's "turnover measurement" requirement
 
     return {
         "n_periods": len(period_records), "mean_net_return": round(mean_r, 6), "std_net_return": round(std_r, 6),
@@ -1050,6 +1149,7 @@ def _compute_cross_sectional_fold_metrics(period_records: List[Dict], cost_rate:
         "total_compounded_return_pct": round((balance / initial_balance - 1) * 100, 4),
         "max_drawdown_pct": round(max_dd, 4), "final_balance": round(balance, 2),
         "total_cost_paid_pct": round(sum(r["cost"] for r in period_records) * 100, 4),
+        "mean_turnover_pct": round(mean_turnover * 100, 4),
     }
 
 
@@ -1073,6 +1173,7 @@ def _aggregate_cross_sectional(folds: List[FoldEvalResult]) -> Dict:
         return {
             "n_folds_evaluated": len(evaluated), "n_periods": 0, "mean_net_return": None,
             "sharpe_ratio": None, "hit_rate_pct": None, "worst_fold_max_drawdown_pct": max(fold_dds) if fold_dds else None,
+            "mean_turnover_pct": None,
         }
 
     net_returns = np.array([r["net_return"] for r in pooled_periods])
@@ -1082,6 +1183,7 @@ def _aggregate_cross_sectional(folds: List[FoldEvalResult]) -> Dict:
     )
     periods_per_year = len(pooled_periods) / total_periods_per_year if total_periods_per_year > 0 else None
     sharpe = (mean_r / std_r * np.sqrt(periods_per_year)) if std_r > 1e-12 and periods_per_year else None
+    mean_turnover = float(np.mean([r.get("turnover_fraction", 1.0) for r in pooled_periods]))   # claude code changed: new — pooled counterpart to the per-fold metric, same rationale
 
     return {
         "n_folds_evaluated": len(evaluated), "n_periods": len(pooled_periods),
@@ -1090,6 +1192,7 @@ def _aggregate_cross_sectional(folds: List[FoldEvalResult]) -> Dict:
         "hit_rate_pct": round(float(np.mean(net_returns > 0)) * 100, 2),
         "worst_fold_max_drawdown_pct": max(fold_dds) if fold_dds else None,
         "total_cost_paid_pct": round(sum(r["cost"] for r in pooled_periods) * 100, 4),
+        "mean_turnover_pct": round(mean_turnover * 100, 4),
     }
 
 
@@ -1108,6 +1211,7 @@ def evaluate_cross_sectional_oos(
     strategy_name: str = "",
     strategy_version: str = "",
     data_fingerprint: Optional[str] = None,
+    rebalance_frequency: int = 1,
 ) -> OOSResult:
     """
     THE Type C evaluator (cross-sectional ranking -> long/short
@@ -1134,6 +1238,32 @@ def evaluate_cross_sectional_oos(
     [train_start_pos, train_end_pos) slice of the shared, deduplicated
     timestamp axis; assert_temporal_disjoint() runs before every fold's
     fit/portfolio-construction pair, identical to Type A/B.
+
+    rebalance_frequency : int
+        claude code changed: new — real, evidenced bug fix. Before this
+        parameter existed, EVERY test timestamp re-ranked and reformed
+        the ENTIRE book, paying a full round-trip cost every single
+        period — on real hourly crypto data over a multi-year test
+        window that means tens of thousands of full-book turnovers,
+        producing an economically impossible cumulative cost (confirmed
+        on a real run against the live 100-asset universe:
+        total_cost_paid_pct > 10,000% and Sharpe ratios in the -20 to
+        -70 range — numbers no real strategy could produce, a clear tell
+        that the REBALANCE ASSUMPTION, not the underlying signal, was
+        driving the result). rebalance_frequency=1 (default) preserves
+        that exact original behavior UNCHANGED — full book turnover
+        every period, cost_rate*2 charged every period — for every
+        existing caller/test that never sets this parameter. Setting it
+        > 1 (e.g. 24 for daily rebalancing on hourly data) switches to a
+        hold-and-measure-real-turnover model: the book is only re-ranked
+        every `rebalance_frequency` periods; between rebalances, the
+        SAME held names' forward returns are realized at ZERO additional
+        trading cost (no trade happened); at each real rebalance, cost
+        is charged proportional to the ACTUAL fraction of the book that
+        changed (_compute_turnover()), never assumed to be 100%
+        regardless of overlap. mean_turnover_pct is always reported
+        (Phase 4's explicit "turnover measurement" requirement) so a
+        caller can see exactly how much the book churns either way.
     """
     working = df[[timestamp_col, asset_col, feature_col, forward_return_col]].copy()
     working[timestamp_col] = pd.to_datetime(working[timestamp_col])
@@ -1164,8 +1294,28 @@ def evaluate_cross_sectional_oos(
 
         test_slice = working.loc[test_mask]
         period_records = []
-        for ts, period_df in test_slice.groupby(timestamp_col, sort=True):
-            record = _rank_and_form_portfolio(period_df, feature_col, forward_return_col, fitted_params, top_k, long_short)
+        # claude code changed: held_long/held_short only matter for
+        # rebalance_frequency > 1 — at rebalance_frequency<=1 every
+        # period re-ranks (is_rebalance is unconditionally True) and
+        # turnover_fraction is pinned to 1.0 below, preserving the EXACT
+        # original cost behavior for every existing caller/test.
+        held_long: List = []
+        held_short: List = []
+        for period_idx, (ts, period_df) in enumerate(test_slice.groupby(timestamp_col, sort=True)):
+            is_rebalance = (rebalance_frequency <= 1) or (period_idx % rebalance_frequency == 0)
+            if is_rebalance:
+                record = _rank_and_form_portfolio(period_df, asset_col, feature_col, forward_return_col, fitted_params, top_k, long_short)
+                if record is not None:
+                    if rebalance_frequency <= 1:
+                        record["turnover_fraction"] = 1.0   # claude code changed: pinned — see this function's docstring
+                    else:
+                        record["turnover_fraction"] = _compute_turnover(held_long, held_short, record["long_names"], record["short_names"], top_k, long_short)
+                    held_long, held_short = record["long_names"], record["short_names"]
+            else:
+                record = _hold_and_realize_portfolio(period_df, asset_col, forward_return_col, held_long, held_short, long_short)
+                if record is not None:
+                    record["turnover_fraction"] = 0.0   # no trade this period
+
             if record is not None:
                 record["timestamp"] = ts
                 period_records.append(record)

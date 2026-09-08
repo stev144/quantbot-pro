@@ -27,12 +27,13 @@
 #     import time from constants already in the repo; nothing here is
 #     persisted, so this file introduces zero migrations.
 #
-# Only CRYPTO is populated today — US_EQUITY/FOREX asset classes exist as
-# real, valid enum values (so calling code can already branch on them
-# correctly) but INSTRUMENT_REGISTRY has no US_EQUITY/FOREX rows, because
-# no such data has ever been ingested. Pretending otherwise would violate
-# the Research Lab's own "never invent data" principle at the instrument
-# layer instead of the feature layer.
+# claude code changed: Forex Multi-Asset Integration — CRYPTO and FOREX
+# are both populated now (FOREX derived from bot.forex_data_fetcher's own
+# SYMBOLS, the exact same "derive, never re-type" principle
+# _build_crypto_registry() already used). US_EQUITY remains unpopulated —
+# no such data has ever been ingested, and pretending otherwise would
+# violate the Research Lab's own "never invent data" principle at the
+# instrument layer instead of the feature layer.
 # ============================================================
 
 from __future__ import annotations
@@ -42,6 +43,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from bot.fetch_all_symbols import INTERVAL, SYMBOLS, symbol_to_filename
+from bot.forex_data_fetcher import (
+    INTERVAL as FOREX_INTERVAL,
+    SYMBOLS as FOREX_SYMBOLS,
+    symbol_to_filename as forex_symbol_to_filename,
+)
 
 ASSET_CLASS_CRYPTO = "CRYPTO"
 ASSET_CLASS_US_EQUITY = "US_EQUITY"
@@ -94,11 +100,34 @@ def _build_crypto_registry() -> Dict[str, Instrument]:
     return registry
 
 
-# claude code changed: new — the single instrument registry. Only CRYPTO
-# rows exist today; US_EQUITY/FOREX are real, valid asset_class values
-# with zero rows until a real data source for them is actually built
-# (deliberately out of scope for this phase — see module docstring).
-INSTRUMENT_REGISTRY: Dict[str, Instrument] = _build_crypto_registry()
+def _build_forex_registry() -> Dict[str, Instrument]:
+    """
+    claude code changed: new — Forex Multi-Asset Integration. Same
+    derive-don't-retype principle as _build_crypto_registry(): every
+    FOREX instrument comes from bot.forex_data_fetcher.SYMBOLS (the real,
+    currently-populated Forex universe), not a second hand-typed list.
+    base_currency/quote_currency parsed from the canonical "BASE/QUOTE"
+    form every forex_data_fetcher symbol already uses.
+    """
+    registry: Dict[str, Instrument] = {}
+    for symbol in FOREX_SYMBOLS:
+        base, _, quote = symbol.partition("/")
+        registry[symbol] = Instrument(
+            canonical_symbol=symbol,
+            asset_class=ASSET_CLASS_FOREX,
+            base_currency=base or None,
+            quote_currency=quote or None,
+            venue="yahoo_finance",
+            timeframe=FOREX_INTERVAL,
+            data_source="forex_data_fetcher",
+        )
+    return registry
+
+
+# claude code changed: CRYPTO and FOREX rows both populated now — see
+# module docstring. US_EQUITY remains a real, valid asset_class value
+# with zero rows until a real data source for it is actually built.
+INSTRUMENT_REGISTRY: Dict[str, Instrument] = {**_build_crypto_registry(), **_build_forex_registry()}
 
 
 def get_instrument(canonical_symbol: str) -> Optional[Instrument]:
@@ -149,16 +178,22 @@ def resolve_ohlcv_path(canonical_symbol: str) -> Path:
         raise UnknownInstrumentError(
             f"'{canonical_symbol}' has no registered instrument identity — cannot resolve a data path for it"
         )
-    if instrument.asset_class != ASSET_CLASS_CRYPTO:
-        # claude code changed: new — fail-closed, not a guess. No non-CRYPTO
-        # instrument has ever had a data source in this codebase; a
-        # confident guessed path would violate the Research Lab's own
-        # "never invent data" principle just as surely as inventing a
-        # feature value would.
-        raise UnknownInstrumentError(
-            f"'{canonical_symbol}' is asset_class={instrument.asset_class}, which has no data source configured yet"
-        )
-    return Path(DATA_DIR) / symbol_to_filename(canonical_symbol)
+    if instrument.asset_class == ASSET_CLASS_CRYPTO:
+        return Path(DATA_DIR) / symbol_to_filename(canonical_symbol)
+    if instrument.asset_class == ASSET_CLASS_FOREX:
+        # claude code changed: new — Forex Multi-Asset Integration.
+        # Segregated data/forex/ subdirectory (not data/) so Forex data
+        # can never collide with or be silently confused for crypto data,
+        # even though the filename convention itself (BASE_QUOTE_1h.csv)
+        # is asset-class-agnostic and would never actually collide.
+        return Path(DATA_DIR) / "forex" / forex_symbol_to_filename(canonical_symbol)
+    # claude code changed: fail-closed, not a guess, for any remaining
+    # unpopulated asset class (US_EQUITY today). No confident guessed path
+    # would violate the Research Lab's own "never invent data" principle
+    # just as surely as inventing a feature value would.
+    raise UnknownInstrumentError(
+        f"'{canonical_symbol}' is asset_class={instrument.asset_class}, which has no data source configured yet"
+    )
 
 
 # ============================================================
@@ -254,14 +289,17 @@ TRADING_DAYS_PER_YEAR: Dict[str, float] = {
 
 
 class UnsupportedAnnualizationError(ValueError):
-    """claude code changed: new — raised by periods_per_year() when the
+    """claude code changed: raised by periods_per_year() when the
     (timeframe, asset_class) pair can't be honestly annualized with what
     this platform currently knows. This is expected and correct for any
-    intraday US_EQUITY/FOREX timeframe today: annualizing sub-daily bars
+    intraday US_EQUITY timeframe today: annualizing sub-daily bars
     requires knowing the market's real session length (e.g. ~6.5h/day for
     US equities), which this platform has no session-calendar model for
-    yet — and since no US_EQUITY/FOREX data has ever been ingested,
-    nothing currently reachable actually hits this path."""
+    yet — and since no US_EQUITY data has ever been ingested, nothing
+    currently reachable actually hits this path. FOREX is NOT in this
+    category (see periods_per_year()'s own comment) — unlike equities, FX
+    trades continuously within its trading days, so no session-length
+    model is needed for it."""
 
 
 def periods_per_year(timeframe: str, asset_class: str) -> float:
@@ -289,18 +327,26 @@ def periods_per_year(timeframe: str, asset_class: str) -> float:
         # length ambiguity regardless of asset class.
         return TRADING_DAYS_PER_YEAR[asset_class]
 
-    if asset_class == ASSET_CLASS_CRYPTO:
-        # claude code changed: crypto trades every minute of every
-        # calendar day — candles/day is a pure function of candle width,
-        # no session-hours model needed.
+    if asset_class in (ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX):
+        # claude code changed: Forex Multi-Asset Integration — extended
+        # this branch to FOREX. Real, justified, not guessed: unlike
+        # equities, FX has no intra-day session-hour limit — confirmed
+        # empirically during the design probe and again on the real
+        # ingested data (bot/forex_data_fetcher.py), the market trades
+        # continuously (24h) across each of its trading days, closing
+        # only on weekends/holidays (TRADING_DAYS_PER_YEAR already
+        # captures that as 260 vs crypto's 365). So candles/day is the
+        # same pure function of candle width as crypto's own case — the
+        # only difference is which TRADING_DAYS_PER_YEAR convention
+        # applies, which the dict lookup above already handles.
         candles_per_day = 1440.0 / TIMEFRAME_MINUTES_PER_CANDLE[timeframe]
         return TRADING_DAYS_PER_YEAR[asset_class] * candles_per_day
 
-    # claude code changed: US_EQUITY/FOREX at an intraday timeframe needs
-    # a real market-session-length model (equities don't trade 24h/day)
-    # this platform doesn't have — fail closed, never guess a session
-    # length. Unreachable with real data today (no non-CRYPTO data
-    # exists), but the correct behavior the day it does.
+    # claude code changed: US_EQUITY at an intraday timeframe needs a real
+    # market-session-length model (equities have a real, shorter-than-24h
+    # trading session) this platform doesn't have — fail closed, never
+    # guess a session length. Unreachable with real data today (no
+    # US_EQUITY data exists), but the correct behavior the day it does.
     raise UnsupportedAnnualizationError(
         f"intraday annualization for asset_class='{asset_class}' at timeframe='{timeframe}' "
         f"requires a market-session-length model this platform does not have yet"

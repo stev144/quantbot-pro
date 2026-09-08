@@ -29,12 +29,12 @@
                 {# claude code changed: new — Advanced Quant Research Capability Architecture. Pairs research has no forward-return horizon (see spec.py's validate_spec()) — showing "Asset B" here instead of a blank/meaningless Horizon stat. #}
                 <div class="term-stat"><span class="term-stat-label">Asset B</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset_b }}</span></div>
                 {% else %}
-                <div class="term-stat"><span class="term-stat-label">Horizon</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.target.horizon }} candles ({{ experiment.research_plan.spec.target.horizon }}h)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Horizon</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon|default_if_none:0 }}" data-decimals="0">0</span> candles (<span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon|default_if_none:0 }}" data-decimals="0">0</span>h)</span></div>
                 {% endif %}
             </div>
             {# claude code changed: Conditional Hypothesis Integrity fix — shows Condition: X op threshold for conditional hypotheses, never just a bare feature name #}
             {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
-            <div class="chart-caption mono" style="margin-bottom:18px">Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</div>
+            <div class="chart-caption mono" style="margin-bottom:18px">Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} <span class="stat-number" data-target="{{ experiment.research_plan.spec.conditions.0.threshold|default_if_none:0 }}" data-decimals="2">0</span></div>
             {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
             {# claude code changed: new — Advanced Quant Research Capability Architecture #}
             <div class="chart-caption mono" style="margin-bottom:18px">Pair: {{ experiment.research_plan.spec.asset }} / {{ experiment.research_plan.spec.asset_b }}</div>
@@ -46,39 +46,39 @@
             {% if experiment.statistical_results.metric == "conditional_event_test" %}
             {# claude code changed: Statistical Integrity Hardening — expanded from 5 to include the fields gap #4/#8/#10 require: qualifying %, median return, FDR (now computed, not skipped), episode count, expected vs observed direction. #}
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Total observations</span><span class="term-stat-value mono">{{ experiment.statistical_results.sample_size }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Qualifying observations</span><span class="term-stat-value mono">{{ experiment.statistical_results.n_condition_true }} ({{ experiment.statistical_results.pct_condition_true|floatformat:2 }}%)</span></div>
-                <div class="term-stat"><span class="term-stat-label">Qualifying episodes (contiguous runs)</span><span class="term-stat-value mono">{{ experiment.statistical_results.n_condition_episodes }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Total observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:0 }}" data-decimals="0">0</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</span>)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying episodes (contiguous runs)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_episodes|default_if_none:0 }}" data-decimals="0">0</span></span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_true|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Mean Return (baseline / condition false)</span><span class="term-stat-value mono">{{ experiment.statistical_results.mean_return_when_false|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Median Return (condition true)</span><span class="term-stat-value mono">{{ experiment.statistical_results.median_return_when_true|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Median Return (baseline)</span><span class="term-stat-value mono">{{ experiment.statistical_results.median_return_when_false|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (baseline / condition false)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (baseline)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|default_if_none:0 }}" data-decimals="4">0</span></span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Expected direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.expected_direction|default:"unspecified" }}</span></div>
                 <div class="term-stat"><span class="term-stat-label">Observed direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.observed_direction }}</span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Mann-Whitney p</span><span class="term-stat-value mono">{{ experiment.statistical_results.mannwhitney_p_value|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono">{{ experiment.statistical_results.block_permutation_p_value|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{{ experiment.statistical_results.fdr_adjusted_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Mann-Whitney p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
                 <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_fdr }}</span></div>
             </div>
             {% if experiment.statistical_results.episode_ratio > 3 %}
-            <div class="chart-caption mono" style="margin-bottom:18px">Note: ~{{ experiment.statistical_results.episode_ratio|floatformat:1 }} qualifying candles per episode — many qualifying candles come from the same contiguous regime, not independent events. The block-permutation p-value above already accounts for this serial dependence (it shuffles whole blocks, not individual candles); the raw qualifying-observation count does not.</div>
+            <div class="chart-caption mono" style="margin-bottom:18px">Note: ~<span class="stat-number" data-target="{{ experiment.statistical_results.episode_ratio|default_if_none:0 }}" data-decimals="1">0</span> qualifying candles per episode — many qualifying candles come from the same contiguous regime, not independent events. The block-permutation p-value above already accounts for this serial dependence (it shuffles whole blocks, not individual candles); the raw qualifying-observation count does not.</div>
             {% endif %}
             {% elif experiment.research_plan.spec.hypothesis_type == "pairs" and experiment.statistical_results %}
             {# claude code changed: new — Advanced Quant Research Capability Architecture. run_cointegration_test()'s evidence shape (is_cointegrated/passes_filters/half_life_hours) has no "metric" key and no "ic" — a distinct branch, not the generic IC branch below, which would otherwise silently show blank/wrong fields for a pairs result. #}
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Cointegration p-value</span><span class="term-stat-value mono">{{ experiment.statistical_results.coint_pvalue|floatformat:6 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">ADF p-value</span><span class="term-stat-value mono">{{ experiment.statistical_results.adf_pvalue|floatformat:6 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Hedge ratio (&beta;)</span><span class="term-stat-value mono">{{ experiment.statistical_results.hedge_ratio|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Cointegration p-value</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.coint_pvalue|default_if_none:0 }}" data-decimals="6">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">ADF p-value</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.adf_pvalue|default_if_none:0 }}" data-decimals="6">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Hedge ratio (&beta;)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.hedge_ratio|default_if_none:0 }}" data-decimals="4">0</span></span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 {# claude code changed: Multi-Asset Foundation Refactor Phase 1B — was a hardcoded "h" suffix on half_life_hours, correct only because every dataset this engine has ever run on is 1h candles. Now reads the honestly timeframe-aware half_life_time/half_life_time_unit. #}
-                <div class="term-stat"><span class="term-stat-label">Half-life</span><span class="term-stat-value mono">{{ experiment.statistical_results.half_life_time|floatformat:1 }} {{ experiment.statistical_results.half_life_time_unit|default:"hours" }} ({{ experiment.statistical_results.half_life_candles|floatformat:1 }} candles)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Half-life</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.half_life_time|default_if_none:0 }}" data-decimals="1">0</span> {{ experiment.statistical_results.half_life_time_unit|default:"hours" }} (<span class="stat-number" data-target="{{ experiment.statistical_results.half_life_candles|default_if_none:0 }}" data-decimals="1">0</span> candles)</span></div>
                 <div class="term-stat"><span class="term-stat-label">Is cointegrated (raw test)</span><span class="term-stat-value mono">{{ experiment.statistical_results.is_cointegrated }}</span></div>
                 <div class="term-stat"><span class="term-stat-label">Passes tradability filter</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_filters }}</span></div>
             </div>
@@ -88,13 +88,13 @@
             <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.fdr_note }}</div>
             {% elif experiment.statistical_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono">{{ experiment.statistical_results.ic|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono">{{ experiment.statistical_results.block_permutation_p_value|floatformat:4 }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Sample Size</span><span class="term-stat-value mono">{{ experiment.statistical_results.sample_size }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.ic|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Sample Size</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:0 }}" data-decimals="0">0</span></span></div>
             </div>
             {% if experiment.validation_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{{ experiment.validation_results.fdr_adjusted_p_value|floatformat:4 }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.validation_results.fdr_adjusted_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
                 <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.validation_results.passes_fdr }}</span></div>
             </div>
             {% endif %}
@@ -128,4 +128,8 @@
 
 {% include "partials/_footer.html" with label="Research Lab" note="every metric above came from a deterministic Python research engine, never invented" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

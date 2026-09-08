@@ -125,6 +125,13 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             category=SIGNAL_RESEARCH, required_tier=CORE, risk_tier="LOW", compute_tier="LOW",
             backing_engine="bot.research.feature_validator.FeatureValidator",
             engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="feature",
+            # claude code changed: Forex Multi-Asset Integration — the
+            # Research Lab tool wrapper loads data via
+            # bot.research_lab.tools._data.load_ohlcv(asset), which resolves
+            # through bot.instruments.resolve_ohlcv_path() and takes an
+            # explicit `asset` symbol — genuinely Forex-invokable today,
+            # verified by reading the actual call chain, not assumed.
+            supported_asset_classes=["CRYPTO", "FOREX"],
         ),
         ResearchCapability(
             id="conditional_event_research",
@@ -133,6 +140,10 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             category=SIGNAL_RESEARCH, required_tier=CORE, risk_tier="LOW", compute_tier="LOW",
             backing_engine="bot.research_lab.tools.conditional_tools.run_conditional_test",
             engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="conditional",
+            # claude code changed: Forex Multi-Asset Integration — same
+            # load_ohlcv(asset) seam as continuous_feature_research above,
+            # plus already timeframe-generic via candles_per_calendar_day().
+            supported_asset_classes=["CRYPTO", "FOREX"],
         ),
         ResearchCapability(
             id="feature_stability_research",
@@ -160,6 +171,14 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             backing_engine="bot.research.cointegration_engine.CointegrationEngine",
             engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="pairs",
             compute_budget={"max_pairs_per_experiment": 1},
+            # claude code changed: Forex Multi-Asset Integration —
+            # run_cointegration_test(asset_a, asset_b) loads both legs via
+            # load_ohlcv() and CointegrationEngine's own price-validation
+            # core only needs a DatetimeIndex + close column — genuinely
+            # Forex-invokable today (cointegration between currency pairs
+            # is also a standard FX relative-value concept, not just a
+            # technical compatibility claim).
+            supported_asset_classes=["CRYPTO", "FOREX"],
         ),
         ResearchCapability(
             id="kalman_dynamic_hedge_ratio",
@@ -194,6 +213,18 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
                 "(Phase 1D evaluated several approaches and deliberately did not implement one pending its own "
                 "look-ahead-bias validation — see the Phase 1D engineering report, Objectives 2-3)."
             ),
+            # claude code changed: Forex Multi-Asset Integration —
+            # run_kalman_pairs_test loads via load_ohlcv() and
+            # KalmanFilterEngine.run_on_prices() (the Research-Lab-integrated
+            # path) is pure computation on already-loaded price Series, with
+            # zero exchange/symbol-format assumptions — genuinely
+            # asset-agnostic. The standalone run()/_load_prices() CSV path
+            # was also fixed this integration (routes through the instrument
+            # registry instead of a hardcoded crypto path). Not yet reachable
+            # via any real Research Lab request either way (see reason (1)
+            # above) — this only affects what's honestly recorded, not what
+            # a user can do today.
+            supported_asset_classes=["CRYPTO", "FOREX"],
         ),
         # claude code changed: new entry — Phase 2D/Research Lab Completion
         # audit, Step 9. capability_registry.py had NO entry at all for
@@ -231,11 +262,47 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
         ResearchCapability(
             id="cross_sectional_research",
             name="Cross-Sectional Relationship Research",
-            description="Test relative-rank and cross-sectional z-score features computed across the whole symbol universe at each timestamp, not just one asset in isolation.",
+            description="Test relative-rank and cross-sectional z-score features computed across the whole symbol universe at each timestamp, not just one asset in isolation — a genuine Type C (fold/purge/embargo/permutation/FDR) OOS evaluation, not an ad-hoc IC check.",
             category=RELATIONSHIP_RESEARCH, required_tier=PRO, risk_tier="MEDIUM", compute_tier="MEDIUM",
-            backing_engine="bot.research.cross_section_engine",
-            engine_status=NOT_IMPLEMENTED, has_tests=True,
-            status_note="No Research Lab tool wrapper exists yet — the underlying engine has thin test coverage (3 tests) relative to its neighbors and would need further audit before exposure.",
+            backing_engine="bot.research.oos_validator.evaluate_cross_sectional_oos (features from bot.research.cross_section_engine, connected via bot.research.run_cross_sectional_oos)",
+            engine_status=IMPLEMENTED_AND_READY, has_tests=True,
+            # claude code changed: was engine_status=NOT_IMPLEMENTED, pointing
+            # at cross_section_engine.py alone (real feature computation,
+            # but nothing that FOLDS/purges/embargoes/permutes it — an ad-hoc
+            # IC check, not an OOS evaluation). Statistics-infrastructure
+            # mission built the missing piece: evaluate_cross_sectional_oos()
+            # (already real and tested pre-mission, just unwired) +
+            # cross_sectional_permutation_test.py (new — within-timestamp
+            # label shuffle, the correct null for "does ranking carry
+            # information," reusing permutation_stats.py's exact statistics
+            # permutation_test_engine.py already proved correct for pairs) +
+            # run_cross_sectional_oos.py (the missing connective reshape
+            # between the two) + the run_cross_sectional_ranking_test tool
+            # (bot/research_lab/tools/research_tools.py), now reachable via
+            # ALLOWED_TOOLS/TOOLS_BY_RISK_TIER. 15 new tests
+            # (bot/tests/test_oos_validator.py). Known gap, stated honestly:
+            # "volatility-adjusted ranking" (one of the originally-envisioned
+            # cross-sectional hypotheses) has no feature computation anywhere
+            # in this codebase yet — the other 4 named hypotheses
+            # (return ranking, percentile ranking, z-score, relative
+            # strength, mean reversion) are real and testable today via
+            # run_cross_sectional_oos.AVAILABLE_FEATURES.
+            #
+            # claude code changed: Forex Multi-Asset Integration — deliberately
+            # NOT marked FOREX here, despite evaluate_cross_sectional_oos()/
+            # cross_sectional_permutation_test.py both being genuinely
+            # asset-agnostic (verified: zero exchange/symbol logic in either
+            # file). The reason is narrower: run_cross_sectional_ranking_test
+            # (the actual Research Lab tool call) has no asset-class/universe
+            # parameter at all — it always calls
+            # cross_section_engine.compute_cross_section_features() over the
+            # CRYPTO-hardcoded default universe, so a caller cannot actually
+            # direct this capability at Forex data today. Marking it FOREX
+            # here would overstate what a Research Lab user can currently do
+            # — correctly left CRYPTO-only until that tool wrapper gains a
+            # universe/asset-class parameter (a real, separate, not-yet-
+            # scheduled wiring task).
+            status_note="Type C evaluator + permutation test + top-K/FDR sweep implemented and wired into the Research Lab tool layer. Volatility-adjusted ranking is not yet computed anywhere in this codebase — a real, disclosed gap, not silently substituted with a different feature.",
         ),
         ResearchCapability(
             id="contagion_divergence_research",
@@ -312,6 +379,14 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
                 "Still excluded from the Research Lab's tool allowlist pending dedicated integration wiring, "
                 "which is a separate, not-yet-scheduled step."
             ),
+            # claude code changed: Forex Multi-Asset Integration —
+            # entry_exit_engine.py's pair-filename parsing and cost-model
+            # lookup are both now asset-class-generic (see
+            # bot/research/entry_exit_engine.py's _parse_pair_from_kalman_filename
+            # and get_cost_model() call). Recorded honestly even though this
+            # capability isn't reachable via any real Research Lab request
+            # yet either way.
+            supported_asset_classes=["CRYPTO", "FOREX"],
         ),
         ResearchCapability(
             id="permutation_robustness_testing",
@@ -329,6 +404,11 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
                 "Still excluded from the Research Lab's tool allowlist pending dedicated integration wiring, "
                 "which is a separate, not-yet-scheduled step."
             ),
+            # claude code changed: Forex Multi-Asset Integration — same
+            # reasoning as walk_forward_validation above (this engine's
+            # full run() path depends on entry_exit_engine.py, now
+            # asset-class-generic).
+            supported_asset_classes=["CRYPTO", "FOREX"],
         ),
         ResearchCapability(
             id="parameter_sensitivity_analysis",

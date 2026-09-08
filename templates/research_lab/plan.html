@@ -29,12 +29,12 @@
                 <li>Dataset availability for {{ experiment.research_plan.spec.asset }}</li>
                 <li>Hypothesis type: <strong>{{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</strong></li>
                 {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
-                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</li>
+                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} <span class="stat-number" data-target="{{ experiment.research_plan.spec.conditions.0.threshold }}" data-decimals="2">0</span></li>
                 {% else %}
                 {% if experiment.research_plan.spec.features %}<li>Feature (continuous): {{ experiment.research_plan.spec.features|join:", " }}</li>{% endif %}
                 {% endif %}
                 {# claude code changed: Multi-Asset Foundation Refactor STEP 3 — was a literal "hours, timeframe=1h" regardless of the spec's actual timeframe #}
-                <li>Forward-return relationship over {{ experiment.research_plan.spec.target.horizon }} candles{% if experiment.research_plan.spec.timeframe == "1h" %} ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
+                <li>Forward-return relationship over <span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon }}" data-decimals="0">0</span> candles{% if experiment.research_plan.spec.timeframe == "1h" %} (<span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon }}" data-decimals="0">0</span> hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
                 <li>Statistical significance (block-permutation test)</li>
                 {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
                 <li class="text-dim">No FDR correction applies to conditional/event tests in this pass — known limitation</li>
@@ -65,4 +65,8 @@
 
 {% include "partials/_footer.html" with label="Research Lab" note="nothing runs without a fail-closed policy-gate approval shown here" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

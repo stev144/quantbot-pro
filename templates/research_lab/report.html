@@ -25,7 +25,7 @@
                 <li>Timeframe: {{ experiment.research_plan.spec.timeframe }}</li>
                 <li>Hypothesis type: {{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</li>
                 {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
-                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} {{ experiment.research_plan.spec.conditions.0.threshold }}</li>
+                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} <span class="stat-number" data-target="{{ experiment.research_plan.spec.conditions.0.threshold|default_if_none:'' }}" data-decimals="2">{{ experiment.research_plan.spec.conditions.0.threshold }}</span></li>
                 {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
                 {# claude code changed: new — Advanced Quant Research Capability Architecture #}
                 <li>Pair: {{ experiment.research_plan.spec.asset }} / {{ experiment.research_plan.spec.asset_b }}</li>
@@ -37,11 +37,11 @@
                 {% else %}
                 <li>Target: forward return</li>
                 {# claude code changed: Multi-Asset Foundation Refactor STEP 3 — was a literal "hours, timeframe=1h" regardless of the spec's actual timeframe #}
-                <li>Horizon: {{ experiment.research_plan.spec.target.horizon }} candles{% if experiment.research_plan.spec.timeframe == "1h" %} ({{ experiment.research_plan.spec.target.horizon }} hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
+                <li>Horizon: <span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon }}" data-decimals="0">{{ experiment.research_plan.spec.target.horizon }}</span> candles{% if experiment.research_plan.spec.timeframe == "1h" %} (<span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon }}" data-decimals="0">{{ experiment.research_plan.spec.target.horizon }}</span> hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
                 {% endif %}
                 <li>Expected direction: {{ experiment.research_plan.spec.direction|default:"unspecified" }}</li>
             </ul>
-            <p><strong>Dataset:</strong> {{ experiment.research_plan.data_availability.checks|length }} data requirement(s) checked, all_available={{ experiment.research_plan.data_availability.all_available }}</p>
+            <p><strong>Dataset:</strong> <span class="stat-number" data-target="{{ experiment.research_plan.data_availability.checks|length }}" data-decimals="0">{{ experiment.research_plan.data_availability.checks|length }}</span> data requirement(s) checked, all_available={{ experiment.research_plan.data_availability.all_available }}</p>
             {% if experiment.capability_id %}
             <p><strong>Capability:</strong> {{ experiment.capability_id }} &mdash; subscription tier at planning: {{ experiment.research_plan.entitlement.tier_at_planning|default:"CORE" }}</p>
             {% endif %}
@@ -50,11 +50,11 @@
             {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
             {# claude code changed: new — Advanced Quant Research Capability Architecture #}
             <ul>
-                <li>Cointegration p-value: {{ experiment.statistical_results.coint_pvalue|default:"not evaluated" }}</li>
-                <li>ADF p-value: {{ experiment.statistical_results.adf_pvalue|default:"not evaluated" }}</li>
-                <li>Hedge ratio: {{ experiment.statistical_results.hedge_ratio|default:"not evaluated" }}</li>
+                <li>Cointegration p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.coint_pvalue|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.coint_pvalue|default:"not evaluated" }}</span></li>
+                <li>ADF p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.adf_pvalue|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.adf_pvalue|default:"not evaluated" }}</span></li>
+                <li>Hedge ratio: <span class="stat-number" data-target="{{ experiment.statistical_results.hedge_ratio|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.hedge_ratio|default:"not evaluated" }}</span></li>
                 {# claude code changed: Multi-Asset Foundation Refactor Phase 1B — was a hardcoded "hours" suffix regardless of the actual timeframe the evidence was computed on #}
-                <li>Half-life: {{ experiment.statistical_results.half_life_time|default:"not evaluated" }} {{ experiment.statistical_results.half_life_time_unit|default:"" }} ({{ experiment.statistical_results.half_life_candles|default:"?" }} candles, timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }})</li>
+                <li>Half-life: <span class="stat-number" data-target="{{ experiment.statistical_results.half_life_time|default_if_none:'' }}" data-decimals="2">{{ experiment.statistical_results.half_life_time|default:"not evaluated" }}</span> {{ experiment.statistical_results.half_life_time_unit|default:"" }} (<span class="stat-number" data-target="{{ experiment.statistical_results.half_life_candles|default_if_none:'' }}" data-decimals="2">{{ experiment.statistical_results.half_life_candles|default:"?" }}</span> candles, timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }})</li>
                 <li>Is cointegrated (raw test): {{ experiment.statistical_results.is_cointegrated|default:"not evaluated" }}</li>
                 <li>Passes tradability filter: {{ experiment.statistical_results.passes_filters|default:"not evaluated" }}</li>
                 <li>{{ experiment.statistical_results.fdr_note|default:"" }}</li>
@@ -62,27 +62,27 @@
             {% elif experiment.statistical_results.metric == "conditional_event_test" %}
             {# claude code changed: Statistical Integrity Hardening — expanded per gap #4/#8/#10/#12; FDR is now computed (m=1 identity), not skipped. #}
             <ul>
-                <li>Total observations: {{ experiment.statistical_results.sample_size|default:"not evaluated" }}</li>
-                <li>Qualifying observations (condition true): {{ experiment.statistical_results.n_condition_true|default:"not evaluated" }} ({{ experiment.statistical_results.pct_condition_true|floatformat:2 }}% of dataset)</li>
-                <li>Non-qualifying observations (condition false / baseline): {{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</li>
-                <li>Qualifying episodes (contiguous runs, not raw candles): {{ experiment.statistical_results.n_condition_episodes|default:"not evaluated" }} — average {{ experiment.statistical_results.episode_ratio|floatformat:1 }} candles/episode</li>
-                <li>Mean return when condition true: {{ experiment.statistical_results.mean_return_when_true|default:"not evaluated" }}</li>
-                <li>Mean return when condition false (baseline): {{ experiment.statistical_results.mean_return_when_false|default:"not evaluated" }}</li>
-                <li>Median return when condition true: {{ experiment.statistical_results.median_return_when_true|default:"not evaluated" }}</li>
-                <li>Median return when condition false (baseline): {{ experiment.statistical_results.median_return_when_false|default:"not evaluated" }}</li>
+                <li>Total observations: <span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.sample_size|default:"not evaluated" }}</span></li>
+                <li>Qualifying observations (condition true): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_true|default:"not evaluated" }}</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|default_if_none:'' }}" data-decimals="2" data-suffix="%">{{ experiment.statistical_results.pct_condition_true|floatformat:2 }}%</span> of dataset)</li>
+                <li>Non-qualifying observations (condition false / baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_false|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</span></li>
+                <li>Qualifying episodes (contiguous runs, not raw candles): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_episodes|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_episodes|default:"not evaluated" }}</span> — average <span class="stat-number" data-target="{{ experiment.statistical_results.episode_ratio|default_if_none:'' }}" data-decimals="1">{{ experiment.statistical_results.episode_ratio|floatformat:1 }}</span> candles/episode</li>
+                <li>Mean return when condition true: <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mean_return_when_true|default:"not evaluated" }}</span></li>
+                <li>Mean return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mean_return_when_false|default:"not evaluated" }}</span></li>
+                <li>Median return when condition true: <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.median_return_when_true|default:"not evaluated" }}</span></li>
+                <li>Median return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.median_return_when_false|default:"not evaluated" }}</span></li>
                 <li>Expected direction: {{ experiment.statistical_results.expected_direction|default:"unspecified" }}</li>
                 <li>Observed direction: {{ experiment.statistical_results.observed_direction|default:"not evaluated" }}</li>
-                <li>Mann-Whitney U p-value: {{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</li>
-                <li>Block-permutation p-value: {{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</li>
-                <li>FDR-adjusted p-value: {{ experiment.statistical_results.fdr_adjusted_p_value|default:"not evaluated" }} (exact for a single-condition family, m=1)</li>
+                <li>Mann-Whitney U p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</span></li>
+                <li>Block-permutation p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</span></li>
+                <li>FDR-adjusted p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.fdr_adjusted_p_value|default:"not evaluated" }}</span> (exact for a single-condition family, m=1)</li>
                 <li>Passes FDR: {{ experiment.statistical_results.passes_fdr|default:"not evaluated" }}</li>
             </ul>
             {% else %}
             <ul>
-                <li>IC: {{ experiment.statistical_results.ic|default:"not evaluated" }}</li>
-                <li>Block-permutation p-value: {{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</li>
-                <li>Sample size: {{ experiment.statistical_results.sample_size|default:"not evaluated" }}</li>
-                <li>FDR-adjusted p-value: {{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</li>
+                <li>IC: <span class="stat-number" data-target="{{ experiment.statistical_results.ic|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.ic|default:"not evaluated" }}</span></li>
+                <li>Block-permutation p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</span></li>
+                <li>Sample size: <span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.sample_size|default:"not evaluated" }}</span></li>
+                <li>FDR-adjusted p-value: <span class="stat-number" data-target="{{ experiment.validation_results.fdr_adjusted_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</span></li>
                 <li>Passes FDR: {{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</li>
             </ul>
             {% endif %}
@@ -97,14 +97,14 @@
             <p><strong>Explanation:</strong> {{ experiment.ai_interpretation }}</p>
 
             <p><strong>Code version:</strong> {{ experiment.code_version }}</p>
-            <p><strong>Random seed:</strong> {{ experiment.random_seed }}</p>
+            <p><strong>Random seed:</strong> <span class="stat-number" data-target="{{ experiment.random_seed|default_if_none:'' }}" data-decimals="0">{{ experiment.random_seed }}</span></p>
             <p><strong>Experiment timestamps:</strong> created {{ experiment.created_at }}, started {{ experiment.started_at }}, completed {{ experiment.completed_at }}</p>
             <p><strong>Research ID:</strong> {{ experiment.id }}</p>
 
             {% if experiment.rerun_of %}<p><strong>Rerun of:</strong> <a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></p>{% endif %}
 
             <details style="margin-top:20px">
-                <summary class="mono">Full tool call log ({{ experiment.tool_call_log|length }} calls)</summary>
+                <summary class="mono">Full tool call log (<span class="stat-number" data-target="{{ experiment.tool_call_log|length }}" data-decimals="0">{{ experiment.tool_call_log|length }}</span> calls)</summary>
                 <pre class="mono" style="white-space:pre-wrap; font-size:12px">{{ experiment.tool_call_log }}</pre>
             </details>
 
@@ -114,4 +114,8 @@
 
 {% include "partials/_footer.html" with label="Research Lab" note="reproducible — same code_version + random_seed will produce the same evidence" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

@@ -18,6 +18,7 @@ from bot.backtesting.backtester import backtest
 from bot.engines.strategy_scorer import StrategyScorer
 from bot.research.cointegration_engine import CointegrationEngine
 from bot.research.kalman_filter_engine import KalmanFilterEngine   # claude code changed: new — Phase 1D, Objective 8 (Kalman Research Integration)
+from bot.research.run_cross_sectional_oos import AVAILABLE_FEATURES, run_cross_sectional_research   # claude code changed: new — statistics-infrastructure mission, Milestone B4
 from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
 
@@ -247,3 +248,37 @@ def run_parameter_sensitivity(asset: str, initial_balance: float = 5000.0) -> di
         "grade": scored.get("grade"),
         "robustness": scored.get("robustness"),
     }
+
+
+@register_tool("run_cross_sectional_ranking_test")
+def run_cross_sectional_ranking_test(
+    hypothesis_name: str,
+    top_k_values: tuple = (1, 3, 5, 10),
+    n_permutations: int = 20,   # claude code changed: new — lower than the 100 a standalone/offline run uses (bot/research/run_cross_sectional_oos.py's own default), so a typed tool call inside an interactive Research Lab session returns in a reasonable time; the smallest achievable p-value at N=20 is 1/21 (~0.048), still enough to clear the standard 0.05 significance bar for a clearly real effect — a researcher who wants a tighter estimate re-runs the standalone script directly with a higher N.
+    long_short: bool = True,
+) -> dict:
+    """
+    Wraps bot.research.run_cross_sectional_oos.run_cross_sectional_research()
+    unchanged — computes cross_section_engine.py's real features across
+    the CURRENT universe (never hardcoded — bot.universe_selector's own
+    dynamic selection), reshapes to long format, and runs the full Type C
+    evaluator + within-timestamp permutation test + top-K FDR sweep
+    (bot/research/cross_sectional_permutation_test.py) as one declared
+    hypothesis family. No new statistics computed in this wrapper.
+
+    hypothesis_name must be one of AVAILABLE_FEATURES' keys — see that
+    module for which of Phase 3's named cross-sectional hypotheses are
+    actually computed today (volatility-adjusted ranking is not yet
+    implemented anywhere in this codebase — an honest gap, not silently
+    substituted with a different feature).
+    """
+    if hypothesis_name not in AVAILABLE_FEATURES:
+        return {
+            "hypothesis_name": hypothesis_name,
+            "available_hypotheses": list(AVAILABLE_FEATURES.keys()),
+            "error": f"'{hypothesis_name}' is not an available cross-sectional hypothesis",
+        }
+    return run_cross_sectional_research(
+        hypothesis_name=hypothesis_name, top_k_values=top_k_values,
+        n_permutations=n_permutations, long_short=long_short,
+    )

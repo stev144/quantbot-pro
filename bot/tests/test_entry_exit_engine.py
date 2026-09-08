@@ -72,16 +72,32 @@ class PairIdentityTest(SimpleTestCase):
         )
         self.assertEqual((pair_name, symbol_a, symbol_b), ("BTC_USDT/ETH_USDT", "BTC_USDT", "ETH_USDT"))  # claude code changed: not AVAX/ATOM
 
-    def test_filename_parsing_is_crypto_usdt_specific_by_design(self):
-        # claude code changed: documents a REAL, currently-true limitation
-        # rather than papering over it — the kalman-CSV-filename convention
-        # itself (inherited from kalman_filter_engine.py's own output naming)
-        # is crypto/USDT-shaped. This is exactly why EntryExitEngine also
-        # accepts pair_name/symbol_a/symbol_b directly (see next two tests):
-        # a non-crypto pair must be supplied explicitly, never guessed from
-        # a filename convention that has no equity/FX equivalent yet.
+    def test_filename_parsing_rejects_unregistered_symbols(self):
+        # claude code changed: was test_filename_parsing_is_crypto_usdt_specific_by_design
+        # — Forex Multi-Asset Integration replaced the old fixed "_USDT"
+        # suffix requirement with a real instrument-registry lookup (see
+        # _parse_pair_from_kalman_filename's own docstring), so this is no
+        # longer "crypto-USDT-specific by design." What's still true, and
+        # what this test now actually documents: a pair filename only
+        # parses when BOTH halves resolve to a REGISTERED instrument.
+        # AAPL/MSFT (US equities) have zero registry rows — no US_EQUITY
+        # data has ever been ingested — so this correctly still raises.
+        # This is exactly why EntryExitEngine also accepts
+        # pair_name/symbol_a/symbol_b directly (see next two tests): an
+        # unregistered pair must be supplied explicitly, never guessed.
         with self.assertRaises(ValueError):
             _parse_pair_from_kalman_filename("research_data/AAPL_MSFT_kalman.csv")
+
+    def test_forex_pair_parsed_from_kalman_filename(self):
+        # claude code changed: new — Forex Multi-Asset Integration proof.
+        # EUR/USD and GBP/USD are real registered FOREX instruments (see
+        # bot/instruments.py's _build_forex_registry()), so the SAME
+        # unmodified parsing function now correctly splits a Forex pair
+        # filename with no "_USDT" suffix anywhere in sight.
+        pair_name, symbol_a, symbol_b = _parse_pair_from_kalman_filename(
+            "research_data/EUR_USD_GBP_USD_kalman.csv"
+        )
+        self.assertEqual((pair_name, symbol_a, symbol_b), ("EUR_USD/GBP_USD", "EUR_USD", "GBP_USD"))
 
     def test_equity_pair_accepted_via_explicit_constructor_args(self):
         # claude code changed: AAPL/MSFT — no "_USDT" in sight, no filename

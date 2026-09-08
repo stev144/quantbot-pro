@@ -55,15 +55,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASSES, get_instrument, list_instruments, symbols_for_asset_class
+from bot.instruments import ASSET_CLASSES, get_instrument, list_instruments
 
-# claude code changed: this platform has exactly one native candle interval
-# today (every CRYPTO instrument in the registry is "1h") —
-# SUPPORTED_TIMEFRAMES is a list of one on purpose, not an oversight. A
-# hypothesis naming a different timeframe is a real, honest
-# INSUFFICIENT_DATA case, not something to silently coerce to 1h.
-SUPPORTED_TIMEFRAMES = sorted({i.timeframe for i in list_instruments(ASSET_CLASS_CRYPTO) if i.timeframe})
-SUPPORTED_ASSETS = symbols_for_asset_class(ASSET_CLASS_CRYPTO)
+# claude code changed: Forex Multi-Asset Integration — both were CRYPTO-only
+# (symbols_for_asset_class(ASSET_CLASS_CRYPTO) / list_instruments(ASSET_CLASS_CRYPTO)).
+# Now derived across every registered asset class — a Forex symbol
+# validates automatically once bot.instruments.INSTRUMENT_REGISTRY has
+# real FOREX rows, with zero special-casing needed here (this platform
+# still has exactly one native candle interval overall, "1h" — every
+# CRYPTO and FOREX instrument in the registry uses it — so
+# SUPPORTED_TIMEFRAMES stays a list of one, on purpose, not because
+# non-CRYPTO was excluded).  A hypothesis naming any other timeframe is a
+# real, honest INSUFFICIENT_DATA case, not something to silently coerce.
+SUPPORTED_TIMEFRAMES = sorted({i.timeframe for i in list_instruments() if i.timeframe})
+SUPPORTED_ASSETS = [i.canonical_symbol for i in list_instruments()]
 
 SUPPORTED_TARGET_TYPES = ["forward_return"]  # claude code changed: the only label type every tool in the Tool Layer (§08) can score against today
 

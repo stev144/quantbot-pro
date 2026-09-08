@@ -136,8 +136,16 @@ class CapabilityUiStateTest(TestCase):
         self.assertEqual(ResearchEntitlementService.capability_ui_state(self.free_user, "continuous_feature_research")["badge"], "AVAILABLE")
 
     def test_not_implemented_capability_is_coming_soon_regardless_of_subscription(self):
-        self.assertEqual(ResearchEntitlementService.capability_ui_state(self.free_user, "cross_sectional_research")["badge"], "COMING_SOON")
-        self.assertEqual(ResearchEntitlementService.capability_ui_state(self.pro_user, "cross_sectional_research")["badge"], "COMING_SOON")
+        # claude code changed: was "cross_sectional_research" — that
+        # capability was promoted to IMPLEMENTED_AND_READY earlier this
+        # session (bot/research_lab/capability_registry.py) once
+        # run_cross_sectional_oos.py made it real and tested; it correctly
+        # shows LOCKED/AVAILABLE now, not COMING_SOON (see
+        # test_free_user_sees_locked_for_a_ready_pro_capability's sibling
+        # coverage of that transition). Swapped to feature_stability_research,
+        # which is still genuinely NOT_IMPLEMENTED.
+        self.assertEqual(ResearchEntitlementService.capability_ui_state(self.free_user, "feature_stability_research")["badge"], "COMING_SOON")
+        self.assertEqual(ResearchEntitlementService.capability_ui_state(self.pro_user, "feature_stability_research")["badge"], "COMING_SOON")
 
     def test_pro_subscription_plus_unready_engine_is_unavailable_not_locked(self):
         """The exact section 10 example: 'Subscription: PRO but engine

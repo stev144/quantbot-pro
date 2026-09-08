@@ -137,6 +137,23 @@ class ResearchExperimentAppendOnlyTest(TestCase):
         with self.assertRaises(Exception):   # django.db.models.ProtectedError, via on_delete=PROTECT
             family.delete()
 
+    def test_student_with_a_linked_experiment_cannot_be_deleted(self):
+        # claude code changed: new — Forensic Audit & Deep Health Check
+        # Hardening mission. Regression guard for a real bug: student
+        # used to be on_delete=CASCADE, the one path that bypassed this
+        # model's own append-only design entirely — Django's cascade
+        # collector deletes related rows via a bulk operation, never
+        # calling each child's overridden delete(), so deleting a User
+        # silently wiped every one of their "permanent" experiments with
+        # no ResearchRecordIsImmutableError ever raised. Now PROTECT,
+        # matching hypothesis_family's own reasoning immediately above.
+        student = _make_user("researcher-with-history")
+        ResearchExperiment.objects.create(student=student, hypothesis_text="does X predict Y")
+        with self.assertRaises(Exception):   # django.db.models.ProtectedError, via on_delete=PROTECT
+            student.delete()
+        # the experiment must genuinely still exist, not just "delete raised"
+        self.assertEqual(ResearchExperiment.objects.filter(student=student).count(), 1)
+
 
 class DataFingerprintTest(TestCase):
 

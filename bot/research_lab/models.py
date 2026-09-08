@@ -195,8 +195,20 @@ class ResearchExperiment(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
+    # claude code changed: was on_delete=CASCADE — a forensic audit found
+    # this was the one path that bypassed this model's own append-only
+    # design entirely. delete() below is overridden to unconditionally
+    # block direct deletion of an experiment (see that method), but
+    # Django's CASCADE collector deletes related rows via a bulk
+    # ORM/SQL operation when the User is deleted — it never calls each
+    # child's overridden .delete(), so a user-account deletion silently
+    # wiped every one of that user's experiments, "permanent,
+    # institutional knowledge" (see this model's own docstring) or not.
+    # PROTECT mirrors the same reasoning already used for
+    # hypothesis_family below: a user with any linked experiment can
+    # never be deleted out from under it.
     student = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="research_experiments"
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="research_experiments"
     )
 
     # ── What the user asked ──────────────────────────────────────────────

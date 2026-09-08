@@ -106,6 +106,18 @@ import pandas as pd                         # DataFrame operations
 from scipy import stats                     # Spearman IC calculation
 from statsmodels.stats.multitest import multipletests   # claude code changed: new — Phase 1D, Objective 10. Family-wide FDR correction across DivergenceICReporter.report()'s (symbol x feature) results, the same discipline cointegration_engine.py's _apply_fdr_correction() and feature_validator.py's apply_family_wide_correction() already use.
 
+# claude code changed: new — real drift bug found by audit. ALTCOIN_SYMBOLS
+# below used to be a hand-typed 19-symbol copy of the ORIGINAL 20-coin
+# universe, frozen at that size through both the 20->50 and 50->100
+# expansions — it silently kept testing a stale set (including 4 symbols,
+# MATIC/ARB/APT/OP, no longer even IN the current universe) while missing
+# every symbol added since, with no error or warning. cointegration_engine.py
+# and cross_section_engine.py were both already migrated to derive their
+# universe from this same single registry (bot/instruments.py's own module
+# docstring flagged the drift risk of NOT doing so) — this file was the one
+# left behind. Same fix applied here now.
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO
+
 warnings.filterwarnings('ignore')           # Suppress non-critical pandas warnings
 
 
@@ -144,32 +156,15 @@ BTC_SYMBOL: str = "BTC/USDT"
 # Altcoins — the assets we test the hypothesis on
 # BTC is excluded because you cannot diverge from yourself
 #
-# claude code changed: fixed a real typo found during audit — 'ETH/USDT]'
-# had a stray trailing ']' baked into the string itself, so it could never
-# match any real symbol. This list is otherwise verified identical to
-# bot/fetch_all_symbols.py's own SYMBOLS list (minus BTC/USDT, excluded
-# here since BTC is the reference asset, not an altcoin) — same 19 symbols,
-# same order, same canonical slash format.
+# claude code changed: was a hand-typed 19-symbol list frozen at the
+# original universe size — see the import comment above for the full
+# story. Now derived live from the single instrument registry, same
+# pattern as cointegration_engine.py's UNIVERSE — any future universe
+# expansion (e.g. 100 -> N) picks this up automatically, no hand-edit,
+# no drift risk. BTC_SYMBOL is still excluded explicitly (it's the fixed
+# reference asset every altcoin is measured against, not a pool member).
 ALTCOIN_SYMBOLS: List[str] = [
-    'ETH/USDT',
-    'BNB/USDT',
-    'SOL/USDT',
-    'ADA/USDT',
-    'AVAX/USDT',
-    'DOT/USDT',
-    'MATIC/USDT',
-    'ARB/USDT',
-    'LINK/USDT',
-    'UNI/USDT',
-    'AAVE/USDT',
-    'XRP/USDT',
-    'XLM/USDT',
-    'DOGE/USDT',
-    'SHIB/USDT',
-    'ATOM/USDT',
-    'FIL/USDT',
-    'APT/USDT',
-    'OP/USDT',
+    s for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO) if s != BTC_SYMBOL
 ]
 
 # Divergence rolling windows (in 1h candles)

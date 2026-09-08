@@ -34,6 +34,7 @@ import ccxt           # Exchange connection for data fetching
 
 # Import your existing backtest function — called directly, not wrapped
 from bot.backtesting.backtester import backtest
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — forensic audit found this file's own hardcoded 7-symbol default silently substituted a tiny stale universe for the real ~100-coin dynamic one whenever no symbols were explicitly passed (hit by dashboard.py, strategy_research.py, and health_check.py). Same fix pattern already applied to cointegration_engine.py/cross_section_engine.py — symbols_for_asset_class() already inherits fetch_all_symbols.py's own safe fallback (load_universe_symbols() or the legacy list) if the dynamic universe has never been selected, so no separate fallback is needed here.
 
 # Import your existing strategy scorer — same one used on dashboard
 from bot.engines.strategy_scorer import StrategyScorer
@@ -74,17 +75,24 @@ class PortfolioBacktester:
         # Store exchange instance — used for OHLCV fetching
         self.exchange = exchange
 
-        # Default symbols if none provided
-        # Selected for variety: large caps, mid caps, and your original pair
-        self.symbols = symbols or [
-            "BTC/USDT",    # Large cap — frequently ranging, hard to trend-trade
-            "ETH/USDT",    # Large cap — moderate trend behaviour
-            "NEAR/USDT",   # Your original pair — keep for comparison
-            "SOL/USDT",    # Mid cap — often strong directional moves
-            "BNB/USDT",    # Exchange token — moderate volatility
-            "ADA/USDT",    # Alt — frequently ranging
-            "XRP/USDT",   # Alt — good trend structure when trending
-        ]
+        # claude code changed: was a hardcoded 7-symbol list — see the
+        # import comment above. Real operational constraint found while
+        # fixing this: run() below fetches live OHLCV + runs a full
+        # backtest per symbol, with a 1s rate-limit sleep between each —
+        # and this constructor is called synchronously from a real
+        # Django HTTP view (bot/views/dashboard.py's
+        # portfolio_backtest_view, bot/views/strategy_research.py)
+        # whenever no explicit `?pairs=` query param is given. Defaulting
+        # to the FULL ~100-coin dynamic universe would turn a ~10s
+        # request into several minutes, risking a real request timeout —
+        # "more universe-correct" would have been a genuine usability
+        # regression, not a safe minimal fix. Instead: take the current
+        # TOP 7 most liquid coins from the same dynamic, liquidity-ranked
+        # universe (symbols_for_asset_class() returns most-liquid-first,
+        # per universe_selector.py) — same count and same fast request
+        # profile as before, but never a frozen/stale hand-picked set;
+        # it tracks whichever 7 coins are actually most liquid today.
+        self.symbols = symbols or symbols_for_asset_class(ASSET_CLASS_CRYPTO)[:7]
 
         self.timeframe       = timeframe        # e.g. "1h"
         self.candle_limit    = candle_limit      # How many candles to fetch per coin

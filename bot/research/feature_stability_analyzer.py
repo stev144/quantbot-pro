@@ -63,6 +63,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — see SYMBOLS comment below
+
 warnings.filterwarnings('ignore')
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,11 +109,21 @@ YEAR_CONTEXT: Dict[str, str] = {
 # These catch gradual decay that calendar year splits miss
 ROLLING_WINDOWS_MONTHS: List[int] = [12, 18, 24]
 
-# Symbols to process
-SYMBOLS: List[str] = [
-    "BTC_USDT", "ETH_USDT", "BNB_USDT", "XRP_USDT",
-    "ADA_USDT", "DOGE_USDT", "SOL_USDT",
-]
+# claude code changed: was a frozen 7-symbol hardcoded list — forensic
+# audit found this was the documented standalone entry point
+# (`python -m bot.research.feature_stability_analyzer`, and this file's
+# own __main__ block below) for analyzing feature stability, silently
+# limited to 7 legacy symbols regardless of how large the real dynamic
+# universe has grown (currently ~100). Safe to switch directly to the
+# full dynamic universe here — unlike the two Django-view fixes above,
+# this is a manually-invoked research script with no request-timeout
+# concern, and run_stability_analysis()'s existing per-symbol guard
+# (`if not obs_path.exists(): continue`, a few lines below) already
+# gracefully skips any symbol without a built observations.csv rather
+# than crashing — so this naturally analyzes whichever universe symbols
+# actually have data today, and picks up more automatically as the
+# observations pipeline is extended, with no future edit needed here.
+SYMBOLS: List[str] = [s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)]
 
 # Thresholds for metric classification
 IC_STRONG:      float = 0.05    # IC above this = strong signal

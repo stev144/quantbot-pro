@@ -57,6 +57,7 @@ ALLOWED_TOOLS = {
     "run_cointegration_test",
     "run_backtest",
     "run_parameter_sensitivity",
+    "run_cross_sectional_ranking_test",   # claude code changed: new — statistics-infrastructure mission, Milestone B4. Real, tested (bot/tests/test_oos_validator.py's CrossSectionalOOSSyntheticProofTest/CrossSectionalPermutationSyntheticProofTest, 11 tests) Type C evaluator + permutation test + FDR sweep, same MEDIUM risk shape as run_cointegration_test/run_backtest (a real statistical test, no path to live execution).
     "generate_research_report",
 }
 
@@ -87,7 +88,7 @@ MAX_PAIRS_PER_EXPERIMENT = 1
 # live execution regardless of declared risk_tier).
 TOOLS_BY_RISK_TIER = {
     "LOW": {"inspect_dataset", "calculate_feature", "run_statistical_test", "run_fdr_correction", "run_conditional_test", "generate_research_report"},
-    "MEDIUM": {"run_cointegration_test", "run_backtest", "run_parameter_sensitivity"},
+    "MEDIUM": {"run_cointegration_test", "run_backtest", "run_parameter_sensitivity", "run_cross_sectional_ranking_test"},
 }
 
 

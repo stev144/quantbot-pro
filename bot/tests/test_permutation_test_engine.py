@@ -25,9 +25,22 @@ import numpy as np
 import pandas as pd
 from django.test import SimpleTestCase
 
+from bot.research.entry_exit_engine import SIGNAL_SOURCE_COLUMNS
 from bot.research.permutation_test_engine import (  # claude code changed: module under test
-    PermutationTestEngine, REQUIRED_KALMAN_COLUMNS, SIGNIFICANCE_PERCENTILE,
+    PermutationTestEngine, SIGNIFICANCE_PERCENTILE,
 )
+
+# claude code changed: REQUIRED_KALMAN_COLUMNS was a hardcoded module-level
+# list in permutation_test_engine.py, removed when PermutationTestEngine
+# switched to resolving this per-instance as self._shuffle_columns from
+# entry_exit_engine.py's SIGNAL_SOURCE_COLUMNS (see that module's own
+# comment) — this test file was never updated for the rename, which broke
+# its import entirely (a real regression: 0 of this file's tests could even
+# load, let alone run). Every test below exercises the default
+# signal_source="kalman" engine, so the "kalman" branch's column set is the
+# exact equivalent of the old constant — kept under the same name so no
+# test body below needs to change.
+REQUIRED_KALMAN_COLUMNS = list(SIGNAL_SOURCE_COLUMNS["kalman"].values())
 
 
 def _make_marked_df(n=24):

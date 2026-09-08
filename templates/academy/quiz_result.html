@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 {% block title %}{{ quiz.title }} — Results{% endblock %}
 {% block content %}
 
@@ -11,7 +12,7 @@
         </div>
         <div class="term-section-body">
             <div class="term-stat-row">
-                <div class="term-stat"><span class="term-stat-label">Score</span><span class="term-stat-value mono">{{ attempt.score }}%</span></div>
+                <div class="term-stat"><span class="term-stat-label">Score</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ attempt.score|default_if_none:0 }}" data-decimals="1" data-suffix="%">0%</span></span></div>
                 <div class="term-stat"><span class="term-stat-label">Result</span><span class="badge {% if attempt.passed %}pos{% else %}neg{% endif %}">{% if attempt.passed %}PASSED{% else %}NOT YET{% endif %}</span></div>
             </div>
 
@@ -35,4 +36,8 @@
 
 {% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

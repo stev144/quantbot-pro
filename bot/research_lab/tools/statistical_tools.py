@@ -14,6 +14,35 @@ from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
 
 
+# claude code changed: new — real bug fix. The two call sites below used
+# to do `enriched[[feature_name, forward_col]].copy()` — correct in
+# INTENT (scope the validator's hypothesis family to exactly one
+# feature), but it also stripped every column
+# bot.research.feature_validator.MarketRegimeDetector.detect_regime()
+# unconditionally needs ('realized_vol', 'close', optionally 'adx'),
+# which raised a KeyError caught by that function's own blanket
+# `except Exception` and silently degraded EVERY observation to the
+# 'ranging' regime — reproduced directly: "Error detecting regime:
+# 'realized_vol'. Defaulting to 'ranging'" on every real call. It also
+# dropped 'timestamp' — enriched's timestamp lives on the INDEX, not a
+# column (confirmed: `'timestamp' in enriched.columns` is False even
+# BEFORE this scoping), so FeatureValidator's year-by-year stability
+# test's `if 'timestamp' in df.columns` branch was always False,
+# silently computing the SAME overall IC four times under the 2021/2022/
+# 2023/2024 keys instead of four genuinely different year slices — which
+# then reports a falsely "perfect" stability_consistency of 0.0 instead
+# of honestly reflecting that no per-year comparison happened at all.
+# Fixed by keeping the SAME single-feature scoping intent (feature_cols'
+# own exclude_cols already excludes all of these — see
+# validate_all_features_raw() — so none of them are ever picked up as an
+# extra "feature" to correct for) while including exactly what
+# regime/stability detection need, and exposing the real DatetimeIndex as
+# an actual 'timestamp' column via reset_index().
+def _scope_to_single_feature(enriched, feature_name: str, forward_col: str):
+    support_cols = [c for c in ("close", "realized_vol", "adx") if c in enriched.columns]
+    return enriched.reset_index()[["timestamp", feature_name, forward_col, *support_cols]].copy()
+
+
 def _prepare(asset: str, horizon: int):
     if horizon not in SUPPORTED_HORIZONS:
         raise ValueError(f"horizon={horizon} is not supported — only {sorted(SUPPORTED_HORIZONS)} candles are available as labels")
@@ -36,7 +65,7 @@ def run_statistical_test(asset: str, feature_name: str, horizon: int, random_see
     if feature_name not in enriched.columns:
         raise ValueError(f"'{feature_name}' is not a column feature_calculator.py produced")
 
-    single_feature_df = enriched[[feature_name, forward_col]].copy()  # claude code changed: scope the validator to exactly the one feature under test — this call's own hypothesis family is size 1
+    single_feature_df = _scope_to_single_feature(enriched, feature_name, forward_col)  # claude code changed: scope the validator to exactly the one feature under test — this call's own hypothesis family is size 1
     # claude code changed: Phase 1B hardening, section 7 — pass the real
     # timeframe/asset_class through so FeatureValidator's Sharpe-
     # contribution annualization (see that module) is correct, not the
@@ -73,7 +102,7 @@ def run_fdr_correction(asset: str, feature_name: str, horizon: int, random_seed:
     if feature_name not in enriched.columns:
         raise ValueError(f"'{feature_name}' is not a column feature_calculator.py produced")
 
-    single_feature_df = enriched[[feature_name, forward_col]].copy()
+    single_feature_df = _scope_to_single_feature(enriched, feature_name, forward_col)
     validator = FeatureValidator(random_seed=random_seed, timeframe=timeframe, asset_class=asset_class)
     raw_results = validator.validate_all_features_raw(single_feature_df, forward_return_col=forward_col)
 

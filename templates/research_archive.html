@@ -24,7 +24,7 @@
         </div>
         <div class="term-section-body">
             {% if conclusions.available %}
-            <div class="chart-caption" style="margin-bottom:10px">Every research verdict this project has recorded — {{ conclusions.n_entries }} entries. Synthesizes cointegration, walk-forward, and permutation-test results into one accepted/rejected call per line of research, explaining WHY, not just what the numbers were.</div>
+            <div class="chart-caption" style="margin-bottom:10px">Every research verdict this project has recorded — <span class="stat-number" data-target="{{ conclusions.n_entries }}" data-decimals="0">0</span> entries. Synthesizes cointegration, walk-forward, and permutation-test results into one accepted/rejected call per line of research, explaining WHY, not just what the numbers were.</div>
             {% for e in conclusions.entries %}
             <div class="term-panel" style="margin-bottom:10px">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
@@ -45,4 +45,8 @@
 
 {% include "partials/_footer.html" with label="Research Archive" note="full go/no-go decision history" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

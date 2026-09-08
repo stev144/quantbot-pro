@@ -91,13 +91,49 @@ USE_BONFERRONI = True                         # Use Bonferroni for ultra-conserv
 USE_FDR = True                                # Use FDR (False Discovery Rate) for balanced approach
 # Both are calculated; FDR is more practical than Bonferroni for many features
 
-# Stability testing windows (test across different time periods)
-STABILITY_WINDOWS = {
-    '2021': (pd.Timestamp('2021-01-01'), pd.Timestamp('2021-12-31')),  # Bull market
-    '2022': (pd.Timestamp('2022-01-01'), pd.Timestamp('2022-12-31')),  # Bear market
-    '2023': (pd.Timestamp('2023-01-01'), pd.Timestamp('2023-12-31')),  # Recovery
-    '2024': (pd.Timestamp('2024-01-01'), pd.Timestamp('2024-12-31')),  # Current
-}
+# claude code changed: real bug fix. This was a hardcoded dict of 4 fixed
+# calendar years (2021-2024) — a real, silently-worsening staleness bug:
+# any data from 2025 onward (an ever-growing fraction of every real
+# dataset as time passes) was NEVER included in the stability-across-years
+# test, regardless of how much real history was actually available.
+# Confirmed the failure mode this caused in the one caller that reaches
+# _validate_single_feature_institutional() with a real, non-empty
+# 'timestamp' column: none directly (that column was ALSO broken until
+# this same fix — see bot/research_lab/tools/statistical_tools.py's
+# _scope_to_single_feature()) — but a from-scratch reproduction against
+# real 2021-2026 BTC/USDT data showed the year-filter itself works
+# correctly once given a real column; only the fixed 2021-2024 window set
+# was stale. Replaced with _build_stability_windows(), which derives one
+# window per calendar year ACTUALLY PRESENT in the data being validated —
+# self-updating forever, the same "derive, don't hardcode" principle
+# already used elsewhere in this research pipeline (e.g.
+# bot.instruments.periods_per_year()).
+def _build_stability_windows(df: pd.DataFrame, timestamp_col: str = "timestamp") -> Dict[str, Tuple[pd.Timestamp, pd.Timestamp]]:
+    """
+    One (start, end) window per calendar year present in df[timestamp_col],
+    tz-matched to that column so the >=/<= comparison in
+    _validate_single_feature_institutional() never raises on a tz-aware
+    vs tz-naive mismatch. Returns {} if timestamp_col isn't present or
+    has no parseable dates — an honest empty result (no stability score
+    computed) rather than a misleading placeholder.
+    """
+    if timestamp_col not in df.columns:
+        return {}
+    ts = pd.to_datetime(df[timestamp_col], errors="coerce")
+    ts = ts.dropna()
+    if ts.empty:
+        return {}
+    tz = ts.dt.tz
+    years = sorted(ts.dt.year.unique())
+    windows = {}
+    for year in years:
+        start = pd.Timestamp(f"{year}-01-01")
+        end = pd.Timestamp(f"{year}-12-31 23:59:59")
+        if tz is not None:
+            start = start.tz_localize(tz)
+            end = end.tz_localize(tz)
+        windows[str(year)] = (start, end)
+    return windows
 
 # Information coefficient (IC) thresholds
 IC_EXCELLENT = 0.15                           # IC > 0.15 = excellent predictive power
@@ -415,7 +451,18 @@ class FeatureValidator:
         logger.info(f"  Regime distribution:")
         for regime, count in df['market_regime'].value_counts().items():
             logger.info(f"    {regime:12} {count:10,} observations ({count/len(df)*100:5.1f}%)")
-        
+
+        # claude code changed: computed ONCE per validation run (same
+        # pattern as market_regime above), not once per feature — see
+        # _build_stability_windows()'s own docstring for the real
+        # staleness bug this replaces.
+        stability_windows = _build_stability_windows(df)
+        if not stability_windows:
+            logger.warning(
+                "  No usable 'timestamp' column — stability-across-years testing will be skipped "
+                "for every feature in this run (stability_scores will be empty, not falsely perfect)"
+            )
+
         # Get all feature columns (exclude metadata/labels)
         exclude_cols = {
             'symbol', 'timeframe', 'timestamp', 'market_regime',
@@ -449,7 +496,7 @@ class FeatureValidator:
         for i, feature_col in enumerate(feature_cols, 1):
             try:
                 result = self._validate_single_feature_institutional(
-                    df, feature_col, forward_return_col, forward_returns
+                    df, feature_col, forward_return_col, forward_returns, stability_windows
                 )
                 self.results.append(result)
                 
@@ -617,7 +664,8 @@ class FeatureValidator:
                                               df: pd.DataFrame,
                                               feature_col: str,
                                               forward_return_col: str,
-                                              forward_returns: np.ndarray) -> InstitutionalValidationResult:
+                                              forward_returns: np.ndarray,
+                                              stability_windows: Optional[Dict[str, Tuple[pd.Timestamp, pd.Timestamp]]] = None) -> InstitutionalValidationResult:
         """
         Comprehensive validation of a single feature.
         
@@ -759,10 +807,23 @@ class FeatureValidator:
             ic_rank = "poor"
         
         # ── STEP 6: Stability testing (across time periods) ──────────────────
-        # Does this feature work in 2021? 2022? 2023? 2024?
+        # Does this feature work consistently across every calendar year
+        # actually present in the data? (windows are derived from the real
+        # data, not a hardcoded/stale year list — see
+        # _build_stability_windows())
         stability_scores = {}
-        
-        for year, (start_date, end_date) in STABILITY_WINDOWS.items():
+        # claude code changed: was the module-level STABILITY_WINDOWS
+        # constant (hardcoded to 2021-2024) — real bug, see
+        # _build_stability_windows()'s docstring. None (no real
+        # 'timestamp' column was available to the caller) is handled
+        # honestly: stability_scores stays empty rather than falsely
+        # reporting a "perfect" consistency for years never actually
+        # compared — see this method's own STEP 10 for how an empty
+        # stability_scores now correctly fails passed_stability rather
+        # than trivially passing it.
+        windows = stability_windows if stability_windows is not None else {}
+
+        for year, (start_date, end_date) in windows.items():
             try:
                 # Filter data to this year (if timestamp available)
                 if 'timestamp' in df.columns:

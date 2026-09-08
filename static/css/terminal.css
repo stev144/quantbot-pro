@@ -15,10 +15,18 @@
  * ============================================================ */
 
 :root {
-  /* ---- surfaces ---- */
-  --bg-0: #0a0c10;       /* page background */
-  --bg-1: #10131a;       /* panel background */
-  --bg-2: #161a23;       /* raised / hover */
+  /* ---- surfaces ----
+   * claude code changed: was #0a0c10/#10131a/#161a23 — retuned to an
+   * exact match of TradeFlow Academy's dark-navy surface family
+   * (#0a0e14 page / #0d121a panel / #131922 raised, per direct request
+   * to match that site's background), from an already near-identical
+   * starting point (off by 2-4 RGB units). Border/text/semantic/accent
+   * tokens below are untouched — this is a background-only match, not a
+   * copy of TradeFlow's actual layout/typography/decoration, which this
+   * file's own design intent (below) still deliberately avoids. */
+  --bg-0: #0a0e14;       /* page background */
+  --bg-1: #0d121a;       /* panel background */
+  --bg-2: #131922;       /* raised / hover */
   --border: #232833;
   --border-strong: #333a48;
 
@@ -28,12 +36,13 @@
    * direct request ("I don't want to see anything in plain white").
    * Retuned to a cool blue-tinted ink (matching this theme's own
    * --accent, #5b8dc9) instead of introducing an unrelated hue — same
-   * lightness tiers (primary brightest, dim most muted), each verified
-   * against --bg-1 (#10131a): primary 11.15:1, secondary 7.07:1 (both
-   * clear the WCAG 4.5:1 normal-text threshold), dim 3.60:1 (large-text
-   * tier only, consistent with the original's 3.13:1 — this tier was
-   * always meant to be the most muted, e.g. table headers/timestamps,
-   * not primary reading content). */
+   * lightness tiers (primary brightest, dim most muted), each re-verified
+   * against --bg-1 after the TradeFlow-match retune above (#0d121a):
+   * primary 11.27:1, secondary 7.15:1 (both clear the WCAG 4.5:1
+   * normal-text threshold), dim 3.64:1 (large-text tier only, consistent
+   * with the original's 3.13:1 — this tier was always meant to be the
+   * most muted, e.g. table headers/timestamps, not primary reading
+   * content). */
   --text-primary: #b9c9ea;
   --text-secondary: #8fa0c4;
   --text-dim: #5f6d8f;

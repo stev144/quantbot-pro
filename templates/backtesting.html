@@ -40,7 +40,7 @@
                 </div>
                 <div class="metric-tile">
                     <div class="metric-label">Split</div>
-                    <div class="metric-value small">{{ walk_forward.split_pct }}% in-sample / {{ walk_forward.in_sample.days }}d in, {{ walk_forward.out_sample.days }}d out</div>
+                    <div class="metric-value small"><span class="stat-number" data-target="{{ walk_forward.split_pct }}" data-decimals="0" data-suffix="%">0%</span> in-sample / {{ walk_forward.in_sample.days }}d in, {{ walk_forward.out_sample.days }}d out</div>
                 </div>
             </div>
             <div class="chart-caption" style="margin-bottom:12px">{{ walk_forward.verdict.message }}</div>
@@ -48,12 +48,12 @@
                 <table class="term-table">
                     <thead><tr><th>Metric</th><th class="num">In-Sample</th><th class="num">Out-of-Sample</th><th class="num">Degradation</th></tr></thead>
                     <tbody>
-                        <tr><td class="label-cell">Trades</td><td class="num">{{ walk_forward.in_sample.metrics.total_trades }}</td><td class="num">{{ walk_forward.out_sample.metrics.total_trades }}</td><td class="num text-dim">—</td></tr>
-                        <tr><td class="label-cell">Win Rate</td><td class="num">{{ walk_forward.in_sample.metrics.win_rate }}%</td><td class="num">{{ walk_forward.out_sample.metrics.win_rate }}%</td><td class="num {% if walk_forward.degradations.win_rate < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.win_rate }}%</td></tr>
-                        <tr><td class="label-cell">Profit Factor</td><td class="num">{{ walk_forward.in_sample.metrics.profit_factor }}</td><td class="num">{{ walk_forward.out_sample.metrics.profit_factor }}</td><td class="num {% if walk_forward.degradations.profit_factor < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.profit_factor }}%</td></tr>
-                        <tr><td class="label-cell">Expectancy (R)</td><td class="num">{{ walk_forward.in_sample.metrics.expectancy_r }}</td><td class="num">{{ walk_forward.out_sample.metrics.expectancy_r }}</td><td class="num {% if walk_forward.degradations.expectancy_r < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.expectancy_r }}%</td></tr>
-                        <tr><td class="label-cell">Max Drawdown</td><td class="num">{{ walk_forward.in_sample.metrics.max_drawdown }}%</td><td class="num">{{ walk_forward.out_sample.metrics.max_drawdown }}%</td><td class="num {% if walk_forward.degradations.max_drawdown < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.max_drawdown }}%</td></tr>
-                        <tr><td class="label-cell">Sharpe</td><td class="num">{{ walk_forward.in_sample.metrics.sharpe }}</td><td class="num">{{ walk_forward.out_sample.metrics.sharpe }}</td><td class="num {% if walk_forward.degradations.sharpe < 0 %}neg{% else %}pos{% endif %}">{{ walk_forward.degradations.sharpe }}%</td></tr>
+                        <tr><td class="label-cell">Trades</td><td class="num stat-number" data-target="{{ walk_forward.in_sample.metrics.total_trades }}" data-decimals="0">0</td><td class="num stat-number" data-target="{{ walk_forward.out_sample.metrics.total_trades }}" data-decimals="0">0</td><td class="num text-dim">—</td></tr>
+                        <tr><td class="label-cell">Win Rate</td><td class="num stat-number" data-target="{{ walk_forward.in_sample.metrics.win_rate }}" data-decimals="2" data-suffix="%">0%</td><td class="num stat-number" data-target="{{ walk_forward.out_sample.metrics.win_rate }}" data-decimals="2" data-suffix="%">0%</td><td class="num stat-number {% if walk_forward.degradations.win_rate < 0 %}neg{% else %}pos{% endif %}" data-target="{{ walk_forward.degradations.win_rate }}" data-decimals="1" data-suffix="%">0%</td></tr>
+                        <tr><td class="label-cell">Profit Factor</td><td class="num stat-number" data-target="{{ walk_forward.in_sample.metrics.profit_factor }}" data-decimals="2">0</td><td class="num stat-number" data-target="{{ walk_forward.out_sample.metrics.profit_factor }}" data-decimals="2">0</td><td class="num stat-number {% if walk_forward.degradations.profit_factor < 0 %}neg{% else %}pos{% endif %}" data-target="{{ walk_forward.degradations.profit_factor }}" data-decimals="1" data-suffix="%">0%</td></tr>
+                        <tr><td class="label-cell">Expectancy (R)</td><td class="num stat-number" data-target="{{ walk_forward.in_sample.metrics.expectancy_r }}" data-decimals="2">0</td><td class="num stat-number" data-target="{{ walk_forward.out_sample.metrics.expectancy_r }}" data-decimals="2">0</td><td class="num stat-number {% if walk_forward.degradations.expectancy_r < 0 %}neg{% else %}pos{% endif %}" data-target="{{ walk_forward.degradations.expectancy_r }}" data-decimals="1" data-suffix="%">0%</td></tr>
+                        <tr><td class="label-cell">Max Drawdown</td><td class="num stat-number" data-target="{{ walk_forward.in_sample.metrics.max_drawdown }}" data-decimals="2" data-suffix="%">0%</td><td class="num stat-number" data-target="{{ walk_forward.out_sample.metrics.max_drawdown }}" data-decimals="2" data-suffix="%">0%</td><td class="num stat-number {% if walk_forward.degradations.max_drawdown < 0 %}neg{% else %}pos{% endif %}" data-target="{{ walk_forward.degradations.max_drawdown }}" data-decimals="1" data-suffix="%">0%</td></tr>
+                        <tr><td class="label-cell">Sharpe</td><td class="num stat-number" data-target="{{ walk_forward.in_sample.metrics.sharpe }}" data-decimals="2">0</td><td class="num stat-number" data-target="{{ walk_forward.out_sample.metrics.sharpe }}" data-decimals="2">0</td><td class="num stat-number {% if walk_forward.degradations.sharpe < 0 %}neg{% else %}pos{% endif %}" data-target="{{ walk_forward.degradations.sharpe }}" data-decimals="1" data-suffix="%">0%</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -77,13 +77,13 @@
                         {% for r in summaries.rows %}
                         <tr>
                             <td class="label-cell"><a href="{% url 'dashboard' %}?symbol={{ r.symbol }}">{{ r.symbol }}</a></td>
-                            <td class="num">{{ r.total_trades }}</td>
-                            <td class="num">{{ r.win_rate }}%</td>
-                            <td class="num">{{ r.profit_factor }}</td>
-                            <td class="num {% if r.expectancy_r > 0 %}pos{% elif r.expectancy_r < 0 %}neg{% endif %}">{{ r.expectancy_r }}</td>
-                            <td class="num {% if r.sharpe > 0 %}pos{% elif r.sharpe < 0 %}neg{% endif %}">{{ r.sharpe }}</td>
-                            <td class="num neg">{{ r.max_drawdown }}%</td>
-                            <td class="num">{{ r.total_score }}</td>
+                            <td class="num stat-number" data-target="{{ r.total_trades }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ r.win_rate }}" data-decimals="2" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ r.profit_factor }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if r.expectancy_r > 0 %}pos{% elif r.expectancy_r < 0 %}neg{% endif %}" data-target="{{ r.expectancy_r }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if r.sharpe > 0 %}pos{% elif r.sharpe < 0 %}neg{% endif %}" data-target="{{ r.sharpe }}" data-decimals="2">0</td>
+                            <td class="num stat-number neg" data-target="{{ r.max_drawdown }}" data-decimals="2" data-suffix="%">0%</td>
+                            <td class="num stat-number" data-target="{{ r.total_score }}" data-decimals="1">0</td>
                             <td><span class="badge {% if r.grade|slice:':1' == 'A' %}pos{% elif r.grade|slice:':1' == 'B' %}neu{% elif r.grade|slice:':1' == 'C' %}warn{% else %}neg{% endif %}">{{ r.grade }}</span></td>
                         </tr>
                         {% endfor %}
@@ -103,4 +103,8 @@
 
 {% include "partials/_footer.html" with label="Backtesting" note="real in/out-of-sample split + full-period summaries" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

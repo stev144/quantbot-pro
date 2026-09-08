@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 {% block title %}Academy — Steph Quant Technologies{% endblock %}
 {# claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies #}
 {% block content %}
@@ -25,9 +26,9 @@
         </div>
         <div class="term-section-body">
             <div class="term-stat-row">
-                <div class="term-stat"><span class="term-stat-label">Lessons Completed</span><span class="term-stat-value mono">{{ completed_lessons }}{% if total_lessons_enrolled %} / {{ total_lessons_enrolled }}{% endif %}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Quiz Attempts</span><span class="term-stat-value mono">{{ quiz_attempts_count }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Avg Quiz Score</span><span class="term-stat-value mono">{% if avg_quiz_score is not None %}{{ avg_quiz_score }}%{% else %}—{% endif %}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Lessons Completed</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ completed_lessons|default_if_none:0 }}" data-decimals="0">0</span>{% if total_lessons_enrolled %} / <span class="stat-number" data-target="{{ total_lessons_enrolled }}" data-decimals="0">0</span>{% endif %}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Quiz Attempts</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ quiz_attempts_count|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Avg Quiz Score</span><span class="term-stat-value mono">{% if avg_quiz_score is not None %}<span class="stat-number" data-target="{{ avg_quiz_score }}" data-decimals="1" data-suffix="%">0%</span>{% else %}—{% endif %}</span></div>
             </div>
 
             {% if profile %}
@@ -72,4 +73,8 @@
 
 {% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice — see each course's disclaimer" %}
 
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/counters.js' %}"></script>
 {% endblock %}

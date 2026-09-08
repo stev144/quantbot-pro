@@ -12,9 +12,33 @@
 from bot.data_fetcher import get_klines
 from bot.backtesting.backtester import backtest
 from bot.engines.strategy_scorer import StrategyScorer
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — see DEFAULT_SYMBOLS comment below
 from bot.views.dashboard import run_walk_forward_validation
 
-DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "AVAXUSDT", "SOLUSDT", "BNBUSDT"]
+# claude code changed: was a frozen 5-symbol hardcoded list — forensic
+# audit found this silently substituted a tiny stale set for the real
+# ~100-coin dynamic universe on EVERY load of the Backtesting dashboard
+# page (bot/views/backtesting_view.py's `backtesting()` calls
+# get_backtest_summaries() with zero args, no query-param escape hatch
+# exists for this one at all). Kept the SAME count (5) rather than the
+# full dynamic universe — this is a synchronous Django view running a
+# real backtest per symbol on every page load, and 100x the per-symbol
+# work would risk a real request timeout, a genuine usability regression
+# that "more universe-correct" would not have been worth (same
+# reasoning already applied to portfolio_backtester.py's default). Takes
+# the top 5 most liquid symbols from the SAME dynamic, liquidity-ranked
+# universe (symbols_for_asset_class() returns most-liquid-first) instead
+# of a frozen, potentially-stale hand-picked set — same performance
+# profile as before, but tracks whichever 5 coins are actually most
+# liquid today. Converted to the same no-slash "BTCUSDT" form the
+# original list used (symbols_for_asset_class() returns "BTC/USDT") so
+# this page's URLs/display (templates/backtesting.html links to
+# ?symbol={{ r.symbol }}) keep their exact existing format — scoped
+# purely to "use the dynamic universe," not a display-format change too.
+# A function (not a plain constant) so it's evaluated fresh on each call
+# rather than frozen at import time.
+def _default_symbols():
+    return [s.replace("/", "") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)[:5]]
 
 
 def get_walk_forward(symbol, split=0.7):
@@ -35,7 +59,7 @@ def get_backtest_summaries(symbols=None):
     bot/views/dashboard.py::dashboard() uses for the single-symbol
     Executive Dashboard view.
     """
-    symbols = symbols or DEFAULT_SYMBOLS
+    symbols = symbols or _default_symbols()
     rows = []
     errors = {}
     for symbol in symbols:

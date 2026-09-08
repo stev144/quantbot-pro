@@ -53,13 +53,29 @@ class MissingEnginesCannotBeExposedTest(SimpleTestCase):
         self.assertEqual(RESEARCH_CAPABILITIES["walk_forward_validation"].engine_status, "BLOCKED_BY_DEPENDENCY")
         self.assertEqual(RESEARCH_CAPABILITIES["permutation_robustness_testing"].engine_status, "BLOCKED_BY_DEPENDENCY")
 
-    def test_cross_sectional_and_feature_stability_decay_are_not_implemented(self):
-        for capability_id in ("cross_sectional_research", "feature_stability_research", "feature_decay_research"):
+    def test_feature_stability_decay_are_not_implemented(self):
+        # claude code changed: was ("cross_sectional_research", "feature_stability_research",
+        # "feature_decay_research") — cross_sectional_research was moved to
+        # IMPLEMENTED_AND_READY by the statistics-infrastructure mission
+        # (evaluate_cross_sectional_oos + cross_sectional_permutation_test.py
+        # + run_cross_sectional_oos.py + a real Research Lab tool, 15 new
+        # tests) and now has its own positive check below — this test still
+        # spot-checks the two capabilities that were NOT touched and remain
+        # genuinely unimplemented.
+        for capability_id in ("feature_stability_research", "feature_decay_research"):
             self.assertEqual(RESEARCH_CAPABILITIES[capability_id].engine_status, "NOT_IMPLEMENTED", capability_id)
 
     def test_cointegration_pairs_research_is_ready(self):
         """The one capability this pass actually finished wiring end to end."""
         self.assertTrue(RESEARCH_CAPABILITIES["cointegration_pairs_research"].operationally_ready)
+
+    def test_cross_sectional_research_is_ready(self):
+        # claude code changed: new — statistics-infrastructure mission.
+        # cross_sectional_research went from NOT_IMPLEMENTED (pointing at
+        # cross_section_engine.py alone — real features, no OOS evaluation)
+        # to a real, tested, tool-reachable Type C capability. See
+        # capability_registry.py's own updated status_note for the full story.
+        self.assertTrue(RESEARCH_CAPABILITIES["cross_sectional_research"].operationally_ready)
 
 
 class HypothesisTypeMappingTest(SimpleTestCase):

@@ -149,6 +149,14 @@ from bot.research.kalman_filter_engine import ZSCORE_WINSOR_LIMIT
 # below for why)
 from bot.research.kalman_filter_engine import load_pair_config
 
+# claude code changed: new — completes the Phase 1C, Step 3 cost-model wiring
+# the module comment near FEE_RATE/SLIPPAGE_RATE/TOTAL_TRANSACTION_COST
+# already described but __init__ never actually implemented (a real,
+# confirmed gap — bot/tests/test_entry_exit_engine.py's CostModelIntegrationTest
+# was written against this exact interface and was failing until now).
+from bot.config.cost_model import get_cost_model
+from bot.instruments import ASSET_CLASS_CRYPTO
+
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings
 
 # claude code changed: new — same fix bot_runner.py/health_check.py/
@@ -826,7 +834,7 @@ class KalmanPositionSizer:
 # (e.g. "AVAX_USDT_ATOM_USDT_kalman.csv"). Parsing pair identity back out of
 # that filename lets this module run on whichever pair's CSV it's pointed
 # at, instead of only ever knowing about AVAX/ATOM.
-_KALMAN_FILENAME_RE = re.compile(r"^(.+?_USDT)_(.+_USDT)_kalman\.csv$")   # claude code changed: new — matches "<A>_<B>_kalman.csv"
+_KALMAN_FILENAME_RE = re.compile(r"^(.+)_kalman\.csv$")   # claude code changed: Forex Multi-Asset Integration — was r"^(.+?_USDT)_(.+_USDT)_kalman\.csv$", which hardcoded a "_USDT" suffix on both halves to disambiguate the split point. A Forex pair filename ("EUR_USD_GBP_USD_kalman.csv") has no such suffix to match. Now only anchors the ".csv" tail; _parse_pair_from_kalman_filename() below disambiguates the actual split point against the real instrument registry instead of a fixed string pattern.
 
 
 def _parse_pair_from_kalman_filename(kalman_csv: str) -> Tuple[str, str, str]:   # claude code changed: new function
@@ -835,24 +843,54 @@ def _parse_pair_from_kalman_filename(kalman_csv: str) -> Tuple[str, str, str]:  
     output filename, e.g.:
         "AVAX_USDT_ATOM_USDT_kalman.csv"
             -> ("AVAX_USDT/ATOM_USDT", "AVAX_USDT", "ATOM_USDT")
+        "EUR_USD_GBP_USD_kalman.csv"
+            -> ("EUR_USD/GBP_USD", "EUR_USD", "GBP_USD")
 
     Raises ValueError if the filename doesn't follow that convention. Scratch
     files that legitimately don't (a walk-forward fold's "train_slice_kalman
     .csv", a permutation test's "shuffled_kalman.csv") are the caller's
     responsibility to catch and fall back on explicitly — this function
     never guesses.
+
+    claude code changed: Forex Multi-Asset Integration — the split point
+    between symbol_a and symbol_b used to be found by requiring a literal
+    "_USDT" suffix on both halves, which only works for crypto. Now tries
+    every underscore split point in the stem and accepts the ONE split
+    where BOTH halves resolve to a real registered instrument (via
+    bot.instruments.get_instrument(), after converting this engine's
+    underscore convention to the registry's canonical "BASE/QUOTE" form).
+    Fails loud — never guesses — if zero or more than one split matches,
+    exactly the same "no silent guessing" contract the old regex had.
     """
-    # claude code changed: entire function body below is new (docstring above can't carry a "#" marker without corrupting it)
-    match = _KALMAN_FILENAME_RE.match(Path(kalman_csv).name)             # claude code changed: new
-    if not match:                                                         # claude code changed: new
-        raise ValueError(                                                 # claude code changed: new
-            f"'{Path(kalman_csv).name}' does not follow the "             # claude code changed: new
-            f"'<SYMBOL_A>_<SYMBOL_B>_kalman.csv' naming convention "      # claude code changed: new
-            f"kalman_filter_engine.py uses for real pair output "         # claude code changed: new
-            f"(e.g. 'AVAX_USDT_ATOM_USDT_kalman.csv')."                   # claude code changed: new
-        )                                                                  # claude code changed: new
-    symbol_a, symbol_b = match.group(1), match.group(2)                  # claude code changed: new
-    return f"{symbol_a}/{symbol_b}", symbol_a, symbol_b                  # claude code changed: new
+    from bot.instruments import get_instrument   # claude code changed: new — local import avoids a module-load-order dependency, matching this file's existing lazy-import style for cost_model
+
+    match = _KALMAN_FILENAME_RE.match(Path(kalman_csv).name)
+    if not match:
+        raise ValueError(
+            f"'{Path(kalman_csv).name}' does not follow the "
+            f"'<SYMBOL_A>_<SYMBOL_B>_kalman.csv' naming convention "
+            f"kalman_filter_engine.py uses for real pair output "
+            f"(e.g. 'AVAX_USDT_ATOM_USDT_kalman.csv')."
+        )
+    stem = match.group(1)
+    tokens = stem.split("_")
+    matches = []
+    for split_idx in range(1, len(tokens)):
+        symbol_a = "_".join(tokens[:split_idx])
+        symbol_b = "_".join(tokens[split_idx:])
+        instrument_a = get_instrument(symbol_a.replace("_", "/", 1))
+        instrument_b = get_instrument(symbol_b.replace("_", "/", 1))
+        if instrument_a is not None and instrument_b is not None:
+            matches.append((symbol_a, symbol_b))
+
+    if len(matches) != 1:
+        raise ValueError(
+            f"'{Path(kalman_csv).name}': could not uniquely resolve a symbol_a/symbol_b split "
+            f"against the instrument registry (found {len(matches)} candidate split(s): {matches}). "
+            f"Both halves of '<SYMBOL_A>_<SYMBOL_B>_kalman.csv' must be registered instruments."
+        )
+    symbol_a, symbol_b = matches[0]
+    return f"{symbol_a}/{symbol_b}", symbol_a, symbol_b
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -912,6 +950,8 @@ class EntryExitEngine:
         validated_ic:          Optional[float] = None,   # claude code changed: new param
         validated_win_rate:    Optional[float] = None,   # claude code changed: new param
         signal_source:         str  = "kalman",   # claude code changed: new param — "kalman" (adaptive, default, kept for backward-compat) or "ols" (static, validated — see SIGNAL_SOURCE_COLUMNS module comment)
+        venue_id:              str  = "binance",   # claude code changed: new param — completes Phase 1C Step 3, see cost_model import comment above
+        asset_class:           str  = ASSET_CLASS_CRYPTO,   # claude code changed: new param — same
     ) -> None:
         """
         Initialise the entry/exit engine with all strategy parameters.
@@ -974,6 +1014,30 @@ class EntryExitEngine:
         self.signal_source = signal_source
         self.cols           = SIGNAL_SOURCE_COLUMNS[signal_source]
 
+        # claude code changed: resolves fee_rate/slippage_rate through
+        # bot.config.cost_model.get_cost_model() instead of the hardcoded
+        # module-level FEE_RATE/SLIPPAGE_RATE/TOTAL_TRANSACTION_COST
+        # constants (those remain only as the documented default value —
+        # see the constants' own comment). Raises UnsupportedAssetClassCostModel
+        # here, at construction, for any asset class with no real cost
+        # model — fails closed rather than silently guessing a
+        # crypto-shaped cost, same contract get_cost_model() itself
+        # guarantees. `symbol=...` added — Forex Multi-Asset Integration:
+        # ForexCostModel needs the actual traded pair (to look up a real
+        # reference price), not a venue_id; the value is silently ignored
+        # for CRYPTO (where venue_id is still what get_cost_model() uses),
+        # so this is safe even though self.symbol_a is in this engine's
+        # own underscore convention ("EUR_USD"/"AVAX_USDT"), not the
+        # instrument registry's canonical "BASE/QUOTE" form — converted
+        # here rather than changing this engine's established convention.
+        self.venue_id      = venue_id
+        self.asset_class   = asset_class
+        _canonical_symbol_a = self.symbol_a.replace("_", "/", 1) if self.symbol_a else self.symbol_a
+        _costs             = get_cost_model(asset_class, venue_id, symbol=_canonical_symbol_a).get_costs()
+        self.fee_rate      = _costs["fee_rate"]
+        self.slippage_rate = _costs["slippage_rate"]
+        self.total_transaction_cost = 2 * (self.fee_rate + self.slippage_rate)   # round trip: both sides, entry + exit
+
         # Initialise position sizer with our validated research parameters
         self.sizer = KalmanPositionSizer(
             capital_usdt=capital_usdt,
@@ -1002,7 +1066,7 @@ class EntryExitEngine:
                     f"(reference half-life: {half_life_note})")                          # claude code changed: was f"(2 x half-life {VALIDATED_HALF_LIFE}h)"
         logger.info(f"  Partial exit      : 50% at |z| < {exit_partial_zscore}")
         logger.info(f"  Lag confirmation  : {require_confirmation}")
-        logger.info(f"  Transaction cost  : {TOTAL_TRANSACTION_COST:.2%} round trip")
+        logger.info(f"  Transaction cost  : {self.total_transaction_cost:.2%} round trip ({asset_class}/{venue_id}: fee={self.fee_rate:.4%}, slippage={self.slippage_rate:.4%})")
 
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1128,12 +1192,38 @@ class EntryExitEngine:
 
         # Remove warmup period — Kalman estimates are unreliable during warmup
         # The 'is_warmup' column is set by kalman_filter_engine.py
+        #
+        # claude code changed: real look-ahead-bias fix. is_warmup alone
+        # (168 candles, the Kalman filter's own convergence period) was
+        # NEVER enough — cointegration_engine.py's hedge_ratio/intercept
+        # were fit on a separate, much longer span (training_window_candles,
+        # ~10,000 candles = ~417 days), and both the static OLS signal
+        # (ols_spread/ols_zscore, a direct function of that frozen fit) and
+        # the Kalman filter's own early output (its theta_0 seed comes from
+        # that same fit) are optimistic over that span for reasons this
+        # warmup exclusion alone never addressed. Confirmed by audit: for
+        # signal_source="ols" specifically, every backtest before this fix
+        # included ~9,832 candles of a static fit backtested against the
+        # exact data it was optimized on — not genuine out-of-sample
+        # performance. is_training_window (kalman_filter_engine.py) is
+        # combined with is_warmup here rather than replacing it, since the
+        # two spans can differ (a short-history pair can have
+        # training_window_candles < warmup, or vice versa) — excluding the
+        # union of both is always at least as safe as excluding either
+        # alone, and older Kalman CSVs saved before this fix (no
+        # is_training_window column) fall back to warmup-only exclusion
+        # exactly as before, not a crash.
+        exclude = pd.Series(False, index=df.index)
         if "is_warmup" in df.columns:
-            warmup_count = df["is_warmup"].sum()
-            df = df[~df["is_warmup"]].copy()    # Keep only post-warmup candles
+            exclude = exclude | df["is_warmup"]
+        if "is_training_window" in df.columns:
+            exclude = exclude | df["is_training_window"]
+        if exclude.any():
+            excluded_count = int(exclude.sum())
+            df = df[~exclude].copy()    # Keep only post-warmup, post-training-window candles
             logger.info(
-                f"  Removed {warmup_count} warmup candles "
-                f"({warmup_count / 24:.0f} days)"
+                f"  Removed {excluded_count} warmup/training-window candles "
+                f"({excluded_count / 24:.0f} days)"
             )
 
         # claude code changed: new block — signal_source="ols" needs three
@@ -1148,7 +1238,15 @@ class EntryExitEngine:
                     f"signal_source='ols' requires 'ols_zscore' in the Kalman CSV "
                     f"(produced by kalman_filter_engine.py) — not found in {kalman_csv}."
                 )
-            df["ols_zscore_lag1"] = df["ols_zscore"].shift(1).bfill()
+            # claude code changed: was .bfill() — a genuine, if tiny,
+            # look-ahead bug: shift(1) leaves the first row NaN (no prior
+            # candle to lag from), and bfill() patched it by pulling in
+            # that SAME row's own not-yet-lagged ols_zscore value — a
+            # one-row future-leak. Affects exactly the first tradeable row
+            # (negligible for aggregate stats over ~33,800 candles), but
+            # fillna(0.0) is the honest "no signal available yet" value and
+            # removes the only backfill in this codebase.
+            df["ols_zscore_lag1"] = df["ols_zscore"].shift(1).fillna(0.0)
             # Static hedge ratio — the pair's own validated OLS fit from
             # cointegration_engine.py, not kalman_beta's mean (which would
             # just be a derived proxy for the same thing this already is).
@@ -1726,7 +1824,7 @@ class EntryExitEngine:
         gross_pnl = np.expm1(spread_move)
 
         # Transaction cost on the partial close (50% of position × round-trip cost)
-        partial_cost  = TOTAL_TRANSACTION_COST * self.exit_partial_frac
+        partial_cost  = self.total_transaction_cost * self.exit_partial_frac
         net_pnl       = gross_pnl - partial_cost
         partial_usdt  = trade.position_usdt * self.exit_partial_frac
 
@@ -1839,7 +1937,7 @@ class EntryExitEngine:
 
         # ── Apply transaction costs ───────────────────────────────────────────
         # Full round-trip cost: fee + slippage on both legs, entry + exit
-        fee_cost_pct  = TOTAL_TRANSACTION_COST
+        fee_cost_pct  = self.total_transaction_cost
         net_pnl_pct   = gross_pnl_pct - fee_cost_pct
 
         # ── Convert to USDT ───────────────────────────────────────────────────
@@ -2127,6 +2225,13 @@ class EntryExitEngine:
         # ── Build summary dictionary ──────────────────────────────────────────
         summary_dict = {
             "pair":                self.pair_name,                              # claude code changed: was PAIR_NAME
+            # claude code changed: new — transparency check (Phase 1C Step 3):
+            # a researcher reading the summary CSV must be able to see which
+            # cost assumptions were actually used, not infer them from a
+            # module constant that no longer applies.
+            "asset_class":         self.asset_class,
+            "venue_id":            self.venue_id,
+            "fee_rate":            self.fee_rate,
             "n_total_trades":      n_total,
             "n_winners":           n_winners,
             "n_losers":            n_losers,
@@ -2203,8 +2308,15 @@ class EntryExitEngine:
         # matches walk_forward_engine.py's pair_deserves_testing(), which
         # already tries this exact short-name pattern when looking for a
         # Missing-Piece-4 summary to gate on.
-        short_a = (self.symbol_a or SYMBOL_A).replace("_USDT", "")   # claude code changed: new
-        short_b = (self.symbol_b or SYMBOL_B).replace("_USDT", "")   # claude code changed: new
+        # claude code changed: added .replace("/", "_") — real bug found by
+        # audit. A non-crypto symbol (e.g. FX "EUR/USD") has no "_USDT" to
+        # strip, so short_a/short_b passed straight through with their "/"
+        # intact; Path.__truediv__ then read that "/" as a directory
+        # separator, crashing with "Cannot save file into a non-existent
+        # directory" instead of writing a flat "<PAIR>_trade_log.csv". Crypto
+        # symbols (always "_USDT" suffixed, no other "/") are unaffected.
+        short_a = (self.symbol_a or SYMBOL_A).replace("_USDT", "").replace("/", "_")   # claude code changed: new
+        short_b = (self.symbol_b or SYMBOL_B).replace("_USDT", "").replace("/", "_")   # claude code changed: new
         prefix  = f"{short_a}_{short_b}"                             # claude code changed: new
 
         # Trade log — primary output

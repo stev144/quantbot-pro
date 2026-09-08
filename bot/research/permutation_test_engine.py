@@ -103,6 +103,14 @@ import pandas as pd                             # DataFrame operations
 # EntryExitEngine sees, never to reimplement its decision logic.
 from bot.research.entry_exit_engine import EntryExitEngine, STRATEGY_CAPITAL_USDT
 
+# claude code changed: new — the percentile/p-value/significance math in
+# _compare() below was extracted verbatim into permutation_stats.py so
+# the cross-sectional (Type C) permutation test can reuse the exact same,
+# already-proven statistics instead of a second incompatible
+# implementation (see that file's module docstring). This module's own
+# 9 tests are the regression guard that the extraction changed nothing.
+from bot.research.permutation_stats import compute_permutation_verdict
+
 logger = logging.getLogger(__name__)            # Module-level logger, same format as the rest of the project
 if not logger.handlers:
     logging.basicConfig(
@@ -222,8 +230,28 @@ class PermutationTestEngine:
         except ValueError:
             slash_pair_name = symbol_a = symbol_b = None
 
+        # claude code changed: real bug found while wiring signal_source="ols"
+        # through this module for the first time (cointegration_pipeline_runner.py).
+        # This used to store the raw `pair_name` ARGUMENT here — fine for
+        # directory naming (pair_dir below uses it directly, unaffected by
+        # this change), but every EntryExitEngine this class builds gets
+        # `pair_name=identity.get("pair_name")` from THIS dict, and
+        # signal_source="ols"'s _load_kalman_data() calls
+        # load_pair_config(self.pair_name, ...) — which looks up
+        # cointegration_pairs.csv's "pair_name" column, always stored in
+        # slash form ("A_USDT/B_USDT"). A caller following this module's
+        # own __main__ convention (underscore pair_name, e.g.
+        # "AVAX_USDT_ATOM_USDT") silently broke that lookup for "ols" —
+        # never noticed before because every permutation test run to date
+        # used the default signal_source="kalman", whose _load_kalman_data()
+        # path never calls load_pair_config() at all. slash_pair_name (from
+        # the kalman CSV's own filename, always correctly formatted) is the
+        # right identity for this; falls back to the raw argument only when
+        # filename parsing fails (a non-standard scratch filename), matching
+        # prior behavior exactly for that edge case.
         self._pair_identity = {
-            "pair_name": pair_name, "symbol_a": symbol_a, "symbol_b": symbol_b,
+            "pair_name": slash_pair_name if slash_pair_name is not None else pair_name,
+            "symbol_a": symbol_a, "symbol_b": symbol_b,
             "validated_half_life": None, "exit_time_stop_hours": None,
         }
         if slash_pair_name is not None:
@@ -467,20 +495,15 @@ class PermutationTestEngine:
         isn't — shuffled history already produces results this good.
         """
 
-        verdict: Dict = {}
-        for metric in ["win_rate", "sharpe_ratio", "profit_factor"]:                     # entry_ic handled separately below
-            shuffled_values = np.array([r[metric] for r in shuffled if not pd.isna(r[metric])])
-            real_value = real[metric]
-
-            if len(shuffled_values) == 0 or pd.isna(real_value):                          # Nothing usable to compare against
-                verdict[f"{metric}_percentile"] = np.nan
-                verdict[f"{metric}_p_value"]      = np.nan
-                continue
-
-            percentile = float(np.mean(shuffled_values <= real_value))                     # Where the real result ranks
-            p_value    = float((np.sum(shuffled_values >= real_value) + 1) / (len(shuffled_values) + 1))  # Standard +1 correction
-            verdict[f"{metric}_percentile"] = percentile
-            verdict[f"{metric}_p_value"]      = p_value
+        # claude code changed: was an inline loop duplicating percentile/
+        # p-value math — now delegates to the shared, reused-by-Type-C
+        # implementation in permutation_stats.py. Byte-identical output
+        # (same +1-corrected empirical p-value, same percentile formula),
+        # verified by this module's own 9 existing tests staying green.
+        verdict: Dict = compute_permutation_verdict(
+            real, shuffled, metrics=["win_rate", "sharpe_ratio", "profit_factor"],
+            significance_percentile=SIGNIFICANCE_PERCENTILE,
+        )
 
         # Entry IC is judged differently: we're not asking "is the real IC
         # higher than shuffled IC" (shuffled IC is meaningless noise around

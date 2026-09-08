@@ -63,7 +63,9 @@ EXCLUDED_BASE_ASSETS = {
 
 OUTPUT_PATH = Path("data") / "universe_selection.json"
 
-DEFAULT_TARGET_SIZE = 50
+# claude code changed: 50 -> 100 — second universe expansion (20 -> 50 -> 100),
+# same liquidity-ranked/history-checked selection logic, just a bigger target.
+DEFAULT_TARGET_SIZE = 100
 DEFAULT_PRIMARY_MIN_YEARS = 5.0
 DEFAULT_FALLBACK_MIN_YEARS = 4.0
 DEFAULT_QUOTE = "USDT"

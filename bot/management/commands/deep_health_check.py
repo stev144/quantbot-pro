@@ -211,6 +211,11 @@ class SessionReport:
     total_warned:       int   = 0
     platform_health:    float = 0.0
     elapsed_seconds:    float = 0.0
+    # claude code changed: new — Forensic Audit Milestone B. Additive:
+    # every field above is unchanged, this is a second, structured view
+    # of the same session alongside the original pass/fail/warn counts.
+    findings:           List["HealthFinding"] = field(default_factory=list)
+    overall_severity:   str = "GREEN"
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -1169,13 +1174,66 @@ EXCLUDED_MODULE_PATTERNS = {
     "management",       # skip the health check commands themselves
 }
 
+# claude code changed: new — real incident found by a forensic audit of
+# this file: running deep_health_check with the module list above (no
+# live-exchange awareness) reached bot.core.bot_runner via
+# discover_all_bot_modules(), and LayerRunner's blind reflection-based
+# function-calling (see _value_for_param below) triggered the live bot's
+# real startup sequence — firing an ACTUAL signed, authenticated HTTP
+# request to https://api.binance.com/sapi/v1/capital/config/getall using
+# whatever BINANCE_API_KEY/SECRET happen to be set in the real
+# environment. It failed harmlessly only because no real key was
+# configured on the machine that surfaced this — on any machine actually
+# running this project's own documented live/dry-run setup (real
+# BINANCE_API_KEY/SECRET present), the exact same run would have fired a
+# real signed request against a real account as an unreviewed side
+# effect of a "health check." The SAME run also generated 700+ lines of
+# real paginated aggTrades network traffic from bot.engines.trade_data.
+#
+# Each module below is excluded because it either (a) performs a real
+# AUTHENTICATED call against a live exchange (balance, open orders,
+# order placement/cancellation — genuinely unsafe to invoke blindly), or
+# (b) performs an uncontrolled HEAVY real network operation as a side
+# effect (a full universe rescan, a large OHLCV fetch, paginated trade
+# history) that a health check must never trigger even though the data
+# itself is public — "safe" and "appropriate for reflection-based blind
+# invocation" are different bars, and this file only needs to clear the
+# second one. bot.engines.price_validator was deliberately NOT added —
+# its own docstring and implementation confirm it makes exactly one
+# lightweight public fetch_ticker() call, no balances, no authentication,
+# no pagination — a genuinely different risk profile from the modules
+# below, verified by reading the code rather than assumed from the name.
+LIVE_EXCHANGE_MODULE_PATTERNS = {
+    "bot.core.bot_runner",           # the live trading entry point itself — real credentials, real startup sequence, this exact incident
+    "bot.engines.execution_engine",  # central live-trading coordinator — execute_signal() can attempt a real/dry-run order
+    "bot.engines.order_manager",     # places/cancels real exchange orders directly
+    "bot.engines.binance_adapter",   # validate_connection() makes an authenticated fetch_balance() call
+    "bot.engines.kraken_adapter",    # same authenticated-balance reasoning, plus its own real place_stop_loss() implementation
+    "bot.engines.position_tracker",  # reconcile_with_exchange() makes authenticated fetch_open_orders()/fetch_orders() calls
+    "bot.engines.market_data",       # live balance/candle fetching, including authenticated balance calls
+    "bot.engines.trade_data",        # confirmed by this exact incident: floods real paginated aggTrades network calls when blindly invoked
+    "bot.universe_selector",         # would trigger a full real liquidity-ranked universe scan (100+ rate-limited history checks) as a side effect
+    "bot.data_fetcher",              # would trigger a real, potentially large OHLCV network fetch as a side effect
+}
+
 
 def should_exclude_module(module_path: str) -> bool:
     """
     Return True if this module should be excluded from auditing.
     Checks every exclusion pattern against the full dotted module path.
+
+    claude code changed: now also excludes LIVE_EXCHANGE_MODULE_PATTERNS —
+    see that set's own comment for the real incident that made this
+    necessary. Uses an exact dotted-path-prefix match (not the
+    substring-anywhere match EXCLUDED_MODULE_PATTERNS uses below) so this
+    can never accidentally over-match an unrelated module that merely
+    contains one of these words elsewhere in its path.
     """
-    return any(pattern in module_path for pattern in EXCLUDED_MODULE_PATTERNS)
+    if any(pattern in module_path for pattern in EXCLUDED_MODULE_PATTERNS):
+        return True
+    if any(module_path == p or module_path.startswith(p + ".") for p in LIVE_EXCHANGE_MODULE_PATTERNS):
+        return True
+    return False
 
 
 def discover_all_bot_modules(root_package: str = "bot") -> List[str]:
@@ -1474,6 +1532,520 @@ class LayerRunner:
 
 
 # ═════════════════════════════════════════════════════════════════════════
+# SECTION 8B — STRUCTURED SEVERITY FINDINGS  [Forensic Audit Milestone B]
+#
+# claude code changed: new. The existing PASS/FAIL/WARN/SKIP statuses
+# above are per-function and stay exactly as they are — nothing here
+# replaces them. This section is ADDITIVE: a higher-level findings list,
+# each carrying GREEN/YELLOW/ORANGE/RED severity plus evidence/expected/
+# actual/impact/remediation_status, used for (a) mapping select existing
+# Layer 2/Layer 5 results into a severity a reader can triage at a
+# glance, and (b) four new category checks the forensic audit
+# specifically asked for. Deliberately narrow — see each check's own
+# docstring for exactly what it does and does not verify. No portfolio/
+# risk, execution/kill-switch-beyond-reconciliation, Academy, or full
+# AI/ML-readiness checks are added here: those subsystems don't exist
+# yet, and a placeholder check for a subsystem that doesn't exist would
+# be decorative, not evidence-backed.
+# ═════════════════════════════════════════════════════════════════════════
+
+GREEN_SEVERITY  = "GREEN"
+YELLOW_SEVERITY = "YELLOW"
+ORANGE_SEVERITY = "ORANGE"
+RED_SEVERITY    = "RED"
+
+# claude code changed: ordering used ONLY to compute "worst severity
+# wins" — never used for arithmetic averaging. This is the concrete
+# mechanism behind the mission's own rule that one RED must not be
+# hidden behind a hundred GREENs.
+_SEVERITY_RANK = {GREEN_SEVERITY: 0, YELLOW_SEVERITY: 1, ORANGE_SEVERITY: 2, RED_SEVERITY: 3}
+
+
+@dataclass
+class HealthFinding:
+    """One structured, triageable finding. component/check identify
+    WHAT was checked; evidence/expected/actual are the raw facts a
+    reader can verify independently; impact explains why it matters;
+    remediation_status is honest bookkeeping ("fixed" / "known gap,
+    accepted" / "not started"), never a claim of "resolved" unless it
+    actually is."""
+    component:           str
+    check:                str
+    severity:             str
+    evidence:             str
+    expected:             str
+    actual:               str
+    impact:               str
+    remediation_status:   str = "not started"
+
+
+def compute_overall_severity(findings: List[HealthFinding]) -> str:
+    """The MAX severity across all findings — never averaged. One RED
+    among 500 GREENs must still report RED overall; that is the entire
+    point of this function existing instead of a percentage score."""
+    if not findings:
+        return GREEN_SEVERITY
+    return max((f.severity for f in findings), key=lambda s: _SEVERITY_RANK.get(s, 0))
+
+
+def _finding_from_function_result(r: "FunctionResult") -> Optional[HealthFinding]:
+    """Maps a Layer 1-3 FunctionResult into a HealthFinding ONLY where
+    the existing per-function status already represents a real,
+    evidenced check — a FAIL (Layer 2 crash or Layer 3 wrong-output) or
+    a WARN (no Layer 3 test defined yet, a real coverage gap). A PASS or
+    SKIP produces no finding — those aren't defects, and manufacturing a
+    GREEN finding for every one of hundreds of passing functions would
+    bury the findings list in noise rather than making problems visible."""
+    label = f"{r.module_path}::{r.class_name}::{r.function_name}"
+    if r.overall_status == "FAIL":
+        if r.layer2_error:
+            return HealthFinding(
+                component=r.module_path, check=f"{label} runs without crashing",
+                severity=RED_SEVERITY, evidence=r.layer2_error,
+                expected="function executes and returns a value",
+                actual=f"raised: {r.layer2_error}",
+                impact="a function in the live/research pipeline crashes when called with realistic inputs",
+            )
+        if r.layer3_tested and not r.layer3_passed:
+            return HealthFinding(
+                component=r.module_path, check=f"{label} returns the mathematically correct result",
+                severity=RED_SEVERITY, evidence=r.layer3_message,
+                expected=r.layer3_expected, actual=r.layer3_actual,
+                impact="function runs without error but silently returns a wrong value",
+            )
+    if r.overall_status == "WARN" and not r.layer3_tested:
+        return HealthFinding(
+            component=r.module_path, check=f"{label} has a behavioural (Layer 3) test",
+            severity=YELLOW_SEVERITY, evidence="no entry in the Layer 3 test registry",
+            expected="a registered @register_test assertion", actual="none — untested correctness",
+            impact="this function could silently return a wrong value and nothing would catch it",
+            remediation_status="known gap, accepted",
+        )
+    return None
+
+
+def _finding_from_drift_result(dr: "DriftResult") -> Optional[HealthFinding]:
+    """Maps a Layer 5 DriftResult into a finding — only WARNING/CRITICAL
+    produce one, matching the same "no noise from passing checks" rule
+    as _finding_from_function_result()."""
+    if dr.severity == "CRITICAL":
+        return HealthFinding(
+            component=dr.module, check=f"{dr.metric_name} within historical tolerance",
+            severity=RED_SEVERITY, evidence=dr.message,
+            expected=f"drift <= {dr.tolerance_pct:.0%}", actual=f"drift = {dr.drift_pct:.1%}",
+            impact="a tracked statistic has drifted far enough that the underlying pipeline or strategy may be broken, not just noisy",
+        )
+    if dr.severity == "WARNING":
+        return HealthFinding(
+            component=dr.module, check=f"{dr.metric_name} within historical tolerance",
+            severity=YELLOW_SEVERITY, evidence=dr.message,
+            expected=f"drift <= {dr.tolerance_pct:.0%}", actual=f"drift = {dr.drift_pct:.1%}",
+            impact="worth investigating before it becomes a CRITICAL drift",
+        )
+    return None
+
+
+def check_universe_dynamism() -> List[HealthFinding]:
+    """Regression-checks Milestone A item 3 (the fix for 3 modules that
+    used to silently fall back to a tiny hardcoded symbol list instead
+    of the real ~100-coin dynamic universe). Verifies two things per
+    module: (1) the module's source no longer contains a bare hardcoded
+    default-symbols list literal — it calls symbols_for_asset_class()
+    instead — and (2) that call actually resolves, at runtime, to more
+    symbols than the old hardcoded fallback ever had. Does NOT assert
+    exact universe membership (the universe legitimately changes as
+    liquidity ranking is re-run) — only that the dynamic path is real
+    and wired, not reverted to a hardcoded stand-in."""
+    findings: List[HealthFinding] = []
+    checks = [
+        ("bot.backtesting.portfolio_backtester", "bot.backtesting.portfolio_backtester", 7),
+        ("bot.views.backtesting_data", "bot.views.backtesting_data", 5),
+        ("bot.research.feature_stability_analyzer", "bot.research.feature_stability_analyzer", 7),
+    ]
+    for component, module_path, old_hardcoded_count in checks:
+        check_name = f"{module_path} sources its default symbol universe dynamically"
+        try:
+            module = importlib.import_module(module_path)
+            source = inspect.getsource(module)
+        except Exception as e:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=RED_SEVERITY,
+                evidence=f"{type(e).__name__}: {e}", expected="module imports and its source is readable",
+                actual="import or source-read failed",
+                impact="cannot verify the universe-dynamism fix is still in place",
+            ))
+            continue
+
+        calls_dynamic_lookup = "symbols_for_asset_class(" in source
+        try:
+            from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO
+            live_universe_size = len(symbols_for_asset_class(ASSET_CLASS_CRYPTO))
+        except Exception:
+            live_universe_size = 0
+
+        if not calls_dynamic_lookup:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=RED_SEVERITY,
+                evidence="source no longer references symbols_for_asset_class(...)",
+                expected="calls symbols_for_asset_class(ASSET_CLASS_CRYPTO)",
+                actual="no such call found in source",
+                impact=f"this module has regressed back to a hardcoded ~{old_hardcoded_count}-symbol universe instead of the real dynamic one",
+                remediation_status="regression — was fixed in Milestone A item 3",
+            ))
+        elif live_universe_size <= old_hardcoded_count:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=YELLOW_SEVERITY,
+                evidence=f"symbols_for_asset_class(ASSET_CLASS_CRYPTO) currently returns {live_universe_size} symbols",
+                expected=f"> {old_hardcoded_count} (larger than the old hardcoded fallback)",
+                actual=str(live_universe_size),
+                impact="the dynamic universe has not been selected/populated on this machine yet (data/universe_selection.json missing or stale), so callers are effectively no better off than the old hardcoded list",
+                remediation_status="known gap, accepted",
+            ))
+        else:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=GREEN_SEVERITY,
+                evidence=f"source calls symbols_for_asset_class(); live universe = {live_universe_size} symbols",
+                expected=f"> {old_hardcoded_count}", actual=str(live_universe_size),
+                impact="none — fix confirmed in place",
+                remediation_status="fixed",
+            ))
+    return findings
+
+
+# claude code changed: static list of the standalone research engines
+# this session's forensic audit found run entirely outside
+# ResearchExperiment/HypothesisFamily governance — see the plan's own
+# "Research governance boundary" evidence section. Kept as a named
+# constant so check_governance_boundary() and any test asserting its
+# contents can never silently drift apart.
+UNGOVERNED_RESEARCH_ENGINES = [
+    "bot/research/cointegration_engine.py",
+    "bot/research/permutation_test_engine.py",
+    "bot/research/walk_forward_engine.py",
+    "bot/research/cross_sectional_permutation_test.py",
+    "bot/research/run_cross_sectional_oos.py",
+    "bot/research/cointegration_pipeline_runner.py",
+]
+
+
+def check_governance_boundary() -> List[HealthFinding]:
+    """A STANDING, always-present YELLOW finding — this is a known,
+    accepted architectural gap, not a bug being tracked for a fix. The
+    six engines that produced 100% of this project's real research
+    output write plain JSON/CSV directly, with no DB row, no freeze, no
+    append-only protection, no declared FDR family — governance
+    (bot/research_lab/models.py) is real but scoped only to the
+    Research Lab's own orchestrated flow. This check exists purely to
+    make that gap visible on every single health-check run instead of
+    silent. Verifies the files still exist and still don't import
+    research_lab.models (i.e. the gap hasn't silently been closed
+    without this check being updated, and hasn't silently gotten
+    worse by one of these files disappearing)."""
+    project_root = Path(__file__).resolve().parents[3]
+    still_ungoverned = []
+    missing = []
+    for rel_path in UNGOVERNED_RESEARCH_ENGINES:
+        full_path = project_root / rel_path
+        if not full_path.exists():
+            missing.append(rel_path)
+            continue
+        try:
+            source = full_path.read_text(encoding="utf-8")
+        except Exception:
+            source = ""
+        if "research_lab.models" not in source and "research_lab import models" not in source:
+            still_ungoverned.append(rel_path)
+
+    findings = [HealthFinding(
+        component="bot.research (standalone engines)",
+        check="standalone research engines are registered under research governance",
+        severity=YELLOW_SEVERITY,
+        evidence=f"{len(still_ungoverned)}/{len(UNGOVERNED_RESEARCH_ENGINES)} engines confirmed still outside governance: {', '.join(still_ungoverned)}",
+        expected="each engine's results are recorded as a governed ResearchExperiment under a frozen HypothesisFamily",
+        actual="each writes plain JSON/CSV directly with no DB row, no freeze, no FDR family declaration",
+        impact="research produced by these engines has no append-only audit trail and no enforced FDR-family discipline at the point of production — a known, accepted scope boundary of the current Research Lab governance layer",
+        remediation_status="known gap, accepted — deferred to a dedicated follow-up mission",
+    )]
+    if missing:
+        findings.append(HealthFinding(
+            component="bot.research (standalone engines)",
+            check="all named ungoverned engines still exist on disk",
+            severity=ORANGE_SEVERITY,
+            evidence=f"missing: {', '.join(missing)}",
+            expected="all files listed in UNGOVERNED_RESEARCH_ENGINES exist",
+            actual=f"{len(missing)} missing",
+            impact="this check's own file list has drifted from the real codebase — either the engine was renamed/removed (update this list) or something deleted real research code",
+        ))
+    return findings
+
+
+# claude code changed: the 10 real standalone research entry points this
+# session's forensic audit inventoried for dataset-fingerprint coverage.
+FINGERPRINT_COVERAGE_ENGINES = [
+    "bot/research/cointegration_engine.py",
+    "bot/research/kalman_filter_engine.py",
+    "bot/research/entry_exit_engine.py",
+    "bot/research/contagion_engine.py",
+    "bot/research/permutation_test_engine.py",
+    "bot/research/walk_forward_engine.py",
+    "bot/research/cross_section_engine.py",
+    "bot/research/cross_sectional_permutation_test.py",
+    "bot/research/run_cross_sectional_oos.py",
+    "bot/research/cointegration_pipeline_runner.py",
+]
+
+
+def check_dataset_fingerprint_coverage() -> List[HealthFinding]:
+    """Reports, per real research entry point, whether it calls
+    fingerprint_dataset() (bot/research_lab/data_fingerprint.py) —
+    GREEN if it does, YELLOW if it doesn't. Confirms Milestone A item 6
+    (run_cross_sectional_oos.py) is wired, and keeps the other 9
+    engines' dormancy visible rather than silently forgotten."""
+    project_root = Path(__file__).resolve().parents[3]
+    findings = []
+    for rel_path in FINGERPRINT_COVERAGE_ENGINES:
+        full_path = project_root / rel_path
+        check_name = f"{rel_path} attaches a dataset fingerprint to its output"
+        if not full_path.exists():
+            findings.append(HealthFinding(
+                component=rel_path, check=check_name, severity=ORANGE_SEVERITY,
+                evidence="file not found", expected="file exists",
+                actual="missing", impact="this check's file list has drifted from the real codebase",
+            ))
+            continue
+        try:
+            source = full_path.read_text(encoding="utf-8")
+        except Exception as e:
+            source = ""
+        covered = "fingerprint_dataset" in source
+        findings.append(HealthFinding(
+            component=rel_path, check=check_name,
+            severity=GREEN_SEVERITY if covered else YELLOW_SEVERITY,
+            evidence="calls fingerprint_dataset()" if covered else "no reference to fingerprint_dataset() found",
+            expected="calls bot.research_lab.data_fingerprint.fingerprint_dataset()",
+            actual="covered" if covered else "not covered",
+            impact="none — reproducible-by-fingerprint" if covered
+                   else "this engine's output cannot be traced back to the exact dataset that produced it",
+            remediation_status="fixed" if covered else "known gap, accepted",
+        ))
+    return findings
+
+
+def check_reconciliation_gate() -> List[HealthFinding]:
+    """Regression-checks Milestone A item 2: reconcile_with_exchange()
+    must set is_reconciled=False on a real detected mismatch, not
+    unconditionally True. Reuses the exact fake-exchange pattern
+    bot/tests/test_position_tracker.py already established (a
+    deterministic stand-in exposing fetch_open_orders()/fetch_orders(),
+    since a real exchange call is excluded from this whole command via
+    LIVE_EXCHANGE_MODULE_PATTERNS and must never be invoked here)."""
+    from bot.engines.position_tracker import PositionTracker
+
+    class _FakeExchangeWithOpenOrder:
+        def fetch_open_orders(self, symbol):
+            return [{"id": "health-check-fixture", "side": "buy", "amount": 1, "price": 1.0}]
+
+        def fetch_orders(self, symbol, limit=5):
+            return []
+
+    check_name = "reconcile_with_exchange() blocks trading on a detected mismatch"
+    try:
+        tracker = PositionTracker()
+        tracker.reconcile_with_exchange(_FakeExchangeWithOpenOrder(), ["HEALTHCHECK/USDT"])
+        if tracker.is_reconciled:
+            return [HealthFinding(
+                component="bot.engines.position_tracker.PositionTracker", check=check_name,
+                severity=RED_SEVERITY,
+                evidence="is_reconciled remained True after a fixture with a real untracked open order",
+                expected="is_reconciled == False", actual="is_reconciled == True",
+                impact="the one hard safety gate execute_signal() relies on before any live trade would falsely certify a known-bad state as clean — this is the exact regression Milestone A item 2 fixed",
+                remediation_status="REGRESSED — was fixed in Milestone A item 2",
+            )]
+        return [HealthFinding(
+            component="bot.engines.position_tracker.PositionTracker", check=check_name,
+            severity=GREEN_SEVERITY,
+            evidence="is_reconciled correctly became False when a real mismatch was injected",
+            expected="is_reconciled == False", actual="is_reconciled == False",
+            impact="none — fix confirmed in place", remediation_status="fixed",
+        )]
+    except Exception as e:
+        return [HealthFinding(
+            component="bot.engines.position_tracker.PositionTracker", check=check_name,
+            severity=RED_SEVERITY, evidence=f"{type(e).__name__}: {e}",
+            expected="reconcile_with_exchange() runs against the fixture without raising",
+            actual=f"raised {type(e).__name__}",
+            impact="cannot verify the reconciliation gate is still correct",
+        )]
+
+
+def check_forex_architecture() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Multi-Asset Integration. Always
+    runs, ZERO network I/O — verifies the Forex registry/path-resolution/
+    cost-model wiring is structurally sound. Reports SKIP-shaped findings
+    (GREEN, but honestly labeled as "no data yet") rather than FAIL when
+    no Forex data has ever been fetched on this machine — an empty
+    data/forex/ directory is an expected, legitimate state (e.g. right
+    after a fresh clone), not a code defect. Only a genuine exception
+    from the registry/path-resolution/cost-model code itself goes RED.
+    """
+    from bot.config.cost_model import ForexCostModelDataError, get_cost_model
+    from bot.instruments import ASSET_CLASS_FOREX, UnknownInstrumentError, resolve_ohlcv_path, symbols_for_asset_class
+
+    findings = []
+    component = "bot.instruments / bot.config.cost_model (FOREX)"
+
+    try:
+        forex_symbols = symbols_for_asset_class(ASSET_CLASS_FOREX)
+        if not forex_symbols:
+            findings.append(HealthFinding(
+                component=component, check="FOREX instrument registry is populated",
+                severity=GREEN_SEVERITY,
+                evidence="symbols_for_asset_class(FOREX) returned zero symbols",
+                expected="either zero symbols (no bot/forex_data_fetcher.py run yet) or a real list",
+                actual="zero symbols — SKIP-shaped, not a failure",
+                impact="Forex research cannot run yet; run `python -m bot.forex_data_fetcher` first",
+                remediation_status="not started",
+            ))
+            return findings
+        findings.append(HealthFinding(
+            component=component, check="FOREX instrument registry is populated",
+            severity=GREEN_SEVERITY, evidence=f"{len(forex_symbols)} FOREX symbols registered: {forex_symbols}",
+            expected="a real, non-empty list", actual=f"{len(forex_symbols)} symbols",
+            impact="none", remediation_status="fixed",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check="FOREX instrument registry is populated",
+            severity=RED_SEVERITY, evidence=f"{type(e).__name__}: {e}",
+            expected="symbols_for_asset_class(FOREX) runs without raising", actual=f"raised {type(e).__name__}",
+            impact="the entire Forex registry is broken — every downstream Forex check/capability is unreliable",
+        ))
+        return findings
+
+    check_name = "resolve_ohlcv_path() resolves a real FOREX symbol without raising"
+    try:
+        path = resolve_ohlcv_path(forex_symbols[0])
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=GREEN_SEVERITY,
+            evidence=f"resolved '{forex_symbols[0]}' -> {path}",
+            expected="a Path under data/forex/", actual=str(path),
+            impact="none", remediation_status="fixed",
+        ))
+    except UnknownInstrumentError as e:
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=RED_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}",
+            expected="a registered FOREX symbol resolves to a path", actual="raised UnknownInstrumentError",
+            impact="a symbol reported by the registry itself cannot resolve a data path — registry/path-resolution are out of sync",
+        ))
+
+    check_name = "get_cost_model(FOREX, symbol=...) no longer fails closed"
+    try:
+        get_cost_model(ASSET_CLASS_FOREX, symbol=forex_symbols[0])
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=GREEN_SEVERITY,
+            evidence=f"get_cost_model(FOREX, symbol='{forex_symbols[0]}') returned a real cost model",
+            expected="no exception", actual="no exception", impact="none", remediation_status="fixed",
+        ))
+    except ForexCostModelDataError:
+        # claude code changed: honest SKIP, not FAIL — this means the
+        # symbol is registered but has no OHLCV data ingested yet (a
+        # ForexCostModel needs a real reference price), a legitimate
+        # "run the fetcher first" state, not a code defect.
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=GREEN_SEVERITY,
+            evidence=f"ForexCostModelDataError for '{forex_symbols[0]}' — no OHLCV data ingested yet",
+            expected="either a real cost model or this exact, documented data-not-ingested error",
+            actual="ForexCostModelDataError (expected until data is fetched)",
+            impact="none — cost-model wiring itself is correct", remediation_status="fixed",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=RED_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}",
+            expected="a real cost model or ForexCostModelDataError", actual=f"raised {type(e).__name__}",
+            impact="FOREX cost modeling is broken — any Forex OOS run's cost validation would be unreliable",
+        ))
+
+    return findings
+
+
+def check_forex_provider_connectivity() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Multi-Asset Integration. OPT-IN
+    ONLY — never called unless --check-external is passed (see
+    Command.handle() below). Makes exactly one lightweight real call to
+    the Forex provider (Yahoo's public chart endpoint) for the first
+    registered FOREX symbol. Distinguishes, per the mission's own
+    PASS/WARN/FAIL/SKIP requirement: GREEN if reachable, YELLOW (WARN)
+    for a real connectivity failure (network/timeout/DNS — not a code
+    defect), RED only for a genuine code exception (a malformed
+    response, a bug in get_forex_klines() itself).
+    """
+    import requests
+
+    from bot.forex_data_fetcher import ForexProviderError, get_forex_klines
+    from bot.instruments import ASSET_CLASS_FOREX, symbols_for_asset_class
+
+    component = "bot.forex_data_fetcher (external provider)"
+    check_name = "Forex provider (Yahoo Finance) is reachable"
+    forex_symbols = symbols_for_asset_class(ASSET_CLASS_FOREX)
+    if not forex_symbols:
+        return [HealthFinding(
+            component=component, check=check_name, severity=GREEN_SEVERITY,
+            evidence="no FOREX symbols registered — nothing to check",
+            expected="n/a", actual="n/a", impact="none", remediation_status="not started",
+        )]
+
+    symbol = forex_symbols[0]
+    try:
+        df = get_forex_klines(symbol, history_days=2)
+        return [HealthFinding(
+            component=component, check=check_name, severity=GREEN_SEVERITY,
+            evidence=f"fetched {len(df)} real candles for '{symbol}'",
+            expected="a non-empty DataFrame", actual=f"{len(df)} rows", impact="none", remediation_status="fixed",
+        )]
+    except requests.RequestException as e:
+        return [HealthFinding(
+            component=component, check=check_name, severity=YELLOW_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}",
+            expected="a reachable provider or a clean connectivity error", actual="connectivity failure",
+            impact="Forex data cannot be refreshed right now — NOT a code defect, do not treat as a regression",
+        )]
+    except ForexProviderError as e:
+        return [HealthFinding(
+            component=component, check=check_name, severity=RED_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}",
+            expected="a well-formed provider response", actual="malformed/error response",
+            impact="the provider responded but something is genuinely wrong — investigate get_forex_klines()",
+        )]
+
+
+def run_structured_findings(check_external: bool = False) -> List[HealthFinding]:
+    """Runs the category checks. Deliberately does NOT re-walk every
+    FunctionResult/DriftResult here — those are mapped by the Command
+    itself (it already has the real session's results in hand), this
+    only owns the standalone category checks.
+
+    claude code changed: `check_external` — Forex Multi-Asset
+    Integration. Defaults to False, so a normal run makes ZERO external
+    network calls (matches this file's own established
+    LIVE_EXCHANGE_MODULE_PATTERNS philosophy). Only check_forex_provider_connectivity()
+    is gated by this flag — every other check here is already
+    network-free."""
+    findings: List[HealthFinding] = []
+    findings.extend(check_universe_dynamism())
+    findings.extend(check_governance_boundary())
+    findings.extend(check_dataset_fingerprint_coverage())
+    findings.extend(check_reconciliation_gate())
+    findings.extend(check_forex_architecture())
+    if check_external:
+        findings.extend(check_forex_provider_connectivity())
+    return findings
+
+
+# ═════════════════════════════════════════════════════════════════════════
 # SECTION 9 — DJANGO MANAGEMENT COMMAND
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -1518,6 +2090,12 @@ class Command(BaseCommand):
             "--no-private", action="store_true",
             help="Skip single-underscore private methods"
         )
+        parser.add_argument(
+            "--check-external", action="store_true",
+            help="Also make one lightweight real call to the Forex data provider to check connectivity. "
+                 "OFF by default — a normal run makes zero external network calls beyond what Layer 2 "
+                 "already permits (see LIVE_EXCHANGE_MODULE_PATTERNS)."
+        )
 
     def handle(self, *args, **options):
         """Entry point called by Django."""
@@ -1527,6 +2105,7 @@ class Command(BaseCommand):
         report_path  = options["report"]
         baseline     = options["baseline"]
         skip_private = options["no_private"]
+        check_external = options["check_external"]
 
         # Build infrastructure
         factories  = _safe_instance_factory()           # safe constructors
@@ -1615,6 +2194,52 @@ class Command(BaseCommand):
                         f"{DIM}[{dr.severity}]{RESET}"
                     )
 
+        # ── Layer 6: Structured Findings (GREEN/YELLOW/ORANGE/RED) ─────
+        # claude code changed: new — Forensic Audit Milestone B. Additive
+        # to everything above: maps the same Layer 2/3/5 results already
+        # computed into severity-classified findings, plus runs the four
+        # new category checks. Always runs (cheap, no network I/O) —
+        # unlike Layer 4/5 it is not gated to standard/deep mode.
+        self.stdout.write(
+            f"\n{BOLD}{CYAN}── STRUCTURED FINDINGS (GREEN/YELLOW/ORANGE/RED) ──{RESET}"
+        )
+        findings: List[HealthFinding] = []
+        for report in module_reports:
+            for r in report.results:
+                f_ = _finding_from_function_result(r)
+                if f_ is not None:
+                    findings.append(f_)
+        for dr in drift_results:
+            f_ = _finding_from_drift_result(dr)
+            if f_ is not None:
+                findings.append(f_)
+        findings.extend(run_structured_findings(check_external=check_external))
+        overall_severity = compute_overall_severity(findings)
+
+        severity_counts = {s: sum(1 for f in findings if f.severity == s)
+                            for s in (RED_SEVERITY, ORANGE_SEVERITY, YELLOW_SEVERITY, GREEN_SEVERITY)}
+        severity_colour = {RED_SEVERITY: RED, ORANGE_SEVERITY: YELLOW, YELLOW_SEVERITY: YELLOW, GREEN_SEVERITY: GREEN}
+        for sev in (RED_SEVERITY, ORANGE_SEVERITY, YELLOW_SEVERITY):
+            for f_ in [f for f in findings if f.severity == sev]:
+                self.stdout.write(
+                    f"  {severity_colour[sev]}[{sev}]{RESET} {BOLD}{f_.check}{RESET}  "
+                    f"({f_.component})"
+                )
+                self.stdout.write(f"       {DIM}evidence: {f_.evidence}{RESET}")
+                if verbose:
+                    self.stdout.write(f"       {DIM}expected: {f_.expected} | actual: {f_.actual}{RESET}")
+                    self.stdout.write(f"       {DIM}impact: {f_.impact} | status: {f_.remediation_status}{RESET}")
+        self.stdout.write(
+            f"\n  {RED}{severity_counts[RED_SEVERITY]} RED{RESET}   "
+            f"{YELLOW}{severity_counts[ORANGE_SEVERITY]} ORANGE{RESET}   "
+            f"{YELLOW}{severity_counts[YELLOW_SEVERITY]} YELLOW{RESET}   "
+            f"{GREEN}{severity_counts[GREEN_SEVERITY]} GREEN{RESET}"
+        )
+        self.stdout.write(
+            f"  {severity_colour[overall_severity]}{BOLD}OVERALL SEVERITY: {overall_severity}{RESET}  "
+            f"{DIM}(max across all findings — one RED overrides any number of GREENs){RESET}"
+        )
+
         # ── Summary ───────────────────────────────────────────────────
         elapsed = time.time() - session_start
         session = SessionReport(
@@ -1628,6 +2253,8 @@ class Command(BaseCommand):
             total_failed        = sum(r.failed for r in module_reports),
             total_warned        = sum(r.warned for r in module_reports),
             elapsed_seconds     = elapsed,
+            findings            = findings,
+            overall_severity    = overall_severity,
         )
         session.platform_health = max(0.0, round(
             ((session.total_passed * 2 + session.total_warned)
@@ -2053,6 +2680,19 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"\n  {RED}{BOLD}🔴  {total_issues} ISSUE(S) REQUIRE ATTENTION{RESET}")
 
+        # claude code changed: new — Forensic Audit Milestone B. Additive
+        # second verdict line alongside the legacy one above: the legacy
+        # line can read "ALL LAYERS CLEAR" while a structured RED finding
+        # (e.g. the reconciliation-gate check regressing) exists, because
+        # the legacy line only counts Layer 1-5 FAIL/critical-drift, not
+        # the new category checks. Both lines are shown — never let the
+        # new one silently replace or be hidden behind the old one.
+        overall_colour = {RED_SEVERITY: RED, ORANGE_SEVERITY: YELLOW,
+                          YELLOW_SEVERITY: YELLOW, GREEN_SEVERITY: GREEN}.get(session.overall_severity, RED)
+        self.stdout.write(
+            f"  {overall_colour}{BOLD}STRUCTURED FINDINGS VERDICT: {session.overall_severity} "
+            f"({len(session.findings)} findings){RESET}")
+
         self.stdout.write(f"{BOLD}{CYAN}{'═' * 76}{RESET}\n")
 
     def _save_report(self, session: SessionReport, path: str) -> None:
@@ -2103,6 +2743,21 @@ class Command(BaseCommand):
                     "drift_pct":dr.drift_pct,
                     "severity": dr.severity,
                 } for dr in session.drift_results
+            ],
+            # claude code changed: new — Forensic Audit Milestone B.
+            # Additive: the fields above are unchanged.
+            "overall_severity": session.overall_severity,
+            "findings": [
+                {
+                    "component":           f.component,
+                    "check":                f.check,
+                    "severity":             f.severity,
+                    "evidence":             f.evidence,
+                    "expected":             f.expected,
+                    "actual":               f.actual,
+                    "impact":               f.impact,
+                    "remediation_status":   f.remediation_status,
+                } for f in session.findings
             ],
         }
         with open(path, "w", encoding="utf-8") as f:

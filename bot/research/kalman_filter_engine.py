@@ -159,6 +159,14 @@ from scipy import stats                         # Spearman IC, OLS initialisatio
 from statsmodels.regression.linear_model import OLS    # OLS for hedge ratio seed
 from statsmodels.tools import add_constant             # Adds intercept column to OLS
 
+# claude code changed: new — look-ahead-bias fix. Single source of truth for
+# "how many leading candles were used to fit hedge_ratio/intercept," reused
+# as the fallback when a cointegration_pairs.csv row predates the
+# training_window_candles column (older CSVs on disk). Matches this file's
+# own stated philosophy just below (load_pair_config's docstring) of never
+# letting two engines hold independent, driftable copies of the same number.
+from bot.research.cointegration_engine import TRAINING_WINDOW as _DEFAULT_TRAINING_WINDOW_CANDLES
+
 warnings.filterwarnings('ignore')               # Suppress statsmodels convergence warnings
 
 
@@ -266,6 +274,18 @@ def load_pair_config(
             f"require_passes_filters=False to test it anyway."
         )
 
+    # claude code changed: new — look-ahead-bias fix. training_window_candles
+    # is the exact number of leading candles hedge_ratio/intercept were
+    # fit on (cointegration_engine.py's train_end). Older CSVs saved before
+    # this column existed fall back to the engine's own TRAINING_WINDOW
+    # default rather than raising — this file is read-only against
+    # whatever CSV is on disk, and a missing column here must never crash
+    # a caller that just wants ols_beta/ols_alpha.
+    if "training_window_candles" in row.index and pd.notna(row["training_window_candles"]):
+        training_window_candles = int(row["training_window_candles"])
+    else:
+        training_window_candles = _DEFAULT_TRAINING_WINDOW_CANDLES
+
     return {
         "symbol_a":       row["symbol_a"],
         "symbol_b":       row["symbol_b"],
@@ -275,6 +295,7 @@ def load_pair_config(
         "adf_pvalue":     float(row["adf_pvalue"]),
         "coint_pvalue":   float(row["coint_pvalue"]),
         "passes_filters": bool(row["passes_filters"]),
+        "training_window_candles": training_window_candles,
     }
 
 # Kalman filter process noise — controls how fast β and α are allowed to change
@@ -535,6 +556,12 @@ class KalmanFilterEngine:
                 "half_life_h": half_life_h if half_life_h is not None else float("nan"),
                 "adf_pvalue": float("nan"), "coint_pvalue": float("nan"),
                 "passes_filters": None,   # claude code changed: honestly "not evaluated by this construction path" — a fresh Research Lab call decides this itself via CointegrationEngine, not a lookup
+                # claude code changed: new — look-ahead-bias fix. This bypass
+                # path computes its OLS seed via CointegrationEngine._test_pair()
+                # on already-loaded data, which uses the same module-level
+                # TRAINING_WINDOW default — so that's the correct fallback
+                # here too, not an arbitrary guess.
+                "training_window_candles": _DEFAULT_TRAINING_WINDOW_CANDLES,
             }
             self.symbol_a    = symbol_a
             self.symbol_b    = symbol_b
@@ -570,6 +597,14 @@ class KalmanFilterEngine:
             self.ols_alpha      = self.pair_config["ols_alpha"]  # 0.7916
             self.half_life_h    = self.pair_config["half_life_h"] # 119.9h
 
+        # claude code changed: new — look-ahead-bias fix. The candle count
+        # hedge_ratio/intercept were fit on, from whichever branch above set
+        # pair_config. Used below (run()) to stamp is_training_window, so
+        # entry_exit_engine.py can exclude the fit span from backtesting —
+        # not just its own short Kalman-convergence warmup, which is a
+        # completely different, much shorter span (168 vs ~10,000 candles).
+        self.training_window_candles = self.pair_config["training_window_candles"]
+
         self.pair_name      = pair_name                  # e.g. "AVAX_USDT/ATOM_USDT"
 
         # Kalman filter hyperparameters
@@ -588,6 +623,7 @@ class KalmanFilterEngine:
         logger.info(f"  OLS β seed       : {self.ols_beta}")
         logger.info(f"  OLS α seed       : {self.ols_alpha}")
         logger.info(f"  Half-life        : {self.half_life_h}h")
+        logger.info(f"  Training window  : {self.training_window_candles:,} candles (OLS fit span — excluded from backtest, see is_training_window)")
         logger.info(f"  Process noise β  : {self.qb}")
         logger.info(f"  Process noise α  : {self.qa}")
         logger.info(f"  Observation noise: {self.R}")
@@ -762,6 +798,35 @@ class KalmanFilterEngine:
     # STEP 1: LOAD PRICES
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _resolve_price_csv_path(self, symbol_underscore: str, data_dir: str) -> Path:
+        """
+        claude code changed: new — Forex Multi-Asset Integration. Replaces
+        the old hardcoded `data_dir / f"{symbol}_1h.csv"` join, which was
+        correct only for CRYPTO. Converts this engine's own underscore
+        symbol convention ("AVAX_USDT"/"EUR_USD") to the instrument
+        registry's canonical "BASE/QUOTE" form and looks up the real
+        instrument to decide which subdirectory it lives in — the same
+        asset-class-aware convention bot.instruments.resolve_ohlcv_path()
+        uses, but built from the CALLER's own data_dir (preserving the
+        data_dir override capability run()/_load_prices() have always
+        had) rather than that function's hardcoded "data" root.
+
+        CRYPTO (and any symbol not yet in the instrument registry, e.g. a
+        pair fetched before this engine's own test fixtures were
+        registered) resolves to EXACTLY the same path as before this
+        change — zero behavior change for existing crypto runs. Only
+        FOREX pairs get a new, correct path (data_dir/forex/SYMBOL_1h.csv).
+        """
+        from bot.forex_data_fetcher import symbol_to_filename as _forex_symbol_to_filename
+        from bot.instruments import ASSET_CLASS_FOREX, get_instrument
+
+        canonical = symbol_underscore.replace("_", "/", 1)
+        instrument = get_instrument(canonical)
+        data_path = Path(data_dir)
+        if instrument is not None and instrument.asset_class == ASSET_CLASS_FOREX:
+            return data_path / "forex" / _forex_symbol_to_filename(canonical)
+        return data_path / f"{symbol_underscore}_1h.csv"
+
     def _load_prices(
         self,
         data_dir: str,
@@ -783,10 +848,8 @@ class KalmanFilterEngine:
 
         logger.info("Step 1: Loading AVAX and ATOM price data...")
 
-        data_path = Path(data_dir)
-
         # ── Load AVAX ─────────────────────────────────────────────────────────
-        avax_path = data_path / f"{self.symbol_a}_1h.csv"
+        avax_path = self._resolve_price_csv_path(self.symbol_a, data_dir)
         if not avax_path.exists():
             raise FileNotFoundError(
                 f"{self.symbol_a} CSV not found at {avax_path}. "
@@ -812,7 +875,7 @@ class KalmanFilterEngine:
         )
 
         # ── Load ATOM ─────────────────────────────────────────────────────────
-        atom_path = data_path / f"{self.symbol_b}_1h.csv"
+        atom_path = self._resolve_price_csv_path(self.symbol_b, data_dir)
         if not atom_path.exists():
             raise FileNotFoundError(
                 f"{self.symbol_b} CSV not found at {atom_path}. "
@@ -1068,6 +1131,12 @@ class KalmanFilterEngine:
                 beta_uncertainty — diagonal of P for beta (confidence)
                 alpha_uncertainty — diagonal of P for alpha
                 is_warmup        — True during first WARMUP_CANDLES candles
+                is_training_window — claude code changed: new — True during
+                                   first training_window_candles candles
+                                   (the span cointegration_engine.py's
+                                   hedge_ratio/intercept were fit on —
+                                   separate from, and usually much longer
+                                   than, is_warmup)
         """
 
         logger.info(
@@ -1190,6 +1259,23 @@ class KalmanFilterEngine:
         results["kalman_alpha_pred"] = kalman_alpha_pred   # Leakage-free intercept — use this for the tradeable spread
         results["is_warmup"]         = (              # True during first N candles
             np.arange(n) < self.warmup
+        )
+        # claude code changed: new — look-ahead-bias fix (see module import
+        # comment and __init__). is_warmup only ever covered the Kalman
+        # filter's OWN convergence (168 candles) — it never covered the
+        # separate, much longer span (training_window_candles, ~10,000
+        # candles) that cointegration_engine.py's hedge_ratio/intercept were
+        # actually FIT on. Both ols_spread/ols_zscore (computed below from
+        # that frozen fit) and the Kalman filter's own early-candle output
+        # (seeded from that same fit — see theta_0 above) are optimistic
+        # over this span for reasons the 168-candle warmup was never meant
+        # to address. A separate column (rather than folding into
+        # is_warmup) keeps is_warmup's existing meaning — and this file's
+        # own post-warmup convergence diagnostics just below — unchanged;
+        # entry_exit_engine.py is what actually combines the two for
+        # backtest exclusion.
+        results["is_training_window"] = (
+            np.arange(n) < self.training_window_candles
         )
 
         # Log convergence statistics
