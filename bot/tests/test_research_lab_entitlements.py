@@ -14,6 +14,7 @@ from django.utils import timezone
 from bot.research_lab.entitlements import (
     ResearchEntitlementService, UNKNOWN_CAPABILITY, AUTHENTICATION_REQUIRED,
     ENGINE_NOT_READY, SUBSCRIPTION_REQUIRED, SUBSCRIPTION_EXPIRED, OK,
+    ASSET_CLASS_NOT_SUPPORTED,
 )
 from bot.research_lab.models import ResearchSubscription
 
@@ -160,3 +161,63 @@ class CapabilityUiStateTest(TestCase):
     def test_pro_user_sees_available_for_a_ready_pro_capability(self):
         state = ResearchEntitlementService.capability_ui_state(self.pro_user, "cointegration_pairs_research")
         self.assertEqual(state["badge"], "AVAILABLE")
+
+
+class AssetClassGatingTest(TestCase):
+    # claude code changed: new — Forex Integration Forensic Verification,
+    # Phase 10. Proves CRYPTO capability != automatically FOREX capability
+    # (the mission's own explicit requirement): a capability is only
+    # Forex-available when capability_registry.py's supported_asset_classes
+    # explicitly says so, never inferred from "it works for crypto."
+    # Covers: Forex-allowed capability, Forex-blocked capability,
+    # crypto-only capability still working for CRYPTO, an unsupported
+    # asset-class VALUE entirely (not just an unsupported capability), and
+    # confirms omitting asset_class preserves every pre-Forex caller's
+    # exact prior behavior (regression guard for the wiring fix in
+    # orchestrator.py/formalize.py).
+
+    def setUp(self):
+        self.pro_user = User.objects.create_user(username="assetclasspro", password="x")
+        ResearchSubscription.objects.create(user=self.pro_user, tier="PRO", status="ACTIVE", expires_at=None)
+
+    def test_forex_allowed_capability(self):
+        result = ResearchEntitlementService.can_access(self.pro_user, "cointegration_pairs_research", asset_class="FOREX")
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.reason_code, OK)
+
+    def test_forex_blocked_capability(self):
+        """cross_sectional_research is deliberately NOT marked FOREX-supported
+        (its Research Lab tool has no asset-class parameter at all — see
+        capability_registry.py's own comment on that entry) — this must be
+        rejected at the entitlement layer, not silently allowed through."""
+        result = ResearchEntitlementService.can_access(self.pro_user, "cross_sectional_research", asset_class="FOREX")
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason_code, ASSET_CLASS_NOT_SUPPORTED)
+
+    def test_crypto_only_capability_still_works_for_crypto(self):
+        result = ResearchEntitlementService.can_access(self.pro_user, "cross_sectional_research", asset_class="CRYPTO")
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.reason_code, OK)
+
+    def test_unsupported_asset_class_value_is_rejected(self):
+        """Not just an unsupported CAPABILITY — an asset_class value that
+        isn't even a real registered asset class at all must still fail
+        closed, never silently pass through."""
+        result = ResearchEntitlementService.can_access(self.pro_user, "cointegration_pairs_research", asset_class="COMMODITIES")
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason_code, ASSET_CLASS_NOT_SUPPORTED)
+
+    def test_omitting_asset_class_preserves_legacy_behavior(self):
+        """Every caller that predates the Forex integration never passes
+        asset_class — this must be completely unaffected."""
+        result = ResearchEntitlementService.can_access(self.pro_user, "cointegration_pairs_research")
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.reason_code, OK)
+
+    def test_ui_state_reflects_the_same_asset_class_gate(self):
+        """capability_ui_state() (the display-layer twin of can_access())
+        must reach the same verdict, not a looser one — the exact
+        'hiding a button is not authorization' principle applied to
+        asset-class gating instead of subscription gating."""
+        state = ResearchEntitlementService.capability_ui_state(self.pro_user, "cross_sectional_research", asset_class="FOREX")
+        self.assertEqual(state["badge"], "UNAVAILABLE")

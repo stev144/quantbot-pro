@@ -48,6 +48,22 @@ class StatisticalTestTest(SimpleTestCase):
         self.assertEqual(result.status, "error")
         self.assertIn("not supported", result.error)
 
+    def test_does_not_trigger_the_regime_detection_fallback(self):
+        # claude code changed: new — real bug regression guard. This tool
+        # used to hand feature_validator.py a DataFrame scoped to only
+        # [feature_name, forward_col], missing 'realized_vol'/'close'/
+        # 'adx' — MarketRegimeDetector.detect_regime() raised a KeyError
+        # on every call, caught by its own broad except, logging "Error
+        # detecting regime: 'realized_vol'. Defaulting to 'ranging'" and
+        # silently degrading every observation to one fake regime. Fixed
+        # via statistical_tools._scope_to_single_feature() including the
+        # columns detect_regime() actually needs. assertNoLogs fails loud
+        # if that warning (or any other WARNING+ from this module) ever
+        # comes back.
+        with self.assertNoLogs(logger="bot.research.feature_validator", level="WARNING"):
+            result = run_tool("run_statistical_test", "LOW", asset="BTC/USDT", feature_name="rsi", horizon=4)
+        self.assertEqual(result.status, "success")
+
 
 class FdrCorrectionTest(SimpleTestCase):
 

@@ -55,8 +55,15 @@ def _context(experiment, spec, errors=None):
     # isn't entitled — visibility and entitlement are independent, per
     # section 10. This is DISPLAY ONLY; the real enforcement is the POST
     # handler's entitlement.allowed check above, not this flag.
+    # claude code changed: real bug fix, Forex Multi-Asset Integration —
+    # asset_class=spec.resolved_asset_class added. Without it, this
+    # pre-submission "locked" notice never reflected which asset class
+    # the student's current draft actually targets, even though
+    # capability_ui_state() has supported asset_class-aware gating since
+    # the Forex integration — the display-only check and the real POST
+    # handler check below were both silently asset-class-blind until now.
     pairs_capability = RESEARCH_CAPABILITIES.get("cointegration_pairs_research")
-    pairs_ui_state = ResearchEntitlementService.capability_ui_state(experiment.student, "cointegration_pairs_research") if pairs_capability else None
+    pairs_ui_state = ResearchEntitlementService.capability_ui_state(experiment.student, "cointegration_pairs_research", asset_class=spec.resolved_asset_class) if pairs_capability else None
 
     return {
         "experiment": experiment, "spec": spec, "errors": errors or [],
@@ -135,7 +142,15 @@ def formalize(request, experiment_id):
         # tool call.
         capability = capability_for_hypothesis_type(spec.hypothesis_type)
         if capability is not None:
-            entitlement = ResearchEntitlementService.can_access(request.user, capability.id)
+            # claude code changed: real bug fix, Forex Multi-Asset
+            # Integration — asset_class=spec.resolved_asset_class added.
+            # This is the real HTTP-level enforcement point (see the
+            # comment above); without this, a student could POST
+            # hypothesis_type="cross_sectional" with asset="EUR/USD" and
+            # nothing here would catch that this capability doesn't
+            # support FOREX — plan_experiment() below is defense in depth
+            # for exactly this, and was fixed the same way.
+            entitlement = ResearchEntitlementService.can_access(request.user, capability.id, asset_class=spec.resolved_asset_class)
             if not entitlement.allowed:
                 return render(request, "research_lab/formalize.html", _context(experiment, spec, [entitlement.message]))
 

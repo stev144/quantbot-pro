@@ -25,6 +25,8 @@ from bot.management.commands.deep_health_check import (
     check_universe_dynamism, check_governance_boundary,
     check_dataset_fingerprint_coverage, check_reconciliation_gate,
     UNGOVERNED_RESEARCH_ENGINES, FINGERPRINT_COVERAGE_ENGINES,
+    check_forex_dataset_freshness, check_forex_dataset_quality,
+    check_forex_capability_governance, check_forex_dataset_fingerprint_reproducibility,
 )
 
 
@@ -246,3 +248,64 @@ class ReconciliationGateCheckTest(SimpleTestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].severity, RED_SEVERITY)
         self.assertIn("REGRESSED", findings[0].remediation_status)
+
+
+class ForexDatasetHealthChecksTest(SimpleTestCase):
+    # claude code changed: new — Forex Integration Forensic Verification,
+    # Phase 12. Real checks against the real 8 registered Forex CSVs
+    # (data/forex/*.csv) already on disk from the prior mission — no
+    # mocking, matching this project's own testing convention, since
+    # these checks exist specifically to catch real data-quality/
+    # freshness regressions, which a mocked file could never do.
+
+    def test_freshness_check_returns_one_finding_per_registered_symbol(self):
+        from bot.instruments import ASSET_CLASS_FOREX, symbols_for_asset_class
+        findings = check_forex_dataset_freshness()
+        self.assertEqual(len(findings), len(symbols_for_asset_class(ASSET_CLASS_FOREX)))
+        for f in findings:
+            self.assertIn(f.severity, (GREEN_SEVERITY, YELLOW_SEVERITY, RED_SEVERITY))
+
+    def test_quality_check_reports_zero_violations_on_real_data(self):
+        """Real data, real assertion — the prior forensic audit (both an
+        independent fork and this file's own author) confirmed 0 OHLC
+        violations and 0 duplicate timestamps across all 8 real Forex
+        CSVs. If this ever regresses (corrupted refetch, a provider
+        change), this test must fail, not silently pass."""
+        findings = check_forex_dataset_quality()
+        self.assertGreater(len(findings), 0)
+        for f in findings:
+            self.assertEqual(f.severity, GREEN_SEVERITY, f.evidence)
+
+    def test_capability_governance_check_is_all_green_today(self):
+        """Regression guard for the exact bug this mission's Phase 10
+        found and fixed (asset_class gating existed but wasn't wired into
+        the real orchestrator/formalize call sites) — proves the check
+        itself currently reports both directions correctly."""
+        findings = check_forex_capability_governance()
+        self.assertEqual(len(findings), 2)
+        for f in findings:
+            self.assertEqual(f.severity, GREEN_SEVERITY, f.evidence)
+
+    def test_capability_governance_check_catches_a_reverted_leak(self):
+        """Proves this check can actually CATCH the regression it claims
+        to catch — not just observe the current passing state. Monkeypatches
+        a capability's supported_asset_classes to (incorrectly) include
+        FOREX and confirms the 'blocked' finding correctly flips to RED."""
+        from bot.research_lab.capability_registry import RESEARCH_CAPABILITIES
+        classes_list = RESEARCH_CAPABILITIES["cross_sectional_research"].supported_asset_classes
+        original = list(classes_list)  # ResearchCapability is frozen, but the list it holds is mutable — mutate in place, restore after
+        classes_list.append("FOREX")
+        try:
+            findings = check_forex_capability_governance()
+        finally:
+            classes_list[:] = original
+        by_check = {f.check: f for f in findings}
+        blocked_finding = by_check["a Forex-unsupported capability is blocked for FOREX, not silently allowed"]
+        self.assertEqual(blocked_finding.severity, RED_SEVERITY)
+        self.assertIn("REGRESSED", blocked_finding.remediation_status)
+
+    def test_fingerprint_reproducibility_check_is_green_on_real_data(self):
+        findings = check_forex_dataset_fingerprint_reproducibility()
+        self.assertGreater(len(findings), 0)
+        for f in findings:
+            self.assertEqual(f.severity, GREEN_SEVERITY, f.evidence)

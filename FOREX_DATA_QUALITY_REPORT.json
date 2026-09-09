@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-09-09",
+  "mission": "Forex Integration Forensic Verification — Phase 2",
+  "provider": "yahoo_finance",
+  "method": "Direct computation against real files in data/forex/*.csv (no estimates, no invented values). OHLC integrity, duplicate/sort checks, and NaN counts independently reproduced twice (once by a dedicated audit fork, once by bot/management/commands/deep_health_check.py's new check_forex_dataset_quality() health check) with identical results.",
+  "datasets": [
+    {
+      "symbol": "EUR/USD", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:35:29+00:00",
+      "row_count": 17242, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 157, "weekend_gap_count": 146, "other_gap_count": 11,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "98c8899f67f5f0b9e2d84b70a552d3475ee3e3f66d3718958914155736c74566",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "GBP/USD", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:35:29+00:00",
+      "row_count": 17243, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 156, "weekend_gap_count": 146, "other_gap_count": 10,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "d8a4dd15dc1cd25de9a3c795e935e109546f4ec5fb66920fcacb09d331da112a",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "USD/JPY", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:36:11+00:00",
+      "row_count": 17130, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 154, "weekend_gap_count": 147, "other_gap_count": 7,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "c22a8f99faf0300b7e0ea5fb856416713f33867290027e1a1bf14d81a00b70b1",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "AUD/USD", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:34:29+00:00",
+      "row_count": 17336, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 149, "weekend_gap_count": 146, "other_gap_count": 3,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "355f2f5962e6a01073816182a1f768eb5d786ff8cc72f66738058aa33636af10",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "USD/CAD", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:36:13+00:00",
+      "row_count": 17342, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 149, "weekend_gap_count": 146, "other_gap_count": 3,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "df01a98670e3df59d1108478d58948d1782dc348ecd8948de941fe0c8d2aaaa3",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "USD/CHF", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:36:23+00:00",
+      "row_count": 17176, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 158, "weekend_gap_count": 146, "other_gap_count": 12,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "cac76b42e14ea1754525e981be0be0351035a8ff6a045146fa8833d9959adb29",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "NZD/USD", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:34:29+00:00",
+      "row_count": 17333, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 152, "weekend_gap_count": 146, "other_gap_count": 6,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "c7b31fd79d7178f36bc3cc099ec44f651cb6dc4fb6d1b21753ea7d743084f038",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    },
+    {
+      "symbol": "EUR/GBP", "provider": "yahoo_finance", "timeframe": "1h",
+      "first_timestamp": "2023-11-22T00:00:00+00:00", "last_timestamp": "2026-09-07T19:36:29+00:00",
+      "row_count": 17268, "duplicate_count": 0, "is_sorted": true,
+      "missing_expected_intervals": 156, "weekend_gap_count": 146, "other_gap_count": 10,
+      "nan_count": 0, "ohlc_violation_count": 0, "zero_or_negative_price_count": 0,
+      "volume_zero_fraction": 1.0, "timezone": "UTC",
+      "spread_availability": "UNAVAILABLE", "volume_availability": "PROVIDER_REPORTS_ZERO",
+      "dataset_fingerprint": "96587e5374b1bae441406fcb749237becb690a77a48edbaa437e92fc51292d83",
+      "columns": ["timestamp", "open", "high", "low", "close", "volume"],
+      "classification": "PASS"
+    }
+  ],
+  "known_limitations": [
+    "spread_availability=UNAVAILABLE for every symbol — Yahoo's public chart endpoint carries no bid/ask fields at all; any cost model using this data must be labeled ESTIMATED, never OBSERVED.",
+    "volume_availability=PROVIDER_REPORTS_ZERO for every symbol (100.0% of rows have volume==0, computed not assumed) — this is not missing data, it reflects that Yahoo does not provide a real Forex volume figure; must never be treated as a liquidity signal.",
+    "other_gap_count (3-12 per symbol) are unclassified — manually spot-checked in a prior pass and found to correspond to real bank holidays (Christmas, New Year's, Easter Monday), but this pipeline has no automated holiday calendar and does not label them as such.",
+    "data/forex_universe_selection.json (the 'auditable universe selection' file) is never actually written by any real code path today — save_forex_universe_selection() exists but has zero callers. Every real run silently falls back to the hardcoded _FOREX_DEFAULT_SYMBOLS list. This is a real, if low-severity, documentation/reproducibility gap."
+  ]
+}

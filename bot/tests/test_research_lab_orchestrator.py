@@ -10,7 +10,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase
 
-from bot.research_lab.models import ResearchExperiment
+from bot.research_lab.models import ResearchExperiment, ResearchSubscription
 from bot.research_lab.orchestrator import plan_experiment, run_experiment
 from bot.research_lab.spec import ResearchSpec
 
@@ -102,6 +102,56 @@ class LifecyclePendingToBlockedTest(TestCase):
         experiment.refresh_from_db()
         self.assertEqual(experiment.status, "BLOCKED")
         self.assertIsNone(experiment.started_at)
+
+
+class AssetClassGatingWiringTest(TestCase):
+    # claude code changed: new — Forex Integration Forensic Verification,
+    # Phase 10. Proves plan_experiment() actually threads the spec's real
+    # resolved asset class into can_access(), not just that can_access()
+    # itself can gate on asset_class in isolation (see
+    # test_research_lab_entitlements.py's AssetClassGatingTest for that).
+    # Found during this audit: none of the three REAL hypothesis_type ->
+    # capability mappings reachable via plan_experiment() today
+    # ("feature"/"conditional"/"pairs") are currently Forex-blocked — every
+    # one of them was marked supported_asset_classes=["CRYPTO","FOREX"] in
+    # the original Forex mission, each individually verified portable. So
+    # there is no live "a real request gets rejected" path to demonstrate
+    # end-to-end right now; what CAN and must be verified is that the
+    # wiring itself passes the correct asset_class through, which is what
+    # protects against a FUTURE capability being added or reclassified as
+    # Forex-unsupported.
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="wiringresearcher", password="x")
+        # claude code changed: cointegration_pairs_research is PRO-tier —
+        # without a subscription this would correctly BLOCK on
+        # SUBSCRIPTION_REQUIRED regardless of asset_class, which would
+        # test the wrong thing (this test's job is asset-class wiring,
+        # not the already-covered subscription gate).
+        ResearchSubscription.objects.create(user=self.user, tier="PRO", status="ACTIVE", expires_at=None)
+
+    def test_forex_asset_resolves_and_is_passed_to_entitlement_check(self):
+        experiment = _make_experiment(
+            self.user, asset="EUR/USD", asset_b="GBP/USD", hypothesis_type="pairs",
+            direction=None, target={},  # claude code changed: ResearchSpec.target defaults to {} (field(default_factory=dict)), never None — to_dict() calls dict(self.target) unconditionally
+        )
+        with patch("bot.research_lab.orchestrator.ResearchEntitlementService.can_access", wraps=__import__("bot.research_lab.orchestrator", fromlist=["ResearchEntitlementService"]).ResearchEntitlementService.can_access) as spy:
+            plan_experiment(experiment)
+            spy.assert_called_once()
+            _, kwargs = spy.call_args
+            self.assertEqual(kwargs.get("asset_class"), "FOREX")
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.status, "PLANNED")  # real, currently-Forex-allowed capability — must not be blocked
+
+    def test_crypto_asset_still_resolves_to_crypto(self):
+        experiment = _make_experiment(self.user)  # default fixture is BTC/USDT, hypothesis_type="feature"
+        with patch("bot.research_lab.orchestrator.ResearchEntitlementService.can_access", wraps=__import__("bot.research_lab.orchestrator", fromlist=["ResearchEntitlementService"]).ResearchEntitlementService.can_access) as spy:
+            plan_experiment(experiment)
+            spy.assert_called_once()
+            _, kwargs = spy.call_args
+            self.assertEqual(kwargs.get("asset_class"), "CRYPTO")
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.status, "PLANNED")
 
 
 class LifecyclePendingToFailedTest(TestCase):

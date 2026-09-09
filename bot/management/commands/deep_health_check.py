@@ -2022,6 +2022,231 @@ def check_forex_provider_connectivity() -> List[HealthFinding]:
         )]
 
 
+def check_forex_dataset_freshness() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Integration Forensic Verification,
+    Phase 12. Real, computed freshness check per registered FOREX symbol
+    (same FRESHNESS_MAX_AGE_DAYS convention fetch_all_symbols.py already
+    uses for crypto). SKIP-shaped GREEN if a symbol's CSV doesn't exist
+    yet (an honest "not fetched" state, not a failure — matches
+    check_forex_architecture()'s own convention). Never makes a network
+    call — reads only the last row already on disk.
+    """
+    from datetime import datetime, timezone
+
+    import pandas as pd
+
+    from bot.forex_data_fetcher import FRESHNESS_MAX_AGE_DAYS
+    from bot.instruments import ASSET_CLASS_FOREX, resolve_ohlcv_path, symbols_for_asset_class
+
+    component = "data/forex/*.csv (freshness)"
+    findings = []
+    now = datetime.now(tz=timezone.utc)
+    for symbol in symbols_for_asset_class(ASSET_CLASS_FOREX):
+        check_name = f"{symbol} Forex dataset is within the freshness window"
+        path = resolve_ohlcv_path(symbol)
+        if not path.exists():
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=GREEN_SEVERITY,
+                evidence=f"no CSV at {path} yet", expected="either no file or a fresh one",
+                actual="not fetched yet", impact="none — SKIP-shaped, not a failure", remediation_status="not started",
+            ))
+            continue
+        try:
+            last_ts = pd.to_datetime(pd.read_csv(path, usecols=["timestamp"])["timestamp"].iloc[-1], utc=True)
+            staleness_days = (now - last_ts).total_seconds() / 86400
+            if staleness_days <= FRESHNESS_MAX_AGE_DAYS:
+                findings.append(HealthFinding(
+                    component=component, check=check_name, severity=GREEN_SEVERITY,
+                    evidence=f"last candle {last_ts.isoformat()} ({staleness_days:.1f} days old)",
+                    expected=f"<= {FRESHNESS_MAX_AGE_DAYS} days old", actual=f"{staleness_days:.1f} days old",
+                    impact="none", remediation_status="fixed",
+                ))
+            else:
+                findings.append(HealthFinding(
+                    component=component, check=check_name, severity=YELLOW_SEVERITY,
+                    evidence=f"last candle {last_ts.isoformat()} ({staleness_days:.1f} days old)",
+                    expected=f"<= {FRESHNESS_MAX_AGE_DAYS} days old", actual=f"{staleness_days:.1f} days old",
+                    impact="stale Forex research data — not a code defect, run bot/forex_data_fetcher.py to refresh",
+                ))
+        except Exception as e:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=RED_SEVERITY,
+                evidence=f"{type(e).__name__}: {e}", expected="a readable CSV with a timestamp column",
+                actual=f"raised {type(e).__name__}", impact="cannot verify this dataset's freshness — investigate the file directly",
+            ))
+    return findings
+
+
+def check_forex_dataset_quality() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Integration Forensic Verification,
+    Phase 12. Real, computed OHLC-integrity check per registered FOREX
+    symbol — the exact violations the Phase 1-2 forensic audit checked by
+    hand (high>=max(open,close), low<=min(open,close), high>=low, zero/
+    negative prices, duplicate timestamps), now a standing, re-runnable
+    health check rather than a one-time manual audit. SKIP-shaped GREEN
+    if the file doesn't exist yet.
+    """
+    import pandas as pd
+
+    from bot.instruments import ASSET_CLASS_FOREX, resolve_ohlcv_path, symbols_for_asset_class
+
+    component = "data/forex/*.csv (OHLC integrity)"
+    findings = []
+    for symbol in symbols_for_asset_class(ASSET_CLASS_FOREX):
+        check_name = f"{symbol} Forex dataset has no OHLC integrity violations"
+        path = resolve_ohlcv_path(symbol)
+        if not path.exists():
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=GREEN_SEVERITY,
+                evidence=f"no CSV at {path} yet", expected="either no file or a clean one",
+                actual="not fetched yet", impact="none — SKIP-shaped, not a failure", remediation_status="not started",
+            ))
+            continue
+        try:
+            df = pd.read_csv(path)
+            violations = int((
+                (df["high"] < df[["open", "close"]].max(axis=1))
+                | (df["low"] > df[["open", "close"]].min(axis=1))
+                | (df["high"] < df["low"])
+                | (df[["open", "high", "low", "close"]] <= 0).any(axis=1)
+            ).sum())
+            duplicate_count = int(df["timestamp"].duplicated().sum())
+            if violations == 0 and duplicate_count == 0:
+                findings.append(HealthFinding(
+                    component=component, check=check_name, severity=GREEN_SEVERITY,
+                    evidence=f"0 OHLC violations, 0 duplicate timestamps across {len(df):,} rows",
+                    expected="0 violations", actual="0 violations", impact="none", remediation_status="fixed",
+                ))
+            else:
+                findings.append(HealthFinding(
+                    component=component, check=check_name, severity=RED_SEVERITY,
+                    evidence=f"{violations} OHLC violation(s), {duplicate_count} duplicate timestamp(s) across {len(df):,} rows",
+                    expected="0 violations, 0 duplicates", actual=f"{violations} violations, {duplicate_count} duplicates",
+                    impact="downstream research on this symbol may be computing statistics over corrupt rows",
+                ))
+        except Exception as e:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=RED_SEVERITY,
+                evidence=f"{type(e).__name__}: {e}", expected="a readable, well-formed CSV",
+                actual=f"raised {type(e).__name__}", impact="cannot verify this dataset's integrity — investigate the file directly",
+            ))
+    return findings
+
+
+def check_forex_capability_governance() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Integration Forensic Verification,
+    Phase 12/10. A real, executable regression guard for the mission's
+    own central governance requirement: "CRYPTO capability != automatically
+    FOREX capability." Exercises the real ResearchEntitlementService with
+    a synthetic PRO-tier stand-in user (no DB write — can_access() only
+    ever reads whatever object it's given, confirmed by reading its
+    source) against one known-Forex-supported capability and one
+    known-Forex-unsupported capability, so a future accidental widening
+    or narrowing of capability_registry.py's supported_asset_classes (or
+    a regression in entitlements.py's asset_class gating itself) goes RED
+    here instead of silently passing.
+    """
+    from bot.research_lab.entitlements import ASSET_CLASS_NOT_SUPPORTED, ResearchEntitlementService
+
+    class _SyntheticProUser:
+        is_authenticated = True
+
+        class research_subscription:
+            tier = "PRO"
+            status = "ACTIVE"
+            expires_at = None
+
+    component = "bot.research_lab.entitlements (asset-class governance)"
+    user = _SyntheticProUser()
+    findings = []
+
+    check_name = "a Forex-supported capability is allowed for FOREX"
+    result = ResearchEntitlementService.can_access(user, "cointegration_pairs_research", asset_class="FOREX")
+    findings.append(HealthFinding(
+        component=component, check=check_name,
+        severity=GREEN_SEVERITY if result.allowed else RED_SEVERITY,
+        evidence=f"can_access(cointegration_pairs_research, FOREX) -> allowed={result.allowed}, reason={result.reason_code}",
+        expected="allowed=True", actual=f"allowed={result.allowed}",
+        impact="none" if result.allowed else "a genuinely Forex-ready capability is being wrongly blocked",
+        remediation_status="fixed" if result.allowed else "REGRESSED",
+    ))
+
+    check_name = "a Forex-unsupported capability is blocked for FOREX, not silently allowed"
+    result = ResearchEntitlementService.can_access(user, "cross_sectional_research", asset_class="FOREX")
+    blocked_correctly = (not result.allowed) and result.reason_code == ASSET_CLASS_NOT_SUPPORTED
+    findings.append(HealthFinding(
+        component=component, check=check_name,
+        severity=GREEN_SEVERITY if blocked_correctly else RED_SEVERITY,
+        evidence=f"can_access(cross_sectional_research, FOREX) -> allowed={result.allowed}, reason={result.reason_code}",
+        expected="allowed=False, reason=ASSET_CLASS_NOT_SUPPORTED", actual=f"allowed={result.allowed}, reason={result.reason_code}",
+        impact="none" if blocked_correctly else "a capability whose tool cannot actually run on Forex data would silently accept a Forex request — the exact bug this mission's Phase 10 was written to catch",
+        remediation_status="fixed" if blocked_correctly else "REGRESSED",
+    ))
+
+    return findings
+
+
+def check_forex_dataset_fingerprint_reproducibility() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Integration Forensic Verification,
+    Phase 3/12. Confirms a real, reproducible dataset fingerprint can be
+    computed for each registered FOREX symbol's actual on-disk data (same
+    fingerprint_dataset() function already used, unmodified, for Crypto —
+    no separate Forex fingerprinting logic exists or is needed). SKIP-shaped
+    GREEN if the file doesn't exist yet.
+    """
+    import pandas as pd
+
+    from bot.instruments import ASSET_CLASS_FOREX, get_instrument, resolve_ohlcv_path, symbols_for_asset_class
+    from bot.research_lab.data_fingerprint import fingerprint_dataset
+
+    component = "bot.research_lab.data_fingerprint (FOREX reproducibility)"
+    findings = []
+    for symbol in symbols_for_asset_class(ASSET_CLASS_FOREX):
+        check_name = f"{symbol} dataset fingerprint is computable and reproducible"
+        path = resolve_ohlcv_path(symbol)
+        if not path.exists():
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=GREEN_SEVERITY,
+                evidence=f"no CSV at {path} yet", expected="either no file or a fingerprintable one",
+                actual="not fetched yet", impact="none — SKIP-shaped, not a failure", remediation_status="not started",
+            ))
+            continue
+        try:
+            df = pd.read_csv(path, usecols=["timestamp"])
+            instrument = get_instrument(symbol)
+            kwargs = dict(
+                source="forex_ohlcv_1h", symbol=symbol, venue=instrument.venue, timeframe=instrument.timeframe,
+                start_date=str(pd.to_datetime(df["timestamp"].iloc[0]).date()),
+                end_date=str(pd.to_datetime(df["timestamp"].iloc[-1]).date()),
+                row_count=len(df),
+            )
+            fp1 = fingerprint_dataset(**kwargs)
+            fp2 = fingerprint_dataset(**kwargs)
+            if fp1 == fp2 and fp1:
+                findings.append(HealthFinding(
+                    component=component, check=check_name, severity=GREEN_SEVERITY,
+                    evidence=f"fingerprint={fp1[:16]}... (reproducible across two calls)",
+                    expected="two identical, non-empty fingerprints", actual="identical", impact="none", remediation_status="fixed",
+                ))
+            else:
+                findings.append(HealthFinding(
+                    component=component, check=check_name, severity=RED_SEVERITY,
+                    evidence=f"fp1={fp1!r} fp2={fp2!r}", expected="two identical, non-empty fingerprints",
+                    actual="mismatch or empty", impact="Forex research results would not be reproducible by dataset identity",
+                ))
+        except Exception as e:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=RED_SEVERITY,
+                evidence=f"{type(e).__name__}: {e}", expected="fingerprint_dataset() runs without raising",
+                actual=f"raised {type(e).__name__}", impact="cannot verify this dataset's reproducibility",
+            ))
+    return findings
+
+
 def run_structured_findings(check_external: bool = False) -> List[HealthFinding]:
     """Runs the category checks. Deliberately does NOT re-walk every
     FunctionResult/DriftResult here — those are mapped by the Command
@@ -2040,6 +2265,10 @@ def run_structured_findings(check_external: bool = False) -> List[HealthFinding]
     findings.extend(check_dataset_fingerprint_coverage())
     findings.extend(check_reconciliation_gate())
     findings.extend(check_forex_architecture())
+    findings.extend(check_forex_dataset_freshness())
+    findings.extend(check_forex_dataset_quality())
+    findings.extend(check_forex_capability_governance())
+    findings.extend(check_forex_dataset_fingerprint_reproducibility())
     if check_external:
         findings.extend(check_forex_provider_connectivity())
     return findings

@@ -87,7 +87,16 @@ def plan_experiment(experiment: ResearchExperiment) -> None:
         experiment.save()
         return
 
-    entitlement = ResearchEntitlementService.can_access(experiment.student, capability.id)
+    # claude code changed: real bug fix, Forex Multi-Asset Integration.
+    # can_access() gained an asset_class parameter specifically so a
+    # capability's supported_asset_classes could actually gate a real
+    # request — but nothing in the real plan_experiment()/formalize.py/
+    # capabilities.py call sites ever passed it, so the whole check was
+    # dead code from the live UI's perspective (a user could select
+    # "EUR/USD" for cross_sectional_research, which has no way to honor
+    # that asset and would have silently run against the crypto universe
+    # instead — found and confirmed by tracing this exact call chain).
+    entitlement = ResearchEntitlementService.can_access(experiment.student, capability.id, asset_class=spec.resolved_asset_class)
     experiment.capability_id = capability.id
     if not entitlement.allowed:
         experiment.status = "BLOCKED"

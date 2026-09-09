@@ -35,15 +35,28 @@ from scipy import stats                        # Statistical tests (t-test, Mann
 from statsmodels.stats.multitest import multipletests  # Multiple testing correction
 from dataclasses import dataclass, asdict      # Type-safe data structures
 import json                                    # JSON serialization
-import warnings                                # Warning handling
 import hashlib                                 # Feature versioning via hash
 from datetime import datetime                  # Timestamps
 import concurrent.futures                      # Parallel processing (optional)
 from bot import data_fetcher
 from bot.instruments import UnsupportedAnnualizationError, UnsupportedTimeframeError, periods_per_year  # claude code changed: new — Phase 1B hardening, section 7
 
-# Suppress warnings
-warnings.filterwarnings('ignore')
+# claude code changed: real bug fix. This used to be a blanket
+# `warnings.filterwarnings('ignore')` — a global, process-wide suppression
+# of EVERY Python warning for the lifetime of the interpreter once this
+# module is imported anywhere (not scoped to this module's own code).
+# Confirmed harmful, not just untidy: it is very likely why the
+# stability-windows bug found during a live audit (an empty
+# stability_scores dict silently producing `np.std([]) == nan` via a
+# suppressed "Mean of empty slice" RuntimeWarning, then silently treated
+# as "0.0 == perfectly stable") went unnoticed — the one signal that
+# would have hinted at it was globally muted. Verified removing it is
+# safe: running the real institutional validator end-to-end against real
+# BTC/USDT data captured zero warnings, so there was no actual noise this
+# was suppressing on the normal path — only hiding a real defect on the
+# edge-case path. If a genuine benign warning does surface from some
+# future edge case, it should be visible and handled at the specific call
+# site that produces it, not muted platform-wide.
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 # LOGGING CONFIGURATION
