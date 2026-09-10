@@ -32,6 +32,66 @@ class DashboardTest(TestCase):
         self.assertEqual(ResearchExperiment.objects.count(), 0)
 
 
+class AssetClassHintTest(TestCase):
+    # claude code changed: new — Crypto/Forex Navigation Discoverability
+    # follow-up. Real user report: clicking the navbar's "Forex" link
+    # landed on this exact page still showing a hardcoded Bitcoin example
+    # hypothesis. Covers the display-only asset_class_hint this page now
+    # derives from ?asset_class=FOREX (see
+    # bot/research_lab/views/dashboard.py's _asset_class_hint()) — never
+    # persisted onto the experiment, never consulted by validate_spec()/
+    # entitlements, purely which example/placeholder text renders.
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="assethintuser", password="x")
+        self.client.login(username="assethintuser", password="x")
+
+    def test_forex_hint_shows_a_forex_example_not_bitcoin(self):
+        html = self.client.get(reverse("research_lab_dashboard") + "?asset_class=FOREX").content.decode()
+        self.assertIn("EUR/USD and GBP/USD", html)
+        self.assertNotIn("Bitcoin", html)
+
+    def test_no_hint_keeps_the_original_bitcoin_example(self):
+        """claude code changed: the existing Crypto behavior must be
+        completely unaffected by this addition."""
+        html = self.client.get(reverse("research_lab_dashboard")).content.decode()
+        self.assertIn("Bitcoin", html)
+
+    def test_unrecognized_hint_value_falls_back_to_the_default_example(self):
+        """claude code changed: fails closed to the existing default
+        rather than guessing — a typo'd or unsupported asset_class value
+        must not silently produce a blank or wrong example."""
+        html = self.client.get(reverse("research_lab_dashboard") + "?asset_class=NOT_A_REAL_CLASS").content.decode()
+        self.assertIn("Bitcoin", html)
+
+    def test_hint_survives_a_failed_submission_via_hidden_field(self):
+        """claude code changed: real UX bug this guards against — without
+        round-tripping the hint through a hidden field, submitting an
+        empty hypothesis while arriving via Forex would silently flip the
+        re-rendered error page back to the Bitcoin example, which would
+        read as the exact same 'why does Forex show Bitcoin' bug report
+        this whole feature exists to fix, just one click later."""
+        response = self.client.post(
+            reverse("research_lab_dashboard"),
+            data={"hypothesis_text": "   ", "asset_class": "FOREX"},
+        )
+        html = response.content.decode()
+        self.assertIn("EUR/USD and GBP/USD", html)
+
+    def test_hint_does_not_affect_what_gets_saved(self):
+        """claude code changed: this is display-only — the real asset
+        class is still decided entirely on the formalize page. Confirms
+        the hint isn't accidentally written into hypothesis_text or
+        anywhere else on the experiment."""
+        self.client.post(
+            reverse("research_lab_dashboard"),
+            data={"hypothesis_text": "EUR/USD trends persist", "asset_class": "FOREX"},
+        )
+        experiment = ResearchExperiment.objects.get(student=self.user)
+        self.assertEqual(experiment.hypothesis_text, "EUR/USD trends persist")
+        self.assertEqual(experiment.structured_spec, {})
+
+
 class AssetSelectorGroupedByAssetClassTest(TestCase):
     # claude code changed: new — Crypto/Forex Navigation Discoverability.
     # Real HTTP request to the real formalize page, confirming the asset

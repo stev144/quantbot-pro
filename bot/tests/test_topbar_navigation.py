@@ -66,6 +66,36 @@ class CryptoForexNavLinksTest(TestCase):
         self.assertIn('>Crypto</a>', html)
         self.assertIn('>Forex</a>', html)
 
+    def test_topbar_comment_text_never_leaks_into_the_rendered_page(self):
+        # claude code changed: new — real bug, found live in production
+        # (reported directly by the user): the long explanatory comment
+        # for the Crypto/Forex nav links was originally written with the
+        # {# #} single-line delimiter, which does not support multi-line
+        # content — the exact same mistake this file's own back-arrow
+        # block already had fixed once before, for the same reason. It
+        # rendered as literal visible text on every page. Every other
+        # test in this file only checks for PRESENCE of expected content,
+        # which is exactly why none of them caught this — the leaked
+        # comment text sat right next to the real links without breaking
+        # any "is Crypto/Forex present" assertion. This test asserts
+        # ABSENCE of the marker string every one of this codebase's
+        # inline authorship comments starts with, across two different
+        # real pages, so a future multi-line {# #} mistake anywhere in
+        # this shared partial fails loudly instead of shipping silently.
+        #
+        # claude code changed: was a blanket assertNotIn("claude code
+        # changed", html) — too broad, since that exact phrase also
+        # appears legitimately inside real JavaScript `//` comments in
+        # base.html's own <script> block (which SHOULD be visible in page
+        # source — that's just how JS comments work, nothing to hide).
+        # Checks for a phrase unique to this partial's own Django
+        # {% comment %} block instead (confirmed absent from every real
+        # .js file), so this only fires on an actual server-side template
+        # comment leaking, never a legitimate client-side JS comment.
+        for url in ('/', '/market/'):  # both public, no login required, both render this shared topbar partial
+            html = self.client.get(url).content.decode()
+            self.assertNotIn('Navigation Discoverability', html, f"a template comment leaked into the rendered HTML of {url}")
+
     def test_crypto_link_points_at_the_real_dashboard_route(self):
         resp = self.client.get('/')
         html = resp.content.decode()
@@ -75,10 +105,15 @@ class CryptoForexNavLinksTest(TestCase):
         self.assertIn('href="/">Crypto</a>', html)
 
     def test_forex_link_points_at_research_lab_new_hypothesis(self):
+        # claude code changed: was an exact-match href with no query
+        # string — now carries ?asset_class=FOREX (see
+        # bot/research_lab/views/dashboard.py's _asset_class_hint()),
+        # added after a real user report that arriving via this link
+        # still showed a hardcoded Bitcoin example hypothesis.
         from django.urls import reverse
         resp = self.client.get('/')
         html = resp.content.decode()
-        self.assertIn(f'href="{reverse("research_lab_dashboard")}">Forex</a>', html)
+        self.assertIn(f'href="{reverse("research_lab_dashboard")}?asset_class=FOREX">Forex</a>', html)
 
     def test_crypto_link_highlights_on_the_dashboard_page(self):
         # claude code changed: the <a> tag's class/href span two lines in

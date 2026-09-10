@@ -14,8 +14,25 @@
         </div>
         <div class="term-section-body">
             <h2 class="term-section-title" style="font-weight:400; margin-bottom:18px">What do you believe about the market?</h2>
+            {% comment %}
+            claude code changed: new — Crypto/Forex Navigation Discoverability
+            follow-up. Real user report: arriving here via the navbar's
+            "Forex" link still showed a hardcoded Bitcoin example, which
+            read as a bug given the link was specifically labeled Forex.
+            This page still asks nothing asset-specific up front (that
+            stays on the formalize page, unchanged) — only the example
+            copy and placeholder below vary by asset_class_hint, a
+            display-only value derived from which navbar link was
+            clicked (see bot/research_lab/views/dashboard.py's
+            _asset_class_hint()), never persisted onto the experiment and
+            never consulted by any statistical/entitlement logic.
+            {% endcomment %}
             <div class="chart-caption mono" style="margin-bottom:18px">
+                {% if asset_class_hint == "FOREX" %}
+                Example: "I believe EUR/USD and GBP/USD maintain a stable, cointegrated relationship."
+                {% else %}
                 Example: "I believe Bitcoin tends to fall within 24 hours when trading volume becomes unusually high."
+                {% endif %}
             </div>
 
             {% if error %}
@@ -24,7 +41,8 @@
 
             <form method="post">
                 {% csrf_token %}
-                <textarea name="hypothesis_text" class="term-input mono" rows="4" style="width:100%" placeholder="Describe your hypothesis in plain language..."></textarea>
+                {% if asset_class_hint %}<input type="hidden" name="asset_class" value="{{ asset_class_hint }}">{% endif %}
+                <textarea name="hypothesis_text" class="term-input mono" rows="4" style="width:100%" placeholder="{% if asset_class_hint == 'FOREX' %}Describe your Forex hypothesis in plain language...{% else %}Describe your hypothesis in plain language...{% endif %}"></textarea>
                 <button type="submit" class="term-btn mono" style="margin-top:14px">Formalize This Hypothesis</button>
             </form>
 
