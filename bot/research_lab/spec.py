@@ -70,6 +70,29 @@ from bot.instruments import ASSET_CLASSES, get_instrument, list_instruments
 SUPPORTED_TIMEFRAMES = sorted({i.timeframe for i in list_instruments() if i.timeframe})
 SUPPORTED_ASSETS = [i.canonical_symbol for i in list_instruments()]
 
+
+def supported_assets_by_class() -> "Dict[str, List[str]]":
+    """
+    claude code changed: new — Crypto/Forex Navigation Discoverability.
+    SUPPORTED_ASSETS is a single flat list (CRYPTO's ~100 symbols, then
+    FOREX's appended after), which is why the formalize.html asset
+    dropdown used to require scrolling past every crypto symbol before
+    reaching Forex — a real discoverability problem, not just a UI
+    preference. This groups the exact same underlying data by each
+    instrument's own real asset_class, straight from the registry
+    (list_instruments()) — never a second, hand-typed
+    crypto_symbols/forex_symbols list. A future asset class needs zero
+    changes here or in the template to show up correctly grouped; it
+    only needs real rows in bot.instruments.INSTRUMENT_REGISTRY.
+    Dict insertion order follows registry insertion order (CRYPTO, then
+    FOREX today), which the template renders in that same order.
+    """
+    grouped: Dict[str, List[str]] = {}
+    for instrument in list_instruments():
+        grouped.setdefault(instrument.asset_class, []).append(instrument.canonical_symbol)
+    return grouped
+
+
 SUPPORTED_TARGET_TYPES = ["forward_return"]  # claude code changed: the only label type every tool in the Tool Layer (§08) can score against today
 
 # claude code changed: moved from tools/statistical_tools.py (single

@@ -54,6 +54,62 @@ class TopbarBackArrowTest(TestCase):
         self.assertIn('&larr; Back', html)
 
 
+class CryptoForexNavLinksTest(TestCase):
+    # claude code changed: new — Crypto/Forex Navigation Discoverability.
+    # Real Django test client against real pages, matching this file's
+    # own established convention (no mocking of the templates/routes
+    # themselves).
+
+    def test_crypto_and_forex_links_present_on_dashboard(self):
+        resp = self.client.get('/')
+        html = resp.content.decode()
+        self.assertIn('>Crypto</a>', html)
+        self.assertIn('>Forex</a>', html)
+
+    def test_crypto_link_points_at_the_real_dashboard_route(self):
+        resp = self.client.get('/')
+        html = resp.content.decode()
+        # claude code changed: the exact <a> tag, not just the word
+        # "Crypto" appearing somewhere — proves it's a real link to '/',
+        # not text that happens to be on the page for another reason.
+        self.assertIn('href="/">Crypto</a>', html)
+
+    def test_forex_link_points_at_research_lab_new_hypothesis(self):
+        from django.urls import reverse
+        resp = self.client.get('/')
+        html = resp.content.decode()
+        self.assertIn(f'href="{reverse("research_lab_dashboard")}">Forex</a>', html)
+
+    def test_crypto_link_highlights_on_the_dashboard_page(self):
+        # claude code changed: the <a> tag's class/href span two lines in
+        # the template (matching every other nav link's own formatting),
+        # so assert on the class attribute and the href/label separately
+        # rather than one exact single-line string.
+        resp = self.client.get('/')
+        html = resp.content.decode()
+        self.assertIn('<a class="term-nav-link active"\n           href="/">Crypto</a>', html)
+
+    def test_forex_link_present_and_not_highlighted_on_an_unrelated_page(self):
+        resp = self.client.get('/research/backtests/')
+        html = resp.content.decode()
+        self.assertIn('>Forex</a>', html)
+        self.assertNotIn('term-nav-link active"\n           href="/research-lab/">Forex</a>', html)
+
+    def test_crypto_and_forex_appear_in_the_wrapped_mobile_nav_too(self):
+        # claude code changed: this app has no separate hamburger-menu
+        # markup — .term-nav wraps onto its own row below 860px via a CSS
+        # media query (static/css/terminal.css), reusing the exact same
+        # <a> elements. Proving the links exist in the one shared markup
+        # IS proving they appear on mobile — there's no separate DOM to
+        # check.
+        resp = self.client.get('/')
+        html = resp.content.decode()
+        self.assertIn('class="term-nav"', html)
+        nav_section = html.split('class="term-nav"', 1)[1].split('</nav>', 1)[0]
+        self.assertIn('>Crypto</a>', nav_section)
+        self.assertIn('>Forex</a>', nav_section)
+
+
 class DropdownCloseOnOutsideClickTest(TestCase):
 
     def test_close_script_present_on_every_page_type_checked(self):

@@ -25,12 +25,18 @@ from bot.instruments import (
 
 class InstrumentRegistryTest(SimpleTestCase):
 
-    def test_every_registry_entry_is_crypto_today(self):
-        """Real, honest current state — no US_EQUITY/FOREX data has ever
-        been ingested by this platform. This test should be the FIRST
-        thing to update, deliberately, the day that changes."""
+    def test_every_registry_entry_is_crypto_or_forex_today(self):
+        """claude code changed: was test_every_registry_entry_is_crypto_today,
+        asserting every entry is CRYPTO — this test's OWN prior docstring
+        predicted this exact day ("this test should be the FIRST thing to
+        update, deliberately, the day that changes") but was never
+        actually updated when the Forex Multi-Asset Integration mission
+        added real FOREX rows — a real, previously-undiscovered gap only
+        surfaced now that a full-suite run finally completed. US_EQUITY
+        genuinely remains unpopulated — still real, still honest to assert."""
         for instrument in INSTRUMENT_REGISTRY.values():
-            self.assertEqual(instrument.asset_class, ASSET_CLASS_CRYPTO)
+            self.assertIn(instrument.asset_class, (ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX))
+            self.assertNotEqual(instrument.asset_class, ASSET_CLASS_US_EQUITY)
 
     def test_btc_usdt_has_correct_currency_metadata(self):
         instrument = get_instrument("BTC/USDT")
@@ -40,16 +46,38 @@ class InstrumentRegistryTest(SimpleTestCase):
         self.assertEqual(instrument.venue, "binance")
         self.assertEqual(instrument.timeframe, "1h")
 
+    def test_eur_usd_has_correct_currency_metadata(self):
+        """claude code changed: new — the Forex-registry equivalent of the
+        BTC/USDT check above, which this file never gained when FOREX
+        rows were added."""
+        instrument = get_instrument("EUR/USD")
+        self.assertIsNotNone(instrument)
+        self.assertEqual(instrument.base_currency, "EUR")
+        self.assertEqual(instrument.quote_currency, "USD")
+        self.assertEqual(instrument.venue, "yahoo_finance")
+        self.assertEqual(instrument.timeframe, "1h")
+
     def test_unknown_symbol_returns_none_not_a_guess(self):
+        """claude code changed: was self.assertIsNone(get_instrument("EUR/USD"))
+        — EUR/USD is a real, registered FOREX instrument now, not an
+        unknown symbol; asserting it's None was itself the stale check.
+        AAPL (a real, genuinely unregistered US_EQUITY symbol — no
+        US_EQUITY data has ever been ingested) is still a correct example."""
         self.assertIsNone(get_instrument("AAPL"))
-        self.assertIsNone(get_instrument("EUR/USD"))
+        self.assertIsNone(get_instrument("NOT_A_REAL_SYMBOL/USDT"))
 
     def test_list_instruments_filters_by_asset_class(self):
+        """claude code changed: was asserting forex==[] and crypto==the
+        WHOLE registry — both false since real FOREX rows exist. Counts
+        (100 crypto, 8 forex) match this platform's own real, current
+        universes (bot.fetch_all_symbols.SYMBOLS / bot.forex_data_fetcher.SYMBOLS)
+        rather than a hardcoded assumption that predates either."""
         crypto = list_instruments(ASSET_CLASS_CRYPTO)
         forex = list_instruments(ASSET_CLASS_FOREX)
         equity = list_instruments(ASSET_CLASS_US_EQUITY)
-        self.assertEqual(len(crypto), len(INSTRUMENT_REGISTRY))
-        self.assertEqual(forex, [])
+        self.assertEqual(len(crypto) + len(forex), len(INSTRUMENT_REGISTRY))
+        self.assertEqual(len(forex), 8)
+        self.assertTrue(all(i.asset_class == ASSET_CLASS_FOREX for i in forex))
         self.assertEqual(equity, [])
 
     def test_symbols_for_asset_class_matches_fetch_all_symbols(self):

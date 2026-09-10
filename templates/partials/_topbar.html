@@ -16,6 +16,13 @@
     strategy_research, strategy_pipeline, pairs_performance, backtesting,
     robustness_analysis, rejected_research, research_archive, portfolio_risk,
     execution_monitor, venue_comparison, system_health
+
+    claude code changed: new — 'crypto' and 'forex' also highlight their
+    respective nav link, though no page passes them today: Crypto shares
+    the Executive/dashboard page's own 'dashboard' slug, Forex shares
+    Research Lab's own 'research_lab_mvp' slug (see those two <a> tags'
+    own comments below for why). Listed here as valid slugs a future
+    dedicated page could pass directly.
 {% endcomment %}
 <div class="term-topbar">
     <div class="term-brand">
@@ -81,6 +88,38 @@
         <a class="term-nav-link {% if active == 'academy' %}active{% endif %}"
            {% if active == 'academy' %}aria-current="page"{% endif %}
            href="{% url 'academy_dashboard' %}">Join Academy</a>
+
+        {# claude code changed: new — Crypto/Forex Navigation Discoverability.
+           Two plain top-level links (not <details> dropdown groups — each
+           currently has exactly one real destination, so a dropdown would
+           be empty ceremony; Market/System above use the same plain-link
+           pattern for the same reason). Placed right after Join Academy so
+           the asset-class distinction is one of the first things a visitor
+           sees, not buried after Research/Risk & Execution.
+
+           Crypto points at the same route as Executive above (the literal
+           front door of the live crypto platform — dashboard, live prices,
+           portfolio backtest) — a deliberate choice, not an oversight: this
+           app has no single dedicated "Crypto page" distinct from the rest
+           of the existing platform, unlike Forex, whose only real entry
+           point today is Research Lab's hypothesis flow. Both Executive and
+           Crypto highlight together when on that page (active=="dashboard"),
+           which is accurate — landing there IS both things at once.
+
+           Forex points at Research Lab's New Hypothesis page — the
+           smallest possible entry point into Forex's real, existing
+           functionality (per this feature's own instruction to not
+           duplicate the Forex research implementation or invent a new
+           page). It highlights together with the Research Lab dropdown
+           for the same reason as above. The actual Crypto/Forex visual
+           distinction happens one click further in, on that page's own
+           asset selector (grouped by real registry asset_class — see
+           templates/research_lab/formalize.html). #}
+        <a class="term-nav-link {% if active == 'dashboard' or active == 'crypto' %}active{% endif %}"
+           href="{% url 'dashboard' %}">Crypto</a>
+
+        <a class="term-nav-link {% if active == 'research_lab_mvp' or active == 'forex' %}active{% endif %}"
+           href="{% url 'research_lab_dashboard' %}">Forex</a>
 
         {# claude code changed: Research Capabilities Discoverability & Navigation Refactor — #}
         {# was a single top-level <a> straight into the hypothesis-formalization form, with #}

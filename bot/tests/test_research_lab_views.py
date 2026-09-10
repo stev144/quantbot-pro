@@ -32,6 +32,54 @@ class DashboardTest(TestCase):
         self.assertEqual(ResearchExperiment.objects.count(), 0)
 
 
+class AssetSelectorGroupedByAssetClassTest(TestCase):
+    # claude code changed: new — Crypto/Forex Navigation Discoverability.
+    # Real HTTP request to the real formalize page, confirming the asset
+    # dropdown is genuinely grouped by real registry asset_class, not just
+    # that the view function returns the right context dict in isolation.
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="groupedassetuser", password="x")
+        self.client.login(username="groupedassetuser", password="x")
+        self.experiment = ResearchExperiment.objects.create(student=self.user, hypothesis_text="test")
+
+    def test_formalize_page_renders_crypto_and_forex_optgroups(self):
+        resp = self.client.get(reverse("research_lab_formalize", kwargs={"experiment_id": self.experiment.id}))
+        html = resp.content.decode()
+        self.assertIn('<optgroup label="CRYPTO">', html)
+        self.assertIn('<optgroup label="FOREX">', html)
+        self.assertIn('<option value="EUR/USD"', html)
+        self.assertIn('<option value="BTC/USDT"', html)
+
+    def test_forex_asset_is_a_real_selectable_option_for_both_asset_and_asset_b(self):
+        html = self.client.get(reverse("research_lab_formalize", kwargs={"experiment_id": self.experiment.id})).content.decode()
+        # claude code changed: both the primary "Asset" <select> and the
+        # pairs "Second asset (asset_b)" <select> must offer every Forex
+        # symbol, not just the first one — proves the fix applies to both
+        # dropdowns identified in the original bug report, not just one.
+        self.assertEqual(html.count('value="EUR/USD"'), 2)
+        self.assertEqual(html.count('value="GBP/USD"'), 2)
+
+    def test_forex_symbol_survives_a_real_pairs_submission(self):
+        """claude code changed: end-to-end proof, not just that the option
+        renders — a POST selecting two real Forex symbols for a pairs
+        hypothesis must be accepted by validate_spec() and saved, exactly
+        like a crypto pairs submission already was before this task."""
+        from bot.research_lab.models import ResearchSubscription
+        ResearchSubscription.objects.create(user=self.user, tier="PRO", status="ACTIVE", expires_at=None)
+        resp = self.client.post(
+            reverse("research_lab_formalize", kwargs={"experiment_id": self.experiment.id}),
+            data={
+                "hypothesis_type": "pairs", "asset": "EUR/USD", "asset_b": "GBP/USD",
+                "timeframe": "1h", "direction": "", "features": [],
+            },
+        )
+        self.experiment.refresh_from_db()
+        self.assertEqual(resp.status_code, 302)  # redirect to plan — spec accepted
+        self.assertEqual(self.experiment.structured_spec.get("asset"), "EUR/USD")
+        self.assertEqual(self.experiment.structured_spec.get("asset_b"), "GBP/USD")
+
+
 class FullWorkflowTest(TestCase):
     """One student, one hypothesis, all the way from intake to a
     completed, evidence-backed verdict — through real HTTP requests."""

@@ -53,8 +53,13 @@
                 <label class="mono" style="display:block; margin-bottom:6px">Asset {% if not spec.asset %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
                 <select name="asset" class="term-input mono" style="margin-bottom:16px">
                     <option value="">—</option>
-                    {% for a in supported_assets %}
-                    <option value="{{ a }}" {% if spec.asset == a %}selected{% endif %}>{{ a }}</option>
+                    {# claude code changed: grouped by real asset_class (bot.instruments.INSTRUMENT_REGISTRY via spec.supported_assets_by_class()) instead of one flat list — Crypto/Forex Navigation Discoverability. Never a hardcoded crypto/forex symbol list; a new asset class needs zero template changes. #}
+                    {% for asset_class, symbols in assets_by_class.items %}
+                    <optgroup label="{{ asset_class }}">
+                        {% for a in symbols %}
+                        <option value="{{ a }}" {% if spec.asset == a %}selected{% endif %}>{{ a }}</option>
+                        {% endfor %}
+                    </optgroup>
                     {% endfor %}
                 </select>
 
@@ -102,8 +107,12 @@
                     <label class="mono" style="display:block; margin-bottom:6px">Second asset (asset_b) {% if not spec.asset_b %}<span style="color:var(--verdict-warning)">— required for pairs research</span>{% endif %}</label>
                     <select name="asset_b" class="term-input mono" style="margin-bottom:16px">
                         <option value="">—</option>
-                        {% for a in supported_assets %}
-                        <option value="{{ a }}" {% if spec.asset_b == a %}selected{% endif %}>{{ a }}</option>
+                        {% for asset_class, symbols in assets_by_class.items %}
+                        <optgroup label="{{ asset_class }}">
+                            {% for a in symbols %}
+                            <option value="{{ a }}" {% if spec.asset_b == a %}selected{% endif %}>{{ a }}</option>
+                            {% endfor %}
+                        </optgroup>
                         {% endfor %}
                     </select>
                     <div class="chart-caption mono" style="margin-top:-8px; margin-bottom:16px">Tests whether "Asset" and "asset_b" above are statistically cointegrated with a stable, mean-reverting spread (Engle-Granger two-step + ADF test + half-life).</div>

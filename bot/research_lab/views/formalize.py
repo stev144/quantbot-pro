@@ -22,7 +22,7 @@ from bot.research_lab.models import ResearchExperiment
 from bot.research_lab.spec import (
     ResearchSpec, SUPPORTED_ASSETS, SUPPORTED_TIMEFRAMES, SUPPORTED_DIRECTIONS,
     SUPPORTED_HORIZONS, DERIVABLE_FROM_OHLCV, HYPOTHESIS_TYPES, CONDITION_OPERATORS,
-    validate_spec,
+    supported_assets_by_class, validate_spec,
 )
 
 
@@ -67,7 +67,9 @@ def _context(experiment, spec, errors=None):
 
     return {
         "experiment": experiment, "spec": spec, "errors": errors or [],
-        "supported_assets": SUPPORTED_ASSETS, "supported_timeframes": SUPPORTED_TIMEFRAMES,
+        "supported_assets": SUPPORTED_ASSETS,  # claude code changed: kept for any other consumer; the template itself now renders assets_by_class below
+        "assets_by_class": supported_assets_by_class(),  # claude code changed: new — Crypto/Forex Navigation Discoverability
+        "supported_timeframes": SUPPORTED_TIMEFRAMES,
         "supported_directions": SUPPORTED_DIRECTIONS, "derivable_features": sorted(DERIVABLE_FROM_OHLCV),
         "supported_horizons": sorted(SUPPORTED_HORIZONS),  # claude code changed: new — real, closed horizon set, shown before submit
         "hypothesis_types": HYPOTHESIS_TYPES, "condition_operators": CONDITION_OPERATORS,  # claude code changed: new
