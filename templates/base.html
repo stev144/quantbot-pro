@@ -140,6 +140,35 @@
                 }
             });
         });
+
+        // claude code changed: new — dashboard hardening. Real user report:
+        // clicking the navbar's Crypto/Executive link "did nothing" —
+        // traced to bot/views/dashboard.py's dashboard() view, which on a
+        // cold cache makes a live exchange fetch AND runs a full
+        // candle-by-candle backtest synchronously (measured ~110s on this
+        // pair of steps) with zero visual feedback, indistinguishable from
+        // a hung page. This does not make that computation faster — it's
+        // a plain full-page navigation, so the only thing JS can do is
+        // show something before the browser leaves this page. Any link
+        // carrying data-slow-nav gets an immediate full-screen "loading"
+        // message on click; the browser's own navigation then replaces
+        // this page (and the overlay with it) once the new page arrives,
+        // same as it always would.
+        document.addEventListener("click", function (event) {
+            var link = event.target.closest("[data-slow-nav]");
+            if (!link) return;
+            var overlay = document.createElement("div");
+            overlay.className = "term-slow-nav-overlay";
+            var message = document.createElement("div");
+            message.className = "term-slow-nav-message";
+            message.textContent = link.getAttribute("data-slow-nav");
+            var cursor = document.createElement("span");
+            cursor.className = "term-slow-nav-cursor";
+            cursor.textContent = " █";
+            message.appendChild(cursor);
+            overlay.appendChild(message);
+            document.body.appendChild(overlay);
+        });
     </script>
 </body>
 

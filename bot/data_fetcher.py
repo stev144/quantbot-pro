@@ -142,6 +142,50 @@ def _save_cache(key: str, df: pd.DataFrame, ttl_seconds: int) -> None:
     except Exception as e:  # Catch disk write failures.
         LOGGER.warning(f"Failed to save cache for key={key}: {e}")  # Log warning.
 
+def get_last_known_klines(
+    symbol: str,
+    interval: str = "1h",
+    total_candles: int = 1000,
+):
+    """
+    Read-only "last known good" peek at the disk cache, ignoring TTL
+    expiry entirely and never deleting the file or making a network call.
+
+    claude code changed: new — dashboard hardening. get_klines()'s own
+    cache (_load_cache above) deletes anything older than
+    DEFAULT_CACHE_TTL_SECONDS (5 minutes) and returns None, so a live
+    Binance outage previously left callers with nothing to fall back to
+    even one minute after the cache expired. This is a separate, additive
+    function — get_klines()'s own behavior (still deletes expired
+    entries, still returns None on a cold/expired cache) is completely
+    unchanged; nothing calls this function unless a caller explicitly
+    opts into a stale fallback after its own live fetch has already
+    failed.
+
+    Returns (dataframe, saved_at_unix_timestamp) — both None if no cache
+    file exists or it can't be read. Callers must treat the result as
+    explicitly stale and label it as such; this never fabricates data.
+    """
+    normalized = _normalize_symbol(symbol)
+    cache_key = f"klines_{normalized}_{interval}_{total_candles}"
+    path = _cache_path(cache_key)
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+        if isinstance(payload, dict) and "df" in payload:
+            df = payload["df"]
+            saved_at = payload.get("saved_at")
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                return df.tail(total_candles), saved_at
+            return None, None
+        if isinstance(payload, pd.DataFrame) and not payload.empty:
+            return payload.tail(total_candles), None  # old cache format predates saved_at
+    except Exception as e:
+        LOGGER.warning(f"get_last_known_klines: failed to read stale cache for {cache_key}: {e}")
+    return None, None
+
 # ---------------------------------------------------------------------------
 # Requests session and rate limit handling
 # ---------------------------------------------------------------------------

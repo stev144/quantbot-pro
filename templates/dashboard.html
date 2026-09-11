@@ -52,6 +52,22 @@
 
 {% include "partials/_topbar.html" with active="dashboard" %}
 
+{% if stale_notice %}
+{% comment %}
+claude code changed: new — dashboard hardening. Only rendered when
+bot/views/dashboard.py's _fetch_klines_or_stale_fallback() had to fall
+back to a previously-cached snapshot because the live exchange fetch
+failed. "warn" (not "neg") — this is a real, honestly-labeled degraded
+state, not an error the page failed to handle.
+{% endcomment %}
+<div style="padding: var(--sp-3) var(--sp-5) 0">
+    <div class="term-panel">
+        <span class="badge warn">STALE DATA</span>
+        <span style="margin-left:8px">{{ stale_notice }}</span>
+    </div>
+</div>
+{% endif %}
+
 <div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
     <form class="term-symbol-form" method="get" action=".">
         <label class="text-dim mono" for="db-symbol">Symbol:</label>

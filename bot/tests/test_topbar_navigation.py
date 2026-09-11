@@ -120,9 +120,17 @@ class CryptoForexNavLinksTest(TestCase):
         # the template (matching every other nav link's own formatting),
         # so assert on the class attribute and the href/label separately
         # rather than one exact single-line string.
+        # claude code changed: dashboard hardening added a data-slow-nav
+        # attribute on this same <a> tag (see templates/base.html's
+        # loading-overlay handler) between the class and href lines — this
+        # now matches on the Crypto link's own <a> block as a whole
+        # (isolated by splitting on ">Crypto</a>") rather than one exact,
+        # now-stale three-line string.
         resp = self.client.get('/')
         html = resp.content.decode()
-        self.assertIn('<a class="term-nav-link active"\n           href="/">Crypto</a>', html)
+        crypto_tag = html.split(">Crypto</a>")[0].rsplit("<a class=", 1)[-1]
+        self.assertIn('"term-nav-link active"', crypto_tag)
+        self.assertIn('href="/"', crypto_tag)
 
     def test_forex_link_present_and_not_highlighted_on_an_unrelated_page(self):
         resp = self.client.get('/research/backtests/')

@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
+
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.core.cache import cache
 
-from bot.data_fetcher import get_klines
+from bot.data_fetcher import get_klines, get_last_known_klines
 from bot.backtesting.backtester import backtest
 from bot.engines.strategy_scorer import StrategyScorer
 from bot.engines.regime_detector import RegimeDetector
@@ -22,6 +24,42 @@ try:
 except Exception:
     PortfolioBacktester = None
 
+def _fetch_klines_or_stale_fallback(symbol):
+    """
+    claude code changed: new — dashboard hardening. Tries the real, live
+    get_klines() call first, completely unchanged. Only when that returns
+    nothing (Binance unreachable, timed out, or genuinely empty) does this
+    fall back to get_last_known_klines() — a stale, previously-fetched
+    disk cache entry that get_klines()'s own cache would otherwise have
+    already deleted for being too old to serve as fresh data. Returns
+    (df, stale_notice): stale_notice is None on a live hit, and a
+    human-readable "why this data might be old" string on a fallback hit;
+    both df and stale_notice are None only when there is truly nothing
+    cached at all, in which case the caller's existing "Failed to fetch
+    market data" error path is unchanged.
+    """
+    df = get_klines(symbol, interval="1h", total_candles=10000)
+    if df is not None and not df.empty:
+        return df, None
+
+    fallback_df, saved_at = get_last_known_klines(symbol, interval="1h", total_candles=10000)
+    if fallback_df is None or fallback_df.empty:
+        return None, None
+
+    if saved_at is not None:
+        age = datetime.now(timezone.utc) - datetime.fromtimestamp(saved_at, tz=timezone.utc)
+        age_minutes = int(age.total_seconds() // 60)
+        if age_minutes < 60:
+            age_text = f"{age_minutes} minute(s)"
+        else:
+            age_text = f"{age_minutes // 60} hour(s)"
+        stale_notice = f"Live market data is unavailable right now — showing the last successfully fetched data ({age_text} old)."
+    else:
+        stale_notice = "Live market data is unavailable right now — showing the last successfully fetched data (age unknown)."
+
+    return fallback_df, stale_notice
+
+
 def dashboard(request):
     # ==============================
     # SYMBOL
@@ -39,7 +77,7 @@ def dashboard(request):
     # FETCH + BACKTEST
     # ==============================
     if results is None:
-        df = get_klines(symbol, interval="1h", total_candles=10000)
+        df, stale_notice = _fetch_klines_or_stale_fallback(symbol)
 
         if df is None or df.empty:
             return render(request, "dashboard.html", {
@@ -52,7 +90,7 @@ def dashboard(request):
         # claude code changed: new — cache hit still needs current-state
         # data for the Market State panel below, so fetch klines even
         # though the backtest itself came from cache
-        df = get_klines(symbol, interval="1h", total_candles=10000)
+        df, stale_notice = _fetch_klines_or_stale_fallback(symbol)
 
     # claude code changed: new — current regime for the Market State
     # panel, computed on the same df already fetched above (no extra
@@ -238,6 +276,7 @@ def dashboard(request):
 
         # Misc
         "error": None,
+        "stale_notice": stale_notice,
     }
 
     return render(request, "dashboard.html", context)

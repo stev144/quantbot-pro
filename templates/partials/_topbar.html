@@ -77,6 +77,7 @@
     <nav class="term-nav" aria-label="Primary">
         <a class="term-nav-link {% if active == 'dashboard' %}active{% endif %}"
            {% if active == 'dashboard' %}aria-current="page"{% endif %}
+           data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
            href="{% url 'dashboard' %}">Executive</a>
 
         <a class="term-nav-link {% if active == 'market_intelligence' %}active{% endif %}"
@@ -133,6 +134,7 @@
         syntax before it knows what is "inside" a comment.
         {% endcomment %}
         <a class="term-nav-link {% if active == 'dashboard' or active == 'crypto' %}active{% endif %}"
+           data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
            href="{% url 'dashboard' %}">Crypto</a>
 
         <a class="term-nav-link {% if active == 'research_lab_mvp' or active == 'forex' %}active{% endif %}"

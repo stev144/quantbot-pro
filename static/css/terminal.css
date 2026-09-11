@@ -684,6 +684,35 @@
   51%, 100% { opacity: 0; }
 }
 
+/* claude code changed: new — dashboard hardening. Shown immediately on
+   click of any [data-slow-nav] link (see static/js/... inline script in
+   base.html) so a slow full-page navigation (the Executive/Crypto
+   dashboard's live fetch + backtest, which can take up to ~2 minutes on
+   a cold cache) reads as "loading" instead of "broken." Reuses
+   blink-cursor above rather than adding a second animation. */
+.term-slow-nav-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--sp-5);
+}
+.term-slow-nav-overlay .term-slow-nav-message {
+  max-width: 480px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.term-slow-nav-overlay .term-slow-nav-cursor {
+  animation: blink-cursor 1s step-end infinite;
+  color: #F5C518;
+}
+
 /* ============================================================
  * LAYOUT
  * ============================================================ */
