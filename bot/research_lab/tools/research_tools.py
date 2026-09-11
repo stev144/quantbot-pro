@@ -12,11 +12,12 @@
 # (their entry_exit_engine.py dependency has zero test coverage).
 # ============================================================
 
+import numpy as np    # claude code changed: new — see run_cointegration_test's log-price fix below
 import pandas as pd   # claude code changed: new — Phase 1D, only used by run_kalman_pairs_test's pd.notna() check
 
 from bot.backtesting.backtester import backtest
 from bot.engines.strategy_scorer import StrategyScorer
-from bot.research.cointegration_engine import CointegrationEngine
+from bot.research.cointegration_engine import CointegrationEngine, MIN_PRICE
 from bot.research.kalman_filter_engine import KalmanFilterEngine   # claude code changed: new — Phase 1D, Objective 8 (Kalman Research Integration)
 from bot.research.run_cross_sectional_oos import AVAILABLE_FEATURES, run_cross_sectional_research   # claude code changed: new — statistics-infrastructure mission, Milestone B4
 from bot.research_lab.tools._data import load_ohlcv
@@ -32,8 +33,25 @@ def run_cointegration_test(asset_a: str, asset_b: str) -> dict:
     """
     df_a = load_ohlcv(asset_a)
     df_b = load_ohlcv(asset_b)
-    price_a = df_a["close"]
-    price_b = df_b["close"]
+    # claude code changed: real bug fix — was passing raw close prices
+    # straight into CointegrationEngine._test_pair(), while the full
+    # run_all() universe sweep only ever calls _test_pair() with log
+    # prices (see cointegration_engine.py's _validate_and_extract_prices(),
+    # whose own docstring explains why: log prices make the hedge ratio a
+    # stable relative ratio and give the spread a constant-variance,
+    # unit-free scale the OU/half-life model assumes). Feeding raw levels
+    # instead silently produced a different hedge ratio, a different ADF/
+    # cointegration p-value, and — whenever a pair did test cointegrated —
+    # a wrong half-life, despite this docstring's own claim of calling
+    # "the same private method the full universe scan calls per pair".
+    # Verified empirically: for BTC/USDT vs ETH/USDT, raw prices gave
+    # hedge_ratio=12.66 / adf_p=0.151 vs log prices' hedge_ratio=0.877 /
+    # adf_p=0.364 — a materially different statistical result, not a
+    # rounding difference. Same clip(lower=MIN_PRICE)-then-log treatment
+    # as _validate_and_extract_prices(), so this single-pair tool is now
+    # actually the same test, not just the same code path.
+    price_a = np.log(df_a["close"].clip(lower=MIN_PRICE))
+    price_b = np.log(df_b["close"].clip(lower=MIN_PRICE))
 
     # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B,
     # Objective 2. Half-life is only reported in honest wall-clock time if
@@ -136,8 +154,26 @@ def run_kalman_pairs_test(
 
     # Fresh OLS seed — the SAME single-pair path run_cointegration_test uses,
     # never a duplicate cointegration implementation.
+    # claude code changed: real bug fix — same root cause as
+    # run_cointegration_test's log-price fix above, but the mismatch here
+    # was worse: KalmanFilterEngine.run_on_prices() below (correctly)
+    # log-transforms price_a/price_b internally before running its
+    # recursion (see _to_log_prices()), but this OLS seed call was handing
+    # _test_pair() the raw, un-logged prices — so ols_beta/ols_alpha, the
+    # values used to INITIALISE that log-space Kalman recursion, were
+    # estimated in a completely different (raw-price) unit system. That's
+    # not just an inaccurate seed, it's a unit mismatch feeding the
+    # filter's initial state, and it also made "seed_ols_hedge_ratio"/
+    # "beta_drift_from_ols_seed" in the returned evidence compare a
+    # log-space dynamic hedge ratio against a raw-space static one.
+    # price_a/price_b themselves stay raw — run_on_prices() below needs
+    # raw input, it does its own log conversion — only this seed test gets
+    # a separately log-transformed copy, matching _test_pair()'s real
+    # contract.
     coint_engine = CointegrationEngine(timeframe=timeframe_a or "1h")
-    coint_result = coint_engine._test_pair(asset_a, asset_b, price_a, price_b)
+    log_price_a = np.log(price_a.clip(lower=MIN_PRICE))
+    log_price_b = np.log(price_b.clip(lower=MIN_PRICE))
+    coint_result = coint_engine._test_pair(asset_a, asset_b, log_price_a, log_price_b)
 
     kalman_kwargs = {}   # claude code changed: only pass noise overrides the caller actually supplied — let KalmanFilterEngine's own constructor defaults apply otherwise
     if process_noise_beta is not None:

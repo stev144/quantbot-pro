@@ -7,6 +7,8 @@
 # engine actually exposed. Uses real project data (no mocking), matching
 # this repo's existing testing convention.
 
+import math
+
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
@@ -127,7 +129,20 @@ class SubscriptionNeverAltersStatisticsTest(TestCase):
         self.assertEqual(direct["coint_pvalue"], via_orchestrator["coint_pvalue"])
         self.assertEqual(direct["adf_pvalue"], via_orchestrator["adf_pvalue"])
         self.assertEqual(direct["hedge_ratio"], via_orchestrator["hedge_ratio"])
-        self.assertEqual(direct["half_life_hours"], via_orchestrator["half_life_hours"])
+        # claude code changed: LINK/USDT vs UNI/USDT is genuinely NOT
+        # cointegrated under the log-price fix (see research_tools.py's
+        # comment on that bug), so half_life_hours is float('inf') here —
+        # which orchestrator.py's own _json_safe() deliberately normalises
+        # to None before it ever reaches a Postgres JSONField (jsonb
+        # rejects the literal "Infinity" outright; see that function's own
+        # docstring). That normalisation is real and intentional, applies
+        # identically regardless of subscription tier, and is not what
+        # this test exists to guard against — so compare through the same
+        # normalisation instead of asserting raw bit-identity on a value
+        # that was never meant to survive JSON storage unchanged.
+        direct_half_life = direct["half_life_hours"]
+        expected_stored = None if (isinstance(direct_half_life, float) and math.isinf(direct_half_life)) else direct_half_life
+        self.assertEqual(expected_stored, via_orchestrator["half_life_hours"])
         self.assertEqual(direct["is_cointegrated"], via_orchestrator["is_cointegrated"])
 
     def test_same_pair_tested_twice_produces_identical_evidence(self):
@@ -247,12 +262,17 @@ class ComputeVerdictPairsTest(TestCase):
         self.assertEqual(result.verdict, "REJECTED")
 
     def test_cointegrated_but_half_life_too_long_is_partially_supported(self):
-        """claude code changed: real evidence shape, BNB/SOL — re-verified
-        against the expanded 50-symbol/5-year universe (was AVAX/ATOM
-        against the old 20-symbol universe; see test_not_cointegrated_is_rejected's
-        comment for why these two pairs swapped roles): is_cointegrated=True,
-        passes_filters=False (half-life 252 candles > 120 max)."""
-        result = compute_verdict_pairs(run_cointegration_test(asset_a="BNB/USDT", asset_b="SOL/USDT"))
+        """claude code changed: real evidence shape, BTC/BCH — re-verified
+        after fixing a real bug in run_cointegration_test() (it was feeding
+        raw close prices into CointegrationEngine._test_pair() instead of
+        log prices, unlike the full run_all() universe sweep — see
+        research_tools.py's own comment on the fix). That fix changed which
+        real pairs test as cointegrated, so BNB/SOL (which relied on the
+        old, wrong raw-price result) no longer does; BTC/USDT vs BCH/USDT
+        was empirically re-checked under the corrected log-price test and
+        is is_cointegrated=True, passes_filters=False (half-life ~262
+        candles > 120 max)."""
+        result = compute_verdict_pairs(run_cointegration_test(asset_a="BTC/USDT", asset_b="BCH/USDT"))
         self.assertEqual(result.verdict, "PARTIALLY_SUPPORTED")
 
     def test_cointegrated_and_passes_filters_is_supported(self):
