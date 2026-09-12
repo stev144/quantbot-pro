@@ -76,6 +76,62 @@ class AmbiguousHypothesisTest(SimpleTestCase):
         self.assertIn("placeholder", INTERPRETER_NAME)
 
 
+class PairsHypothesisDetectionTest(SimpleTestCase):
+    # claude code changed: new — real bug found live: a student's actual
+    # Forex cointegration hypothesis ("I believe USD/CAD and NZD/USD
+    # share a stable, cointegrated spread") rendered the Formalize page
+    # in Feature-based mode (Feature/Direction/Horizon fields, none of
+    # which apply to a pairs hypothesis) because suggest_spec() had no
+    # pairs-detection branch at all — hypothesis_type was hardcoded to
+    # "feature" unless a conditional pattern matched. Two real bugs
+    # compounded here, both covered below: (1) hypothesis_type never
+    # became "pairs" for any cointegration-shaped hypothesis, and (2) even
+    # the single-asset guess was wrong for this exact text — the old
+    # single-pass _guess_asset() matched USD/JPY via a loose \bUSD\b
+    # base-word check before ever considering USD/CAD's own exact,
+    # literal match, since "usd" as a bare word also appears inside
+    # "usd/cad" and "nzd/usd".
+
+    def test_real_reported_case_usdcad_nzdusd_cointegrated_spread(self):
+        spec = suggest_spec("I believe USD/CAD and NZD/USD share a stable, cointegrated spread")
+        self.assertEqual(spec.hypothesis_type, "pairs")
+        self.assertEqual(spec.asset, "USD/CAD")
+        self.assertEqual(spec.asset_b, "NZD/USD")
+        self.assertNotIn("asset", spec.ambiguous_fields)
+        self.assertNotIn("asset_b", spec.ambiguous_fields)
+        self.assertIn("timeframe", spec.ambiguous_fields)  # claude code changed: still always ambiguous, unchanged rule
+
+    def test_crypto_pairs_hypothesis_also_detected(self):
+        spec = suggest_spec("I believe ETH/USDT and BNB/USDT are cointegrated.")
+        self.assertEqual(spec.hypothesis_type, "pairs")
+        self.assertEqual(spec.asset, "ETH/USDT")
+        self.assertEqual(spec.asset_b, "BNB/USDT")
+
+    def test_two_assets_without_cointegration_language_stays_feature_type(self):
+        """claude code changed: no false positive — merely mentioning two
+        assets must not by itself trigger hypothesis_type="pairs"; only
+        an explicit cointegration claim should."""
+        spec = suggest_spec("Bitcoin dropped right after Ethereum's big update.")
+        self.assertEqual(spec.hypothesis_type, "feature")
+
+    def test_only_one_asset_found_marks_asset_b_ambiguous_not_guessed(self):
+        spec = suggest_spec("I believe Bitcoin is cointegrated with some other asset.")
+        self.assertEqual(spec.hypothesis_type, "pairs")
+        self.assertEqual(spec.asset, "BTC/USDT")
+        self.assertIsNone(spec.asset_b)
+        self.assertIn("asset_b", spec.ambiguous_fields)
+
+    def test_shared_currency_leg_no_longer_collides_outside_pairs_detection_too(self):
+        """claude code changed: regression guard for the underlying
+        _guess_asset() fix on its own, independent of pairs detection —
+        a single Forex symbol sharing a currency code with other
+        registered pairs (USD appears in six of this project's eight
+        Forex majors) must resolve to the ONE actually named, not
+        whichever USD-involving symbol happens to iterate first."""
+        spec = suggest_spec("I believe USD/CAD trends persist for several hours.")
+        self.assertEqual(spec.asset, "USD/CAD")
+
+
 class ExplainEvidenceTest(SimpleTestCase):
 
     class _FakeExperiment:

@@ -115,16 +115,52 @@ _CONDITION_PATTERNS = [
 # explanation at all.
 _RELATIVE_THRESHOLD_RE = re.compile(r"\b(above|below|>|<)\s*(?:the\s+)?average\b", re.IGNORECASE)
 
+# claude code changed: new — pairs/cointegration hypothesis detection.
+# "cointegrat" (matches cointegrate/cointegrated/cointegration) is
+# deliberately the sole trigger — specific enough that it essentially
+# never appears outside a pairs-trading context, matching this module's
+# own "a wrong guess here is worse than an honest ambiguous flag"
+# standard. A hypothesis that means "pairs" but never uses a form of
+# "cointegrated" is left as an ordinary feature/conditional guess rather
+# than assumed.
+_COINTEGRATION_RE = re.compile(r"cointegrat\w*", re.IGNORECASE)
 
-def _guess_asset(text: str) -> Optional[str]:
+
+def _guess_asset(text: str, exclude: Optional[str] = None) -> Optional[str]:
+    # claude code changed: real bug fix — was a single pass over
+    # SUPPORTED_ASSETS checking "exact full symbol" and "loose base-word"
+    # in the same OR per symbol, so an early symbol's weak base-word match
+    # could win over a later symbol's exact, unambiguous match. Harmless
+    # for crypto (BTC/ETH/SOL/... bases rarely collide) but actively wrong
+    # for Forex majors, which routinely share a currency leg — e.g. for
+    # "USD/CAD and NZD/USD", the loose \bUSD\b base check matched
+    # USD/JPY (whichever USD-quoted/based symbol happened to iterate
+    # first), not either symbol actually named in the text, because "usd"
+    # as a bare word appears inside "usd/cad" and "nzd/usd" too. Now two
+    # clean passes: every symbol's EXACT literal form is checked first
+    # (most precise, always wins when present); only if nothing matched
+    # exactly does the loose base-word heuristic run at all.
     lower = text.lower()
+
     for alias, symbol in ASSET_ALIASES.items():
+        if symbol == exclude:
+            continue
         if re.search(rf"\b{re.escape(alias)}\b", lower):
             return symbol
-    for symbol in SUPPORTED_ASSETS:  # claude code changed: also catch a directly-typed symbol like "BTC/USDT" or "AVAX"
-        base = symbol.split("/")[0]
-        if symbol.lower() in lower or re.search(rf"\b{base.lower()}\b", lower):
+
+    for symbol in SUPPORTED_ASSETS:
+        if symbol == exclude:
+            continue
+        if symbol.lower() in lower:
             return symbol
+
+    for symbol in SUPPORTED_ASSETS:  # claude code changed: also catch a directly-typed base symbol like "AVAX" with no "/USDT" suffix — fallback only, exact pass above always wins first
+        if symbol == exclude:
+            continue
+        base = symbol.split("/")[0]
+        if re.search(rf"\b{base.lower()}\b", lower):
+            return symbol
+
     return None
 
 
@@ -219,6 +255,32 @@ def suggest_spec(hypothesis_text: str) -> ResearchSpec:
     asset = _guess_asset(hypothesis_text)
     if asset is None:
         ambiguous.append("asset")
+
+    # claude code changed: new — real bug fix. This function had ZERO
+    # pairs-detection logic despite ResearchSpec/validate_spec() fully
+    # supporting hypothesis_type=="pairs" (Advanced Quant Research
+    # Capability Architecture) — every cointegration-shaped hypothesis
+    # ("X and Y share a stable, cointegrated spread") silently fell
+    # through to the default hypothesis_type="feature" branch below,
+    # which surfaces Feature/Direction/Horizon fields that don't even
+    # apply to a pairs hypothesis (see validate_spec()'s own "scoped away
+    # from hypothesis_type=='pairs'" handling of target/direction) — a
+    # student could never actually complete the form this produced.
+    # Checked before the conditional/feature branch since a cointegration
+    # hypothesis is a completely different axis from those two.
+    if _COINTEGRATION_RE.search(hypothesis_text):
+        asset_b = _guess_asset(hypothesis_text, exclude=asset) if asset else None
+        if asset_b is None:
+            ambiguous.append("asset_b")
+        ambiguous.append("timeframe")  # claude code changed: never guessed here either, same as the feature/conditional path below
+        return ResearchSpec(
+            hypothesis_text=hypothesis_text,
+            asset=asset,
+            asset_b=asset_b,
+            timeframe=None,
+            hypothesis_type="pairs",
+            ambiguous_fields=ambiguous,
+        )
 
     # claude code changed: new — Conditional Hypothesis Integrity fix.
     # Detect an explicit condition BEFORE direction/feature detection, so
