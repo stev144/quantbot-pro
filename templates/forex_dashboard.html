@@ -122,11 +122,19 @@ figure.
                     <div class="metric-value stat-number" data-target="{{ market_state.bb_width_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
                     <div class="metric-sub">compression</div>
                 </div>
+                {% if market_state.cross_section_dispersion.available %}
+                <div class="metric-tile">
+                    <div class="metric-label">Cross-Sect. Dispersion</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.cross_section_dispersion.dispersion_std }}" data-decimals="3">0</div>
+                    <div class="metric-sub">{{ market_state.cross_section_dispersion.n_symbols }} symbols, σ of z-score</div>
+                </div>
+                {% else %}
                 <div class="metric-tile">
                     <div class="metric-label">Cross-Sect. Dispersion</div>
                     <div class="unavailable-inline mono">N/A</div>
                     <div class="metric-sub">{{ market_state.cross_section_dispersion.reason }}</div>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -240,9 +248,26 @@ figure.
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title">Cross-Sectional Opportunities</span>
+            <span class="term-section-meta">latest, by |z-score|, across the Forex majors universe</span>
         </div>
         <div class="term-section-body">
-            <div class="unavailable">cross_section_engine.py has never been run against the Forex universe — no real cross-sectional research exists for Forex yet.</div>
+            {% if cross_section_dispersion.available %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Symbol</th><th class="num">Z-Score</th></tr></thead>
+                    <tbody>
+                        {% for row in cross_section_dispersion.top_extremes %}
+                        <tr>
+                            <td class="label-cell">{{ row.symbol }}</td>
+                            <td class="num stat-number {% if row.cs_zscore > 0 %}pos{% else %}neg{% endif %}" data-target="{{ row.cs_zscore }}" data-decimals="3">0</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ cross_section_dispersion.reason }}</div>
+            {% endif %}
         </div>
     </div>
 

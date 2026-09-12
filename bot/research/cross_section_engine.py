@@ -87,7 +87,7 @@ from typing import Dict, List, Optional     # Type hints for function signatures
 import numpy as np                          # Numerical operations
 import pandas as pd                         # DataFrame operations
 
-from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — universe expansion mission, see cointegration_engine.py's identical change for the full rationale
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX, resolve_ohlcv_path  # claude code changed: new — universe expansion mission, see cointegration_engine.py's identical change for the full rationale. ASSET_CLASS_FOREX/resolve_ohlcv_path added for run_forex_cross_section_research() below (Forex Research Dashboard mission)
 
 # Suppress noisy pandas warnings that don't affect correctness
 warnings.filterwarnings('ignore')
@@ -962,6 +962,74 @@ def run_cross_section_research(
         "with forward_return_col='forward_return_1h'"
     )
 
+    return enriched_data
+
+
+def run_forex_cross_section_research(output_dir: str = "research_data/forex") -> Dict[str, pd.DataFrame]:
+    """
+    claude code changed: new — Forex Research Dashboard mission, explicit
+    follow-up request. Same CrossSectionEngine, same math, zero engine
+    duplication — this is a thin sibling of run_cross_section_research()
+    above that loads the real Forex universe (via
+    bot.instruments.resolve_ohlcv_path(), never a hand-built path,
+    exactly like cointegration_engine.py's own Forex sweep did) instead
+    of the crypto-hardcoded module-level UNIVERSE/data_dir. CrossSectionEngine
+    itself is already universe-agnostic — calculate_all(data) just
+    processes whatever {symbol: df} dict it's handed; only this
+    standalone crypto runner was ever universe-locked.
+
+    Output is deliberately written to research_data/forex/, NOT
+    research_data/ directly — bot/views/terminal_data.py's
+    get_cross_sectional_dispersion() globs research_data/*_cross_section.csv
+    with no asset-class filter at all, so writing Forex output into the
+    same flat directory would silently mix Forex and Crypto symbols into
+    Crypto's own cross-sectional dispersion computation the next time
+    that function runs — a real correctness bug, not a cosmetic one
+    (comparing a Forex pair's return z-score against a crypto coin's in
+    the same cross-section is statistically meaningless). Segregated
+    directory, same reasoning bot.instruments.resolve_ohlcv_path() already
+    documents for raw OHLCV.
+    """
+    from pathlib import Path
+
+    logger.info("=" * 70)
+    logger.info("CROSS-SECTIONAL RESEARCH — FOREX STANDALONE RUN")
+    logger.info("=" * 70)
+
+    forex_symbols = symbols_for_asset_class(ASSET_CLASS_FOREX)
+    data: Dict[str, pd.DataFrame] = {}
+
+    for symbol in forex_symbols:
+        csv_path = resolve_ohlcv_path(symbol)
+        if not csv_path.exists():
+            logger.warning(f"  {symbol}: not found at {csv_path}")
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+                df.set_index("timestamp", inplace=True)
+            for col in ["open", "high", "low", "close", "volume"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            df.dropna(subset=["close"], inplace=True)
+            df.sort_index(inplace=True)
+            key = symbol.replace("/", "_")  # claude code changed: this module's own underscore filename convention, matching the crypto runner's UNIVERSE keys
+            data[key] = df
+            logger.info(f"  Loaded {symbol}: {len(df):,} candles")
+        except Exception as e:
+            logger.error(f"  Failed to load {symbol}: {e}")
+
+    engine = CrossSectionEngine()
+    enriched_data = engine.calculate_all(data)
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    for symbol, df in enriched_data.items():
+        out = Path(output_dir) / f"{symbol}_cross_section.csv"
+        df.reset_index().to_csv(out, index=False)
+        logger.info(f"  Saved: {out}")
+
+    logger.info("Complete.")
     return enriched_data
 
 

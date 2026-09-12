@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from django.test import SimpleTestCase
 
-from bot.research.cross_section_engine import CrossSectionEngine, WINSOR_MIN_PERIODS
+from bot.research.cross_section_engine import CrossSectionEngine, WINSOR_MIN_PERIODS, run_forex_cross_section_research
 
 
 def _make_return_df(n, seed, spike_at=None, spike_magnitude=5.0):
@@ -105,3 +105,48 @@ class WinsorizationLeakageTest(SimpleTestCase):
             winsorized_value, 3.0,
             "an extreme row's own value must not inflate the boundary used to clip itself",
         )
+
+
+class RunForexCrossSectionResearchTest(SimpleTestCase):
+    """claude code changed: new — Forex Research Dashboard mission,
+    explicit follow-up request. Real data, real engine, no mocking
+    (matching this project's own convention) — this is a genuine,
+    fast (~5s for 8 symbols) research-generation run against whatever
+    real data/forex/*.csv files exist on this machine, not a synthetic
+    fixture, since the whole point is proving the real pipeline produces
+    real output."""
+
+    def test_writes_to_the_segregated_forex_directory_not_the_flat_root(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_out:
+            result = run_forex_cross_section_research(output_dir=tmp_out)
+            if not result:
+                self.skipTest("no data/forex/*.csv files on this machine")
+            written = os.listdir(tmp_out)
+            self.assertTrue(any(f.endswith("_cross_section.csv") for f in written))
+
+    def test_output_has_real_cs_zscore_column_not_fabricated(self):
+        import os
+        import tempfile
+
+        import pandas as pd
+
+        with tempfile.TemporaryDirectory() as tmp_out:
+            result = run_forex_cross_section_research(output_dir=tmp_out)
+            if not result:
+                self.skipTest("no data/forex/*.csv files on this machine")
+            symbol, enriched_df = next(iter(result.items()))
+            self.assertIn("cs_zscore", enriched_df.columns)
+            self.assertGreater(enriched_df["cs_zscore"].notna().sum(), 0)
+            # claude code changed: confirms real files land on disk, not
+            # just returned in memory
+            saved = pd.read_csv(os.path.join(tmp_out, f"{symbol}_cross_section.csv"))
+            self.assertEqual(len(saved), len(enriched_df))
+
+    def test_uses_the_real_instrument_registry_never_a_hardcoded_symbol_list(self):
+        import inspect
+        source = inspect.getsource(run_forex_cross_section_research)
+        self.assertIn("symbols_for_asset_class", source)
+        self.assertIn("resolve_ohlcv_path", source)

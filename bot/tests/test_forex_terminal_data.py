@@ -34,6 +34,39 @@ class CorrelationDirectoryParamRegressionTest(SimpleTestCase):
             self.assertNotEqual(forex_result.get("top_pairs"), crypto_result.get("top_pairs"))
 
 
+class ForexCrossSectionalDispersionTest(SimpleTestCase):
+    """claude code changed: new — real Forex cross-sectional data now
+    exists (bot.research.cross_section_engine.run_forex_cross_section_research(),
+    explicit follow-up request). Reads whatever is actually on disk under
+    research_data/forex/ rather than asserting exact values (real,
+    changing data) — the segregation-from-Crypto guarantee is the
+    behavior worth locking down here."""
+
+    def test_reads_real_data_when_present_or_fails_honestly_when_absent(self):
+        result = forex_terminal_data.get_forex_cross_sectional_dispersion()
+        if result["available"]:
+            self.assertGreaterEqual(result["n_symbols"], 3)
+            self.assertIn("dispersion_std", result)
+            self.assertIsInstance(result["top_extremes"], list)
+        else:
+            self.assertIn("reason", result)
+
+    def test_never_reads_from_the_shared_crypto_research_data_root(self):
+        # claude code changed: the actual correctness guarantee this
+        # segregated-directory design exists for — must glob
+        # research_data/forex/, never bare research_data/ (which holds
+        # Crypto's own *_cross_section.csv files and would silently mix
+        # asset classes into one dispersion computation if globbed
+        # together).
+        import inspect
+        source = inspect.getsource(forex_terminal_data.get_forex_cross_sectional_dispersion)
+        self.assertIn("FOREX_RESEARCH_DATA_DIR", source)
+
+    def test_forex_output_directory_is_segregated_from_crypto(self):
+        self.assertNotEqual(forex_terminal_data.FOREX_RESEARCH_DATA_DIR, terminal_data.RESEARCH_DATA_DIR)
+        self.assertTrue(forex_terminal_data.FOREX_RESEARCH_DATA_DIR.startswith(terminal_data.RESEARCH_DATA_DIR))
+
+
 class ForexDataProvenanceTest(SimpleTestCase):
 
     def test_no_local_data_is_honest_not_fabricated(self):

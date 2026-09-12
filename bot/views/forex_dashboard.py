@@ -24,6 +24,7 @@ from bot.engines.regime_detector import RegimeDetector
 from bot.instruments import ASSET_CLASS_FOREX, get_instrument, resolve_ohlcv_path, symbols_for_asset_class
 from bot.views.forex_terminal_data import (
     get_forex_alpha_intelligence,
+    get_forex_cross_sectional_dispersion,
     get_forex_data_provenance,
     get_forex_execution_state,
     get_forex_portfolio_risk,
@@ -73,13 +74,8 @@ def forex_dashboard(request):
     df = _load_local_forex_ohlcv(symbol)
 
     regime_result = RegimeDetector().detect(df if not df.empty else None)
-    market_state = get_market_state(
-        regime_result,
-        cross_section_dispersion={
-            "available": False,
-            "reason": "cross_section_engine.py has never been run against the Forex universe",
-        },
-    )
+    cross_section_dispersion = get_forex_cross_sectional_dispersion()
+    market_state = get_market_state(regime_result, cross_section_dispersion)
 
     context = {
         "symbol": symbol,
@@ -88,6 +84,7 @@ def forex_dashboard(request):
         "error": None,
         "provenance": get_forex_data_provenance(symbol, instrument, df),
         "market_state": market_state,
+        "cross_section_dispersion": cross_section_dispersion,
         "research_state": get_forex_research_state(),
         "alpha_intelligence": get_forex_alpha_intelligence(),
         "portfolio_risk": get_forex_portfolio_risk(),

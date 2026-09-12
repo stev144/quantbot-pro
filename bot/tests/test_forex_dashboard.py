@@ -57,11 +57,24 @@ class ForexDashboardViewTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         mock_fetch.assert_not_called()
 
-    def test_cross_sectional_and_backtest_sections_are_honestly_unavailable(self):
+    def test_backtest_section_is_honestly_unavailable(self):
+        # claude code changed: cross-sectional research has since been
+        # run for real (bot.research.cross_section_engine.
+        # run_forex_cross_section_research()) — see
+        # ForexCrossSectionDataTest below for that section's own coverage.
+        # The backtest-derived section remains unavailable: no engine
+        # change was made here, only a UI wiring for cross-sectional data.
         resp = self.client.get(reverse("forex_dashboard"), {"symbol": "EUR/USD"})
         html = resp.content.decode()
-        self.assertIn("cross_section_engine.py has never been run against the Forex universe", html)
         self.assertIn("No Forex-cost-aware backtest exists yet", html)
+
+    def test_cross_sectional_section_shows_real_data_when_available(self):
+        resp = self.client.get(reverse("forex_dashboard"), {"symbol": "EUR/USD"})
+        html = resp.content.decode()
+        if "cross_section_engine.py has not been run" in html:
+            self.skipTest("no research_data/forex/*_cross_section.csv on this machine")
+        self.assertIn("Cross-Sectional Opportunities", html)
+        self.assertNotIn("cross_section_engine.py has not been run", html)
 
     def test_research_hypothesis_form_posts_to_the_existing_research_lab_endpoint(self):
         resp = self.client.get(reverse("forex_dashboard"), {"symbol": "EUR/USD"})
