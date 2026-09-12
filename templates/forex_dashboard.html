@@ -1,0 +1,382 @@
+{% extends 'base.html' %}
+{% block title %}Forex — Research Terminal{% endblock %}
+{% block content %}
+
+{% comment %}
+claude code changed: new file — Forex Research Dashboard mission. Real
+first-class Forex market/research dashboard, mirroring
+templates/dashboard.html's institutional-terminal section structure and
+CSS classes exactly (zero new CSS) rather than inventing a second visual
+language. Every value below either comes straight from
+bot/views/forex_dashboard.py + bot/views/forex_terminal_data.py's real
+backend reads, or renders through the existing ".unavailable" pattern
+with an honest, specific reason — see those files' own docstrings for
+the forensic audit finding that bounds what has a legitimate Forex
+backend today (the shared regime/strategy backtester has never been
+made Forex-cost-aware, and no Forex cross-sectional/feature-validation
+run has ever been made). Nothing here is a placeholder or invented
+figure.
+{% endcomment %}
+
+{% if error %}
+{% include "partials/_topbar.html" with active="forex" %}
+<div class="term-body">
+    <div class="term-panel">
+        <span class="badge neg">ERROR</span>
+        <span style="margin-left:8px">{{ error }}</span>
+    </div>
+</div>
+{% else %}
+
+{% include "partials/_topbar.html" with active="forex" %}
+
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <form class="term-symbol-form" method="get" action=".">
+        <label class="text-dim mono" for="fx-symbol">Forex Symbol:</label>
+        <select id="fx-symbol" name="symbol" class="term-input mono">
+            {% for s in forex_symbols %}
+            <option value="{{ s }}" {% if s == symbol %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="term-btn">Load</button>
+    </form>
+</div>
+
+<div class="term-body">
+
+    <!-- ================= DATA PROVENANCE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Data Provenance</span>
+            <span class="term-section-meta">
+                {% if provenance.available %}
+                    {% if provenance.is_fresh %}<span class="badge pos">FRESH</span>{% else %}<span class="badge warn">STALE</span>{% endif %}
+                {% else %}<span class="badge dim">NO DATA</span>{% endif %}
+            </span>
+        </div>
+        <div class="term-section-body">
+            {% if provenance.available %}
+            <div class="term-grid term-grid-6">
+                <div class="metric-tile">
+                    <div class="metric-label">Provider</div>
+                    <div class="metric-value small">{{ provenance.provider }}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Symbol</div>
+                    <div class="metric-value small">{{ provenance.symbol }}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Timeframe</div>
+                    <div class="metric-value small">{{ provenance.timeframe }}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Last Bar (UTC)</div>
+                    <div class="metric-value small">{{ provenance.last_bar_utc|date:"Y-m-d H:i" }}</div>
+                    <div class="metric-sub">{{ provenance.age_days }}d ago</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Rows Cached</div>
+                    <div class="metric-value stat-number" data-target="{{ provenance.row_count }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Dataset Fingerprint</div>
+                    <div class="metric-value small mono" style="font-size:11px; word-break:break-all">{{ provenance.fingerprint|truncatechars:16 }}</div>
+                </div>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ provenance.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= MARKET / REGIME STATE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Market State</span>
+            <span class="term-section-meta">{{ symbol }} · {{ instrument.timeframe }}</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-6">
+                <div class="metric-tile">
+                    <div class="metric-label">Regime</div>
+                    <div class="metric-value small">{{ market_state.regime }}</div>
+                    <div class="metric-sub">{{ market_state.confidence }} confidence</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">ADX</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.adx|default_if_none:0 }}" data-decimals="1">0</div>
+                    <div class="metric-sub">trend strength</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">ATR Ratio</div>
+                    <div class="metric-value stat-number {% if market_state.volatility_extreme %}warn{% endif %}" data-target="{{ market_state.atr_ratio|default_if_none:0 }}" data-decimals="2">0</div>
+                    <div class="metric-sub">{% if market_state.volatility_extreme %}extreme volatility{% else %}normal range{% endif %}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">EMA Spread</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.ema_spread_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
+                    <div class="metric-sub">20/50 divergence</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">BB Width</div>
+                    <div class="metric-value stat-number" data-target="{{ market_state.bb_width_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
+                    <div class="metric-sub">compression</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Cross-Sect. Dispersion</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                    <div class="metric-sub">{{ market_state.cross_section_dispersion.reason }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= RESEARCH STATE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Research State</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-4">
+                <div class="metric-tile">
+                    <div class="metric-label">Forex Assets Registered</div>
+                    <div class="metric-value stat-number" data-target="{{ research_state.asset_count }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Forex Experiments Run</div>
+                    <div class="metric-value stat-number" data-target="{{ research_state.total_experiments }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Latest Research Run</div>
+                    <div class="metric-value small">{% if research_state.latest_run %}{{ research_state.latest_run|date:"Y-m-d" }}{% else %}—{% endif %}</div>
+                    <div class="metric-sub">{% if research_state.age_days is not None %}{{ research_state.age_days }}d ago{% endif %}</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Features Evaluated</div>
+                    <div class="unavailable-inline mono">N/A</div>
+                    <div class="metric-sub">{{ research_state.features_evaluated.reason }}</div>
+                </div>
+            </div>
+            {% if research_state.status_counts or research_state.verdict_counts %}
+            <div class="hairline"></div>
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">By Status</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <tbody>
+                                {% for status, count in research_state.status_counts.items %}
+                                <tr><td class="label-cell">{{ status }}</td><td class="num">{{ count }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">By Verdict</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <tbody>
+                                {% for verdict, count in research_state.verdict_counts.items %}
+                                <tr><td class="label-cell">{{ verdict }}</td><td class="num">{{ count }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="hairline"></div>
+            <div class="unavailable">No Forex experiments have been run yet — use the Research Hypothesis section below to start one.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= ALPHA INTELLIGENCE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Alpha Intelligence</span>
+            <span class="term-section-meta">cointegration / pairs research</span>
+        </div>
+        <div class="term-section-body">
+            {% if alpha_intelligence.pairs_available %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead>
+                        <tr><th>Pair</th><th>Verdict</th><th class="num">ADF p</th><th class="num">Hedge Ratio</th><th class="num">Half-Life (h)</th><th>Reject Reason</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for r in alpha_intelligence.pairs_results %}
+                        <tr class="{% if r.verdict == 'SUPPORTED' %}row-win{% elif r.verdict == 'REJECTED' %}row-loss{% endif %}">
+                            <td class="label-cell">{{ r.pair_name }}</td>
+                            <td><span class="badge {% if r.verdict == 'SUPPORTED' %}pos{% elif r.verdict == 'PARTIALLY_SUPPORTED' %}warn{% elif r.verdict == 'REJECTED' %}neg{% else %}dim{% endif %}">{{ r.verdict }}</span></td>
+                            <td class="num">{{ r.adf_pvalue|floatformat:4 }}</td>
+                            <td class="num">{{ r.hedge_ratio|floatformat:4 }}</td>
+                            <td class="num">{{ r.half_life_hours|floatformat:1 }}</td>
+                            <td class="text-dim">{{ r.reject_reason|truncatechars:60 }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">No completed Forex pairs research yet — use the Research Hypothesis section below to test a cointegration relationship.</div>
+            {% endif %}
+            <div class="hairline"></div>
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Feature Predictive Power</div>
+                    <div class="unavailable">{{ alpha_intelligence.feature_power.reason }}</div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Strategy Expectancy</div>
+                    <div class="unavailable">{{ alpha_intelligence.strategy_expectancy.reason }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= CROSS-SECTIONAL OPPORTUNITIES ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Cross-Sectional Opportunities</span>
+        </div>
+        <div class="term-section-body">
+            <div class="unavailable">cross_section_engine.py has never been run against the Forex universe — no real cross-sectional research exists for Forex yet.</div>
+        </div>
+    </div>
+
+    <!-- ================= PORTFOLIO RISK ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Portfolio Risk</span>
+        </div>
+        <div class="term-section-body">
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Correlation (Forex Majors)</div>
+                    {% if portfolio_risk.correlation.available %}
+                    <div class="metric-sub" style="margin-bottom:8px">avg |corr| {{ portfolio_risk.correlation.avg_abs_correlation }} across {{ portfolio_risk.correlation.n_symbols }} symbols, {{ portfolio_risk.correlation.window_candles }} candles</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Pair</th><th class="num">Corr</th></tr></thead>
+                            <tbody>
+                                {% for p in portfolio_risk.correlation.top_pairs %}
+                                <tr><td class="label-cell">{{ p.a }} / {{ p.b }}</td><td class="num {% if p.corr > 0 %}pos{% else %}neg{% endif %}">{{ p.corr }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="unavailable">{{ portfolio_risk.correlation.reason }}</div>
+                    {% endif %}
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Currency Exposure (registry-wide)</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Currency</th><th class="num">Pairs</th></tr></thead>
+                            <tbody>
+                                {% for c in portfolio_risk.currency_exposure %}
+                                <tr><td class="label-cell">{{ c.currency }}</td><td class="num">{{ c.pair_count }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="hairline"></div>
+            <div class="unavailable">Max Drawdown: {{ portfolio_risk.max_drawdown.reason }}</div>
+        </div>
+    </div>
+
+    <!-- ================= EXECUTION ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Execution</span>
+            <span class="term-section-meta"><span class="badge dim">{{ execution.mode }}</span></span>
+        </div>
+        <div class="term-section-body">
+            {% if execution.available %}
+            <div class="term-grid term-grid-3">
+                <div class="metric-tile">
+                    <div class="metric-label">Open Positions</div>
+                    <div class="metric-value stat-number" data-target="{{ execution.open_count }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Closed Trades</div>
+                    <div class="metric-value stat-number" data-target="{{ execution.total_closed }}" data-decimals="0">0</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-label">Realized P&amp;L</div>
+                    <div class="metric-value stat-number {% if execution.realized_pnl > 0 %}pos{% elif execution.realized_pnl < 0 %}neg{% endif %}" data-target="{{ execution.realized_pnl }}" data-decimals="2">0</div>
+                </div>
+            </div>
+            {% else %}
+            <div class="unavailable">{{ execution.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ================= SYSTEM HEALTH ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">System Health</span>
+            <span class="term-section-meta">
+                {% if system_health.overall == "ok" %}<span class="badge pos">OK</span>
+                {% elif system_health.overall == "warn" %}<span class="badge warn">WARN</span>
+                {% else %}<span class="badge neg">ERROR</span>{% endif %}
+            </span>
+        </div>
+        <div class="term-section-body">
+            <div class="two-col">
+                {% for c in system_health.checks %}
+                <div class="status-row">
+                    <span class="status-name"><span class="status-dot {{ c.status }}"></span>{{ c.name }}</span>
+                    <span class="status-detail">{{ c.detail }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= BACKTEST / EQUITY / DRAWDOWN / REGIME / REJECTION ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Backtest &amp; Research Details</span>
+        </div>
+        <div class="term-section-body">
+            <div class="unavailable">No Forex-cost-aware backtest exists yet. bot.backtesting.backtester has a venue_id parameter for crypto exchange (Binance/Kraken) fee variance only — it has no asset_class awareness and never calls bot.config.cost_model.get_cost_model()/ForexCostModel, so running it against Forex data today would silently apply the wrong (crypto exchange) transaction costs. Equity curve, drawdown, regime breakdown, and rejection analysis all depend on this same backtest and are unavailable for the same reason. See the Alpha Intelligence section above for what Forex research is real today: cointegration/pairs verdicts.</div>
+        </div>
+    </div>
+
+    <!-- ================= RESEARCH HYPOTHESIS ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Research Hypothesis</span>
+            <span class="term-section-meta">deterministic, evidence-backed hypothesis testing</span>
+        </div>
+        <div class="term-section-body">
+            <div class="chart-caption mono" style="margin-bottom:18px">
+                Example: "I believe EUR/USD and GBP/USD maintain a stable, cointegrated relationship."
+            </div>
+            <form method="post" action="{% url 'research_lab_dashboard' %}">
+                {% csrf_token %}
+                <input type="hidden" name="asset_class" value="FOREX">
+                <textarea name="hypothesis_text" class="term-input mono" rows="4" style="width:100%" placeholder="Describe your Forex hypothesis in plain language..."></textarea>
+                <button type="submit" class="term-btn mono" style="margin-top:14px">Formalize This Hypothesis</button>
+            </form>
+            <div class="chart-caption mono" style="margin-top:16px">
+                <a href="{% url 'research_lab_history' %}">Full experiment history &rarr;</a>
+                &nbsp;&middot;&nbsp;
+                <a href="{% url 'research_lab_capabilities' %}">Research capabilities (Core &amp; Pro) &rarr;</a>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Forex" note="market/regime data from local cached OHLCV — research state from the Research Lab's own experiment history — no fabricated metrics" %}
+
+{% endif %}
+{% endblock %}

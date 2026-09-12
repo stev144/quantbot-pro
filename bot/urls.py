@@ -3,6 +3,7 @@ from django.urls import path, include
 from bot.views.dashboard import (
     dashboard, live_data, portfolio_backtest_view, live_regime_monitor, walk_forward_view,
 )
+from bot.views.forex_dashboard import forex_dashboard   # claude code changed: new — Forex Research Dashboard mission
 from bot.views.market_intelligence import market_intelligence
 from bot.views.research_lab import research_lab
 from bot.views.feature_intelligence import (
@@ -31,6 +32,13 @@ urlpatterns = [
 
     # ---- MARKET ----
     path('market/', market_intelligence, name='market_intelligence'),
+
+    # ---- FOREX ----
+    # claude code changed: new — Forex Research Dashboard mission. The
+    # navbar's Forex link used to open Research Lab's hypothesis-entry
+    # page directly (no market/research dashboard existed); this is
+    # Forex's equivalent of the EXECUTIVE dashboard above.
+    path('forex/', forex_dashboard, name='forex_dashboard'),
 
     # ---- ACADEMY ----
     # claude code changed: new — one include() line, per the approved

@@ -104,16 +104,17 @@ class CryptoForexNavLinksTest(TestCase):
         # not text that happens to be on the page for another reason.
         self.assertIn('href="/">Crypto</a>', html)
 
-    def test_forex_link_points_at_research_lab_new_hypothesis(self):
-        # claude code changed: was an exact-match href with no query
-        # string — now carries ?asset_class=FOREX (see
-        # bot/research_lab/views/dashboard.py's _asset_class_hint()),
-        # added after a real user report that arriving via this link
-        # still showed a hardcoded Bitcoin example hypothesis.
+    def test_forex_link_points_at_the_forex_dashboard(self):
+        # claude code changed: Forex Research Dashboard mission — Forex
+        # used to point straight at Research Lab's hypothesis-entry page
+        # (?asset_class=FOREX hint and all); now it opens a real,
+        # first-class Forex market/research dashboard (bot/views/
+        # forex_dashboard.py), with the hypothesis workflow embedded
+        # inside that page rather than being the link's sole destination.
         from django.urls import reverse
         resp = self.client.get('/')
         html = resp.content.decode()
-        self.assertIn(f'href="{reverse("research_lab_dashboard")}?asset_class=FOREX">Forex</a>', html)
+        self.assertIn(f'href="{reverse("forex_dashboard")}">Forex</a>', html)
 
     def test_crypto_link_highlights_on_the_dashboard_page(self):
         # claude code changed: the <a> tag's class/href span two lines in
@@ -133,10 +134,11 @@ class CryptoForexNavLinksTest(TestCase):
         self.assertIn('href="/"', crypto_tag)
 
     def test_forex_link_present_and_not_highlighted_on_an_unrelated_page(self):
+        from django.urls import reverse
         resp = self.client.get('/research/backtests/')
         html = resp.content.decode()
         self.assertIn('>Forex</a>', html)
-        self.assertNotIn('term-nav-link active"\n           href="/research-lab/">Forex</a>', html)
+        self.assertNotIn(f'term-nav-link active"\n           href="{reverse("forex_dashboard")}">Forex</a>', html)
 
     def test_crypto_and_forex_appear_in_the_wrapped_mobile_nav_too(self):
         # claude code changed: this app has no separate hamburger-menu

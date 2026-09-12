@@ -290,8 +290,16 @@ def get_portfolio_risk(backtest_results):
     }
 
 
-def _compute_price_correlation(window=500):
-    files = sorted(glob.glob(os.path.join(DATA_DIR, "*.csv")))[:12]  # cap for page-load cost
+def _compute_price_correlation(window=500, directory=None):
+    # claude code changed: new `directory` param — Forex Research
+    # Dashboard mission. Default preserves the exact prior behavior
+    # (DATA_DIR, i.e. this function's only caller before today,
+    # get_portfolio_risk() below, is completely unaffected) so
+    # bot/views/forex_terminal_data.py's get_forex_portfolio_risk() can
+    # pass DATA_DIR/forex and get genuine Forex cross-pair correlation
+    # without a duplicate copy of this function.
+    directory = directory if directory is not None else DATA_DIR
+    files = sorted(glob.glob(os.path.join(directory, "*.csv")))[:12]  # cap for page-load cost
     if len(files) < 3:
         return {"available": False, "reason": "Fewer than 3 symbol datasets available"}
 

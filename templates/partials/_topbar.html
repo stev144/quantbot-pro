@@ -137,8 +137,8 @@
            data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
            href="{% url 'dashboard' %}">Crypto</a>
 
-        <a class="term-nav-link {% if active == 'research_lab_mvp' or active == 'forex' %}active{% endif %}"
-           href="{% url 'research_lab_dashboard' %}?asset_class=FOREX">Forex</a>
+        <a class="term-nav-link {% if active == 'forex' %}active{% endif %}"
+           href="{% url 'forex_dashboard' %}">Forex</a>
 
         {# claude code changed: Research Capabilities Discoverability & Navigation Refactor — #}
         {# was a single top-level <a> straight into the hypothesis-formalization form, with #}
