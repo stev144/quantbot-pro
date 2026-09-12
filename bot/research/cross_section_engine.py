@@ -645,7 +645,22 @@ class CrossSectionEngine:
 
         logger.info("Step 6: Calculating rolling momentum features...")
 
-        for symbol in UNIVERSE:
+        # claude code changed: real bug fix — Forex Cross-Sectional
+        # Research Validation Audit. This loop was `for symbol in
+        # UNIVERSE:`, the crypto-hardcoded module-level constant — for
+        # any symbol not in that list (every Forex symbol; also silently
+        # any crypto symbol _validate_inputs() had filtered out for
+        # insufficient rows), the "rank_norm_col not in cs_features.columns"
+        # guard below was ALWAYS true, so momentum was silently never
+        # computed at all, for that symbol, with no error. Derives the
+        # symbol list from cs_features' own columns instead — the actual
+        # data the engine is processing, never a hardcoded universe.
+        symbols_present = sorted({
+            c.rsplit("__cs_rank_norm", 1)[0]
+            for c in cs_features.columns if c.endswith("__cs_rank_norm")
+        })
+
+        for symbol in symbols_present:
 
             rank_norm_col = f"{symbol}__cs_rank_norm"
 
@@ -711,7 +726,15 @@ class CrossSectionEngine:
 
         logger.info("Step 7: Calculating mean reversion signal...")
 
-        for symbol in UNIVERSE:
+        # claude code changed: real bug fix — same root cause as Step 6
+        # above (was `for symbol in UNIVERSE:`, the crypto-hardcoded
+        # constant). Derived from cs_features' own columns instead.
+        symbols_present = sorted({
+            c.rsplit("__cs_zscore", 1)[0]
+            for c in cs_features.columns if c.endswith("__cs_zscore")
+        })
+
+        for symbol in symbols_present:
 
             zscore_col   = f"{symbol}__cs_zscore"
             momentum_col = f"{symbol}__cs_momentum_6h"
@@ -768,11 +791,16 @@ class CrossSectionEngine:
 
         logger.info("Step 8: Calculating forward return labels...")
 
-        for symbol in UNIVERSE:
-
-            if symbol not in returns_matrix.columns:
-                logger.warning(f"  {symbol}: not in returns matrix, skipping")
-                continue
+        # claude code changed: real bug fix — same root cause as Steps 6/7
+        # above (was `for symbol in UNIVERSE:`). This was the most severe
+        # instance: forward_return_1h is the Y-variable every downstream
+        # IC/predictive-power test depends on — for any symbol not in the
+        # hardcoded crypto UNIVERSE (every Forex symbol), it was never
+        # computed at all, making predictive research on that symbol's
+        # cross-sectional features structurally impossible, silently.
+        # Iterates returns_matrix's own columns instead — the actual
+        # aligned data, never a hardcoded universe.
+        for symbol in returns_matrix.columns:
 
             # shift(-1): pull the next row's value into the current row
             # At t=10:00, forward_return_1h = return that happened at 11:00

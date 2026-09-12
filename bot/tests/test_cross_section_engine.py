@@ -107,6 +107,70 @@ class WinsorizationLeakageTest(SimpleTestCase):
         )
 
 
+def _make_ohlcv_df(n, seed, base=100.0):
+    rng = np.random.default_rng(seed)
+    close = base * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    df = pd.DataFrame({
+        "open": close, "high": close * 1.001, "low": close * 0.999,
+        "close": close, "volume": np.full(n, 1000.0),
+    })
+    df.index = pd.date_range("2024-01-01", periods=n, freq="1h")
+    return df
+
+
+class ForwardReturnMomentumReversalUniverseBugTest(SimpleTestCase):
+    """claude code changed: new — real, confirmed bug found during the
+    Forex Cross-Sectional Research Validation Audit. _calculate_momentum_features(),
+    _calculate_reversal_signal(), and _calculate_forward_returns() each
+    iterated the module-level, crypto-hardcoded UNIVERSE constant instead
+    of the symbols actually present in the data being processed. Every
+    Forex symbol (not in UNIVERSE at all) silently got NO forward_return_1h,
+    cs_momentum_3h/6h, or cs_reversal_signal — the Y-variable every
+    downstream predictive-power test depends on was simply never
+    produced, no error raised. Confirmed live: research_data/forex/
+    *_cross_section.csv only ever had 4 of the intended 8 feature
+    columns before this fix. Also latent for ANY crypto symbol
+    _validate_inputs() happened to filter out (fewer than min_rows) —
+    not exclusively a Forex-only defect, just Forex-guaranteed since no
+    Forex symbol is ever in UNIVERSE."""
+
+    def test_forward_return_and_momentum_and_reversal_signal_computed_for_non_universe_symbols(self):
+        # claude code changed: symbol names deliberately NOT in the real
+        # crypto UNIVERSE constant — this is exactly the Forex scenario.
+        data = {
+            "EUR_USD": _make_ohlcv_df(600, seed=1),
+            "GBP_USD": _make_ohlcv_df(600, seed=2),
+            "USD_JPY": _make_ohlcv_df(600, seed=3),
+            "AUD_USD": _make_ohlcv_df(600, seed=4),
+        }
+        engine = CrossSectionEngine()
+        result = engine.calculate_all(data)
+        for symbol, df in result.items():
+            self.assertIn("forward_return_1h", df.columns, f"{symbol} missing forward_return_1h")
+            self.assertIn("cs_momentum_3h", df.columns, f"{symbol} missing cs_momentum_3h")
+            self.assertIn("cs_momentum_6h", df.columns, f"{symbol} missing cs_momentum_6h")
+            self.assertIn("cs_reversal_signal", df.columns, f"{symbol} missing cs_reversal_signal")
+            self.assertGreater(df["forward_return_1h"].notna().sum(), 0, f"{symbol} forward_return_1h is all-NaN")
+            self.assertGreater(df["cs_reversal_signal"].notna().sum(), 0, f"{symbol} cs_reversal_signal is all-NaN")
+
+    def test_real_crypto_universe_symbols_unaffected_by_the_fix(self):
+        # claude code changed: regression guard — real UNIVERSE members
+        # (crypto symbols) must behave identically after deriving the
+        # symbol list from the data instead of the hardcoded constant.
+        data = {
+            "BTC_USDT": _make_ohlcv_df(600, seed=5),
+            "ETH_USDT": _make_ohlcv_df(600, seed=6),
+            "SOL_USDT": _make_ohlcv_df(600, seed=7),
+            "AVAX_USDT": _make_ohlcv_df(600, seed=8),
+        }
+        engine = CrossSectionEngine()
+        result = engine.calculate_all(data)
+        for symbol, df in result.items():
+            self.assertGreater(df["forward_return_1h"].notna().sum(), 0)
+            self.assertGreater(df["cs_reversal_signal"].notna().sum(), 0)
+            self.assertGreater(df["cs_momentum_6h"].notna().sum(), 0)
+
+
 class RunForexCrossSectionResearchTest(SimpleTestCase):
     """claude code changed: new — Forex Research Dashboard mission,
     explicit follow-up request. Real data, real engine, no mocking
@@ -140,6 +204,13 @@ class RunForexCrossSectionResearchTest(SimpleTestCase):
             symbol, enriched_df = next(iter(result.items()))
             self.assertIn("cs_zscore", enriched_df.columns)
             self.assertGreater(enriched_df["cs_zscore"].notna().sum(), 0)
+            # claude code changed: regression guard for the confirmed
+            # UNIVERSE-hardcoding bug fixed by this same audit — these
+            # three columns were silently absent for every real Forex
+            # symbol before the fix.
+            self.assertIn("forward_return_1h", enriched_df.columns)
+            self.assertGreater(enriched_df["forward_return_1h"].notna().sum(), 0)
+            self.assertIn("cs_reversal_signal", enriched_df.columns)
             # claude code changed: confirms real files land on disk, not
             # just returned in memory
             saved = pd.read_csv(os.path.join(tmp_out, f"{symbol}_cross_section.csv"))
