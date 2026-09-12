@@ -8,26 +8,19 @@
 // silently ignored it. This is the superset: data-suffix always
 // supported.
 //
-// claude code changed: removed the setInterval(animateAllCounters, 5000)
-// re-trigger — per the institutional-UI pass, every number on the page
-// (Sharpe, drawdown, individual trade rows, everything) was resetting to
-// 0 and counting back up every 5 seconds forever, on every page, even
-// though these pages are server-rendered on load/form-submit and the
-// underlying data never actually changes between reloads. An
-// institutional terminal shows static numbers that update only when the
-// data does; a number that visibly flickers and re-animates on a fixed
-// timer with no data change reads as decorative, not informational —
-// exactly the retail-SaaS pattern this design system's own header
-// comment ("no gradients, no glassmorphism, no decorative animation")
-// already commits to avoiding. The one-time reveal animation on load is
-// kept — it's a common, unobtrusive professional touch — only the
-// infinite repeat is removed.
+// claude code changed: restored setInterval(animateAllCounters, 5000) —
+// an earlier "institutional-UI" pass had removed this re-trigger (every
+// number resetting to 0 and counting back up every 5s regardless of
+// whether the underlying data changed, reasoned to read as decorative on
+// a server-rendered page). Explicit, deliberate reversal per direct
+// request: every .stat-number on every page counts up from 0 again every
+// 5 seconds, exactly as it worked before that pass.
 //
 // Usage: any element with class="stat-number" and a numeric
 // data-target="123.45" attribute (optionally data-decimals="2" and
-// data-suffix="%") animates from 0 to the target once, on page load.
-// Non-numeric data-target (e.g. missing/placeholder values) are left
-// untouched rather than animated to 0.
+// data-suffix="%") animates from 0 to the target, on page load and every
+// 5 seconds thereafter. Non-numeric data-target (e.g. missing/placeholder
+// values) are left untouched rather than animated to 0.
 // ============================================================
 
 function formatNumber(num, decimals) {
@@ -62,3 +55,4 @@ function animateAllCounters() {
 }
 
 document.addEventListener("DOMContentLoaded", animateAllCounters);
+setInterval(animateAllCounters, 5000);
