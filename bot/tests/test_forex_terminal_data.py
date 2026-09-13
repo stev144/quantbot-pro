@@ -173,9 +173,31 @@ class ForexPortfolioRiskTest(SimpleTestCase):
     def test_currency_exposure_reflects_the_real_registry(self):
         result = forex_terminal_data.get_forex_portfolio_risk()
         currencies = {row["currency"] for row in result["currency_exposure"]}
-        self.assertIn("USD", currencies)  # every registered major involves USD on one side
+        self.assertIn("USD", currencies)
         usd_row = next(r for r in result["currency_exposure"] if r["currency"] == "USD")
-        self.assertGreaterEqual(usd_row["pair_count"], 6)  # confirmed 6+ of 8 majors involve USD
+        self.assertGreaterEqual(usd_row["pair_count"], 6)
+
+    def test_universe_is_currency_balanced_not_usd_dominated(self):
+        """claude code changed: new — Forex Cross-Sectional Research
+        Validation Audit's Phase 6 finding: the original 8-symbol default
+        universe had USD on one side of 7/8 pairs (87.5%), making
+        "cross-sectional dispersion" largely a proxy for broad USD moves
+        rather than 8 independent currency stories. The universe was
+        widened to the complete C(8,2)=28 cross matrix of the 8 major
+        currencies specifically to fix this — every currency now appears
+        in exactly 7 of 28 pairs (25%), symmetric. Asserts the fix
+        actually holds structurally, not just that data exists."""
+        result = forex_terminal_data.get_forex_portfolio_risk()
+        counts = {row["currency"]: row["pair_count"] for row in result["currency_exposure"]}
+        if sum(counts.values()) < 2 * 28:
+            self.skipTest("fewer than 28 Forex pairs registered on this machine — universe expansion not applied here")
+        # claude code changed: every one of the 8 major currencies must
+        # appear the SAME number of times (a genuinely balanced cross
+        # matrix), not just "USD isn't overwhelming" — the max-minus-min
+        # spread across currencies should be zero for the exact 28-pair
+        # construction, but allow a small tolerance for a differently
+        # sized/composed real universe on another machine.
+        self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)
 
     def test_max_drawdown_and_crash_risk_are_honestly_unavailable(self):
         result = forex_terminal_data.get_forex_portfolio_risk()

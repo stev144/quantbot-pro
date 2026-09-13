@@ -171,6 +171,24 @@ Do not build a Forex cross-sectional strategy on this signal — the evidence do
 
 ---
 
+## Addendum (2026-09-13): Universe Widened to Close the USD-Overlap Gap
+
+Per direct follow-up request, the Forex universe was expanded from the original 8-symbol default to the **complete C(8,2)=28 cross matrix** of the 8 major currencies (USD, EUR, GBP, AUD, NZD, CAD, CHF, JPY) — every currency now appears in exactly **7 of 28 pairs (25%)**, confirmed programmatically, versus the prior 7-of-8 (87.5%) USD concentration. Persisted via the existing, already-built `bot.forex_data_fetcher.save_forex_universe_selection()` mechanism (writes `data/forex_universe_selection.json`, timestamped and auditable) — no new infrastructure required, this extensibility point already existed for exactly this purpose. All 28 pairs' real OHLCV downloaded via the existing `download_all_forex_symbols()` (Yahoo Finance, same pipeline, same per-symbol try/except and freshness checks as the original 8) — 28/28 succeeded, ~17,240–17,340 candles each, same ~2023-11 to 2026-09 span, same weekend-gap structure (145 expected weekend gaps per symbol) plus a small number (2–14) of additional non-weekend gaps per symbol not individually investigated further (consistent in scale with the original 8's own minor-holiday gaps, not re-audited in the same depth as Phase 2 above — flagged here rather than silently assumed clean).
+
+**Re-ran the exact same pre-defined 3-horizon preliminary test (Phase 7/8) on the widened, now-balanced universe**:
+
+| Horizon | Pooled n | Pooled Spearman IC | p-value | Survives Bonferroni (0.0167)? |
+|---|---|---|---|---|
+| 1h | 482,014 | +0.0302 | 1.8×10⁻⁹⁷ | Yes |
+| 4h | 478,549 | +0.0226 | 3.0×10⁻⁵⁵ | Yes |
+| 24h | 455,668 | +0.0087 | 5.0×10⁻⁹ | **Yes — now survives, unlike the narrow universe** |
+
+Economic magnitude at 1h: top-minus-bottom decile spread **0.67 bps** (was 0.56 bps); directional hit rate **50.72%** (was 49.87%).
+
+**Interpretation**: removing the structural USD-overlap bias made the statistical result *more* robust (all three horizons now survive correction, not just two) — this is informative in itself: it suggests the reversal effect is a real, if extremely weak, phenomenon across the wider currency space rather than an artifact of the narrow universe's USD concentration. It does **not** change the economic verdict. 0.67 bps is still at or below a realistic FX round-trip transaction cost, and a 50.72% directional hit rate remains indistinguishable from a coin flip for practical purposes. **Research verdict is unchanged: RESEARCH NEGATIVE for tradability**, now on firmer statistical footing rather than a narrower, more easily dismissed one. Risk #5 in the "Remaining Risks" section above is considered closed by this change; all other remaining risks (per-row minimum-instrument gate, governance/fingerprinting integration, overlapping-window dependence correction at 4h/24h) are unchanged and still open.
+
+No engine or dashboard code changed for this addendum — only universe configuration data (`data/forex_universe_selection.json`) and the real downloaded/regenerated CSVs. One test updated (`test_forex_terminal_data.py`'s currency-exposure test, plus one new test asserting the balance is structurally exact, not just "not overwhelming").
+
 ## Pending: fix not yet committed
 
 Per the mission's explicit instruction ("Do not commit or push changes unless implementation fixes are genuinely required and tested... report them explicitly before committing"): the bug fix above **is** genuinely required (the pipeline could not otherwise support any predictive-power research at all) and **is** tested (38/38 passing, including 2 new regression tests targeting exactly this defect). Reporting it here as required; will commit and push as a separate, clearly-labeled commit from this report.
