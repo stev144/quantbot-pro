@@ -167,6 +167,14 @@
             cursor.textContent = " █";
             message.appendChild(cursor);
             overlay.appendChild(message);
+            // claude code changed: new — real user feedback: the text
+            // alone read as easy to miss. Indeterminate progress bar
+            // (no real percentage exists to report for a synchronous
+            // full-page load — this only ever signals "still working",
+            // never a specific completion estimate).
+            var progress = document.createElement("div");
+            progress.className = "term-slow-nav-progress";
+            overlay.appendChild(progress);
             document.body.appendChild(overlay);
         });
     </script>

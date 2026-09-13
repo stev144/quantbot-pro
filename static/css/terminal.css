@@ -712,6 +712,47 @@
   animation: blink-cursor 1s step-end infinite;
   color: #F5C518;
 }
+/* claude code changed: new — real user report: the overlay's text alone
+   was too easy to miss/not register as "in progress." Indeterminate
+   (not percentage-based — there is no real progress feed for a
+   synchronous full-page load to report) sliding bar, the standard
+   "something is happening" pattern for exactly this situation. Plain
+   bar, one accent color, no gradient/glow — matches this design
+   system's own "no decorative animation" rule while still being
+   immediately, unambiguously legible as active. */
+.term-slow-nav-overlay .term-slow-nav-progress {
+  width: 280px;
+  max-width: 80vw;
+  height: 3px;
+  margin: 22px auto 0;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.term-slow-nav-overlay .term-slow-nav-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -40%;
+  height: 100%;
+  width: 40%;
+  background: #F5C518;
+  border-radius: 2px;
+  animation: term-slow-nav-indeterminate 1.3s ease-in-out infinite;
+}
+@keyframes term-slow-nav-indeterminate {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term-slow-nav-overlay .term-slow-nav-progress::after {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
 
 /* ============================================================
  * LAYOUT
