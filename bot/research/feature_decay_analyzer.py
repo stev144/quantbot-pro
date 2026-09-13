@@ -61,6 +61,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — Forex Integration Stage 1, see SYMBOLS comment below
+
 warnings.filterwarnings('ignore')
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,28 +116,18 @@ REGIME_WINDOWS: Dict[str, Tuple[str, str, str]] = {
     "current":        ("2026-01-01", "2026-12-31", "Current market"),
 }
 
-SYMBOLS: List[str] = [
-    'BTC_USDT',
-    'ETH_USDT',
-    'BNB_USDT',
-    'SOL_USDT',
-    'ADA_USDT',
-    'AVAX_USDT',
-    'DOT_USDT',
-    'MATIC_USDT',
-    'ARB_USDT',
-    'LINK_USDT',
-    'UNI_USDT',
-    'AAVE_USDT',
-    'XRP_USDT',
-    'XLM_USDT',
-    'DOGE_USDT',
-    'SHIB_USDT',
-    'ATOM_USDT',
-    'FIL_USDT',
-    'APT_USDT',
-    'OP_USDT',
-]
+# claude code changed: real bug fix — Forex Integration Stage 1. Was a
+# literal, hand-typed 20-symbol crypto list (not even registry-derived,
+# unlike every other module in this research arsenal) — the exact
+# "regression-critical" hardcoded-universe pattern already found and
+# fixed once in cross_section_engine.py. run_decay_analysis()'s own
+# `symbols = symbols or SYMBOLS` (below) already lets a caller override
+# this with symbols_for_asset_class(ASSET_CLASS_FOREX) explicitly; this
+# fix only changes the DEFAULT from a frozen, un-refreshable crypto list
+# to the real, current crypto universe, so it also stops silently
+# excluding any crypto symbol added to the registry after this list was
+# last hand-typed.
+SYMBOLS: List[str] = [s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)]
 
 # Bar chart configuration for terminal display
 MAX_BAR_WIDTH: int = 20        # Maximum bar length in characters
@@ -148,7 +140,12 @@ IC_MODERATE: float = 0.03
 IC_WEAK:     float = 0.01
 
 MIN_OBS: int = 300
-ANNUALISATION_FACTOR: float = np.sqrt(8_760)
+# claude code changed: removed ANNUALISATION_FACTOR = sqrt(8_760) —
+# Forex Integration Stage 1 audit confirmed zero references anywhere in
+# this file (Sharpe was already removed from grading per an earlier fix;
+# this was leftover dead code carrying a crypto-only 24/7/365 assumption
+# that would have been wrong for Forex the moment anyone reintroduced a
+# reader for it — safer removed than left as a landmine).
 
 EXCLUDE_COLS = {
     'symbol', 'timeframe', 'timestamp', 'market_regime',

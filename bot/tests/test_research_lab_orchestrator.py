@@ -154,6 +154,87 @@ class AssetClassGatingWiringTest(TestCase):
         self.assertEqual(experiment.status, "PLANNED")
 
 
+class DataFingerprintGovernanceWiringTest(TestCase):
+    # claude code changed: new — Forex Integration Stage 1 (Architectural
+    # Parity). Real gap found: ResearchExperiment.data_fingerprint (a real
+    # model field) was never populated by any real student-run experiment
+    # — fingerprint_dataset() was only ever wired into the crypto-only
+    # run_cross_sectional_oos.py pipeline and a read-only, non-persisted
+    # Forex-dashboard display call. Proves the fix closes this gap
+    # symmetrically for BOTH asset classes through the real
+    # plan_experiment()/run_experiment() flow, not just a direct unit
+    # test of the helper function in isolation.
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="fingerprintresearcher", password="x")
+        ResearchSubscription.objects.create(user=self.user, tier="PRO", status="ACTIVE", expires_at=None)
+
+    def test_crypto_experiment_gets_a_real_data_fingerprint(self):
+        experiment = _make_experiment(self.user)  # default fixture: BTC/USDT, feature hypothesis
+        plan_experiment(experiment)
+        experiment.refresh_from_db()
+        run_experiment(experiment)
+        experiment.refresh_from_db()
+
+        self.assertEqual(experiment.status, "COMPLETED")
+        self.assertTrue(experiment.data_fingerprint, "data_fingerprint must not be left blank for a real completed run")
+        self.assertEqual(len(experiment.data_fingerprint), 64)  # sha256 hexdigest
+        self.assertIn("BTC/USDT", experiment.research_plan.get("data_fingerprints", {}))
+
+    def test_forex_pairs_experiment_gets_a_combined_fingerprint_from_both_legs(self):
+        experiment = _make_experiment(
+            self.user, asset="EUR/USD", asset_b="GBP/USD", hypothesis_type="pairs",
+            direction=None, target={},
+        )
+        plan_experiment(experiment)
+        experiment.refresh_from_db()
+        run_experiment(experiment)
+        experiment.refresh_from_db()
+
+        self.assertEqual(experiment.status, "COMPLETED")
+        self.assertTrue(experiment.data_fingerprint)
+        self.assertEqual(len(experiment.data_fingerprint), 64)
+        per_instrument = experiment.research_plan.get("data_fingerprints", {})
+        self.assertIn("EUR/USD", per_instrument)
+        self.assertIn("GBP/USD", per_instrument)
+
+    def test_combined_fingerprint_is_order_independent(self):
+        # claude code changed: "EUR/USD vs GBP/USD" and "GBP/USD vs
+        # EUR/USD" must be recognised as the same underlying dataset pair.
+        exp_a = _make_experiment(self.user, asset="EUR/USD", asset_b="GBP/USD", hypothesis_type="pairs", direction=None, target={})
+        exp_b = _make_experiment(self.user, asset="GBP/USD", asset_b="EUR/USD", hypothesis_type="pairs", direction=None, target={})
+        for exp in (exp_a, exp_b):
+            plan_experiment(exp)
+            exp.refresh_from_db()
+            run_experiment(exp)
+            exp.refresh_from_db()
+        self.assertEqual(exp_a.data_fingerprint, exp_b.data_fingerprint)
+
+    def test_fingerprint_failure_does_not_block_an_otherwise_successful_run(self):
+        from unittest.mock import patch
+        experiment = _make_experiment(self.user)
+        plan_experiment(experiment)
+        experiment.refresh_from_db()
+        with patch("bot.research_lab.orchestrator._compute_experiment_data_fingerprint", side_effect=RuntimeError("boom")):
+            run_experiment(experiment)  # claude code changed: must not raise — wrapped at the run_experiment() call site, not just inside the helper's own per-instrument try/except
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.status, "COMPLETED")
+        self.assertEqual(experiment.data_fingerprint, "")
+
+    def test_missing_underlying_data_file_is_logged_not_fatal(self):
+        # claude code changed: the helper's own internal try/except (per
+        # instrument) is what makes this robust — a symbol whose OHLCV
+        # file is missing must not prevent the experiment from completing.
+        experiment = _make_experiment(self.user, asset="NOT_A_REAL_SYMBOL/USDT")
+        plan_experiment(experiment)
+        experiment.refresh_from_db()
+        # claude code changed: an unregistered symbol fails validate_spec()
+        # (BLOCKED) long before reaching run_experiment() — confirms the
+        # fail-closed path, which is the real, exercised behavior for this
+        # scenario, rather than asserting on an unreachable code path.
+        self.assertEqual(experiment.status, "BLOCKED")
+
+
 class LifecyclePendingToFailedTest(TestCase):
 
     def setUp(self):

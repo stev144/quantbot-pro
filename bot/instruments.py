@@ -76,6 +76,29 @@ class Instrument:
     timeframe: Optional[str] = None        # native candle resolution this instrument's dataset is stored at, e.g. "1h"
     data_source: Optional[str] = None      # informational: which fetch pipeline populated this instrument's data
 
+    # claude code changed: new — Forex Integration Stage 1 (Architectural
+    # Parity). Optional, asset-specific market metadata — same "never
+    # force irrelevant fields onto every asset" principle as this
+    # dataclass's own docstring already states. All four default to None
+    # (CRYPTO rows leave them None, zero behavior change). Populated for
+    # FOREX rows using the same pip-size convention
+    # bot.config.cost_model.ForexCostModel already established (reused,
+    # not re-derived) plus standard, publicly-documented retail-FX lot
+    # conventions — real numbers, but conventions pending confirmation
+    # against an actual broker's contract specification once Stage 2
+    # (MT5/broker adapter) exists, not claimed as broker-verified today.
+    pip_size: Optional[float] = None       # smallest quoted price increment, e.g. 0.0001 (0.01 for JPY-quoted pairs)
+    contract_size: Optional[float] = None  # units per 1.0 standard lot, e.g. 100_000 base-currency units
+    min_lot: Optional[float] = None        # smallest tradable position size, in lots
+    lot_step: Optional[float] = None       # smallest increment between tradable position sizes, in lots
+    # claude code changed: deliberately left as None, not guessed — these
+    # require a real broker/MT5 connection (Stage 2) to populate honestly.
+    swap_long: Optional[float] = None      # overnight financing rate, long side — broker-specific, unavailable pre-Stage-2
+    swap_short: Optional[float] = None     # overnight financing rate, short side — broker-specific, unavailable pre-Stage-2
+    trading_sessions: Optional[str] = None  # broker/exchange session calendar identifier — unavailable pre-Stage-2
+    broker_server: Optional[str] = None    # which broker/server this instrument's specs were sourced from — unavailable pre-Stage-2
+    execution_mode: Optional[str] = None   # e.g. "market"/"instant"/"exchange" — broker-specific, unavailable pre-Stage-2
+
 
 def _build_crypto_registry() -> Dict[str, Instrument]:
     """
@@ -109,6 +132,21 @@ def _build_forex_registry() -> Dict[str, Instrument]:
     base_currency/quote_currency parsed from the canonical "BASE/QUOTE"
     form every forex_data_fetcher symbol already uses.
     """
+    # claude code changed: new — Forex Integration Stage 1. Same pip-size
+    # convention bot.config.cost_model.ForexCostModel already uses
+    # (reused verbatim, not re-derived, so the two never drift):
+    # JPY-quoted pairs use a 0.01 pip; every other major/cross uses
+    # 0.0001. contract_size/min_lot/lot_step are standard, publicly-
+    # documented retail-FX conventions (100,000-unit standard lot,
+    # 0.01-lot minimum/step) — real numbers, but conventions pending
+    # confirmation against an actual broker's contract specification
+    # once Stage 2 exists, not claimed as broker-verified today.
+    _JPY_QUOTE_PIP_SIZE = 0.01
+    _DEFAULT_PIP_SIZE = 0.0001
+    _STANDARD_CONTRACT_SIZE = 100_000.0
+    _STANDARD_MIN_LOT = 0.01
+    _STANDARD_LOT_STEP = 0.01
+
     registry: Dict[str, Instrument] = {}
     for symbol in FOREX_SYMBOLS:
         base, _, quote = symbol.partition("/")
@@ -120,6 +158,13 @@ def _build_forex_registry() -> Dict[str, Instrument]:
             venue="yahoo_finance",
             timeframe=FOREX_INTERVAL,
             data_source="forex_data_fetcher",
+            pip_size=_JPY_QUOTE_PIP_SIZE if symbol.endswith("/JPY") else _DEFAULT_PIP_SIZE,
+            contract_size=_STANDARD_CONTRACT_SIZE,
+            min_lot=_STANDARD_MIN_LOT,
+            lot_step=_STANDARD_LOT_STEP,
+            # swap_long/swap_short/trading_sessions/broker_server/execution_mode
+            # deliberately left at their None default — see Instrument's
+            # own field comments for why (require a real broker, Stage 2).
         )
     return registry
 

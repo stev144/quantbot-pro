@@ -63,7 +63,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — see SYMBOLS comment below
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, get_instrument, periods_per_year  # claude code changed: new — see SYMBOLS comment below; get_instrument/periods_per_year added for the ANNUALISATION_FACTOR fix, see _compute_metrics
 
 warnings.filterwarnings('ignore')
 
@@ -462,8 +462,29 @@ class FeatureStabilityAnalyzer:
             strategy_returns = fwd_clean * ic_sign * np.sign(feat_clean)
             mean_ret         = np.mean(strategy_returns)
             std_ret          = np.std(strategy_returns)
+            # claude code changed: real bug fix — Forex Integration Stage
+            # 1. Was the bare module constant ANNUALISATION_FACTOR =
+            # sqrt(8760), i.e. crypto's 24/7/365 density, applied
+            # unconditionally to every symbol including Forex (which
+            # trades ~6,240 1h candles/year, not 8,760 — see
+            # bot.instruments.periods_per_year). Resolves the real
+            # asset_class from `symbol` via the instrument registry (same
+            # pattern feature_calculator.py already uses), falling back
+            # to the original constant — loudly logged, never silent —
+            # only if the symbol isn't registered at all. `symbol` here
+            # may be in this module's own underscore form ("BTC_USDT");
+            # the registry uses "/" ("BTC/USDT"), so both forms are tried.
+            annualisation_factor = ANNUALISATION_FACTOR
+            instrument = get_instrument(symbol) or get_instrument(symbol.replace("_", "/", 1))
+            if instrument is not None:
+                try:
+                    annualisation_factor = np.sqrt(periods_per_year("1h", instrument.asset_class))
+                except Exception as e:
+                    logger.warning(f"  {symbol}: periods_per_year lookup failed ({e}), falling back to the crypto 8,760/year constant")
+            else:
+                logger.warning(f"  {symbol}: not found in the instrument registry, falling back to the crypto 8,760/year annualisation constant")
             sharpe = (
-                (mean_ret / (std_ret + 1e-10)) * ANNUALISATION_FACTOR
+                (mean_ret / (std_ret + 1e-10)) * annualisation_factor
                 if std_ret > 0 else 0.0
             )
 

@@ -155,7 +155,7 @@ from bot.research.kalman_filter_engine import load_pair_config
 # confirmed gap — bot/tests/test_entry_exit_engine.py's CostModelIntegrationTest
 # was written against this exact interface and was failing until now).
 from bot.config.cost_model import get_cost_model
-from bot.instruments import ASSET_CLASS_CRYPTO
+from bot.instruments import ASSET_CLASS_CRYPTO, periods_per_year  # claude code changed: periods_per_year added — Forex Integration Stage 1, see _compute_sharpe_from_equity_curve
 
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings
 
@@ -2068,8 +2068,7 @@ class EntryExitEngine:
     # SHARPE RATIO FROM THE EQUITY CURVE
     # ─────────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _compute_sharpe_from_equity_curve(equity_curve: pd.DataFrame) -> float:
+    def _compute_sharpe_from_equity_curve(self, equity_curve: pd.DataFrame) -> float:
         """
         claude code changed: new — real bug fix, see _build_strategy_summary()'s
         Sharpe comment for the full story. Standard institutional Sharpe:
@@ -2077,6 +2076,17 @@ class EntryExitEngine:
         per-trade statistics scaled by trade frequency. Crypto trades 24/7,
         so every calendar day counts — no trading-day-calendar adjustment
         (e.g. 252) is needed, unlike equities.
+
+        claude code changed: real bug fix — Forex Integration Stage 1.
+        Was `np.sqrt(365)` unconditionally (was a @staticmethod, no access
+        to self.asset_class) — correct for Crypto's 365-day trading
+        calendar, wrong for Forex (a real ~260-trading-day calendar, per
+        bot.instruments.periods_per_year). No longer a @staticmethod
+        (needs self.asset_class); every existing call site
+        (_build_strategy_summary, an instance method) already calls this
+        as self._compute_sharpe_from_equity_curve(...), so this is a
+        zero-behavior-change fix for Crypto and a real correctness fix
+        for Forex.
         """
         if equity_curve.empty or len(equity_curve) < 2:
             return 0.0
@@ -2089,7 +2099,13 @@ class EntryExitEngine:
         if len(daily_returns) < 2 or daily_returns.std() == 0:
             return 0.0
 
-        return float((daily_returns.mean() / daily_returns.std()) * np.sqrt(365))
+        try:
+            annualisation_factor = np.sqrt(periods_per_year("1d", self.asset_class))
+        except Exception as e:
+            logger.warning(f"periods_per_year lookup failed ({e}), falling back to the Crypto 365-day constant")
+            annualisation_factor = np.sqrt(365)
+
+        return float((daily_returns.mean() / daily_returns.std()) * annualisation_factor)
 
 
     # ─────────────────────────────────────────────────────────────────────────

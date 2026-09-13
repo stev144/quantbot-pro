@@ -69,14 +69,23 @@ class InstrumentRegistryTest(SimpleTestCase):
     def test_list_instruments_filters_by_asset_class(self):
         """claude code changed: was asserting forex==[] and crypto==the
         WHOLE registry — both false since real FOREX rows exist. Counts
-        (100 crypto, 8 forex) match this platform's own real, current
-        universes (bot.fetch_all_symbols.SYMBOLS / bot.forex_data_fetcher.SYMBOLS)
-        rather than a hardcoded assumption that predates either."""
+        match this platform's own real, current universes
+        (bot.fetch_all_symbols.SYMBOLS / bot.forex_data_fetcher.SYMBOLS)
+        rather than a hardcoded assumption that predates either.
+
+        claude code changed: was a hardcoded `len(forex) == 8` — stale
+        the moment the Forex universe was widened to the complete 28-pair
+        G8-currency cross matrix (closing the USD-overlap structural
+        finding from the cross-sectional research audit). Compares
+        against the real registry-derived universe size instead of a
+        frozen literal, so this test survives any future universe
+        change without needing another manual edit."""
         crypto = list_instruments(ASSET_CLASS_CRYPTO)
         forex = list_instruments(ASSET_CLASS_FOREX)
         equity = list_instruments(ASSET_CLASS_US_EQUITY)
         self.assertEqual(len(crypto) + len(forex), len(INSTRUMENT_REGISTRY))
-        self.assertEqual(len(forex), 8)
+        self.assertEqual(len(forex), len(symbols_for_asset_class(ASSET_CLASS_FOREX)))
+        self.assertGreaterEqual(len(forex), 8)  # never fewer than the documented default majors
         self.assertTrue(all(i.asset_class == ASSET_CLASS_FOREX for i in forex))
         self.assertEqual(equity, [])
 
@@ -150,3 +159,43 @@ class CandlesToWallClockTest(SimpleTestCase):
         value, unit = candles_to_wall_clock(float("inf"), "1h")
         self.assertEqual(value, float("inf"))
         self.assertEqual(unit, "hours")
+
+
+class InstrumentMarketMetadataTest(SimpleTestCase):
+    """claude code changed: new — Forex Integration Stage 1
+    (Architectural Parity). Covers the new, optional, asset-specific
+    Instrument fields (pip_size/contract_size/min_lot/lot_step/
+    swap_long/swap_short/trading_sessions/broker_server/execution_mode)."""
+
+    def test_crypto_instrument_has_all_new_fields_none(self):
+        from bot.instruments import get_instrument
+        btc = get_instrument("BTC/USDT")
+        self.assertIsNotNone(btc)
+        for field in ("pip_size", "contract_size", "min_lot", "lot_step",
+                      "swap_long", "swap_short", "trading_sessions", "broker_server", "execution_mode"):
+            self.assertIsNone(getattr(btc, field), f"CRYPTO instrument unexpectedly has {field} set")
+
+    def test_forex_non_jpy_pair_uses_the_default_pip_size(self):
+        from bot.instruments import get_instrument
+        eurusd = get_instrument("EUR/USD")
+        self.assertEqual(eurusd.pip_size, 0.0001)
+        self.assertEqual(eurusd.contract_size, 100_000.0)
+        self.assertEqual(eurusd.min_lot, 0.01)
+        self.assertEqual(eurusd.lot_step, 0.01)
+
+    def test_forex_jpy_quoted_pair_uses_the_larger_pip_size(self):
+        from bot.instruments import get_instrument
+        usdjpy = get_instrument("USD/JPY")
+        self.assertEqual(usdjpy.pip_size, 0.01)
+
+    def test_broker_specific_fields_are_honestly_none_pending_stage_2(self):
+        """claude code changed: these must never be guessed — a real
+        broker/MT5 connection (Stage 2) is required to populate them
+        honestly."""
+        from bot.instruments import get_instrument
+        eurusd = get_instrument("EUR/USD")
+        self.assertIsNone(eurusd.swap_long)
+        self.assertIsNone(eurusd.swap_short)
+        self.assertIsNone(eurusd.trading_sessions)
+        self.assertIsNone(eurusd.broker_server)
+        self.assertIsNone(eurusd.execution_mode)

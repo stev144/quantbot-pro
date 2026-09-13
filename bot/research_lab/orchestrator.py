@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import subprocess
 
@@ -19,6 +20,7 @@ from django.utils import timezone
 
 from bot.research_lab.capability_registry import capability_for_hypothesis_type  # claude code changed: new — Advanced Quant Research Capability Architecture
 from bot.research_lab.data_availability import check_data_availability
+from bot.research_lab.data_fingerprint import fingerprint_dataset  # claude code changed: new — Forex Integration Stage 1, see _compute_experiment_data_fingerprint
 from bot.research_lab.entitlements import ResearchEntitlementService  # claude code changed: new — Advanced Quant Research Capability Architecture
 from bot.research_lab.interpreter import explain_evidence
 from bot.research_lab.models import ResearchExperiment
@@ -28,6 +30,66 @@ from bot.research_lab.tools import run_tool
 from bot.research_lab.verdict import compute_verdict, compute_verdict_conditional, compute_verdict_pairs  # claude code changed: +compute_verdict_conditional (Conditional Hypothesis Integrity fix), +compute_verdict_pairs (Advanced Quant Research Capability Architecture)
 
 DEFAULT_RANDOM_SEED = 42
+
+logger = logging.getLogger(__name__)
+
+
+def _compute_experiment_data_fingerprint(spec: ResearchSpec) -> str:
+    """
+    claude code changed: new — Forex Integration Stage 1 (Architectural
+    Parity). Real gap found: ResearchExperiment.data_fingerprint (a real
+    model field, see bot/research_lab/models.py) was never populated by
+    any real student-run experiment — fingerprint_dataset() was only ever
+    wired into the crypto-only run_cross_sectional_oos.py pipeline and a
+    read-only, non-persisted Forex-dashboard display call. This closes
+    that gap for BOTH asset classes symmetrically (no asset_class branch
+    needed — bot.instruments.resolve_ohlcv_path()/get_instrument() are
+    already asset-class-aware).
+
+    A pairs hypothesis touches two instruments (spec.instruments); a
+    single combined fingerprint is stored on the one CharField(max_length=64)
+    the model provides, computed deterministically from the SORTED
+    per-instrument fingerprints (order-independent — "EUR/USD vs GBP/USD"
+    and "GBP/USD vs EUR/USD" are the same dataset pair) so the same pair
+    always reproduces the same combined fingerprint. Per-instrument
+    fingerprints are additionally recorded in research_plan (already the
+    home for other planning-time provenance like data_availability/
+    entitlement) for full transparency, not just the combined hash.
+
+    Never raises — a fingerprinting failure (e.g. a file was deleted
+    between plan_experiment() and run_experiment()) is logged and the
+    experiment still completes; provenance is valuable but must not be
+    allowed to block a real, otherwise-successful research run.
+    """
+    import hashlib
+
+    from bot.instruments import get_instrument
+    from bot.research_lab.tools._data import load_ohlcv
+
+    per_instrument = {}
+    for symbol in spec.instruments:
+        try:
+            instrument = get_instrument(symbol)
+            df = load_ohlcv(symbol)
+            per_instrument[symbol] = fingerprint_dataset(
+                source=instrument.data_source or "unknown",
+                symbol=symbol,
+                venue=instrument.venue or "unknown",
+                timeframe=instrument.timeframe or spec.timeframe or "unknown",
+                start_date=str(df.index[0].date()),
+                end_date=str(df.index[-1].date()),
+                row_count=len(df),
+            )
+        except Exception as e:
+            logger.warning(f"data fingerprint failed for {symbol}: {type(e).__name__}: {e}")
+
+    if not per_instrument:
+        return "", {}
+
+    combined = hashlib.sha256(
+        "|".join(sorted(per_instrument.values())).encode("utf-8")
+    ).hexdigest()
+    return combined, per_instrument
 
 
 def get_code_version() -> str:
@@ -146,6 +208,23 @@ def run_experiment(experiment: ResearchExperiment) -> None:
     experiment.started_at = timezone.now()
     experiment.random_seed = DEFAULT_RANDOM_SEED
     experiment.code_version = get_code_version()
+    # claude code changed: new — Forex Integration Stage 1. See
+    # _compute_experiment_data_fingerprint()'s own docstring for the full
+    # gap this closes. Recorded prospectively (same timing as
+    # random_seed/code_version above) — what data this run is ABOUT to
+    # use, before any tool executes. Wrapped here too (in addition to the
+    # helper's own internal per-instrument try/except) so that an
+    # unanticipated failure in the fingerprinting call itself — not just
+    # a single instrument's lookup — can never block an otherwise-
+    # successful research run; provenance is valuable, not load-bearing.
+    try:
+        combined_fingerprint, per_instrument_fingerprints = _compute_experiment_data_fingerprint(spec)
+    except Exception as e:
+        logger.warning(f"data fingerprint computation failed for experiment {experiment.id}: {type(e).__name__}: {e}")
+        combined_fingerprint, per_instrument_fingerprints = "", {}
+    experiment.data_fingerprint = combined_fingerprint
+    if per_instrument_fingerprints:
+        experiment.research_plan = {**experiment.research_plan, "data_fingerprints": per_instrument_fingerprints}
     experiment.save()
 
     try:

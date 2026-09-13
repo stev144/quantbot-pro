@@ -58,6 +58,7 @@ from bot.instruments import (
     get_instrument,
     periods_per_year,
 )
+from bot.research.capabilities import DataRequirement, check_data_requirement  # claude code changed: new — Forex Integration Stage 1
 
 # ───────────────────────────────────────────────────────────────────────────────────────────────────────
 # LOGGING CONFIGURATION
@@ -173,7 +174,7 @@ class FeatureCalculator:
             result_df['efficiency'] = self._calculate_efficiency(result_df)
             result_df['atr_ratio'] = self._calculate_atr_ratio(result_df)
             result_df['realized_vol'] = self._calculate_realized_vol(result_df, timeframe=timeframe, asset_class=asset_class)
-            result_df['volume_ratio'] = self._calculate_volume_ratio(result_df)
+            result_df['volume_ratio'] = self._calculate_volume_ratio(result_df, asset_class=asset_class)
             
             # ── INDICATOR FEATURES (To be statistically tested) ─────────────────────────────
             logger.info(f"Calculating indicator features for {symbol}...")
@@ -407,16 +408,35 @@ class FeatureCalculator:
             logger.debug(f"Error calculating realized_vol: {e}")
             return pd.Series(np.nan, index=df.index)
     
-    def _calculate_volume_ratio(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
+    def _calculate_volume_ratio(self, df: pd.DataFrame, period: int = 20, asset_class: str = None) -> pd.Series:
         """
         Calculate volume ratio (today vs normal).
-        
+
         volume_ratio = current_volume / avg_volume
+
+        claude code changed: new — Forex Integration Stage 1. Real gap
+        found: Forex OHLCV (from bot.forex_data_fetcher, Yahoo Finance)
+        reports volume=0 for every row — no centralized traded-volume
+        figure exists for OTC FX. Before this fix, that silently produced
+        an all-NaN column via a division-by-zero-turned-NaN path with no
+        indication anywhere that this was an expected data limitation
+        rather than a bug. Now explicitly checked via
+        bot.research.capabilities' DataRequirement.REAL_VOLUME first, and
+        logged loudly (not swallowed at debug level) when the requirement
+        isn't met — the stored column contract is unchanged (still an
+        all-NaN pd.Series in that case, which feature_validator.py
+        already handles correctly by excluding it), only the visibility
+        of WHY changed.
         """
+        capability = check_data_requirement(df, DataRequirement.REAL_VOLUME, asset_class=asset_class)
+        if not capability.satisfied:
+            logger.info(f"volume_ratio: {capability.status} — {capability.reason}")
+            return pd.Series(np.nan, index=df.index)
+
         try:
             avg_volume = df['volume'].rolling(window=period).mean()
             ratio = df['volume'] / avg_volume.replace(0, np.nan)
-            
+
             return ratio
         except Exception as e:
             logger.debug(f"Error calculating volume_ratio: {e}")

@@ -221,3 +221,87 @@ class RunForexCrossSectionResearchTest(SimpleTestCase):
         source = inspect.getsource(run_forex_cross_section_research)
         self.assertIn("symbols_for_asset_class", source)
         self.assertIn("resolve_ohlcv_path", source)
+
+
+class RegressionCriticalUniverseIntegrityTest(SimpleTestCase):
+    """claude code changed: new — Forex Integration Stage 1 (Architectural
+    Parity), mission section 1.4's explicit checklist for the exact bug
+    class this session already found and fixed once (UNIVERSE
+    hardcoding silently mis-scoping Forex). Each test below proves one
+    named property from that checklist directly against the real engine
+    and its real callers — not synthetic assertions about intent."""
+
+    def test_empty_symbol_universe_fails_explicitly_not_silently(self):
+        with self.assertRaises(ValueError):
+            CrossSectionEngine().calculate_all({})
+
+    def test_missing_required_columns_are_dropped_not_silently_processed(self):
+        # claude code changed: _validate_inputs() already fails this way
+        # (SKIPPED + logged, then a hard ValueError once too few symbols
+        # remain) — this test proves that real behavior directly, since
+        # nothing previously exercised _validate_inputs() on its own.
+        no_close_df = pd.DataFrame({"open": [1, 2, 3]}, index=pd.date_range("2024-01-01", periods=3, freq="1h"))
+        data = {
+            "A": _make_ohlcv_df(600, seed=1), "B": _make_ohlcv_df(600, seed=2),
+            "C": _make_ohlcv_df(600, seed=3), "D": no_close_df,
+        }
+        # Only 3 of 4 symbols have a usable 'close' column — still >= MIN_ASSETS(4)? No: 3 < 4, must raise.
+        with self.assertRaises(ValueError):
+            CrossSectionEngine().calculate_all(data)
+
+    def test_missing_datetime_index_is_dropped_not_silently_processed(self):
+        not_datetime_indexed = pd.DataFrame({"close": [1.0, 2.0, 3.0]})  # default RangeIndex
+        data = {
+            "A": _make_ohlcv_df(600, seed=1), "B": _make_ohlcv_df(600, seed=2),
+            "C": _make_ohlcv_df(600, seed=3), "D": not_datetime_indexed,
+        }
+        with self.assertRaises(ValueError):
+            CrossSectionEngine().calculate_all(data)
+
+    def test_below_minimum_assets_fails_explicitly(self):
+        # 3 valid symbols, MIN_ASSETS_FOR_CROSS_SECTION default is 4.
+        data = {"A": _make_ohlcv_df(600, seed=1), "B": _make_ohlcv_df(600, seed=2), "C": _make_ohlcv_df(600, seed=3)}
+        with self.assertRaises(ValueError):
+            CrossSectionEngine().calculate_all(data)
+
+    def test_real_forex_and_crypto_callers_never_mix_universes(self):
+        # claude code changed: CrossSectionEngine.calculate_all() is
+        # deliberately universe-agnostic (it processes whatever dict it's
+        # handed — that's the correct, shared-core design). The actual
+        # guarantee "Forex data never silently uses the Crypto universe,
+        # and vice versa" lives in the two real callers, each scoped to
+        # its own asset class via the registry — proven here directly,
+        # not asserted as an intent.
+        from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX, get_instrument, symbols_for_asset_class
+        from bot.research.cross_section_engine import UNIVERSE as CRYPTO_UNIVERSE
+
+        crypto_symbols = set(symbols_for_asset_class(ASSET_CLASS_CRYPTO))
+        forex_symbols = set(symbols_for_asset_class(ASSET_CLASS_FOREX))
+        self.assertTrue(crypto_symbols.isdisjoint(forex_symbols), "registry itself must never assign one symbol to two asset classes")
+
+        # The crypto module-level UNIVERSE (run_cross_section_research()'s
+        # own scope) must be 100% CRYPTO instruments.
+        for underscore_symbol in CRYPTO_UNIVERSE:
+            canonical = underscore_symbol.replace("_", "/", 1)
+            instrument = get_instrument(canonical)
+            if instrument is not None:
+                self.assertEqual(instrument.asset_class, ASSET_CLASS_CRYPTO, f"{canonical} leaked into the crypto UNIVERSE constant")
+
+    def test_provider_metadata_survives_through_engine_output(self):
+        """claude code changed: 'provider metadata is preserved' — the
+        engine's output DataFrame must still carry the real OHLCV columns
+        (open/high/low/close/volume) it was given, not just the derived
+        cs_* columns, so a caller can always trace a feature value back
+        to its real source price."""
+        data = {f"SYM{i}": _make_ohlcv_df(600, seed=i) for i in range(5)}
+        result = CrossSectionEngine().calculate_all(data)
+        for symbol, df in result.items():
+            for col in ("open", "high", "low", "close", "volume"):
+                self.assertIn(col, df.columns, f"{symbol} lost its original '{col}' column")
+
+    def test_symbol_to_filename_mapping_is_deterministic(self):
+        from bot.instruments import resolve_ohlcv_path
+        for symbol in ("BTC/USDT", "EUR/USD", "USD/JPY"):
+            path_1 = resolve_ohlcv_path(symbol)
+            path_2 = resolve_ohlcv_path(symbol)
+            self.assertEqual(path_1, path_2, f"resolve_ohlcv_path({symbol!r}) is not deterministic")
