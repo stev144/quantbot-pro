@@ -28,6 +28,7 @@ from bot.management.commands.deep_health_check import (
     check_forex_dataset_freshness, check_forex_dataset_quality,
     check_forex_capability_governance, check_forex_dataset_fingerprint_reproducibility,
     check_forex_cross_sectional_research_wiring,
+    check_regime_conditional_research_wiring,
 )
 
 
@@ -342,3 +343,50 @@ class ForexCrossSectionalResearchWiringHealthCheckTest(SimpleTestCase):
         by_check = {f.check: f for f in findings}
         param_finding = by_check["run_cross_sectional_research() accepts an asset_class parameter"]
         self.assertEqual(param_finding.severity, RED_SEVERITY)
+
+
+class RegimeConditionalResearchWiringHealthCheckTest(SimpleTestCase):
+    # claude code changed: new — Regime-Conditional Quantitative Research
+    # mission. A real structural regression guard for the new regime_labels/
+    # regime_conditional_* module arsenal built this mission — zero network
+    # I/O, zero regime computation, just "does the API this mission's
+    # reports and tests depend on still exist."
+
+    def test_all_checks_are_green_on_the_current_code(self):
+        findings = check_regime_conditional_research_wiring()
+        self.assertEqual(len(findings), 7)
+        for f in findings:
+            self.assertEqual(f.severity, GREEN_SEVERITY, f"{f.check}: {f.evidence}")
+
+    def test_catches_a_missing_public_api_name(self):
+        """Proves this check can actually catch a regression, not just
+        observe the current passing state — simulates a future edit that
+        accidentally renames/removes assert_no_lookahead."""
+        import bot.research.regime_labels as regime_labels_module
+        original = regime_labels_module.assert_no_lookahead
+        del regime_labels_module.assert_no_lookahead
+        try:
+            findings = check_regime_conditional_research_wiring()
+        finally:
+            regime_labels_module.assert_no_lookahead = original
+
+        by_check = {f.check: f for f in findings}
+        api_finding = by_check["regime_labels.py exposes its documented public API"]
+        self.assertEqual(api_finding.severity, RED_SEVERITY)
+        self.assertIn("assert_no_lookahead", api_finding.evidence)
+
+    def test_catches_a_reintroduced_independent_adx_formula(self):
+        """Proves the drift-risk guard fires if compute_regime_labels()
+        stops delegating to the tested precomputer."""
+        from unittest.mock import patch
+
+        import bot.research.regime_labels as regime_labels_module
+
+        def fake_source(fn):
+            return "def compute_regime_labels(df, config):\n    pass\n"   # no _compute_adx_and_atr_ratio call
+
+        with patch("inspect.getsource", side_effect=fake_source):
+            findings = check_regime_conditional_research_wiring()
+        by_check = {f.check: f for f in findings}
+        drift_finding = by_check["compute_regime_labels() reuses the tested regime_precomputer, not a second ADX/ATR reimplementation"]
+        self.assertEqual(drift_finding.severity, RED_SEVERITY)

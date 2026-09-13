@@ -2351,6 +2351,101 @@ def check_forex_cross_sectional_research_wiring() -> List[HealthFinding]:
     return findings
 
 
+def check_regime_conditional_research_wiring() -> List[HealthFinding]:
+    """
+    claude code changed: new — Regime-Conditional Quantitative Research
+    mission. Always runs, ZERO network I/O, ZERO regime computation — a
+    structural regression guard confirming the regime-conditional
+    research modules exist, expose the functions the rest of this
+    codebase (and this mission's own reports) depend on, and that
+    regime_labels.py's no-look-ahead self-test utility is present (the
+    single most safety-critical property of the whole mission — a silent
+    regression here would mean every downstream regime-conditional result
+    could leak future information without any other check catching it).
+    """
+    import inspect
+
+    findings = []
+    component = "bot.research.regime_labels / regime_conditional_* (Regime-Conditional Research)"
+
+    try:
+        from bot.research import regime_labels
+        required = ["compute_regime_labels", "assert_no_lookahead", "summarize_regime_labels", "label_regime_episodes", "REGIME_TAXONOMY_VERSION"]
+        missing = [name for name in required if not hasattr(regime_labels, name)]
+        findings.append(HealthFinding(
+            component=component, check="regime_labels.py exposes its documented public API",
+            severity=GREEN_SEVERITY if not missing else RED_SEVERITY,
+            evidence=f"missing: {missing}" if missing else "all required names present",
+            expected=f"{required} all present", actual="present" if not missing else f"missing {missing}",
+            impact="none" if not missing else "downstream regime-conditional modules would fail to import — a hard break, not a silent one, but caught here before any real run hits it",
+            remediation_status="fixed" if not missing else "regression",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check="bot.research.regime_labels is importable",
+            severity=RED_SEVERITY, evidence=f"{type(e).__name__}: {e}",
+            expected="no exception", actual=f"raised {type(e).__name__}",
+            impact="the entire regime-conditional research arsenal is unreachable",
+        ))
+        return findings
+
+    try:
+        source = inspect.getsource(regime_labels.compute_regime_labels)
+        # claude code changed: a cheap, real structural proxy for "this
+        # still delegates to the tested precomputer rather than
+        # reimplementing ADX/ATR independently" — the actual causality
+        # proof lives in test_regime_labels.py's assert_no_lookahead
+        # tests, which this check does not replace; this only guards
+        # against the specific, previously-identified drift risk of a
+        # second independent formula reimplementation creeping back in.
+        reuses_precomputer = "_compute_adx_and_atr_ratio" in source
+        findings.append(HealthFinding(
+            component=component, check="compute_regime_labels() reuses the tested regime_precomputer, not a second ADX/ATR reimplementation",
+            severity=GREEN_SEVERITY if reuses_precomputer else RED_SEVERITY,
+            evidence="calls _compute_adx_and_atr_ratio()" if reuses_precomputer else "no call to _compute_adx_and_atr_ratio() found",
+            expected="ADX/ATR values sourced from bot.backtesting.regime_precomputer, never re-derived independently",
+            actual="delegates correctly" if reuses_precomputer else "possible independent reimplementation",
+            impact="none" if reuses_precomputer else "a second ADX/ATR implementation could silently drift from RegimeDetector's production math",
+            remediation_status="fixed" if reuses_precomputer else "regression",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check="compute_regime_labels() source is inspectable",
+            severity=RED_SEVERITY, evidence=f"{type(e).__name__}: {e}", expected="no exception", actual=f"raised {type(e).__name__}",
+            impact="cannot verify the precomputer-delegation fix is still present",
+        ))
+
+    module_checks = [
+        ("bot.research.regime_conditional_ic", ["compute_regime_conditional_ic", "test_regime_interaction"]),
+        ("bot.research.regime_conditional_pairs", ["regime_conditional_cointegration", "regime_conditional_kalman_hedge_ratio"]),
+        ("bot.research.regime_conditional_oos", ["evaluate_cross_sectional_oos_by_regime"]),
+        ("bot.research.regime_conditional_permutation", ["run_regime_conditional_permutation_test"]),
+        ("bot.research.regime_conditional_status", ["compute_regime_conditional_status", "REGIME_CONDITIONAL_STATUSES"]),
+    ]
+    for module_path, names in module_checks:
+        check_name = f"{module_path} exposes {', '.join(names)}"
+        try:
+            import importlib
+            module = importlib.import_module(module_path)
+            missing = [n for n in names if not hasattr(module, n)]
+            findings.append(HealthFinding(
+                component=component, check=check_name,
+                severity=GREEN_SEVERITY if not missing else RED_SEVERITY,
+                evidence=f"missing: {missing}" if missing else "all present",
+                expected=f"{names} all present in {module_path}", actual="present" if not missing else f"missing {missing}",
+                impact="none" if not missing else f"{module_path} regression — a real Phase 4-13 capability silently broke",
+                remediation_status="fixed" if not missing else "regression",
+            ))
+        except Exception as e:
+            findings.append(HealthFinding(
+                component=component, check=check_name, severity=RED_SEVERITY,
+                evidence=f"{type(e).__name__}: {e}", expected="no exception", actual=f"raised {type(e).__name__}",
+                impact=f"{module_path} is unreachable",
+            ))
+
+    return findings
+
+
 def run_structured_findings(check_external: bool = False) -> List[HealthFinding]:
     """Runs the category checks. Deliberately does NOT re-walk every
     FunctionResult/DriftResult here — those are mapped by the Command
@@ -2374,6 +2469,7 @@ def run_structured_findings(check_external: bool = False) -> List[HealthFinding]
     findings.extend(check_forex_capability_governance())
     findings.extend(check_forex_dataset_fingerprint_reproducibility())
     findings.extend(check_forex_cross_sectional_research_wiring())
+    findings.extend(check_regime_conditional_research_wiring())
     if check_external:
         findings.extend(check_forex_provider_connectivity())
     return findings

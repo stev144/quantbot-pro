@@ -99,6 +99,18 @@ class ResearchCapability:
     # has nothing real to enforce yet — every capability supports exactly
     # the same one asset class today, so gating on it would be a no-op).
     supported_asset_classes: List[str] = field(default_factory=lambda: ["CRYPTO"])
+    # claude code changed: new — Regime-Conditional Quantitative Research
+    # mission, Phase 15. Each engine can now declare which regime taxonomy
+    # dimensions (bot.research.regime_labels: "trend_state",
+    # "volatility_state", "regime_label") it can be conditioned on. None
+    # (the default) honestly means "not yet regime-aware" for every
+    # capability this mission did not touch — matching the same
+    # not-a-forecast, statement-of-current-fact convention
+    # supported_asset_classes already established above. A capability
+    # this mission DID wire (cointegration/pairs, cross-sectional
+    # research, continuous-feature research) lists its real supported
+    # dimensions explicitly below, at its own definition site.
+    supported_regimes: Optional[List[str]] = None
 
     @property
     def operationally_ready(self) -> bool:
@@ -125,6 +137,11 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             category=SIGNAL_RESEARCH, required_tier=CORE, risk_tier="LOW", compute_tier="LOW",
             backing_engine="bot.research.feature_validator.FeatureValidator",
             engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="feature",
+            # claude code changed: new — Phase 15. bot.research.regime_conditional_ic
+            # can condition this capability's IC/FDR analysis on any of the three
+            # taxonomy dimensions, in addition to feature_validator.py's own
+            # pre-existing (separate, unpropagated) in-file regime breakdown.
+            supported_regimes=["trend_state", "volatility_state", "regime_label"],
             # claude code changed: Forex Multi-Asset Integration — the
             # Research Lab tool wrapper loads data via
             # bot.research_lab.tools._data.load_ohlcv(asset), which resolves
@@ -171,6 +188,11 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             backing_engine="bot.research.cointegration_engine.CointegrationEngine",
             engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="pairs",
             compute_budget={"max_pairs_per_experiment": 1},
+            # claude code changed: new — Phase 15. bot.research.regime_conditional_pairs
+            # tests cointegration within contiguous regime episodes (trend_state
+            # only — volatility_state/regime_label episodes were not validated
+            # for this mission's real end-to-end run and are not claimed here).
+            supported_regimes=["trend_state"],
             # claude code changed: Forex Multi-Asset Integration —
             # run_cointegration_test(asset_a, asset_b) loads both legs via
             # load_ohlcv() and CointegrationEngine's own price-validation
@@ -266,6 +288,11 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             category=RELATIONSHIP_RESEARCH, required_tier=PRO, risk_tier="MEDIUM", compute_tier="MEDIUM",
             backing_engine="bot.research.oos_validator.evaluate_cross_sectional_oos (features from bot.research.cross_section_engine, connected via bot.research.run_cross_sectional_oos)",
             engine_status=IMPLEMENTED_AND_READY, has_tests=True,
+            # claude code changed: new — Phase 15. bot.research.regime_conditional_oos
+            # and regime_conditional_permutation slice this capability's own
+            # already-computed fold-level records by regime post hoc, without
+            # touching fold/purge/embargo — see those modules' own docstrings.
+            supported_regimes=["trend_state", "volatility_state", "regime_label"],
             # claude code changed: was engine_status=NOT_IMPLEMENTED, pointing
             # at cross_section_engine.py alone (real feature computation,
             # but nothing that FOLDS/purges/embargoes/permutes it — an ad-hoc

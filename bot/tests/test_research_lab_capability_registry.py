@@ -101,3 +101,25 @@ class LookupHelpersTest(SimpleTestCase):
         grouped = list_by_category()
         total = sum(len(v) for v in grouped.values())
         self.assertEqual(total, len(RESEARCH_CAPABILITIES))
+
+
+class SupportedRegimesTest(SimpleTestCase):
+    """claude code changed: new — Regime-Conditional Quantitative Research
+    mission, Phase 15. supported_regimes defaults to None (honestly "not
+    yet regime-aware") for every capability this mission did not wire,
+    matching supported_asset_classes's own not-a-forecast convention;
+    exactly the three capabilities this mission actually built
+    regime-conditional analysis for declare it explicitly."""
+
+    def test_default_is_none_not_an_empty_list(self):
+        # a capability this mission never touched must not silently claim
+        # "supports zero regimes" (which would read as a tested, negative
+        # finding) versus "regime-awareness was never assessed" (None)
+        self.assertIsNone(RESEARCH_CAPABILITIES["derivatives_research"].supported_regimes)
+
+    def test_capabilities_this_mission_wired_declare_real_dimensions(self):
+        from bot.research.regime_labels import COMBINED_REGIME_LABELS, TREND_STATES, VOL_STATES  # noqa: F401 — existence check only
+        for cap_id in ("continuous_feature_research", "cointegration_pairs_research", "cross_sectional_research"):
+            regimes = RESEARCH_CAPABILITIES[cap_id].supported_regimes
+            self.assertIsNotNone(regimes)
+            self.assertTrue(set(regimes) <= {"trend_state", "volatility_state", "regime_label"})

@@ -1153,6 +1153,24 @@ def _compute_cross_sectional_fold_metrics(period_records: List[Dict], cost_rate:
     }
 
 
+def compute_cross_sectional_metrics_from_records(
+    period_records: List[Dict], cost_rate: float, initial_balance: float = 10_000.0, periods_per_year: Optional[float] = None,
+) -> Dict:
+    """
+    claude code changed: new — Regime-Conditional Quantitative Research
+    mission (Phase 11/13). A thin PUBLIC wrapper around
+    _compute_cross_sectional_fold_metrics(), added so a regime-conditional
+    OOS report (bot/research/regime_conditional_oos.py) can recompute the
+    SAME real economic-metrics formula (compounding equity curve, real
+    turnover-scaled cost, Sharpe/hit-rate/drawdown) on a REGIME-FILTERED
+    subset of an already-evaluated fold's own period_records — without
+    reaching into a private function across a module boundary, and without
+    re-deriving or approximating this math a second time. Zero behavior
+    change to the existing function; this purely exposes it.
+    """
+    return _compute_cross_sectional_fold_metrics(period_records, cost_rate, initial_balance, periods_per_year)
+
+
 def _aggregate_cross_sectional(folds: List[FoldEvalResult]) -> Dict:
     """
     claude code changed: new — same Section-10-style discipline as Type
