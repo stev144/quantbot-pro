@@ -1214,6 +1214,21 @@ LIVE_EXCHANGE_MODULE_PATTERNS = {
     "bot.engines.trade_data",        # confirmed by this exact incident: floods real paginated aggTrades network calls when blindly invoked
     "bot.universe_selector",         # would trigger a full real liquidity-ranked universe scan (100+ rate-limited history checks) as a side effect
     "bot.data_fetcher",              # would trigger a real, potentially large OHLCV network fetch as a side effect
+    # claude code changed: new — confirmed live by a real user report: a
+    # normal `manage.py deep_health_check` run was downloading the entire
+    # 100-symbol crypto universe (43,800 candles each) partway through the
+    # structural scan. Root cause is the exact same reflection mechanism
+    # as the bot.core.bot_runner/bot.engines.trade_data incident above:
+    # download_all_symbols()/download_all_forex_symbols() are public,
+    # take zero required arguments, and are guarded only by an
+    # `if __name__ == "__main__":` block — which does not protect against
+    # `importlib.import_module()` + blind reflection calling the function
+    # directly. Neither module's own explicit, opt-in checks elsewhere in
+    # this file (check_forex_provider_connectivity(), the freshness check)
+    # are affected by this exclusion — they import exactly what they need
+    # directly, independent of discover_all_bot_modules()'s module list.
+    "bot.fetch_all_symbols",         # download_all_symbols() — real, paginated, full-universe OHLCV fetch reachable via blind zero-arg reflection
+    "bot.forex_data_fetcher",        # download_all_forex_symbols() — same shape, same risk, for the Forex universe
 }
 
 

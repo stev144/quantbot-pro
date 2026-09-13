@@ -48,6 +48,8 @@ class LiveExchangeModuleExclusionTest(SimpleTestCase):
         "bot.engines.trade_data",        # the exact module that flooded real aggTrades traffic in the same incident
         "bot.universe_selector",
         "bot.data_fetcher",
+        "bot.fetch_all_symbols",         # download_all_symbols() — confirmed live by a real user report of a full crypto-universe download during a routine run
+        "bot.forex_data_fetcher",        # download_all_forex_symbols() — same shape, same risk, for the Forex universe
     ]
 
     def test_every_known_dangerous_module_is_excluded(self):
