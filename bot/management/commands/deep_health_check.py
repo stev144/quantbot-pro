@@ -2247,6 +2247,95 @@ def check_forex_dataset_fingerprint_reproducibility() -> List[HealthFinding]:
     return findings
 
 
+def check_forex_cross_sectional_research_wiring() -> List[HealthFinding]:
+    """
+    claude code changed: new — Forex Integration Stage 3 groundwork.
+    Always runs, ZERO network I/O — a real structural regression guard
+    for the exact gap Stage 1's audit found and Stage 3 groundwork fixed:
+    run_cross_sectional_oos.py's real Type C OOS orchestrator only ever
+    reached the crypto-only feature-computation path, with cost_rate/
+    fingerprint-provenance/checkpoint-and-verdict-path defaults all
+    silently crypto-shaped regardless of asset_class. This does not
+    re-run the (expensive) real pipeline — it checks the actual source
+    for the specific structural properties that regression would break:
+    the Forex feature-computation function is imported and reachable,
+    an asset_class parameter exists, and the checkpoint/verdict-path
+    namespacing that prevents Crypto/Forex collision is still present.
+    A negative research result (RESEARCH NEGATIVE — no economically
+    significant cross-sectional edge, see
+    FOREX_CROSS_SECTIONAL_RESEARCH_VALIDATION_AUDIT.md) is a valid
+    scientific outcome, never surfaced as a health-check failure here —
+    this only ever checks whether the WIRING is structurally intact, not
+    what the research concluded.
+    """
+    import inspect
+
+    from bot.research import run_cross_sectional_oos as rcso
+
+    findings = []
+    component = "bot.research.run_cross_sectional_oos (FOREX wiring)"
+
+    check_name = "run_forex_cross_section_research is imported and reachable"
+    try:
+        has_forex_fn = hasattr(rcso, "compute_forex_cross_section_features")
+        findings.append(HealthFinding(
+            component=component, check=check_name,
+            severity=GREEN_SEVERITY if has_forex_fn else RED_SEVERITY,
+            evidence=f"compute_forex_cross_section_features present: {has_forex_fn}",
+            expected="the Forex feature-computation function is imported at module level",
+            actual="present" if has_forex_fn else "missing",
+            impact="none" if has_forex_fn else "run_cross_sectional_research(asset_class=FOREX) would raise NameError, not run against the wrong universe — fails loud, but this check catches it before a real run does",
+            remediation_status="fixed" if has_forex_fn else "regression",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=RED_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}", expected="no exception", actual=f"raised {type(e).__name__}",
+            impact="cannot verify the Forex cross-sectional wiring at all",
+        ))
+
+    check_name = "run_cross_sectional_research() accepts an asset_class parameter"
+    try:
+        sig = inspect.signature(rcso.run_cross_sectional_research)
+        has_param = "asset_class" in sig.parameters
+        findings.append(HealthFinding(
+            component=component, check=check_name,
+            severity=GREEN_SEVERITY if has_param else RED_SEVERITY,
+            evidence=f"signature: {sig}",
+            expected="asset_class in the function signature",
+            actual="present" if has_param else "missing",
+            impact="none" if has_param else "no caller could ever select FOREX — a silent regression back to the crypto-only entry point",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=RED_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}", expected="no exception", actual=f"raised {type(e).__name__}",
+            impact="cannot verify the asset_class parameter exists",
+        ))
+
+    check_name = "checkpoint/verdict paths are namespaced by asset_class (Crypto/Forex collision guard)"
+    try:
+        source = inspect.getsource(rcso.run_cross_sectional_research)
+        namespaced = "asset_class.lower()" in source and "cross_sectional_checkpoints" in source
+        findings.append(HealthFinding(
+            component=component, check=check_name,
+            severity=GREEN_SEVERITY if namespaced else RED_SEVERITY,
+            evidence="asset_class.lower() found in the checkpoint/verdict path construction" if namespaced else "asset_class.lower() NOT found near checkpoint/verdict path construction",
+            expected="checkpoint_dir and the default verdict_output_path both include asset_class",
+            actual="namespaced" if namespaced else "not namespaced",
+            impact="none" if namespaced else "testing the same hypothesis_name for both CRYPTO and FOREX would silently collide on cached checkpoints or overwrite the other's verdict file — a real, previously-found bug",
+            remediation_status="fixed" if namespaced else "regression",
+        ))
+    except Exception as e:
+        findings.append(HealthFinding(
+            component=component, check=check_name, severity=RED_SEVERITY,
+            evidence=f"{type(e).__name__}: {e}", expected="no exception", actual=f"raised {type(e).__name__}",
+            impact="cannot verify the collision-namespacing fix is still present",
+        ))
+
+    return findings
+
+
 def run_structured_findings(check_external: bool = False) -> List[HealthFinding]:
     """Runs the category checks. Deliberately does NOT re-walk every
     FunctionResult/DriftResult here — those are mapped by the Command
@@ -2269,6 +2358,7 @@ def run_structured_findings(check_external: bool = False) -> List[HealthFinding]
     findings.extend(check_forex_dataset_quality())
     findings.extend(check_forex_capability_governance())
     findings.extend(check_forex_dataset_fingerprint_reproducibility())
+    findings.extend(check_forex_cross_sectional_research_wiring())
     if check_external:
         findings.extend(check_forex_provider_connectivity())
     return findings

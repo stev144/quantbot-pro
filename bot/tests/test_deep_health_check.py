@@ -27,6 +27,7 @@ from bot.management.commands.deep_health_check import (
     UNGOVERNED_RESEARCH_ENGINES, FINGERPRINT_COVERAGE_ENGINES,
     check_forex_dataset_freshness, check_forex_dataset_quality,
     check_forex_capability_governance, check_forex_dataset_fingerprint_reproducibility,
+    check_forex_cross_sectional_research_wiring,
 )
 
 
@@ -309,3 +310,33 @@ class ForexDatasetHealthChecksTest(SimpleTestCase):
         self.assertGreater(len(findings), 0)
         for f in findings:
             self.assertEqual(f.severity, GREEN_SEVERITY, f.evidence)
+
+
+class ForexCrossSectionalResearchWiringHealthCheckTest(SimpleTestCase):
+    # claude code changed: new — Forex Integration Stage 3 groundwork.
+    # A real structural regression guard for the exact bug class Stage 1
+    # found (crypto-only entry points silently never reaching Forex) and
+    # Stage 3 groundwork fixed in run_cross_sectional_oos.py.
+
+    def test_all_three_wiring_checks_are_green_on_the_current_code(self):
+        findings = check_forex_cross_sectional_research_wiring()
+        self.assertEqual(len(findings), 3)
+        for f in findings:
+            self.assertEqual(f.severity, GREEN_SEVERITY, f"{f.check}: {f.evidence}")
+
+    def test_catches_a_reverted_asset_class_parameter(self):
+        """Proves this check can actually CATCH the regression it claims
+        to catch, not just observe the current passing state."""
+        import inspect
+        from unittest.mock import patch
+
+        def fake_signature_without_asset_class(fn):
+            real_sig = inspect.Signature.from_callable(fn)
+            params = [p for name, p in real_sig.parameters.items() if name != "asset_class"]
+            return real_sig.replace(parameters=params)
+
+        with patch("inspect.signature", side_effect=fake_signature_without_asset_class):
+            findings = check_forex_cross_sectional_research_wiring()
+        by_check = {f.check: f for f in findings}
+        param_finding = by_check["run_cross_sectional_research() accepts an asset_class parameter"]
+        self.assertEqual(param_finding.severity, RED_SEVERITY)
