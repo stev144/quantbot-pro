@@ -66,8 +66,15 @@ class ForexCostModelTest(SimpleTestCase):
         self.assertEqual(a, b)
 
     def test_unregistered_or_unfetched_pair_fails_closed_not_a_guess(self):
+        # claude code changed: was GBP/JPY, which was outside the original
+        # 8-pair universe and had no data ingested yet — both went stale
+        # when the universe widened to the 28-pair G8 cross matrix (which
+        # includes GBP/JPY) and the widening's own research runs ingested
+        # real data for it. A fictional currency pair can never become
+        # registered by a future universe change, so this can't go stale
+        # the same way again.
         with self.assertRaises(ForexCostModelDataError):
-            ForexCostModel(pair="GBP/JPY").get_costs()   # registered? no data ingested for this cross in the current 8-pair universe
+            ForexCostModel(pair="XYZ/ABC").get_costs()
 
 
 class UnsupportedAssetClassTest(SimpleTestCase):

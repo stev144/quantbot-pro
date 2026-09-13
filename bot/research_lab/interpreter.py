@@ -142,24 +142,56 @@ def _guess_asset(text: str, exclude: Optional[str] = None) -> Optional[str]:
     # exactly does the loose base-word heuristic run at all.
     lower = text.lower()
 
+    # claude code changed: real bug fix — each pass below used to return
+    # the first candidate that matched in SUPPORTED_ASSETS' registry
+    # iteration order, which has nothing to do with where a symbol is
+    # actually written in the text. This was invisible while the Forex
+    # universe's incidental 8-pair ordering happened to agree with common
+    # phrasing, and broke silently the moment the universe widened to the
+    # 28-pair G8 cross matrix reordered the registry (e.g. "NZD/USD" now
+    # iterates before "USD/CAD" even though "USD/CAD" is the one written
+    # first in "USD/CAD and NZD/USD"). _leftmost() now picks whichever
+    # candidate's match starts earliest IN THE TEXT — the only ordering a
+    # caller passing hypothesis_text actually means — while keeping the
+    # exact same three-pass precedence (alias, then exact symbol, then
+    # bare base symbol) as before.
+    def _leftmost(hits: list) -> Optional[str]:
+        best_symbol, best_pos = None, None
+        for symbol, pos in hits:
+            if pos is not None and (best_pos is None or pos < best_pos):
+                best_symbol, best_pos = symbol, pos
+        return best_symbol
+
+    alias_hits = []
     for alias, symbol in ASSET_ALIASES.items():
         if symbol == exclude:
             continue
-        if re.search(rf"\b{re.escape(alias)}\b", lower):
-            return symbol
+        m = re.search(rf"\b{re.escape(alias)}\b", lower)
+        alias_hits.append((symbol, m.start() if m else None))
+    hit = _leftmost(alias_hits)
+    if hit:
+        return hit
 
+    exact_hits = []
     for symbol in SUPPORTED_ASSETS:
         if symbol == exclude:
             continue
-        if symbol.lower() in lower:
-            return symbol
+        pos = lower.find(symbol.lower())
+        exact_hits.append((symbol, pos if pos != -1 else None))
+    hit = _leftmost(exact_hits)
+    if hit:
+        return hit
 
-    for symbol in SUPPORTED_ASSETS:  # claude code changed: also catch a directly-typed base symbol like "AVAX" with no "/USDT" suffix — fallback only, exact pass above always wins first
+    base_hits = []
+    for symbol in SUPPORTED_ASSETS:  # fallback only, exact pass above always wins first — also catches a directly-typed base symbol like "AVAX" with no "/USDT" suffix
         if symbol == exclude:
             continue
         base = symbol.split("/")[0]
-        if re.search(rf"\b{base.lower()}\b", lower):
-            return symbol
+        m = re.search(rf"\b{base.lower()}\b", lower)
+        base_hits.append((symbol, m.start() if m else None))
+    hit = _leftmost(base_hits)
+    if hit:
+        return hit
 
     return None
 
