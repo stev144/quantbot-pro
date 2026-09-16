@@ -1318,6 +1318,7 @@ def run_walk_forward_for_pair(
     output_dir:    str   = WALK_FORWARD_OUTPUT_DIR,
     capital:        float = STRATEGY_CAPITAL_USDT,
     resample_hours:  Optional[int] = None,   # claude code changed: new — see WalkForwardEngine.__init__
+    signal_source:    str = "kalman",   # claude code changed: new — was missing entirely, so every caller silently got WalkForwardEngine's "kalman" default regardless of what they intended; real bug found via cointegration_pipeline_runner.py, which builds its whole ladder around signal_source="ols" but had no way to pass that through this wrapper to the walk-forward stage
 ) -> Dict:
     """
     Run walk-forward validation for exactly one pair.
@@ -1336,6 +1337,7 @@ def run_walk_forward_for_pair(
     engine = WalkForwardEngine(                                             # Build the engine with project defaults
         capital_usdt=capital, output_dir=output_dir,
         resample_hours=resample_hours,                                     # claude code changed: new
+        signal_source=signal_source,                                        # claude code changed: new
     )
     # engine.run() already prints the verdict once internally (Step 8) and
     # returns it as the 4th value — calling _print_verdict() again here

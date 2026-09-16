@@ -136,8 +136,23 @@ def run_pair_through_ladder(
     # ── Stage: OOS_VALIDATED (walk-forward) ────────────────────────────────
     try:
         wf_verdict = run_walk_forward_for_pair(
-            kalman_csv=kalman_csv, pair_name=pair_slug,
+            # claude code changed: real bug fix — was pair_name=pair_slug
+            # ("DODO_USDT_FIDA_USDT"). WalkForwardEngine.run() does
+            # `symbol_a, symbol_b = pair_name.split("/")`, which needs the
+            # slash form ("DODO_USDT/FIDA_USDT") this function's own
+            # `pair_name` argument already holds — the underscore slug
+            # crashed every walk-forward call this runner ever made with
+            # "not enough values to unpack (expected 2, got 1)", caught by
+            # the blanket except below and misreported as a generic
+            # walk_forward_engine failure rather than this one-line mismatch.
+            kalman_csv=kalman_csv, pair_name=pair_name,
             output_dir=str(Path(research_data_dir) / "walk_forward"),
+            # claude code changed: new — was missing entirely, so the
+            # walk-forward stage silently ran under WalkForwardEngine's
+            # "kalman" default regardless of this ladder's own
+            # signal_source, testing a different signal than the
+            # permutation stage just validated.
+            signal_source=signal_source,
         )
     except Exception as e:
         result.error = f"walk_forward_engine failed: {e}"
