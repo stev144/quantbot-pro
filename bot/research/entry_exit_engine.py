@@ -2411,8 +2411,20 @@ class EntryExitEngine:
               f"→ {trade_log['exit_timestamp'].max()}")
         print(f"  Initial capital  : ${STRATEGY_CAPITAL_USDT:,.0f}")
         print(f"  Final capital    : ${STRATEGY_CAPITAL_USDT + s['total_pnl_usdt']:,.0f}")
+        # claude code changed: real bug fix — was f"({s['total_pnl_pct']:.2%})".
+        # total_pnl_pct is trade_log['net_pnl_pct'].sum() — a sum of each
+        # trade's OWN return against its own position size, not a portfolio-
+        # level return, and already scaled as a raw fraction-sum (e.g. 5.90
+        # meaning "590% if read naively"). Formatting that with Python's `%`
+        # spec (which multiplies by 100) doubled the scaling — confirmed
+        # directly: a run with total_pnl_usdt=$11,497.10 on $10,000 capital
+        # (114.97% real return) printed "(590.09%)" next to it. The dollar
+        # figure was always correct; only this derived percentage was wrong.
+        # Now computed directly from the real capital growth this line's own
+        # "Final capital" row above already displays.
+        real_return_pct = s['total_pnl_usdt'] / STRATEGY_CAPITAL_USDT
         print(f"  Total P&L        : ${s['total_pnl_usdt']:,.2f} "
-              f"({s['total_pnl_pct']:.2%})")
+              f"({real_return_pct:.2%})")
 
         print(f"\n{'─'*70}")
         print("  TRADE STATISTICS")
