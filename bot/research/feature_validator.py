@@ -277,14 +277,50 @@ class MarketRegimeDetector:
         """
         
         try:
+            # claude code changed: real bug fix — this method assumed every
+            # row in `df` belongs to one contiguous, single-asset time
+            # series. Fine for every existing correct caller (run_research_
+            # all.py, statistical_tools.py — both single-symbol), but
+            # feature_validator.py's own __main__ entrypoint calls this on
+            # research_data/observations.csv, a pooled multi-symbol dataset
+            # (confirmed: 104 symbols, ZERO of them contiguous — build_
+            # observations.py sorts by timestamp alone, so symbols are
+            # fully interleaved throughout the file). A naive .rolling(20)/
+            # .rolling(5) there would silently blend unrelated symbols'
+            # volatility/returns within one "window" — wrong, not just
+            # missing-column-wrong. When a 'symbol' column is present with
+            # more than one distinct value, every rolling computation below
+            # is grouped by symbol instead — each symbol's own window only
+            # ever sees its own rows, in their real chronological order
+            # (a global timestamp sort preserves each symbol's relative
+            # order even when interleaved with others). Single-symbol
+            # callers (no 'symbol' column, or exactly one distinct value)
+            # take the exact original, ungrouped code path — byte-identical
+            # behavior, confirmed against the existing regression tests.
+            multi_symbol = 'symbol' in df.columns and df['symbol'].nunique() > 1
+            symbol_col = df['symbol'] if multi_symbol else None
+
             # Calculate rolling statistics for regime detection
             # Use 20-period windows for stability
-            vol_mean = df[volatility_col].rolling(20).mean()  # Normal volatility level
+            if symbol_col is not None:
+                vol_mean = df.groupby(symbol_col)[volatility_col].transform(lambda s: s.rolling(20).mean())
+            else:
+                vol_mean = df[volatility_col].rolling(20).mean()  # Normal volatility level
             vol_current = df[volatility_col]                  # Current volatility
-            
+
             # Calculate returns for crash detection
-            returns = df['close'].pct_change() if 'close' in df.columns else pd.Series(0, index=df.index)
-            dd_5 = returns.rolling(5).sum()                   # 5-candle drawdown
+            if 'close' in df.columns:
+                if symbol_col is not None:
+                    returns = df.groupby(symbol_col)['close'].transform(lambda s: s.pct_change())
+                else:
+                    returns = df['close'].pct_change()
+            else:
+                returns = pd.Series(0, index=df.index)
+
+            if symbol_col is not None:
+                dd_5 = returns.groupby(symbol_col).transform(lambda s: s.rolling(5).sum())
+            else:
+                dd_5 = returns.rolling(5).sum()                   # 5-candle drawdown
             
             regime = pd.Series("ranging", index=df.index)     # Default: ranging
             
