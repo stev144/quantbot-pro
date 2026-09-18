@@ -271,6 +271,76 @@ def get_forex_alpha_intelligence():
 
 
 # ============================================================
+# PAIRS PERFORMANCE (cointegration scan)
+# ============================================================
+# claude code changed: new — Forex Pairs Performance mission. Distinct
+# data source from get_forex_alpha_intelligence() above (which reads
+# Research Lab experiments): this reads real, direct
+# bot/research/forex_cointegration_scan.py output
+# (research_data/forex_cointegration_pairs*.csv) — the same
+# CointegrationEngine crypto's 100-coin scan uses, run against all 28
+# major/cross Forex pairs. Crypto's equivalent page
+# (bot/views/pairs_performance.py) reads entry_exit_engine.py's
+# equity-curve output, which requires a pair to have already PASSED
+# cointegration — no Forex pair has (see
+# research_data/model_governance_log.md's "Forex cointegration scan"
+# entry for the full methodology and why: two consistent, well-justified
+# timeframe-unit corrections applied, still 0/378 pairs pass, for real
+# reasons — out-of-sample persistence failure and FDR correction, not a
+# data artifact). This function surfaces that real result honestly
+# rather than leaving the page silently empty.
+FOREX_COINTEGRATION_SCAN_FILES = {
+    "MT5, 58 pairs incl. gold/silver, real 5yr data (1h)": os.path.join(RESEARCH_DATA_DIR, "forex_cointegration_pairs_mt5_58.csv"),
+    "MT5, 56 pairs, real 5yr data (1h)": os.path.join(RESEARCH_DATA_DIR, "forex_cointegration_pairs_mt5_56.csv"),
+    "MT5, 28 pairs, real 5yr data (1h)": os.path.join(RESEARCH_DATA_DIR, "forex_cointegration_pairs_mt5.csv"),
+    "MT5, 28 pairs, real 5yr data (4h)": os.path.join(RESEARCH_DATA_DIR, "forex_cointegration_pairs_mt5_4h.csv"),
+    "Yahoo, 1h (2yr cap)": os.path.join(RESEARCH_DATA_DIR, "forex_cointegration_pairs.csv"),
+    "Yahoo, 4h (unit-corrected)": os.path.join(RESEARCH_DATA_DIR, "forex_cointegration_pairs_4h.csv"),
+}
+
+
+def get_forex_pairs_performance():
+    """
+    Real forex_cointegration_scan.py results, both timeframes if present.
+    Returns {"available": False, "reason": ...} if neither scan has been
+    run yet — never a fabricated "no pairs" placeholder pretending a scan
+    happened when it didn't.
+    """
+    scans = {}
+    for label, path in FOREX_COINTEGRATION_SCAN_FILES.items():
+        if not os.path.exists(path):
+            continue
+        df = pd.read_csv(path)
+        top = df[df["is_cointegrated"]].sort_values("coint_pvalue").head(5)
+        scans[label] = {
+            "n_total": len(df),
+            "n_passed": int(df["passes_filters"].sum()),
+            "top_candidates": [
+                {
+                    "pair_name": row["pair_name"],
+                    "adf_pvalue": row["adf_pvalue"],
+                    "half_life_hours": row["half_life_hours"],
+                    "passes_filters": bool(row["passes_filters"]),
+                    "reject_reason": row.get("reject_reason") or "",
+                }
+                for _, row in top.iterrows()
+            ],
+        }
+
+    if not scans:
+        return {
+            "available": False,
+            "reason": "No Forex cointegration scan has been run yet — see bot/research/forex_cointegration_scan.py.",
+        }
+
+    return {
+        "available": True,
+        "any_passed": any(s["n_passed"] > 0 for s in scans.values()),
+        "scans": scans,
+    }
+
+
+# ============================================================
 # PORTFOLIO RISK
 # ============================================================
 def get_forex_portfolio_risk():

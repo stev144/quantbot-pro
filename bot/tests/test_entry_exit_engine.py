@@ -268,7 +268,16 @@ class EntryExitSimulationTest(SimpleTestCase):
         engine = EntryExitEngine(output_dir=self.tmp_dir)
         trade_log, summary, equity_curve = engine.run(kalman_csv=str(csv_path))
         trade = trade_log.iloc[0]
-        self.assertAlmostEqual(trade["leg_a_usdt"] + trade["leg_b_usdt"], trade["position_usdt"], places=2)
+        # claude code changed: was places=2 — the entry-depth-scaled sizing
+        # multiplier (exit-rule redesign, model_governance_log.md) produces
+        # a total_usdt that isn't always an exact multiple of cents, so
+        # total_usdt's own independent rounding and (leg_a_usdt + leg_b_usdt)'s
+        # rounding can now legitimately differ by up to a cent (e.g. 1514.50
+        # vs 1514.49 — a 0.0007% relative difference) — real floating-point
+        # rounding, not a leg-split accounting bug. places=1 still catches
+        # any genuine leg-split error (which would be off by real dollars,
+        # not a cent) while tolerating this.
+        self.assertAlmostEqual(trade["leg_a_usdt"] + trade["leg_b_usdt"], trade["position_usdt"], places=1)
 
 
 class SecurityBoundaryTest(SimpleTestCase):

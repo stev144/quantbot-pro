@@ -166,6 +166,8 @@ from statsmodels.tools import add_constant             # Adds intercept column t
 # own stated philosophy just below (load_pair_config's docstring) of never
 # letting two engines hold independent, driftable copies of the same number.
 from bot.research.cointegration_engine import TRAINING_WINDOW as _DEFAULT_TRAINING_WINDOW_CANDLES
+from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX, get_instrument  # claude code changed: Data-Layer Audit migration (F.3) — see DATA_LAYER_ARCHITECTURE_AUDIT.md
+from bot.research.data_access import load_ohlcv_via_provider  # claude code changed: Data-Layer Audit migration (F.3)
 
 warnings.filterwarnings('ignore')               # Suppress statsmodels convergence warnings
 
@@ -353,6 +355,63 @@ SIGNAL_STRONG_THRESHOLD: float = 3.0    # |z-score| above this = strong signal
 
 # Minimum price — prevents log(0) errors for very low-priced assets
 MIN_PRICE:               float = 1e-8
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KALMAN-SPREAD HALF-LIFE — real bug fix, found via statistical characterization
+#
+# claude code changed: new — model_governance_log.md's "Foundational
+# correction" entry (2026-09-14). cointegration_engine.py's own
+# `validated_half_life` (used everywhere downstream — entry_exit_engine.py's
+# EXIT_TIME_STOP_HOURS, min_hold_hours/target_zscore scaling, every design
+# attempt this pipeline has tried) is estimated from the STATIC OLS spread
+# on its TRAINING WINDOW ONLY. Refitting that same AR(1)/OU regression on
+# the full post-training static spread gives R^2 ~ 0.0001 (no detectable
+# reversion at all — confirms the already-known OOS-persistence problem a
+# second way). But entry_exit_engine.py does not trade the static spread —
+# every entry/exit decision reads kalman_zscore/kalman_spread, the
+# adaptive-hedge-ratio series, whose OWN AR(1) half-life is a genuinely
+# different, and genuinely much faster, number: ~2-3 hours on every pair
+# checked so far (AVAX/ATOM 2.56h, DOT/LINK 2.31h, DODO/FIDA 2.72h — all
+# with a real, non-spurious R^2 ~ 0.13-0.15 across the FULL dataset, not
+# just a training slice). This function makes that number a real, computed
+# artifact of every Kalman run instead of something that has to be
+# rediscovered by hand each time.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def estimate_kalman_half_life(kalman_spread: pd.Series) -> Dict:
+    """
+    Real AR(1)/Ornstein-Uhlenbeck half-life estimate on the ACTUAL traded
+    series (kalman_spread), not the static OLS spread cointegration_engine.py
+    reports. Same regression cointegration_engine.py's own
+    `_estimate_half_life()` uses (ΔS_t = α + λ×S_{t-1} + ε_t, HL = -log(2)/λ),
+    applied here to a different, genuinely different-behaving series.
+
+    Returns a dict, never raises on a non-mean-reverting series (λ >= 0
+    reports half_life_hours = inf, same convention cointegration_engine.py
+    already uses elsewhere) — half_life_hours is in CANDLES, matching this
+    engine's own 1h-only scope today (no timeframe parameter exists yet in
+    this file — see bot.instruments.candles_to_wall_clock for the general
+    conversion used elsewhere in this codebase if that ever changes).
+    """
+    s = kalman_spread.dropna()
+    lag = s.shift(1)
+    diff = s.diff()
+    valid = lag.notna() & diff.notna()
+
+    X = add_constant(lag[valid].values)
+    y = diff[valid].values
+    result = OLS(y, X).fit()
+    lam = float(result.params[1])
+
+    half_life_hours = -np.log(2) / lam if lam < 0 else np.inf
+
+    return {
+        "lambda": lam,
+        "half_life_hours": half_life_hours,
+        "r_squared": float(result.rsquared),
+        "n_obs": int(valid.sum()),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -638,14 +697,17 @@ class KalmanFilterEngine:
 
     def run(
         self,
-        data_dir:      str = "data",
+        data_dir=None,
+        start=None,
+        end=None,
         output_dir:    str = "research_data",
     ) -> pd.DataFrame:
         """
         Main entry point. Run the full Kalman filter pipeline.
 
         Steps:
-            1  Load AVAX and ATOM price CSVs
+            1  Load AVAX and ATOM prices (data_dir CSVs, or the canonical
+               provider contract if data_dir isn't given)
             2  Validate data quality and alignment
             3  Convert to log prices (required for the state-space model)
             4  Initialise Kalman filter state using OLS seed from cointegration engine
@@ -657,11 +719,28 @@ class KalmanFilterEngine:
             10 Compare Kalman dynamic signal vs static OLS signal
             11 Save all outputs and log summary
 
+        claude code changed: Data-Layer Architecture Audit migration (F.3,
+        DATA_LAYER_ARCHITECTURE_AUDIT.md). `data_dir` is kept as a real,
+        still-supported path — NOT a deprecated shim — because
+        walk_forward_engine.py's per-fold Kalman refit and
+        cointegration_pipeline_runner.py both depend on the exact CSV-read
+        behavior (see _load_prices_from_csv's docstring for why). When
+        `data_dir` is omitted, prices are fetched live via
+        BinanceKlinesProvider/YahooForexProvider instead, with `start`/
+        `end` defaulting to a 5-year lookback ending now (matching this
+        codebase's existing data/*.csv history depth) — this is the new
+        path run_kalman_research()'s own top-level driver uses.
+
         Parameters
         ----------
-        data_dir : str
-            Folder containing AVAX_USDT_1h.csv and ATOM_USDT_1h.csv.
-            These are produced by fetch_all_symbols.py.
+        data_dir : str, optional
+            Folder containing AVAX_USDT_1h.csv and ATOM_USDT_1h.csv. When
+            given, prices are read from disk exactly as before this
+            migration — start/end are ignored in that case.
+
+        start, end : datetime, optional
+            History window to fetch for both symbols when `data_dir` is
+            not given. Default: 5 years ending now.
 
         output_dir : str
             Folder to save Kalman output CSVs.
@@ -679,7 +758,16 @@ class KalmanFilterEngine:
         logger.info("=" * 70)
 
         # ── Step 1: Load price data ───────────────────────────────────────────
-        price_a, price_b = self._load_prices(data_dir)
+        if data_dir is not None:
+            price_a, price_b = self._load_prices_from_csv(data_dir)
+        else:
+            from datetime import datetime, timedelta, timezone
+
+            if end is None:
+                end = datetime.now(timezone.utc)
+            if start is None:
+                start = end - timedelta(days=5 * 365)
+            price_a, price_b = self._load_prices(start, end)
 
         # ── Step 2: Validate and align ────────────────────────────────────────
         aligned = self._align_prices(price_a, price_b)
@@ -798,44 +886,88 @@ class KalmanFilterEngine:
     # STEP 1: LOAD PRICES
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _resolve_price_csv_path(self, symbol_underscore: str, data_dir: str) -> Path:
+    def _resolve_asset_class(self, symbol_underscore: str) -> str:
         """
-        claude code changed: new — Forex Multi-Asset Integration. Replaces
-        the old hardcoded `data_dir / f"{symbol}_1h.csv"` join, which was
-        correct only for CRYPTO. Converts this engine's own underscore
-        symbol convention ("AVAX_USDT"/"EUR_USD") to the instrument
-        registry's canonical "BASE/QUOTE" form and looks up the real
-        instrument to decide which subdirectory it lives in — the same
-        asset-class-aware convention bot.instruments.resolve_ohlcv_path()
-        uses, but built from the CALLER's own data_dir (preserving the
-        data_dir override capability run()/_load_prices() have always
-        had) rather than that function's hardcoded "data" root.
-
-        CRYPTO (and any symbol not yet in the instrument registry, e.g. a
-        pair fetched before this engine's own test fixtures were
-        registered) resolves to EXACTLY the same path as before this
-        change — zero behavior change for existing crypto runs. Only
-        FOREX pairs get a new, correct path (data_dir/forex/SYMBOL_1h.csv).
+        claude code changed: Data-Layer Architecture Audit migration (F.3,
+        DATA_LAYER_ARCHITECTURE_AUDIT.md) — replaces the old
+        _resolve_price_csv_path()'s CSV-path resolution (which decided
+        data_dir/{SYM}_1h.csv vs data_dir/forex/{SYM}_1h.csv). Same
+        asset-class lookup, now used to pick a MarketDataProvider instead
+        of a file path. CRYPTO remains the default for any symbol not yet
+        in the instrument registry — zero behavior change for existing
+        crypto runs, matching the old function's own stated guarantee.
         """
-        from bot.forex_data_fetcher import symbol_to_filename as _forex_symbol_to_filename
-        from bot.instruments import ASSET_CLASS_FOREX, get_instrument
-
         canonical = symbol_underscore.replace("_", "/", 1)
         instrument = get_instrument(canonical)
-        data_path = Path(data_dir)
         if instrument is not None and instrument.asset_class == ASSET_CLASS_FOREX:
-            return data_path / "forex" / _forex_symbol_to_filename(canonical)
-        return data_path / f"{symbol_underscore}_1h.csv"
+            return ASSET_CLASS_FOREX
+        return ASSET_CLASS_CRYPTO
+
+    def _load_prices_from_csv(self, data_dir: str) -> Tuple[pd.Series, pd.Series]:
+        """
+        claude code changed: Data-Layer Architecture Audit migration (F.3)
+        — renamed from the old _load_prices(data_dir), UNCHANGED otherwise.
+        Kept as a real, still-supported path (not a shim) specifically
+        because bot/research/walk_forward_engine.py's _refit_kalman_for_fold()
+        depends on it exactly as-is: it writes a fold-sliced
+        [train_start, test_end] scratch CSV per fold (so the Kalman filter
+        starts fresh at train_start with no borrowed convergence from
+        earlier data — see that function's own docstring) and reads it
+        back through THIS path. Swapping that to a live provider fetch
+        would silently change walk-forward's out-of-sample behavior — a
+        research-statistics change explicitly out of scope for this
+        migration (DATA_LAYER_ARCHITECTURE_AUDIT.md, spec §20). Also still
+        used by bot/research/cointegration_pipeline_runner.py.
+        """
+        from bot.forex_data_fetcher import symbol_to_filename as _forex_symbol_to_filename
+
+        def _resolve_price_csv_path(symbol_underscore: str) -> Path:
+            canonical = symbol_underscore.replace("_", "/", 1)
+            instrument = get_instrument(canonical)
+            data_path = Path(data_dir)
+            if instrument is not None and instrument.asset_class == ASSET_CLASS_FOREX:
+                return data_path / "forex" / _forex_symbol_to_filename(canonical)
+            return data_path / f"{symbol_underscore}_1h.csv"
+
+        def _load_one(symbol: str) -> pd.Series:
+            path = _resolve_price_csv_path(symbol)
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{symbol} CSV not found at {path}. "
+                    f"Run fetch_all_symbols.py first to download price data."
+                )
+            df = pd.read_csv(path)
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+                df.set_index("timestamp", inplace=True)
+            df["close"] = pd.to_numeric(df["close"], errors="coerce")
+            df.dropna(subset=["close"], inplace=True)
+            df.sort_index(inplace=True)
+            close = df["close"]
+            logger.info(
+                f"  {symbol}: {len(close):,} candles "
+                f"({close.index[0].date()} → {close.index[-1].date()})"
+            )
+            return close
+
+        logger.info("Step 1: Loading AVAX and ATOM price data...")
+        return _load_one(self.symbol_a), _load_one(self.symbol_b)
 
     def _load_prices(
         self,
-        data_dir: str,
+        start,
+        end,
+        timeframe: str = "1h",
     ) -> Tuple[pd.Series, pd.Series]:
         """
-        Load AVAX and ATOM close price series from the fetch_all_symbols CSVs.
+        Load AVAX and ATOM close price series via the canonical
+        MarketDataProvider contract.
 
-        These CSVs are produced by fetch_all_symbols.py which uses the
-        project data_fetcher module for pagination, cleaning, and normalisation.
+        claude code changed: Data-Layer Architecture Audit migration
+        (F.3) — the live-fetch counterpart to _load_prices_from_csv().
+        Fetches through BinanceKlinesProvider/YahooForexProvider
+        (bot.research.data_access.load_ohlcv_via_provider), asset-class-
+        routed exactly as _load_prices_from_csv's path resolution is.
 
         The close price column contains the raw USDT price (not log-transformed yet).
         Log transformation happens in Step 3 after alignment.
@@ -849,23 +981,12 @@ class KalmanFilterEngine:
         logger.info("Step 1: Loading AVAX and ATOM price data...")
 
         # ── Load AVAX ─────────────────────────────────────────────────────────
-        avax_path = self._resolve_price_csv_path(self.symbol_a, data_dir)
-        if not avax_path.exists():
+        avax_asset_class = self._resolve_asset_class(self.symbol_a)
+        avax_df = load_ohlcv_via_provider(self.symbol_a, avax_asset_class, timeframe, start, end)
+        if avax_df is None:
             raise FileNotFoundError(
-                f"{self.symbol_a} CSV not found at {avax_path}. "
-                f"Run fetch_all_symbols.py first to download price data."
+                f"{self.symbol_a}: provider returned no data for [{start.date()}, {end.date()}]."
             )
-
-        avax_df = pd.read_csv(avax_path)
-
-        # Parse timestamp to UTC DatetimeIndex — required for alignment
-        if "timestamp" in avax_df.columns:
-            avax_df["timestamp"] = pd.to_datetime(avax_df["timestamp"], utc=True)
-            avax_df.set_index("timestamp", inplace=True)
-
-        avax_df["close"] = pd.to_numeric(avax_df["close"], errors="coerce")
-        avax_df.dropna(subset=["close"], inplace=True)   # Remove any NaN prices
-        avax_df.sort_index(inplace=True)                  # Ensure chronological order
 
         avax_close = avax_df["close"]                     # Extract close price Series
 
@@ -875,22 +996,12 @@ class KalmanFilterEngine:
         )
 
         # ── Load ATOM ─────────────────────────────────────────────────────────
-        atom_path = self._resolve_price_csv_path(self.symbol_b, data_dir)
-        if not atom_path.exists():
+        atom_asset_class = self._resolve_asset_class(self.symbol_b)
+        atom_df = load_ohlcv_via_provider(self.symbol_b, atom_asset_class, timeframe, start, end)
+        if atom_df is None:
             raise FileNotFoundError(
-                f"{self.symbol_b} CSV not found at {atom_path}. "
-                f"Run fetch_all_symbols.py first to download price data."
+                f"{self.symbol_b}: provider returned no data for [{start.date()}, {end.date()}]."
             )
-
-        atom_df = pd.read_csv(atom_path)
-
-        if "timestamp" in atom_df.columns:
-            atom_df["timestamp"] = pd.to_datetime(atom_df["timestamp"], utc=True)
-            atom_df.set_index("timestamp", inplace=True)
-
-        atom_df["close"] = pd.to_numeric(atom_df["close"], errors="coerce")
-        atom_df.dropna(subset=["close"], inplace=True)
-        atom_df.sort_index(inplace=True)
 
         atom_close = atom_df["close"]
 
@@ -1829,6 +1940,30 @@ class KalmanFilterEngine:
             f"({(post_warmup['kalman_zscore'].abs() > 2.0).mean():.1%} of post-warmup data)"
         )
 
+        # ── 4. Kalman-spread half-life — real bug fix, see module comment ──────
+        # claude code changed: new — the correct half-life for THIS series
+        # (the one entry_exit_engine.py actually trades), computed fresh
+        # every run instead of relying on cointegration_engine.py's static-
+        # OLS-training-window figure, which describes a different process.
+        half_life_info = estimate_kalman_half_life(post_warmup["kalman_spread"])
+        logger.info(
+            f"    Kalman-spread half-life (AR(1) on the traded series, "
+            f"full sample): {half_life_info['half_life_hours']:.2f}h "
+            f"(R^2={half_life_info['r_squared']:.4f}, n={half_life_info['n_obs']:,}) "
+            f"— compare to the static-OLS training-window half-life in "
+            f"cointegration_pairs.csv, which describes a DIFFERENT series "
+            f"and should not be used to calibrate time-based exit rules for "
+            f"this Kalman-based strategy (model_governance_log.md, "
+            f"'Foundational correction')."
+        )
+        half_life_path = out_path / f"{pair_slug}_kalman_half_life.csv"
+        pd.DataFrame([{
+            "pair": self.pair_name, "lambda": half_life_info["lambda"],
+            "kalman_half_life_hours": half_life_info["half_life_hours"],
+            "r_squared": half_life_info["r_squared"], "n_obs": half_life_info["n_obs"],
+        }]).to_csv(half_life_path, index=False)
+        logger.info(f"  Saved Kalman half-life: {half_life_path}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PARAMETER SENSITIVITY ANALYZER
@@ -1855,12 +1990,15 @@ class KalmanParameterAnalyzer:
 
     def __init__(
         self,
-        data_dir:   str = "data",
         output_dir: str = "research_data",
+        start=None,
+        end=None,
     ) -> None:
-        """Initialise with data paths."""
-        self.data_dir   = data_dir
+        """claude code changed: Data-Layer Audit migration (F.3) — data_dir
+        replaced by start/end, threaded through to engine.run() below."""
         self.output_dir = output_dir
+        self.start = start
+        self.end = end
 
     def run_sensitivity(
         self,
@@ -1900,7 +2038,8 @@ class KalmanParameterAnalyzer:
                     process_noise_alpha=qa,
                 )
                 output = engine.run(
-                    data_dir=self.data_dir,
+                    start=self.start,
+                    end=self.end,
                     output_dir=self.output_dir,
                 )
 
@@ -1976,16 +2115,17 @@ def run_kalman_research(
     pair_name:               str  = "AVAX_USDT/ATOM_USDT",
     cointegration_pairs_csv: str  = DEFAULT_COINTEGRATION_PAIRS_CSV,
     require_passes_filters:  bool = True,
-    data_dir:                str  = "data",
     output_dir:              str  = "research_data",
     run_sensitivity:         bool = False,
+    start=None,
+    end=None,
 ) -> pd.DataFrame:
     """
     Standalone entry point for the Kalman filter engine.
 
-    Loads the two assets' price CSVs produced by fetch_all_symbols.py,
-    runs the full Kalman filter pipeline for the requested pair, saves
-    outputs, and prints the IC comparison between dynamic Kalman and
+    Fetches the two assets' prices via the canonical MarketDataProvider
+    contract, runs the full Kalman filter pipeline for the requested pair,
+    saves outputs, and prints the IC comparison between dynamic Kalman and
     static OLS signals.
 
     Run from project root, for the default pair:
@@ -1993,6 +2133,11 @@ def run_kalman_research(
 
     Or for any other pair cointegration_engine.py has tested:
         python -m bot.research.kalman_filter_engine --pair SOL_USDT/DOT_USDT
+
+    claude code changed: Data-Layer Architecture Audit migration (F.3,
+    DATA_LAYER_ARCHITECTURE_AUDIT.md) — data_dir param removed. `start`/
+    `end` default to a 5-year lookback ending now, matching this
+    codebase's existing data/*.csv history depth.
 
     Parameters
     ----------
@@ -2007,10 +2152,6 @@ def run_kalman_research(
         cointegration_engine.py's own half-life filter. Set False to
         deliberately test a pair that narrowly missed the cutoff.
 
-    data_dir : str
-        Folder containing the two assets' 1h price CSVs.
-        Default: "data" (same folder used by fetch_all_symbols.py)
-
     output_dir : str
         Folder to save Kalman CSVs. Default: "research_data"
 
@@ -2018,6 +2159,10 @@ def run_kalman_research(
         If True: also run parameter sensitivity analysis.
         This takes longer but helps calibrate process noise.
         Default: False (use defaults for first run)
+
+    start, end : datetime, optional
+        History window to fetch for both symbols. Default: 5 years
+        ending now.
 
     Returns
     -------
@@ -2029,7 +2174,6 @@ def run_kalman_research(
     logger.info("KALMAN FILTER ENGINE — QUANTIBOT PRO RESEARCH PIPELINE")
     logger.info("=" * 70)
     logger.info(f"  Pair     : {pair_name}")
-    logger.info(f"  Data dir : {data_dir}")
     logger.info(f"  Output   : {output_dir}")
     logger.info(f"  Context  : loaded dynamically from {cointegration_pairs_csv}")
 
@@ -2040,7 +2184,8 @@ def run_kalman_research(
         require_passes_filters=require_passes_filters,
     )
     kalman_output = engine.run(
-        data_dir=data_dir,
+        start=start,
+        end=end,
         output_dir=output_dir,
     )
 
@@ -2048,8 +2193,9 @@ def run_kalman_research(
     if run_sensitivity:
         logger.info("\nRunning parameter sensitivity analysis...")
         analyzer = KalmanParameterAnalyzer(
-            data_dir=data_dir,
             output_dir=output_dir,
+            start=start,
+            end=end,
         )
         analyzer.run_sensitivity()
 
@@ -2106,7 +2252,6 @@ if __name__ == "__main__":
     run_kalman_research(
         pair_name=pair_name,
         require_passes_filters=not allow_filtered,
-        data_dir="data",
         output_dir="research_data",
         run_sensitivity=sensitivity,
     )

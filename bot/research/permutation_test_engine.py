@@ -179,6 +179,7 @@ class PermutationTestEngine:
         random_seed:              Optional[int] = None,        # Set for a reproducible shuffle sequence
         resample_hours:            Optional[int] = None,        # claude code changed: new — threaded into the loader so df_real (and therefore every shuffle, which reshuffles df_real) is already at this candle width
         signal_source:              str  = "kalman",        # claude code changed: new — "kalman" or "ols", see entry_exit_engine.py's SIGNAL_SOURCE_COLUMNS
+        disable_target_exit:        bool = False,        # claude code changed: new — exit-rule redesign, "fixed holding period" attempt (model_governance_log.md). Threaded into every EntryExitEngine this class builds (the real run AND every shuffle) so the permutation test compares like-for-like against this exit mode, not the default threshold-crossing one.
     ) -> None:
         self.n_permutations     = n_permutations
         self.block_size          = block_size_candles       # May be None here — resolved to a real value in run()
@@ -188,6 +189,7 @@ class PermutationTestEngine:
         self.rng                        = np.random.default_rng(random_seed)   # Isolated RNG — doesn't disturb global numpy state
         self.resample_hours             = resample_hours       # claude code changed: new
         self.signal_source               = signal_source       # claude code changed: new
+        self.disable_target_exit          = disable_target_exit   # claude code changed: new
         from bot.research.entry_exit_engine import SIGNAL_SOURCE_COLUMNS   # claude code changed: new — local import avoids a module-level cycle risk with entry_exit_engine's own kalman_filter_engine import
         self._shuffle_columns            = SIGNAL_SOURCE_COLUMNS[signal_source]   # claude code changed: new
 
@@ -222,13 +224,28 @@ class PermutationTestEngine:
         # AVAX/ATOM (240h happens to equal 2x its own 119.9h half-life) but
         # wrong for any other pair, e.g. DOT_USDT/LINK_USDT at 196.8h, where a
         # fair test needs a ~394h time-stop, not a borrowed 240h one.
-        from bot.research.entry_exit_engine import _parse_pair_from_kalman_filename
+        from bot.research.entry_exit_engine import _parse_pair_from_kalman_filename, _split_pair_string
         from bot.research.kalman_filter_engine import load_pair_config
 
         try:
             slash_pair_name, symbol_a, symbol_b = _parse_pair_from_kalman_filename(kalman_csv)
         except ValueError:
-            slash_pair_name = symbol_a = symbol_b = None
+            # claude code changed: new fallback — real bug found while
+            # testing an ad hoc "_kalman_LAG1h.csv" scratch filename (an
+            # execution-lag variant, not kalman_filter_engine.py's own
+            # output naming). The filename check above ALWAYS failed for
+            # it (it doesn't end in literally "_kalman.csv"), which used
+            # to leave slash_pair_name=None and skip load_pair_config()
+            # entirely below — silently falling back to the class default
+            # exit_time_stop_hours=240 regardless of what half-life this
+            # run actually intended to force. The caller's own `pair_name`
+            # argument follows the exact same underscore convention
+            # ("AVAX_USDT_ATOM_USDT") the filename would have, so it's a
+            # real, correct identity source here — try it before giving up.
+            try:
+                slash_pair_name, symbol_a, symbol_b = _split_pair_string(pair_name)
+            except ValueError:
+                slash_pair_name = symbol_a = symbol_b = None
 
         # claude code changed: real bug found while wiring signal_source="ols"
         # through this module for the first time (cointegration_pipeline_runner.py).
@@ -259,7 +276,14 @@ class PermutationTestEngine:
                 pair_config = load_pair_config(slash_pair_name, require_passes_filters=False)
                 half_life = pair_config["half_life_h"]
                 self._pair_identity["validated_half_life"]  = half_life
-                self._pair_identity["exit_time_stop_hours"] = round(2 * half_life)
+                # claude code changed: new — in disable_target_exit mode,
+                # TIMESTOP is the PRIMARY exit (TARGET never fires), not a
+                # rare backstop, so it uses 1x half-life (the theoretical
+                # time for 50% reversion) rather than the old 2x-half-life
+                # backstop value, which was calibrated for "TARGET almost
+                # always fires first, TIMESTOP is a rare safety net."
+                time_stop_multiple = 1.0 if self.disable_target_exit else 2.0
+                self._pair_identity["exit_time_stop_hours"] = round(time_stop_multiple * half_life)
                 if not pair_config["passes_filters"]:
                     logger.warning(
                         f"  '{pair_name}' did not pass cointegration_engine.py's own "
@@ -406,11 +430,31 @@ class PermutationTestEngine:
         # populates. self._shuffle_columns is a dict {role: column_name}.
         zscore_col      = self._shuffle_columns["zscore"]
         zscore_lag1_col = self._shuffle_columns["zscore_lag1"]
+        # claude code changed: real bug found while re-testing the 4-hour-
+        # horizon design (block_size resolved to 1 candle there — a fully
+        # IID shuffle). Shuffling "spread" (kalman_spread) itself used to
+        # be included here, on the same footing as the decision columns.
+        # kalman_spread is the fill-price/PnL-determining series, not a
+        # decision input — it's a real, serially-mean-reverting price
+        # process, and reassigning its values to random timestamps
+        # destroys exactly the autocorrelation/tail structure that
+        # produces genuine adverse excursions and stop-losses. Confirmed
+        # empirically: at block_size=1, 100/100 shuffles beat the real
+        # win rate (83-89% shuffled vs 74.8% real) and Sharpe, an
+        # unmistakably one-directional artifact, not sampling noise —
+        # every shuffled "null" world was artificially easier to trade
+        # than reality. The correct null only scrambles WHEN the decision
+        # was made, never WHAT the real market actually did; kalman_spread
+        # must stay at its own true chronological values, exactly
+        # matching the precedent already established in this codebase's
+        # own make_lagged_kalman.py convention ("the one column that must
+        # stay real/unshifted").
+        spread_col = self._shuffle_columns.get("spread")
 
         shuffled = df.copy()                                                      # Keep the original index/timestamps intact
-        for col in self._shuffle_columns.values():                                 # Shuffle every required column, in lockstep,
-            if col == zscore_lag1_col:                                               # so a relocated candle's columns stay consistent —
-                continue                                                              # EXCEPT lag1, which is derived below instead
+        for col in self._shuffle_columns.values():                                 # Shuffle every required DECISION column, in lockstep,
+            if col in (zscore_lag1_col, spread_col):                                 # so a relocated candle's columns stay consistent —
+                continue                                                              # EXCEPT lag1 (derived below) and spread (kept real)
             shuffled[col] = df[col].to_numpy()[shuffled_positions]
 
         # Derive lag1 from the shuffled zscore itself, so lag1[i] always
@@ -457,6 +501,7 @@ class PermutationTestEngine:
             "symbol_b":     identity.get("symbol_b"),
             "validated_half_life": identity.get("validated_half_life"),
             "signal_source": self.signal_source,   # claude code changed: new
+            "disable_target_exit": self.disable_target_exit,   # claude code changed: new
         }
         if identity.get("exit_time_stop_hours") is not None:
             engine_kwargs["exit_time_stop_hours"] = identity["exit_time_stop_hours"]

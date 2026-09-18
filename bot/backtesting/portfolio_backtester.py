@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # PORTFOLIO BACKTESTER — MAIN CLASS
 # ============================================================
+
 class PortfolioBacktester:
     """
     Runs backtests across multiple trading pairs and ranks results.
@@ -529,3 +530,28 @@ class PortfolioBacktester:
             print(f"\n⚠ FAILED: {list(self.errors.keys())}")
 
         print()
+        
+def register(request):
+    if request.method == "post":
+        username = request.post('username')
+        email = request.post('email')
+        password = request.post('password')
+        confirm_password = request.post('confirm_password')
+        
+        if password != confirm_password:
+            if User.objects.filter(username=username).exists():
+                messages.info(request, 'Username already Taken...!')
+                return redirect('register_engine')
+            elif User.objects.filter(email=email).exists():
+                messages.info(request, 'Email Already Taken...!')
+                return redirect('register_engine')
+            
+            else:
+                user = User.objects.create_user(password=confirm_password, username=username, email=email)
+                user.save;
+                return redirect('login')
+        else:
+            messages.info(request, 'Password NOt Matching...!')
+            return redirect('register_engine,')    
+            
+        

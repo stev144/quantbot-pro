@@ -39,7 +39,7 @@
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone  # claude code changed: timedelta added — Data-Layer Audit "wire forex_data_fetcher.py too" needs it for the rolling (start, end) window
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -238,11 +238,30 @@ def download_all_forex_symbols() -> dict:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(tz=timezone.utc)
 
+    # claude code changed: Data-Layer Audit — "wire forex_data_fetcher.py
+    # too". Lazy imports: bot.instruments imports THIS module at top level
+    # for SYMBOLS/INTERVAL/symbol_to_filename (same reasoning as this
+    # file's own write_provenance_marker import below); YahooForexProvider
+    # itself imports bot.instruments too, so a top-level import of it here
+    # would cycle the same way. Rolling window, not a fixed date — same
+    # reasoning as bot/fetch_all_symbols.py's own "wire into
+    # fetch_all_symbols.py first" step: "most recent HISTORY_DAYS days" is
+    # computed fresh from `now` every run, functionally identical to
+    # get_forex_klines(symbol)'s own default history_days=HISTORY_DAYS
+    # behavior, just expressed as a real date range because
+    # get_historical_bars()'s contract is date-range shaped for every
+    # provider, not Yahoo-specific day-count semantics.
+    from bot.instruments import get_instrument
+    from bot.yahoo_forex_provider import YahooForexProvider
+
+    start = now - timedelta(days=HISTORY_DAYS)
+    provider = YahooForexProvider()
+
     print("\n" + "=" * 80)
     print(f"DOWNLOADING FOREX DATA FOR {len(SYMBOLS)} PAIRS")
     print(f"History : most recent {HISTORY_DAYS} days as of {now.isoformat()}")
     print(f"Interval: {INTERVAL}")
-    print("Fetcher : Yahoo Finance public chart endpoint (direct requests call)")
+    print("Fetcher : YahooForexProvider (bot/forex_data_fetcher.py via the MarketDataProvider contract)")
     print("=" * 80)
 
     summary = {}
@@ -250,7 +269,13 @@ def download_all_forex_symbols() -> dict:
     for symbol in SYMBOLS:
         print(f"\n[Downloading] {symbol}")
         try:
-            df = get_forex_klines(symbol)
+            # claude code changed: was get_forex_klines(symbol) directly.
+            # Every symbol in SYMBOLS is derived from THIS file's own
+            # SYMBOLS by bot.instruments' _build_forex_registry(), so
+            # get_instrument(symbol) is guaranteed to resolve here.
+            instrument = get_instrument(symbol)
+            bars = provider.get_historical_bars(instrument, INTERVAL, start, now)
+            df = bars.data
             if df.empty:
                 raise ForexProviderError("provider returned an empty DataFrame")
 
@@ -263,6 +288,32 @@ def download_all_forex_symbols() -> dict:
             df.to_csv(filepath, index=False)
 
             candle_count = len(df)
+
+            # claude code changed: Data-Layer Audit Step 1 — records that
+            # THIS fetcher wrote filepath, so bot/instruments.py's
+            # _build_forex_registry() reports venue="yahoo_finance" from a
+            # real marker rather than a hardcoded literal, and can tell this
+            # file apart from one mt5_data_fetcher.py later overwrites at the
+            # exact same path. Lazy import: bot.instruments imports this
+            # module at top level, so a top-level import here would cycle.
+            #
+            # claude code changed: Data-Layer Audit Step 5 — now also passes
+            # the real dataset identity (source/symbol/timeframe/date-range/
+            # row_count), so a real sha256 fingerprint gets embedded too —
+            # closing the "no data fingerprint recorded" gap
+            # FOREX_CROSS_SECTIONAL_RESEARCH_VALIDATION_AUDIT.md's Phase 11
+            # flagged as open. source="yahoo_finance_chart_api" matches the
+            # DatasetIdentity.source YahooForexProvider already uses for the
+            # in-memory CanonicalBars path, so a disk-written file and an
+            # in-memory fetch of the identical request produce comparable
+            # identities.
+            from bot.instruments import write_provenance_marker
+            write_provenance_marker(
+                filepath, venue="yahoo_finance", data_source="forex_data_fetcher",
+                source="yahoo_finance_chart_api", symbol=symbol, timeframe=INTERVAL,
+                start_date=str(df["timestamp"].iloc[0].date()), end_date=str(df["timestamp"].iloc[-1].date()),
+                row_count=candle_count,
+            )
             last_timestamp = df["timestamp"].iloc[-1]
             staleness_days = (now - last_timestamp).total_seconds() / 86400
             is_fresh = staleness_days <= FRESHNESS_MAX_AGE_DAYS

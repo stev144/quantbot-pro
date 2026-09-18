@@ -4,22 +4,32 @@
 # (STEP 2). No mocking, per this project's convention — reads the real
 # data/BTC_USDT_1h.csv file exactly like the Research Lab tool layer does.
 
+import json  # claude code changed: Data-Layer Audit Step 5 — read raw marker JSON to check the fingerprint section
+import os  # claude code changed: Data-Layer Audit Step 1 — cleanup for provenance marker tests
+from pathlib import Path  # claude code changed: Data-Layer Audit Step 1
+
 from django.test import SimpleTestCase
 
+from bot import instruments  # claude code changed: Data-Layer Audit Step 1 — need module access for _build_forex_registry()
+from bot.research_lab.data_fingerprint import DatasetIdentity  # claude code changed: Data-Layer Audit Step 5 — recompute the expected fingerprint independently
 from bot.instruments import (
     ASSET_CLASS_CRYPTO,
     ASSET_CLASS_FOREX,
     ASSET_CLASS_US_EQUITY,
     ASSET_CLASSES,
+    DATA_DIR,  # claude code changed: Data-Layer Audit Step 1
     INSTRUMENT_REGISTRY,
     Instrument,
     UnknownInstrumentError,
     UnsupportedTimeframeError,
     candles_to_wall_clock,
+    forex_symbol_to_filename,  # claude code changed: Data-Layer Audit Step 1
     get_instrument,
     list_instruments,
+    read_provenance_marker,  # claude code changed: Data-Layer Audit Step 1
     resolve_ohlcv_path,
     symbols_for_asset_class,
+    write_provenance_marker,  # claude code changed: Data-Layer Audit Step 1
 )
 
 
@@ -199,3 +209,101 @@ class InstrumentMarketMetadataTest(SimpleTestCase):
         self.assertIsNone(eurusd.trading_sessions)
         self.assertIsNone(eurusd.broker_server)
         self.assertIsNone(eurusd.execution_mode)
+
+
+class ProvenanceMarkerTest(SimpleTestCase):
+    """claude code changed: new — Data-Layer Audit Step 1. Proves
+    bot/instruments.py's FOREX registry reports the REAL fetcher that
+    wrote a symbol's CSV (via a sidecar marker) instead of a hardcoded
+    "yahoo_finance" literal — the fix needed before bot/mt5_data_fetcher.py
+    can safely overwrite data/forex/*.csv files without every downstream
+    consumer silently keeping the stale Yahoo attribution. No mocking, per
+    this project's convention: exercises real file I/O against a throwaway
+    path, and against EUR/USD's real (but temporary, cleaned-up) marker."""
+
+    def setUp(self):
+        self.dummy_csv = Path("data/forex/__test_provenance_dummy_1h.csv")
+        self.dummy_marker = self.dummy_csv.with_suffix(".provenance.json")
+        self.eurusd_csv = Path(DATA_DIR) / "forex" / forex_symbol_to_filename("EUR/USD")
+        self.eurusd_marker = self.eurusd_csv.with_suffix(".provenance.json")
+
+    def tearDown(self):
+        for marker in (self.dummy_marker, self.eurusd_marker):
+            if marker.exists():
+                os.remove(marker)
+
+    def test_read_provenance_marker_returns_none_when_absent(self):
+        self.assertIsNone(read_provenance_marker(self.dummy_csv))
+
+    def test_write_then_read_round_trips(self):
+        write_provenance_marker(self.dummy_csv, venue="mt5", data_source="mt5_data_fetcher")
+        marker = read_provenance_marker(self.dummy_csv)
+        self.assertEqual(marker, {"venue": "mt5", "data_source": "mt5_data_fetcher"})
+
+    def test_forex_registry_falls_back_to_yahoo_when_no_marker_exists(self):
+        """claude code changed: the byte-for-byte-preserved-behavior guarantee
+        — every data/forex/*.csv written before this change has no marker."""
+        self.assertFalse(self.eurusd_marker.exists())
+        registry = instruments._build_forex_registry()
+        self.assertEqual(registry["EUR/USD"].venue, "yahoo_finance")
+        self.assertEqual(registry["EUR/USD"].data_source, "forex_data_fetcher")
+
+    def test_forex_registry_reports_mt5_once_mt5_has_written_the_marker(self):
+        """claude code changed: the actual bug this step fixes — once MT5
+        writes a real marker for EUR/USD's CSV, the registry must reflect
+        that immediately, never keep reporting the stale Yahoo default."""
+        write_provenance_marker(self.eurusd_csv, venue="mt5", data_source="mt5_data_fetcher")
+        registry = instruments._build_forex_registry()
+        self.assertEqual(registry["EUR/USD"].venue, "mt5")
+        self.assertEqual(registry["EUR/USD"].data_source, "mt5_data_fetcher")
+        # claude code changed: every OTHER symbol is unaffected — this isn't
+        # a global flag, it's per-file.
+        self.assertEqual(registry["GBP/USD"].venue, "yahoo_finance")
+
+    def test_marker_without_fingerprint_kwargs_has_no_fingerprint_section(self):
+        """claude code changed: new — Data-Layer Audit Step 5. Backward-
+        compatibility guarantee: a caller that only ever passes
+        venue/data_source (every Step 1 call site, and any future one that
+        genuinely can't supply the full identity) writes exactly the same
+        shape as before — no "fingerprint" key at all, not a null/empty one."""
+        write_provenance_marker(self.dummy_csv, venue="mt5", data_source="mt5_data_fetcher")
+        with open(self.dummy_marker) as f:
+            raw = json.load(f)
+        self.assertNotIn("fingerprint", raw)
+        self.assertNotIn("dataset_identity", raw)
+
+    def test_marker_with_full_identity_embeds_a_real_fingerprint(self):
+        """claude code changed: new — Data-Layer Audit Step 5. The actual
+        fix: when a fetcher supplies the full dataset identity, the marker
+        embeds a real sha256 fingerprint computed via the EXISTING
+        DatasetIdentity.fingerprint() (bot/research_lab/data_fingerprint.py)
+        — not a second, independently-invented hash."""
+        write_provenance_marker(
+            self.dummy_csv, venue="mt5", data_source="mt5_data_fetcher",
+            source="mt5_terminal_ipc", symbol="EUR/USD", timeframe="1h",
+            start_date="2026-01-01", end_date="2026-01-02", row_count=48,
+        )
+        with open(self.dummy_marker) as f:
+            raw = json.load(f)
+        expected_identity = DatasetIdentity(
+            source="mt5_terminal_ipc", symbol="EUR/USD", venue="mt5", timeframe="1h",
+            start_date="2026-01-01", end_date="2026-01-02", row_count=48,
+        )
+        self.assertEqual(raw["fingerprint"], expected_identity.fingerprint())
+        self.assertEqual(raw["dataset_identity"]["row_count"], 48)
+
+    def test_marker_with_partial_identity_kwargs_omits_fingerprint(self):
+        """claude code changed: new — Data-Layer Audit Step 5. ALL identity
+        fields are required together (a fingerprint computed from a
+        partial identity would be actively misleading, not merely
+        incomplete) — omitting even one (row_count here) must behave
+        exactly like supplying none."""
+        write_provenance_marker(
+            self.dummy_csv, venue="mt5", data_source="mt5_data_fetcher",
+            source="mt5_terminal_ipc", symbol="EUR/USD", timeframe="1h",
+            start_date="2026-01-01", end_date="2026-01-02",
+            # row_count deliberately omitted
+        )
+        with open(self.dummy_marker) as f:
+            raw = json.load(f)
+        self.assertNotIn("fingerprint", raw)

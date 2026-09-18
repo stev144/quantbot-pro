@@ -120,8 +120,12 @@ class CrossSectionalPermutationCrossAssetProofTest(SimpleTestCase):
     claude code changed: new. run_cross_sectional_permutation_test() —
     the SAME function real crypto cross-sectional research uses (see
     bot/tests/test_oos_validator.py's CrossSectionalPermutationSyntheticProofTest) —
-    run against a real long-format panel built directly from the 8 real
-    Forex majors' own ingested OHLCV. Deliberately does NOT go through
+    run against a real long-format panel built directly from whichever
+    Forex pairs are currently in bot.forex_data_fetcher.SYMBOLS (the live,
+    persisted universe selection — NOT a fixed 8 majors; that universe was
+    deliberately widened to a 28-pair full G8-currency cross matrix on
+    2026-09-13, so this test's panel size moves whenever that selection
+    does, on purpose). Deliberately does NOT go through
     cross_section_engine.py (that file's compute_cross_section_features()
     still hardcodes a CRYPTO-only universe, an honestly-recorded, separate
     gap — see capability_registry.py's cross_sectional_research entry) —
@@ -153,4 +157,9 @@ class CrossSectionalPermutationCrossAssetProofTest(SimpleTestCase):
         )
         self.assertIn("real", result)
         self.assertIn("verdict", result)
-        print(f"\n[cross-asset proof] Forex cross-sectional (8 majors) real Sharpe: {result['real'].get('sharpe_ratio')}")
+        # claude code changed: was a hardcoded "(8 majors)" label — went
+        # stale the moment the universe widened to 28 pairs on 2026-09-13
+        # without this print statement being updated, silently mislabeling
+        # a structurally different (3.5x larger, non-USD-dominant) panel as
+        # the original 8-majors one. Reports the real, current count instead.
+        print(f"\n[cross-asset proof] Forex cross-sectional ({len(FOREX_SYMBOLS)} pairs) real Sharpe: {result['real'].get('sharpe_ratio')}")

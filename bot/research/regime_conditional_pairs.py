@@ -51,14 +51,27 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
+from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX, symbols_for_asset_class
 from bot.research.cointegration_engine import MIN_CANDLES, CointegrationEngine, PairResult
-from bot.research.regime_labels import label_regime_episodes
+from bot.research.data_access import load_ohlcv_via_provider  # claude code changed: Data-Layer Audit migration (F.3) — was a private copy in this file, now the shared helper (see that module's docstring)
+from bot.research.regime_labels import compute_regime_labels, label_regime_episodes
+
+logger = logging.getLogger(__name__)
+
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
 
 @dataclass
@@ -239,3 +252,174 @@ def regime_conditional_kalman_hedge_ratio(
         "by_regime": by_regime,
         "cross_regime_instability_ratio": cross_regime_instability,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNNABLE DRIVER
+#
+# claude code changed: real bug fix — this module previously defined only
+# importable functions/dataclasses with no __main__ entry point at all, so
+# `python -m bot.research.regime_conditional_pairs` imported the module,
+# executed nothing, and exited cleanly with no output — not a crash, just
+# nothing to run. The only existing caller anywhere in the codebase was
+# this module's own test file (test_regime_conditional_pairs.py), which
+# builds synthetic data directly rather than going through a CLI. This
+# adds the missing driver, following cointegration_engine.py's own
+# __main__ (run_cointegration_research()) CSV-loading convention exactly,
+# so both scripts behave the same way for the same data/ directory.
+#
+# claude code changed: Data-Layer Architecture Audit migration (F.3 proof
+# of concept — see DATA_LAYER_ARCHITECTURE_AUDIT.md). This driver no
+# longer reads data/*.csv directly; it goes through the canonical
+# MarketDataProvider contract instead. This is the first research-side
+# consumer of get_historical_bars() anywhere in the codebase — every
+# other research engine still reads CSVs/calls fetchers directly (see the
+# audit doc's dependency list, section D). Confirmed zero-risk to migrate:
+# grepped the whole repo first — this module's only test
+# (test_regime_conditional_pairs.py) imports regime_conditional_cointegration/
+# regime_conditional_kalman_hedge_ratio directly with synthetic data and
+# never touches this driver or _load_ohlcv_csv, so no existing test
+# depends on the old CSV-reading behavior being replaced here.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_regime_conditional_research(
+    asset_class: str = ASSET_CLASS_CRYPTO,
+    interval: str = "1h",
+    min_episode_length: int = MIN_CANDLES,
+    universe: Optional[List[str]] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> Dict[str, RegimeConditionalCointegrationReport]:
+    """
+    Real, runnable driver. `universe` defaults to CointegrationEngine's own
+    default (crypto, see that module's UNIVERSE constant) — pass an
+    explicit list (e.g. bot.instruments.symbols_for_asset_class(ASSET_CLASS_FOREX),
+    "/" replaced with "_" to match this file-naming convention) to run
+    against a different asset class or a smaller/faster subset; nothing
+    here assumes crypto beyond that inherited default.
+
+    Two-stage, deliberately not "test every pair regime-conditionally" —
+    that would mean paying for a full per-episode ADF test on every
+    candidate pair, most of which aren't even cointegrated over the full
+    sample, which is not a meaningful question to ask regime-by-regime.
+    Instead:
+
+    1. Run the ordinary CointegrationEngine.run_all() (full-sample,
+       already FDR- and OOS-persistence-corrected) to find which pairs
+       are genuinely cointegrated overall.
+    2. For each of THOSE pairs only, run regime_conditional_cointegration()
+       to check whether that relationship holds up within each regime
+       episode, using regime labels computed from symbol_a's own OHLCV
+       via regime_labels.compute_regime_labels() (real, causal, already
+       tested — not a placeholder). Tagging a pair by symbol_a's regime
+       is a real, named choice, not the only valid one — a shared
+       benchmark regime series would be an equally defensible
+       alternative; this keeps the driver self-contained without
+       requiring the caller to supply one.
+
+    `start`/`end` default to a 5-year lookback ending now, matching this
+    codebase's existing data/*.csv history depth — pass explicit values to
+    request a narrower/different window. Data now comes live from
+    BinanceKlinesProvider/YahooForexProvider (see _load_ohlcv_via_provider)
+    rather than from data/*.csv, so results reflect whatever the venue
+    returns for the requested window at run time, not a static snapshot.
+    """
+    if end is None:
+        end = datetime.now(timezone.utc)
+    if start is None:
+        start = end - timedelta(days=5 * 365)
+
+    engine = CointegrationEngine(universe=universe)
+    data: Dict[str, pd.DataFrame] = {}
+    for symbol in engine.universe:
+        df = load_ohlcv_via_provider(symbol, asset_class, interval, start, end)
+        if df is not None:
+            data[symbol] = df
+            logger.info(f"  Loaded {symbol}: {len(df):,} candles")
+
+    if not data:
+        logger.warning(
+            f"No OHLCV data retrieved from the {asset_class} provider for interval "
+            f"{interval!r} over [{start.date()}, {end.date()}] — nothing to test."
+        )
+        return {}
+
+    pairs_df, _ = engine.run_all(data)
+    valid_pairs = pairs_df[pairs_df["passes_filters"]] if not pairs_df.empty else pairs_df
+
+    if valid_pairs.empty:
+        logger.info(
+            "\nNo pair passed full-sample cointegration (in-sample ADF + FDR + "
+            "half-life + out-of-sample persistence) — nothing to test regime-"
+            "conditionally. This is a real, reportable result, not an error."
+        )
+        return {}
+
+    reports: Dict[str, RegimeConditionalCointegrationReport] = {}
+    logger.info(f"\n{len(valid_pairs)} full-sample-cointegrated pair(s) — running regime-conditional analysis...")
+    logger.info("=" * 70)
+
+    for _, row in valid_pairs.iterrows():
+        symbol_a, symbol_b = row["symbol_a"], row["symbol_b"]
+        df_a, df_b = data[symbol_a], data[symbol_b]
+
+        regime_labels = compute_regime_labels(df_a)["regime_label"]
+        log_a = np.log(df_a["close"])
+        log_b = np.log(df_b["close"])
+
+        aligned_index = log_a.index.intersection(log_b.index).intersection(regime_labels.dropna().index)
+        if len(aligned_index) < min_episode_length:
+            logger.info(f"\n{row['pair_name']}: SKIPPED — only {len(aligned_index)} rows with valid price+regime data")
+            continue
+
+        report = regime_conditional_cointegration(
+            engine, symbol_a, symbol_b,
+            log_a.loc[aligned_index], log_b.loc[aligned_index], regime_labels.loc[aligned_index],
+            min_episode_length=min_episode_length,
+        )
+        reports[row["pair_name"]] = report
+
+        logger.info(f"\n{row['pair_name']} — full sample: cointegrated={report.full_sample.is_cointegrated}, "
+                    f"half_life={report.full_sample.half_life:.1f} candles")
+        for regime, summary in sorted(report.by_regime_summary.items()):
+            if summary["status"] == "OK":
+                logger.info(
+                    f"    {regime:28} n_episodes={summary['n_qualifying_episodes']:>2} "
+                    f"frac_cointegrated={summary['fraction_cointegrated']:.2f} "
+                    f"half_life_mean={summary['half_life_mean']}"
+                )
+            else:
+                logger.info(f"    {regime:28} {summary['status']} — {summary['reason']}")
+
+    return reports
+
+
+# claude code changed: Data-Layer Architecture Audit migration (F.3) —
+# --asset-class now selects a provider (_PROVIDERS) instead of a data_dir;
+# crypto/forex CSVs no longer need to be pre-fetched onto disk before
+# running this driver (the old data_dir split existed only because
+# data/{SYM}_{interval}.csv vs data/forex/{SYM}_{interval}.csv were two
+# different directories to read from — moot now that both asset classes
+# go through get_historical_bars() instead).
+_ASSET_CLASSES_BY_CLI_NAME = {"crypto": ASSET_CLASS_CRYPTO, "forex": ASSET_CLASS_FOREX}
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Regime-conditional cointegration research driver.")
+    parser.add_argument("--asset-class", choices=sorted(_ASSET_CLASSES_BY_CLI_NAME), default="crypto")
+    parser.add_argument("--interval", default="1h")
+    parser.add_argument("--min-episode-length", type=int, default=MIN_CANDLES)
+    parser.add_argument("--lookback-days", type=int, default=5 * 365, help="History window ending now.")
+    args = parser.parse_args()
+
+    asset_class = _ASSET_CLASSES_BY_CLI_NAME[args.asset_class]
+    universe = [s.replace("/", "_") for s in symbols_for_asset_class(asset_class)]
+    run_end = datetime.now(timezone.utc)
+    run_start = run_end - timedelta(days=args.lookback_days)
+
+    run_regime_conditional_research(
+        asset_class=asset_class, interval=args.interval,
+        min_episode_length=args.min_episode_length, universe=universe,
+        start=run_start, end=run_end,
+    )

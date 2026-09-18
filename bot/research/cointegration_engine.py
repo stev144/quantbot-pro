@@ -140,6 +140,7 @@ from statsmodels.stats.multitest import multipletests   # claude code changed: r
 
 from bot.instruments import candles_to_wall_clock  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. The single candles->wall-clock-time conversion, see bot/instruments.py
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — universe expansion mission. Derives UNIVERSE from the single instrument registry instead of an independent hand-typed copy (bot/instruments.py's own module docstring already flagged this file's independent list as a known drift risk vs. fetch_all_symbols.SYMBOLS)
+from bot.research.data_access import load_ohlcv_via_provider  # claude code changed: Data-Layer Audit migration (F.3) — see DATA_LAYER_ARCHITECTURE_AUDIT.md
 
 warnings.filterwarnings('ignore')           # Suppress statsmodels convergence warnings
 
@@ -1529,63 +1530,58 @@ class CointegrationEngine:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run_cointegration_research(
-    data_dir:   str = "data",
     output_dir: str = "research_data",
     interval:   str = "1h",
+    universe:   Optional[List[str]] = None,
+    start=None,
+    end=None,
 ) -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
-    Standalone runner. Loads all 7 CSVs, runs cointegration tests,
-    saves pair summary and spread DataFrames, prints results.
+    Standalone runner. Fetches all UNIVERSE symbols via the canonical
+    MarketDataProvider contract, runs cointegration tests, saves pair
+    summary and spread DataFrames, prints results.
 
     Run from project root:
         python -m bot.research.cointegration_engine
 
+    claude code changed: Data-Layer Architecture Audit migration (F.3,
+    DATA_LAYER_ARCHITECTURE_AUDIT.md) — was a direct data_dir/*.csv read
+    loop (data_dir param removed, replaced by start/end/`universe`'s own
+    asset class implicitly deciding the provider via load_ohlcv_via_provider's
+    ASSET_CLASS_CRYPTO default). `start`/`end` default to a 5-year lookback
+    ending now, matching this codebase's existing data/*.csv history
+    depth — same convention as regime_conditional_pairs.py's driver.
+
     Returns
     -------
     Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]
-        pairs_df    : All 21 pair test results
+        pairs_df    : All pair test results
         spread_data : Valid pair spread DataFrames for validator
     """
 
+    from datetime import datetime, timedelta, timezone
     from pathlib import Path
 
     logger.info("=" * 70)
     logger.info("COINTEGRATION ENGINE — STANDALONE RUN")
     logger.info("=" * 70)
 
-    # ── Load all 7 CSVs ───────────────────────────────────────────────────────
+    if end is None:
+        end = datetime.now(timezone.utc)
+    if start is None:
+        start = end - timedelta(days=5 * 365)
+
+    # ── Fetch all UNIVERSE symbols via the canonical provider contract ─────────
     data: Dict[str, pd.DataFrame] = {}
 
-    for symbol in UNIVERSE:
-
-        csv_path = Path(data_dir) / f"{symbol}_{interval}.csv"
-
-        if not csv_path.exists():
-            logger.warning(f"  {symbol}: not found at {csv_path}")
-            continue
-
-        try:
-            df = pd.read_csv(csv_path)
-
-            if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-                df.set_index("timestamp", inplace=True)
-
-            for col in ["open", "high", "low", "close", "volume"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-            df.dropna(subset=["close"], inplace=True)
-            df.sort_index(inplace=True)
-
+    for symbol in (universe or UNIVERSE):
+        df = load_ohlcv_via_provider(symbol, ASSET_CLASS_CRYPTO, interval, start, end)
+        if df is not None:
             data[symbol] = df
             logger.info(f"  Loaded {symbol}: {len(df):,} candles")
 
-        except Exception as e:
-            logger.error(f"  Failed to load {symbol}: {e}")
-
     # ── Run engine ────────────────────────────────────────────────────────────
-    engine              = CointegrationEngine()
+    engine              = CointegrationEngine(universe=universe)
     pairs_df, spread_data = engine.run_all(data)
 
     # ── Save outputs ──────────────────────────────────────────────────────────
@@ -1610,32 +1606,63 @@ def run_cointegration_research(
         logger.info("=" * 70)
         logger.info(
             f"\n{'Pair':20} {'Coint_p':>9} {'ADF_p':>8} "
-            f"{'β':>8} {'HL(h)':>8} {'Status':>12}"
+            f"{'β':>8} {'HL(h)':>8} {'Status':>16}"
         )
         logger.info("-" * 70)
         for _, row in pairs_df.iterrows():
-            if row["passes_filters"]:
-                status = "✓ VALID"
-            elif row["is_cointegrated"]:
-                status = "⚠ COINT/NO HL"
-            else:
-                status = "✗ NONE"
+            status = _rejection_status_label(row)
             logger.info(
                 f"  {row['pair_name']:20} "
                 f"{row['coint_pvalue']:>9.4f} "
                 f"{row['adf_pvalue']:>8.4f} "
                 f"{row['hedge_ratio']:>8.4f} "
                 f"{row['half_life_hours']:>8.1f} "
-                f"{status:>12}"
+                f"{status:>16}"
             )
 
     return pairs_df, spread_data
 
 
+# claude code changed: real bug fix — the print loop above used to collapse
+# every "is_cointegrated=True but passes_filters=False" pair under one
+# label, "⚠ COINT/NO HL", regardless of WHICH filter actually rejected it
+# (half-life out of range, insufficient out-of-sample data, the raw OOS
+# persistence check, or either FDR-correction downgrade in run_all()'s
+# Step 2.5/2.6). That made every one of those distinct, already-recorded
+# reject_reason strings (see _test_pair()/_apply_fdr_correction()/
+# _apply_oos_persistence_filter()) invisible in the summary table a user
+# actually reads — e.g. a pair with a perfectly in-range half-life (well
+# inside [min_half_life, max_half_life]) still printed "NO HL", which
+# reads as a half-life failure it never had. This derives a specific,
+# short tag straight from the real reject_reason text instead.
+def _rejection_status_label(row: pd.Series) -> str:
+    if row["passes_filters"]:
+        return "✓ VALID"
+    if not row["is_cointegrated"]:
+        return "✗ NONE"
+
+    reason = (row.get("reject_reason") or "").lower()
+    if reason.startswith("half-life"):
+        return "⚠ HALF-LIFE"
+    if "insufficient out-of-sample data" in reason:
+        return "⚠ OOS DATA"
+    if "out-of-sample adf test failed" in reason:
+        return "⚠ OOS ERROR"
+    if "fdr-corrected out-of-sample persistence" in reason:
+        return "⚠ OOS FDR"
+    if "did not persist out-of-sample" in reason:
+        return "⚠ OOS FAILED"
+    if "fdr-corrected significance" in reason:
+        return "⚠ FDR"
+    # Cointegrated, rejected, but for a reason not covered above — surfaced
+    # generically rather than mislabeled as a specific filter that didn't
+    # actually reject it. Check reject_reason directly if this appears.
+    return "⚠ COINT/OTHER"
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     run_cointegration_research(
-        data_dir="data",
         output_dir="research_data",
         interval="1h",
     )

@@ -38,7 +38,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json  # claude code changed: multi-provider FOREX registry fix — read/write provenance sidecar JSON
+from dataclasses import asdict, dataclass  # claude code changed: Data-Layer Audit Step 5 — asdict() to embed DatasetIdentity in the marker
+from datetime import datetime, timezone  # claude code changed: multi-provider FOREX registry fix — timestamp provenance markers
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -48,6 +50,7 @@ from bot.forex_data_fetcher import (
     SYMBOLS as FOREX_SYMBOLS,
     symbol_to_filename as forex_symbol_to_filename,
 )
+from bot.research_lab.data_fingerprint import DatasetIdentity  # claude code changed: Data-Layer Audit Step 5 — reuse, not reinvent, the existing fingerprinting mechanism
 
 ASSET_CLASS_CRYPTO = "CRYPTO"
 ASSET_CLASS_US_EQUITY = "US_EQUITY"
@@ -100,6 +103,91 @@ class Instrument:
     execution_mode: Optional[str] = None   # e.g. "market"/"instant"/"exchange" — broker-specific, unavailable pre-Stage-2
 
 
+# claude code changed: new — Data-Layer Audit Step 1. The sidecar-marker
+# convention that lets _build_forex_registry() report the REAL provider
+# that wrote a given data/forex/*.csv file, instead of a hardcoded
+# "yahoo_finance" literal. This exists because bot/mt5_data_fetcher.py
+# deliberately writes into the exact same data/forex/{symbol}_1h.csv
+# paths bot/forex_data_fetcher.py does (see that module's own docstring)
+# — without this, every Instrument would keep silently reporting
+# venue="yahoo_finance"/data_source="forex_data_fetcher" even for a file
+# MT5 actually wrote, a real provenance bug, not a hypothetical one.
+def _provenance_marker_path(ohlcv_path: Path) -> Path:
+    """claude code changed: new — one place the sidecar naming convention
+    lives, so the writer (each fetcher) and the reader (_build_forex_registry())
+    can never drift apart on where this file goes."""
+    return ohlcv_path.with_suffix(".provenance.json")
+
+
+def write_provenance_marker(
+    ohlcv_path: Path,
+    venue: str,
+    data_source: str,
+    *,
+    source: Optional[str] = None,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    row_count: Optional[int] = None,
+    schema_version: str = "1",
+) -> None:
+    """claude code changed: new — called by a fetcher immediately after it
+    writes ohlcv_path, recording which provider/pipeline actually produced
+    that specific file. A failure here is a provenance-recording problem,
+    not a fetch problem — deliberately not wrapped in a try/except, so a
+    real write failure (e.g. disk full) surfaces rather than being
+    silently swallowed and mistaken for "no provenance recorded yet."
+
+    claude code changed: Data-Layer Audit Step 5 — venue/data_source
+    (positional, required, unchanged from Step 1) remain sufficient on
+    their own for every existing caller; the new keyword-only args are
+    fully optional and additive. When ALL of them are supplied, this also
+    computes and embeds a real dataset fingerprint via the EXISTING
+    bot.research_lab.data_fingerprint.DatasetIdentity — not a second
+    hashing scheme — closing the "no data fingerprint recorded" gap both
+    Forex audit reports independently flagged as open. When any are
+    omitted (e.g. an existing call site that only ever needed
+    venue/data_source), the marker is written exactly as before, with no
+    fingerprint section — this is a real "not yet computed" state, not a
+    silently wrong one."""
+    marker_path = _provenance_marker_path(ohlcv_path)
+    payload = {
+        "venue": venue,
+        "data_source": data_source,
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    fingerprint_inputs = (source, symbol, timeframe, start_date, end_date, row_count)
+    if all(field is not None for field in fingerprint_inputs):
+        identity = DatasetIdentity(
+            source=source, symbol=symbol, venue=venue, timeframe=timeframe,
+            start_date=start_date, end_date=end_date, row_count=row_count,
+            schema_version=schema_version,
+        )
+        payload["dataset_identity"] = asdict(identity)
+        payload["fingerprint"] = identity.fingerprint()
+    with open(marker_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def read_provenance_marker(ohlcv_path: Path) -> Optional[Dict[str, str]]:
+    """claude code changed: new — returns {"venue": ..., "data_source": ...}
+    if a well-formed marker exists next to ohlcv_path, else None. Never
+    raises: a missing or corrupt marker means "no fetcher has recorded
+    provenance for this file yet" — the real, expected state for every
+    data/forex/*.csv written before this change existed — not an error
+    worth failing registry construction over."""
+    marker_path = _provenance_marker_path(ohlcv_path)
+    if not marker_path.exists():
+        return None
+    try:
+        with open(marker_path) as f:
+            data = json.load(f)
+        return {"venue": data["venue"], "data_source": data["data_source"]}
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
+
+
 def _build_crypto_registry() -> Dict[str, Instrument]:
     """
     claude code changed: new. Derives every CRYPTO instrument from
@@ -147,21 +235,54 @@ def _build_forex_registry() -> Dict[str, Instrument]:
     _STANDARD_MIN_LOT = 0.01
     _STANDARD_LOT_STEP = 0.01
 
+    # claude code changed: new — Gold/Silver added to the Forex universe
+    # (XAU/XAG are real ISO 4217 currency codes, so they fit this asset
+    # class's own BASE/QUOTE model correctly) — but the standard 100,000-
+    # unit/0.0001-pip retail-FX lot convention above is simply wrong for
+    # metals; a metals contract is quoted in troy ounces, not currency
+    # units. These are REAL, broker-confirmed values (mt5.symbol_info()
+    # against the connected account, 2026-09-18), not the same "pending
+    # confirmation" placeholder the FX defaults above still are.
+    _METAL_SPECS: Dict[str, Dict[str, float]] = {
+        "XAU": {"pip_size": 0.01, "contract_size": 100.0, "min_lot": 0.01, "lot_step": 0.01},
+        "XAG": {"pip_size": 0.001, "contract_size": 5_000.0, "min_lot": 0.01, "lot_step": 0.01},
+    }
+
     registry: Dict[str, Instrument] = {}
     for symbol in FOREX_SYMBOLS:
         base, _, quote = symbol.partition("/")
+        # claude code changed: Data-Layer Audit Step 1 — venue/data_source now
+        # come from the real provenance marker next to this symbol's CSV when
+        # one exists (i.e. once mt5_data_fetcher.py has actually written it),
+        # falling back to the pre-existing "yahoo_finance"/"forex_data_fetcher"
+        # literals otherwise. Every data/forex/*.csv written before this
+        # change has no marker, so this fallback preserves today's behavior
+        # byte-for-byte for all currently-ingested data — nothing here
+        # silently reclassifies existing Yahoo-sourced files as MT5's.
+        csv_path = Path(DATA_DIR) / "forex" / forex_symbol_to_filename(symbol)
+        marker = read_provenance_marker(csv_path)
+        venue = marker["venue"] if marker else "yahoo_finance"
+        data_source = marker["data_source"] if marker else "forex_data_fetcher"
+        metal_spec = _METAL_SPECS.get(base)
+        if metal_spec is not None:
+            pip_size, contract_size = metal_spec["pip_size"], metal_spec["contract_size"]
+            min_lot, lot_step = metal_spec["min_lot"], metal_spec["lot_step"]
+        else:
+            pip_size = _JPY_QUOTE_PIP_SIZE if symbol.endswith("/JPY") else _DEFAULT_PIP_SIZE
+            contract_size, min_lot, lot_step = _STANDARD_CONTRACT_SIZE, _STANDARD_MIN_LOT, _STANDARD_LOT_STEP
+
         registry[symbol] = Instrument(
             canonical_symbol=symbol,
             asset_class=ASSET_CLASS_FOREX,
             base_currency=base or None,
             quote_currency=quote or None,
-            venue="yahoo_finance",
+            venue=venue,
             timeframe=FOREX_INTERVAL,
-            data_source="forex_data_fetcher",
-            pip_size=_JPY_QUOTE_PIP_SIZE if symbol.endswith("/JPY") else _DEFAULT_PIP_SIZE,
-            contract_size=_STANDARD_CONTRACT_SIZE,
-            min_lot=_STANDARD_MIN_LOT,
-            lot_step=_STANDARD_LOT_STEP,
+            data_source=data_source,
+            pip_size=pip_size,
+            contract_size=contract_size,
+            min_lot=min_lot,
+            lot_step=lot_step,
             # swap_long/swap_short/trading_sessions/broker_server/execution_mode
             # deliberately left at their None default — see Instrument's
             # own field comments for why (require a real broker, Stage 2).

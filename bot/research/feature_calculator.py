@@ -628,26 +628,37 @@ class FeatureCalculator:
 
 if __name__ == "__main__":
     """
-    Example: Calculate features for Bitcoin
+    Example: Calculate features for Bitcoin.
+
+    claude code changed: Data-Layer Architecture Audit migration
+    (DATA_LAYER_ARCHITECTURE_AUDIT.md, F.3). FeatureCalculator itself has
+    no data-acquisition code to migrate — calculate_all_features() only
+    ever takes a DataFrame the caller already loaded; confirmed by reading
+    the whole module, no CSV read or fetcher import exists anywhere in it.
+    This demo block was the one place standing in for real data (fabricated
+    random-walk prices, per its own prior comment "replace with real
+    Binance data") — now sourced from BinanceKlinesProvider, the same
+    canonical MarketDataProvider contract regime_conditional_pairs.py's
+    driver was migrated to, so running this file demonstrates real
+    provider-sourced features instead of synthetic ones.
     """
-    
-    # Create sample data (replace with real Binance data)
-    dates = pd.date_range('2023-01-01', periods=1000, freq='1h')
-    np.random.seed(42)
-    
-    sample_df = pd.DataFrame({
-        'open': 40000 + np.random.randn(1000).cumsum() * 50,
-        'high': 40100 + np.random.randn(1000).cumsum() * 50,
-        'low': 39900 + np.random.randn(1000).cumsum() * 50,
-        'close': 40000 + np.random.randn(1000).cumsum() * 50,
-        'volume': np.random.uniform(1000, 10000, 1000),
-    }, index=dates)
-    
+    from datetime import datetime, timedelta, timezone
+
+    from bot.binance_klines_provider import BinanceKlinesProvider
+    from bot.instruments import get_instrument
+
+    symbol, timeframe = "BTC/USDT", "1h"
+    instrument = get_instrument(symbol)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=60)
+    bars = BinanceKlinesProvider().get_historical_bars(instrument, timeframe, start, end)
+    sample_df = bars.data.set_index("timestamp").sort_index()
+
     # Initialize calculator
     calculator = FeatureCalculator(min_data_required=100)
-    
+
     # Calculate all features
-    result_df = calculator.calculate_all_features(sample_df, symbol='BTCUSDT', timeframe='1h')
+    result_df = calculator.calculate_all_features(sample_df, symbol=symbol, timeframe=timeframe)
     
     # Show results
     print(f"✓ Calculated {len(result_df.columns)} columns")

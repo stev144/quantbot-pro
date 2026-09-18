@@ -1,5 +1,22 @@
 # Forex Cross-Sectional Research Validation Audit
 
+<!-- claude code changed: correction notice — data-layer audit, 2026-09-17 -->
+> **NOTE (added 2026-09-17):** Phases 1–10's headline numbers (IC, hit rate,
+> spread, "7 of 8 pairs USD-quoted") describe the **original 8-pair**
+> universe only. This report already documents the fix for that, same day:
+> see **"Addendum (2026-09-13): Universe Widened..."** below, which reran
+> Phase 7/8 against the current 28-pair universe and got the same
+> RESEARCH NEGATIVE verdict on firmer statistical footing. A second,
+> independent rerun on 2026-09-17 (see the addendum after that one)
+> confirms this holds — `data/forex/*.csv`/`research_data/forex/*.csv` have
+> not been refetched since 2026-09-13 (same data both times), so the small
+> numeric differences between the two 28-pair reruns reflect a minor
+> methodological difference in how the 4h/24h forward-return windows were
+> constructed, not a data change. Phases 1–6, 9, 11–12 (the bug fix, the
+> math/leakage audit, the governance/provenance gaps, the architecture
+> comparison) were never dataset-size-dependent and remain accurate as
+> originally written.
+
 Audit date: 2026-09-13. Scope: the Forex cross-sectional pipeline added in commit `a70db71` (`bot/research/cross_section_engine.py`'s `run_forex_cross_section_research()`, `bot/views/forex_terminal_data.py`'s `get_forex_cross_sectional_dispersion()`, and the Forex dashboard's Cross-Sectional Opportunities section). Investigation-first, as instructed — no strategy, no execution, no threshold tuning attempted.
 
 ## Executive Summary
@@ -192,3 +209,55 @@ No engine or dashboard code changed for this addendum — only universe configur
 ## Pending: fix not yet committed
 
 Per the mission's explicit instruction ("Do not commit or push changes unless implementation fixes are genuinely required and tested... report them explicitly before committing"): the bug fix above **is** genuinely required (the pipeline could not otherwise support any predictive-power research at all) and **is** tested (38/38 passing, including 2 new regression tests targeting exactly this defect). Reporting it here as required; will commit and push as a separate, clearly-labeled commit from this report.
+
+---
+
+## Addendum (2026-09-17): Independent rerun, same 28-pair data
+
+<!-- claude code changed: new — data-layer audit follow-up, 2026-09-17 -->
+Triggered by an unrelated data-layer audit (`bot/instruments.py`'s FOREX
+provenance-marker fix) that surfaced a stale `"(8 majors)"` label in
+`bot/tests/test_forex_crypto_cross_asset_proof.py`'s cross-sectional proof
+test — that test derives its panel from the live `forex_data_fetcher.SYMBOLS`
+universe (28 pairs today, not 8), so the label was wrong even though the
+code itself was correct. Fixing the label prompted this independent rerun,
+to confirm the addendum above still holds rather than assume it does.
+
+**Confirmed: `data/forex/*.csv` and `research_data/forex/*.csv` have not
+been refetched or regenerated since 2026-09-13** (file mtimes and last
+candle timestamp — 2026-09-11 21:00 UTC — unchanged). This rerun used the
+exact same underlying data as the addendum above, computed independently
+(a standalone script pooling `research_data/forex/*_cross_section.csv`'s
+real `cs_reversal_signal`/`forward_return_1h` columns directly, deriving
+4h/24h forward returns the same way — `close.shift(-N)/close - 1` per
+symbol, before pooling):
+
+| Horizon | Pooled n | Pooled Spearman IC | p-value | Survives Bonferroni (0.0167)? |
+|---|---|---|---|---|
+| 1h | 483,196 | +0.0287 | 1.6×10⁻⁸⁸ | Yes |
+| 4h | 483,111 | +0.0235 | 8.3×10⁻⁶⁰ | Yes |
+| 24h | 482,551 | +0.0098 | 1.2×10⁻¹¹ | Yes |
+
+Economic magnitude at 1h: top-minus-bottom decile spread **+0.638 bps**
+(addendum above: 0.67 bps); directional hit rate **50.63%** (addendum
+above: 50.72%).
+
+**On the discrepancy with the addendum above**: IC/n values are close but
+not identical (largest gap at 24h: n=482,551 here vs. 455,668 there, ~6%
+more rows). Since the underlying data is byte-identical between the two
+reruns, this is not a data effect — most likely the original addendum's
+24h forward-return construction excluded windows whose 24-candle span
+crossed a weekend gap (i.e. a "24h" label that would otherwise span ~72
+real hours across a Friday-close/Sunday-reopen boundary), while this
+rerun's naive `shift(-24)` does not filter for that. Not re-derived further
+here — both computations reach the same conclusion, so resolving the exact
+row-count gap was not pursued as a use of time, but it is flagged rather
+than silently ignored, consistent with this report's own standard.
+
+**Verdict: unchanged.** RESEARCH NEGATIVE holds under an independent,
+same-data, same-methodology-family rerun three days later: statistically
+significant at all three horizons, economically negligible (sub-1bp spread,
+~coin-flip hit rate). No new risk identified; the open gaps listed above
+(per-row minimum-instrument gate, governance/fingerprinting integration,
+overlapping-window dependence correction, and now — newly noted — the
+weekend-gap-aware-vs-naive 24h-window discrepancy) remain open.

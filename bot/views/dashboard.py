@@ -4,7 +4,13 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.core.cache import cache
 
-from bot.data_fetcher import get_klines, get_last_known_klines
+# claude code changed: was `from bot.data_fetcher import get_klines,
+# get_last_known_klines` — get_klines is no longer called directly
+# anywhere in this file (Data-Layer Audit "wire into the dashboard too":
+# every call site now goes through BinanceKlinesProvider.get_recent_bars(),
+# which still calls data_fetcher.get_klines() internally). get_last_known_klines
+# stays — the stale-data fallback still reads it directly, unchanged.
+from bot.data_fetcher import get_last_known_klines
 from bot.backtesting.backtester import backtest
 from bot.engines.strategy_scorer import StrategyScorer
 from bot.engines.regime_detector import RegimeDetector
@@ -24,6 +30,49 @@ try:
 except Exception:
     PortfolioBacktester = None
 
+def _resolve_dashboard_instrument(compact_symbol):
+    """
+    claude code changed: new — Data-Layer Audit "wire into the dashboard
+    too". Every one of dashboard.py's ?symbol= query params arrives
+    compact ("AVAXUSDT"), but BinanceKlinesProvider needs a canonical
+    bot.instruments.Instrument. Checks the REAL INSTRUMENT_REGISTRY first
+    (exact match for every one of the tracked symbols); falls back to the
+    same quote-suffix heuristic portfolio_backtest_view()'s own
+    to_slash() (further down this file) already uses, for a
+    valid-but-untracked Binance symbol a user might type directly into
+    the URL. data_fetcher.get_klines() itself has never restricted
+    requests to the tracked universe — this always returns a usable
+    Instrument (never None) so that behavior isn't quietly narrowed by
+    routing through the provider layer.
+    """
+    from bot.instruments import ASSET_CLASS_CRYPTO, Instrument, get_instrument
+
+    # claude code changed: strip any separator the caller already included
+    # ("/", "-", "_", " ") before applying the quote-suffix heuristic below
+    # — data_fetcher._normalize_symbol() has always tolerated both
+    # "AVAXUSDT" and "AVAX/USDT" as input (it strips these same
+    # separators internally), including in this project's own tests
+    # (test_dashboard_stale_fallback.py constructs symbols already
+    # containing "/"). Without this, an already-slashed input would
+    # produce a malformed double slash below ("BASE//QUOTE").
+    compact = compact_symbol.upper()
+    for sep in ("/", "-", "_", " "):
+        compact = compact.replace(sep, "")
+    canonical_symbol = compact
+    for quote in ("USDT", "BTC", "ETH", "BNB"):
+        if compact.endswith(quote) and compact != quote:
+            canonical_symbol = f"{compact[:-len(quote)]}/{quote}"
+            break
+
+    registered = get_instrument(canonical_symbol)
+    if registered is not None:
+        return registered
+    return Instrument(
+        canonical_symbol=canonical_symbol, asset_class=ASSET_CLASS_CRYPTO,
+        venue="binance", timeframe="1h", data_source="dashboard_ad_hoc",
+    )
+
+
 def _fetch_klines_or_stale_fallback(symbol):
     """
     claude code changed: new — dashboard hardening. Tries the real, live
@@ -37,8 +86,26 @@ def _fetch_klines_or_stale_fallback(symbol):
     both df and stale_notice are None only when there is truly nothing
     cached at all, in which case the caller's existing "Failed to fetch
     market data" error path is unchanged.
+
+    claude code changed: Data-Layer Audit "wire into the dashboard too" —
+    the live half now goes through BinanceKlinesProvider.get_recent_bars()
+    instead of calling get_klines() directly. That method deliberately
+    still calls data_fetcher.get_klines() internally (not
+    get_klines_by_date()) so it writes into the EXACT SAME cache-key
+    namespace get_last_known_klines() below already depends on — see
+    get_recent_bars()'s own docstring. bars.data arrives with 'timestamp'
+    as a plain column (CanonicalBars' required shape); restored to a
+    DatetimeIndex here because bot.backtesting.backtester.Backtester
+    requires self.df.index to already be a DatetimeIndex (confirmed by
+    reading Backtester.__init__ directly) — get_klines()'s own return
+    shape always had this, so every downstream consumer (backtest(),
+    RegimeDetector().detect()) keeps seeing an identical shape.
     """
-    df = get_klines(symbol, interval="1h", total_candles=10000)
+    from bot.binance_klines_provider import BinanceKlinesProvider
+
+    instrument = _resolve_dashboard_instrument(symbol)
+    bars = BinanceKlinesProvider().get_recent_bars(instrument, "1h", 10000)
+    df = bars.data if bars.data.empty else bars.data.set_index("timestamp")
     if df is not None and not df.empty:
         return df, None
 
@@ -301,7 +368,16 @@ def live_data(request):
         results = cache.get(backtest_cache_key)
 
         if results is None:
-            df = get_klines(symbol, interval="1h", total_candles=10000)
+            # claude code changed: Data-Layer Audit "wire into the
+            # dashboard too" — was get_klines(symbol, ...) directly; see
+            # _fetch_klines_or_stale_fallback()'s own comment for why
+            # get_recent_bars() (not get_historical_bars()) and why the
+            # set_index("timestamp") restoration is required before
+            # backtest() sees this DataFrame.
+            from bot.binance_klines_provider import BinanceKlinesProvider
+            instrument = _resolve_dashboard_instrument(symbol)
+            bars = BinanceKlinesProvider().get_recent_bars(instrument, "1h", 10000)
+            df = bars.data if bars.data.empty else bars.data.set_index("timestamp")
             if df is None or df.empty:
                 return JsonResponse({"success": False, "summary": {}})
             results = backtest(df) or {}
@@ -476,7 +552,7 @@ def live_regime_monitor(request):
     for any given symbol. Used by the Live Regime Monitor on the dashboard.
     """
     import traceback
-    from bot.data_fetcher import get_klines
+    from bot.binance_klines_provider import BinanceKlinesProvider
     from bot.engines.regime_detector import RegimeDetector
 
     symbol = request.GET.get("symbol", "BTCUSDT").upper()
@@ -486,7 +562,15 @@ def live_regime_monitor(request):
 
         # ── 60-DAY DOMINANT REGIME ────────────────────
         # 1440 candles on 1H = exactly 60 days
-        df_60 = get_klines(symbol, interval="1h", total_candles=1440)
+        # claude code changed: Data-Layer Audit "wire into the dashboard
+        # too" — was get_klines(symbol, ...) directly; see
+        # _fetch_klines_or_stale_fallback()'s own comment for the
+        # get_recent_bars()/set_index("timestamp") reasoning, which
+        # applies identically here (RegimeDetector.detect() also expects
+        # a DatetimeIndex).
+        instrument = _resolve_dashboard_instrument(symbol)
+        bars_60 = BinanceKlinesProvider().get_recent_bars(instrument, "1h", 1440)
+        df_60 = bars_60.data if bars_60.data.empty else bars_60.data.set_index("timestamp")
 
         if df_60 is None or df_60.empty:
             return JsonResponse({
@@ -699,12 +783,19 @@ def run_walk_forward_validation(symbol, split):
     now a thin request-parsing wrapper around this.
     """
     import traceback
-    from bot.data_fetcher import get_klines
     from bot.backtesting.backtester import backtest
+    from bot.binance_klines_provider import BinanceKlinesProvider
 
     try:
         # Fetch 1440 candles = 60 days on 1H
-        df = get_klines(symbol, interval="1h", total_candles=1440)
+        # claude code changed: Data-Layer Audit "wire into the dashboard
+        # too" — was get_klines(symbol, ...) directly; see
+        # _fetch_klines_or_stale_fallback()'s own comment for the
+        # get_recent_bars()/set_index("timestamp") reasoning (backtest()
+        # below requires a DatetimeIndex).
+        instrument = _resolve_dashboard_instrument(symbol)
+        bars = BinanceKlinesProvider().get_recent_bars(instrument, "1h", 1440)
+        df = bars.data if bars.data.empty else bars.data.set_index("timestamp")
 
         if df is None or df.empty:
             return {

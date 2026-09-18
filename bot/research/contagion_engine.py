@@ -117,6 +117,7 @@ from statsmodels.stats.multitest import multipletests   # claude code changed: n
 # docstring flagged the drift risk of NOT doing so) — this file was the one
 # left behind. Same fix applied here now.
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO
+from bot.research.data_access import load_ohlcv_via_provider  # claude code changed: Data-Layer Audit migration (F.3) — see DATA_LAYER_ARCHITECTURE_AUDIT.md
 
 warnings.filterwarnings('ignore')           # Suppress non-critical pandas warnings
 
@@ -1284,73 +1285,68 @@ class DivergenceICReporter:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run_contagion_research(
-    data_dir:   str = "data",
     output_dir: str = "research_data",
     interval:   str = "1h",
+    altcoin_symbols: Optional[List[str]] = None,   # claude code changed: new — was hardcoded to module-level ALTCOIN_SYMBOLS with no override, so excluding a symbol (e.g. LUNA_USDT — see the caller's own investigation) required editing this file. None preserves exact existing behavior (falls back to ALTCOIN_SYMBOLS), matching the same "symbols = altcoin_symbols or ALTCOIN_SYMBOLS" convention ContagionEngine's own __init__ and calculate_selected_features() already use.
+    start=None,
+    end=None,
 ) -> Dict[str, pd.DataFrame]:
     """
-    Standalone runner. Loads CSVs, runs engine, saves enriched output,
-    and prints a quick IC report for rapid hypothesis screening.
+    Standalone runner. Fetches all symbols via the canonical
+    MarketDataProvider contract, runs engine, saves enriched output, and
+    prints a quick IC report for rapid hypothesis screening.
 
     Run from project root:
         python -m bot.research.contagion_engine
 
+    claude code changed: Data-Layer Architecture Audit migration (F.3,
+    DATA_LAYER_ARCHITECTURE_AUDIT.md) — was a direct data_dir/*.csv read
+    loop (data_dir param removed). `start`/`end` default to a 5-year
+    lookback ending now, matching this codebase's existing data/*.csv
+    history depth — same convention as cointegration_engine.py's and
+    regime_conditional_pairs.py's migrated drivers.
+
     Parameters
     ----------
-    data_dir   : Folder containing symbol CSVs. Default "data".
     output_dir : Folder to save enriched CSVs. Default "research_data".
-    interval   : Candle interval in filenames. Default "1h".
+    interval   : Candle timeframe. Default "1h".
+    altcoin_symbols : Which altcoins to include. Default: all ALTCOIN_SYMBOLS.
 
     Returns
     -------
     Dict[str, pd.DataFrame] — enriched DataFrames ready for full validation.
     """
 
+    from datetime import datetime, timedelta, timezone
     from pathlib import Path
 
     logger.info("=" * 70)
     logger.info("CONTAGION ENGINE — HYPOTHESIS 7 — STANDALONE RUN")
     logger.info("=" * 70)
 
-    # ── Load all 7 symbol CSVs ────────────────────────────────────────────────
-    all_symbols = [BTC_SYMBOL] + ALTCOIN_SYMBOLS
+    if end is None:
+        end = datetime.now(timezone.utc)
+    if start is None:
+        start = end - timedelta(days=5 * 365)
+
+    # ── Fetch symbols via the canonical provider contract ──────────────────────
+    symbols     = altcoin_symbols or ALTCOIN_SYMBOLS   # claude code changed: new
+    all_symbols = [BTC_SYMBOL] + symbols
     data: Dict[str, pd.DataFrame] = {}
 
     for symbol in all_symbols:
-
-        # claude code changed: was f"{symbol}_{interval}.csv" directly on
-        # the slash-format symbol — see _symbol_to_csv_stem()'s docstring
-        # for the real bug this fixes.
-        csv_path = Path(data_dir) / f"{_symbol_to_csv_stem(symbol)}_{interval}.csv"
-
-        if not csv_path.exists():
-            logger.warning(f"  {symbol}: not found at {csv_path}")
-            continue
-
-        try:
-            df = pd.read_csv(csv_path)
-
-            # Parse timestamp and set as DatetimeIndex
-            if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-                df.set_index("timestamp", inplace=True)
-
-            # Ensure numeric OHLCV columns
-            for col in ["open", "high", "low", "close", "volume"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-            df.dropna(subset=["close"], inplace=True)
-            df.sort_index(inplace=True)
-
+        # claude code changed: load_ohlcv_via_provider (slash-format
+        # symbol goes straight through — see that function's docstring;
+        # this engine's canonical in-memory symbol format is already
+        # slash-based, unlike cointegration_engine.py's underscore-joined
+        # UNIVERSE, and the helper handles both).
+        df = load_ohlcv_via_provider(symbol, ASSET_CLASS_CRYPTO, interval, start, end)
+        if df is not None:
             data[symbol] = df
             logger.info(f"  Loaded {symbol}: {len(df):,} candles")
 
-        except Exception as e:
-            logger.error(f"  Failed to load {symbol}: {e}")
-
     # ── Run the engine ────────────────────────────────────────────────────────
-    engine       = ContagionEngine()
+    engine       = ContagionEngine(altcoin_symbols=symbols)   # claude code changed: was ContagionEngine() with no altcoin_symbols passed, so this always fell back to the full module-level ALTCOIN_SYMBOLS regardless of what this function's own new parameter said
     enriched     = engine.calculate_all(data)
 
     # ── Quick IC report before saving ─────────────────────────────────────────
@@ -1392,7 +1388,7 @@ def run_contagion_research(
     # ── Save enriched CSVs ────────────────────────────────────────────────────
     Path(output_dir).mkdir(exist_ok=True)
 
-    for symbol in ALTCOIN_SYMBOLS:
+    for symbol in symbols:   # claude code changed: was ALTCOIN_SYMBOLS — see this function's new altcoin_symbols param
         if symbol not in enriched:
             continue
         # claude code changed: same fix as the input-loading path above —
@@ -1418,7 +1414,6 @@ def run_contagion_research(
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     run_contagion_research(
-        data_dir="data",
         output_dir="research_data",
         interval="1h",
     )

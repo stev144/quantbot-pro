@@ -648,10 +648,24 @@ class KalmanPositionSizer:
         Beta uncertainty: higher uncertainty → smaller position
         Prediction error: elevated filter error → smaller position
 
-    claude code changed: dropped "stronger signals (|z| > 3) get larger
-    positions" — audit on real trade logs found STRONG signals (|z| >= 3.0)
-    have a LOWER win rate than NORMAL on both AVAX/ATOM and DOT/LINK, so
-    sizing them up was backwards. See size_position()'s Step 2 comment.
+    claude code changed: entry-depth-scaled position size, REINSTATED —
+    see size_position()'s Step 2 comment for the full reasoning. The
+    original "stronger signals get larger positions" was dropped after an
+    audit found STRONG (|z|>=3.0) had a LOWER win rate than NORMAL on both
+    AVAX/ATOM and DOT/LINK — but that audit ran under the pre-P&L-bug-fix,
+    pre-trade-relative-stop code, where a deeper entry was mechanically
+    closer to a FIXED stop level, not because it carried more genuine
+    edge. Both of those confounds are now fixed (see model_governance_log.md,
+    "P&L normalisation bug" and "Structural bias audit" entries), and under
+    the current design `entry_ic` — IC(|entry_z|, realised P&L) — is
+    robustly, cross-pair-replicated POSITIVE (0.33-0.44 across three
+    pairs): deeper entries now demonstrably earn more, not less. Target
+    distance and minimum hold time are already scaled continuously by
+    entry depth (see target_zscore/min_hold_hours below); size was the
+    one dimension still flat at every entry regardless of depth. This is
+    the exit-rule-redesign direction model_governance_log.md's "Fourth
+    design attempt" and "P&L normalisation bug" entries named and left
+    untried: "sizing... scaled continuously by entry_ic-implied edge."
     """
 
     def __init__(
@@ -743,19 +757,23 @@ class KalmanPositionSizer:
         # This is the baseline position before any adjustments
         kelly_usdt = self.capital * self.safe_kelly
 
-        # ── Step 2: Signal strength label (size no longer varies with it) ────
-        # claude code changed: was sizing STRONG (|z|>=3.0) trades 1.5x normal,
-        # on the stated rationale that "higher z-scores have higher win rates."
-        # Audit on real trade logs (AVAX/ATOM and DOT/LINK, both) found the
-        # opposite: STRONG trades had a LOWER win rate than NORMAL in both
-        # (83.5% vs 95.5% on AVAX/ATOM; 79.8% vs 93.8% on DOT/LINK) — because a
-        # bigger entry |z| is mechanically closer to a fixed stop level (see
-        # EXIT_ZSCORE_STOPLOSS/EXIT_ZSCORE_STOP_DISTANCE comments), not because
-        # it carries more genuine edge. Sizing UP the bucket that performs
-        # WORSE was actively harmful, independent of whether the underlying
-        # signal has any real predictive power at all. Every entry now gets
-        # the same size; signal_strength is kept only as a label for analysis.
-        signal_multiplier = 1.00
+        # ── Step 2: Entry-depth-scaled size — REINSTATED, continuous this time ──
+        # claude code changed: exit-rule redesign, "sizing scaled continuously
+        # by entry_ic-implied edge" (model_governance_log.md, the one untried
+        # direction from the Fourth design attempt / P&L normalisation bug
+        # entries). Replaces the flat 1.00 multiplier with a continuous scale
+        # anchored at 1.0x at the entry threshold itself — a threshold-level
+        # entry (|z|=2.0) is sized IDENTICALLY to before this change, so this
+        # never makes any single entry smaller than the old flat design, only
+        # larger for entries beyond the threshold, proportional to how much
+        # further beyond it they are. Uses the same
+        # "BASE * |entry_z| / ENTRY_ZSCORE_THRESHOLD" scaling convention
+        # target_zscore/min_hold_hours below already use, not a new pattern.
+        # No separate cap on the multiplier itself — MAX_POSITION_FRACTION
+        # (Step 5 below) is the real, pre-existing safety bound on any single
+        # trade's capital exposure regardless of how large this multiplier
+        # gets, exactly as it already was before this change.
+        signal_multiplier = abs(zscore) / ENTRY_ZSCORE_THRESHOLD
         signal_strength   = "STRONG" if abs(zscore) >= ENTRY_ZSCORE_STRONG else "NORMAL"
 
         # ── Step 3: Beta uncertainty adjustment ───────────────────────────────
@@ -862,8 +880,6 @@ def _parse_pair_from_kalman_filename(kalman_csv: str) -> Tuple[str, str, str]:  
     Fails loud — never guesses — if zero or more than one split matches,
     exactly the same "no silent guessing" contract the old regex had.
     """
-    from bot.instruments import get_instrument   # claude code changed: new — local import avoids a module-load-order dependency, matching this file's existing lazy-import style for cost_model
-
     match = _KALMAN_FILENAME_RE.match(Path(kalman_csv).name)
     if not match:
         raise ValueError(
@@ -872,7 +888,19 @@ def _parse_pair_from_kalman_filename(kalman_csv: str) -> Tuple[str, str, str]:  
             f"kalman_filter_engine.py uses for real pair output "
             f"(e.g. 'AVAX_USDT_ATOM_USDT_kalman.csv')."
         )
-    stem = match.group(1)
+    return _split_pair_string(match.group(1))
+
+
+def _split_pair_string(stem: str) -> Tuple[str, str, str]:   # claude code changed: new — extracted from _parse_pair_from_kalman_filename's own body (the "_kalman.csv" filename check was never load-bearing to this logic, only to how the stem is obtained). Lets callers with an already-known underscore-joined pair string (e.g. permutation_test_engine.py's own `pair_name` argument, "AVAX_USDT_ATOM_USDT") resolve symbol_a/symbol_b the same registry-backed way, without requiring a "*_kalman.csv"-named file to exist.
+    """
+    Disambiguate an underscore-joined "<SYMBOL_A>_<SYMBOL_B>" string (e.g.
+    "AVAX_USDT_ATOM_USDT") into (pair_name, symbol_a, symbol_b) by finding
+    the ONE split point where both halves resolve to a real registered
+    instrument. Fails loud — never guesses — if zero or more than one
+    split matches.
+    """
+    from bot.instruments import get_instrument   # claude code changed: new — local import avoids a module-load-order dependency, matching this file's existing lazy-import style for cost_model
+
     tokens = stem.split("_")
     matches = []
     for split_idx in range(1, len(tokens)):
@@ -885,9 +913,8 @@ def _parse_pair_from_kalman_filename(kalman_csv: str) -> Tuple[str, str, str]:  
 
     if len(matches) != 1:
         raise ValueError(
-            f"'{Path(kalman_csv).name}': could not uniquely resolve a symbol_a/symbol_b split "
-            f"against the instrument registry (found {len(matches)} candidate split(s): {matches}). "
-            f"Both halves of '<SYMBOL_A>_<SYMBOL_B>_kalman.csv' must be registered instruments."
+            f"'{stem}': could not uniquely resolve a symbol_a/symbol_b split "
+            f"against the instrument registry (found {len(matches)} candidate split(s): {matches})."
         )
     symbol_a, symbol_b = matches[0]
     return f"{symbol_a}/{symbol_b}", symbol_a, symbol_b
@@ -952,6 +979,7 @@ class EntryExitEngine:
         signal_source:         str  = "kalman",   # claude code changed: new param — "kalman" (adaptive, default, kept for backward-compat) or "ols" (static, validated — see SIGNAL_SOURCE_COLUMNS module comment)
         venue_id:              str  = "binance",   # claude code changed: new param — completes Phase 1C Step 3, see cost_model import comment above
         asset_class:           str  = ASSET_CLASS_CRYPTO,   # claude code changed: new param — same
+        disable_target_exit:   bool = False,   # claude code changed: new — exit-rule redesign, "fixed holding period" attempt (model_governance_log.md). False preserves every existing construction site's behavior unchanged. True removes Exit 1 (TARGET, the z-score-crossing check) from _check_exit_conditions() entirely, leaving STOPLOSS (safety, rare-tail) and TIMESTOP as the only two exit paths — TIMESTOP then becomes the PRIMARY, not backstop, exit, so callers using this mode should also pass an exit_time_stop_hours tied to the pair's own half-life (e.g. 1x), not the old 2x-half-life backstop value. The point: TARGET's "does z cross back near its own mean" check is exactly the mechanism diagnosed as producing the same inflated win-rate/Sharpe on shuffled data as on real data (see the "Why entry_ic won't move" and five prior design-attempt entries) — a pure time exit never asks that question at all.
     ) -> None:
         """
         Initialise the entry/exit engine with all strategy parameters.
@@ -990,6 +1018,7 @@ class EntryExitEngine:
         self.exit_min_hold_base_hours = exit_min_hold_base_hours  # claude code changed: new — actual per-trade min hold is this * |entry_z| / entry_threshold, see TradeRecord.min_hold_hours
         self.resample_hours    = resample_hours         # claude code changed: new — see CANDLE_RESAMPLE_HOURS module comment; applied once in _load_kalman_data()
         self.exit_time_stop    = exit_time_stop_hours   # Maximum hours to hold position
+        self.disable_target_exit = disable_target_exit  # claude code changed: new — see __init__'s param comment
         self.exit_partial_z    = exit_partial_zscore    # z-score for partial exit
         self.exit_partial_frac = exit_partial_fraction  # Fraction to close at partial exit
         self.require_confirm   = require_confirmation   # Require lag z-score confirmation
@@ -1747,7 +1776,14 @@ class EntryExitEngine:
         # claude code changed: was `self.exit_min_hold_hours` (flat 24h for
         # every trade) — now checks THIS trade's own min_hold_hours, scaled
         # to its entry depth (see EXIT_MIN_HOLD_BASE_HOURS module comment).
-        if hours_held >= trade.min_hold_hours:
+        # claude code changed: new — exit-rule redesign, "fixed holding
+        # period" attempt. When disable_target_exit is set, TARGET never
+        # fires at all — this is the entire point of that mode: remove the
+        # "does z cross back near its own mean" check, which is exactly the
+        # mechanism diagnosed as producing the same inflated win-rate/Sharpe
+        # on shuffled data as on real data. STOPLOSS and TIMESTOP below are
+        # unaffected; TIMESTOP becomes the primary exit in this mode.
+        if not self.disable_target_exit and hours_held >= trade.min_hold_hours:
             if trade.direction == "LONG_SPREAD" and zscore >= trade.target_zscore:
                 return "TARGET"    # Spread has crossed through equilibrium — take profit
             if trade.direction == "SHORT_SPREAD" and zscore <= trade.target_zscore:

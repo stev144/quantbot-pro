@@ -244,6 +244,47 @@ figure.
         </div>
     </div>
 
+    <!-- ================= PAIRS PERFORMANCE ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Pairs Performance</span>
+            <span class="term-section-meta">real cointegration scan — bot/research/forex_cointegration_scan.py</span>
+        </div>
+        <div class="term-section-body">
+            {% if pairs_performance.available %}
+                {% if pairs_performance.any_passed %}
+                <p class="text-dim">See <a href="{% url 'pairs_performance' %}">Research &rarr; Pairs Performance</a> for the full backtest on any passing pair.</p>
+                {% else %}
+                <div class="term-panel" style="margin-bottom:12px">
+                    <span class="badge neg">0 PAIRS VALIDATED</span>
+                    <p class="text-dim">No Forex pair currently passes this platform's cointegration validation bar (same engine and thresholds Crypto's pairs use, timeframe-unit-corrected for Forex — see research_data/model_governance_log.md's "Forex cointegration scan" entry for full methodology). Closest candidates below, with the real reason each was rejected.</p>
+                </div>
+                {% endif %}
+                {% for label, scan in pairs_performance.scans.items %}
+                <div class="metric-label" style="margin-bottom:6px">{{ label }} scan — {{ scan.n_passed }}/{{ scan.n_total }} passed</div>
+                <div class="term-table-wrap" style="margin-bottom:16px">
+                    <table class="term-table">
+                        <thead><tr><th>Pair</th><th class="num">ADF p</th><th class="num">Half-Life (h)</th><th>Result</th><th>Reject Reason</th></tr></thead>
+                        <tbody>
+                            {% for c in scan.top_candidates %}
+                            <tr class="{% if c.passes_filters %}row-win{% else %}row-loss{% endif %}">
+                                <td class="label-cell">{{ c.pair_name }}</td>
+                                <td class="num">{{ c.adf_pvalue|floatformat:4 }}</td>
+                                <td class="num">{{ c.half_life_hours|floatformat:1 }}</td>
+                                <td><span class="badge {% if c.passes_filters %}pos{% else %}neg{% endif %}">{% if c.passes_filters %}PASSED{% else %}REJECTED{% endif %}</span></td>
+                                <td class="text-dim">{{ c.reject_reason|truncatechars:80 }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endfor %}
+            {% else %}
+            <div class="unavailable">{{ pairs_performance.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
+
     <!-- ================= CROSS-SECTIONAL OPPORTUNITIES ================= -->
     <div class="term-section">
         <div class="term-section-head">

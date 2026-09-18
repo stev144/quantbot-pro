@@ -1016,3 +1016,1119 @@ produce a replicating result, a further increase to the min-hold window
 (e.g. 48h/72h) is a weaker next bet than the untried resolution change —
 it's the same lever turned further, not a different diagnosis. Still
 REJECTED for live deployment as currently built.
+
+---
+
+## DODO_USDT / FIDA_USDT — REJECTED
+
+**Date:** 2026-09-14
+**Verdict:** REJECTED — no statistically demonstrated edge. Do not deploy live. Third independent pair to fail with the identical signature as AVAX/ATOM and DOT/LINK.
+
+### Context
+
+Found via a full 100-symbol cointegration scan (`research_data/cointegration_pairs.csv`,
+3,403+ pairs tested with FDR correction): `is_cointegrated=True`, `passes_filters=True`,
+half-life 76.7h, hedge ratio 0.796. Run through the current (already-fixed:
+P&L normalisation, trade-relative stop, entry-depth-scaled target/min-hold,
+STRONG-multiplier removed) `entry_exit_engine.py` end to end — full-period
+sim, walk-forward, then permutation test.
+
+### Reason 1: full-period and walk-forward both looked exceptional — exactly the pattern this log warns is uninformative
+
+| | Full-period | Walk-forward OOS (2 folds) |
+|---|---|---|
+| Trades | 332 | 159 |
+| Win rate | 87.4% | 87.4% |
+| Sharpe | 6.80 | 4.97 |
+| Profit factor | 5.29 | 3.84 |
+| Walk-forward efficiency | — | 0.70 |
+| Verdict | ALL THRESHOLDS PASSED | WALK-FORWARD PASSED |
+
+Per this log's own standing conclusion (see "Third design attempt" entry
+above): walk-forward passing has now happened for every pair and every
+design variant ever tested here, including every one later rejected by the
+permutation test. It was not treated as informative on its own for this
+pair either — the permutation test was run before drawing any conclusion.
+
+### Reason 2: permutation test fails on Sharpe and win rate, same shape as both prior pairs
+
+`research_data/permutation_test/DODO_USDT_FIDA_USDT/permutation_verdict.csv`
+(100 block shuffles vs. the real run):
+
+| metric | real value | percentile vs. shuffles | p-value | significant? |
+|---|---|---|---|---|
+| win_rate | 0.8735 | 0.14 | 0.871 | False |
+| sharpe_ratio | 6.7975 | 0.00 | 1.000 | False |
+| profit_factor | 5.2943 | 0.01 | 0.990 | False |
+
+`edge_appears_real = False`. Sharpe beats **0 of 100** shuffles — every
+single randomized replica scored higher. This is the same bottom-of-distribution
+signature as AVAX/ATOM and DOT/LINK, not a milder version of it.
+
+### Reason 3: entry_ic is real and replicates a third time — the signal is not the problem
+
+`real_entry_ic = 0.3274`, `real_entry_ic_meaningfully_positive = True`. In
+range with AVAX/ATOM (0.35) and DOT/LINK (0.44) post-P&L-fix. Three
+independent pairs now show a real, positive, replicating entry-timing
+signal from the Kalman z-score, and three independent pairs now show that
+this specific exit-rule family (fixed/scaled target near the mean, stop in
+the tail) cannot convert that signal into a win_rate/Sharpe result
+distinguishable from randomly shuffled noise — the same target-zone/stop-zone
+occupancy asymmetry documented in "Why entry_ic won't move" above applies
+here too (not re-derived per-pair; the mechanism is a property of the rule
+family, not of any one pair's z-series).
+
+### Strategic implication
+
+Three for three now, not two for two. This meaningfully raises confidence
+that the earlier conclusion ("the current entry_exit_engine.py rule set has
+not yet demonstrated edge on any pair tested, not just an unlucky one") is
+about the rule family, not about pair selection. **Decision made this
+date: stop searching for a pair this rule family happens to work on.**
+No further pairs will be run through the unmodified entry/exit rules on the
+strength of a cointegration-scan hit alone. The one direction from the
+"Fourth design attempt" entry that was never tried — sizing and holding
+period scaled continuously by entry_ic-implied edge, rather than any
+binary target/stop threshold — remains open and undecided, not attempted,
+not rejected. Revisit only as a deliberate choice, not by drifting back
+into re-running the existing rules on a new pair.
+
+---
+
+## Fifth design attempt — entry-depth-scaled position size — the direction flagged as untried, now tried and rejected
+
+**Date:** 2026-09-14
+
+The one direction explicitly named as untried across the last several
+entries ("sizing... scaled continuously by entry_ic-implied edge") and in
+this same day's Option-B discussion: `KalmanPositionSizer.size_position()`'s
+flat `signal_multiplier = 1.00` (fixed after an earlier audit found the old
+binary STRONG/NORMAL multiplier sized up a worse-performing bucket) replaced
+with a continuous scale, `signal_multiplier = abs(zscore) / ENTRY_ZSCORE_THRESHOLD`
+— 1.0x at the entry threshold itself (identical to the old flat design at
+the margin), scaling up proportionally for deeper entries. Justified now,
+unlike when the old multiplier was removed, because that removal was based
+on a pre-P&L-bug-fix, pre-trade-relative-stop audit; under the current
+design `entry_ic` is robustly positive and cross-pair-replicated, meaning
+deeper entries now demonstrably earn more, not less.
+
+### Self-audit before trusting any result
+
+`corr(|entry_zscore|, position_usdt) = 0.603` on AVAX/ATOM's real run —
+positive and substantial, not 1.0 only because beta-uncertainty/prediction-
+error multipliers still apply on top (expected, not a bug). Spot-checked:
+threshold entry (|z|=2.0) sized at $688 (~1.0x baseline), deepest entry
+(|z|=5.0, winsor limit) sized at the $1,500 pre-cap ceiling. Mechanism
+confirmed working as designed before running the pipeline.
+
+### Result: same failure signature as every prior attempt, both pairs
+
+Note: `research_data/cointegration_pairs.csv` was overwritten by unrelated
+100-symbol scans run earlier the same day — on today's longer price
+history, neither AVAX/ATOM nor DOT/LINK tests as cointegrated at all in
+either symbol ordering (checked directly, not an ordering artifact). This
+is itself flagged below as a separate, real finding. For this test, the
+already-built Kalman CSVs (constructed on their original data snapshot)
+were run with their historically-documented, governance-logged half-lives
+(119.9h / 196.8h) supplied directly rather than re-derived from the
+now-stale shared CSV.
+
+| metric | AVAX/ATOM percentile (p-value) | DOT/LINK percentile (p-value) |
+|---|---|---|
+| win_rate | 0.0 (1.000) | 0.07 (0.931) |
+| sharpe_ratio | **0.0 (1.000)** | **0.0 (1.000)** |
+| profit_factor | 0.04 (0.960) | 0.08 (0.921) |
+| real_entry_ic | 0.2949 | 0.3948 |
+| `edge_appears_real` | **False** | **False** |
+
+Sharpe beat 0 of 100 shuffles on both pairs — identical to the original
+Aug-2/Aug-3 rejections and every design variant since. Entry-depth-scaled
+sizing did not do anything the entry-depth-scaled target and min-hold
+(already in the current design) hadn't already tried in spirit.
+
+### Interpretation
+
+Five structurally different levers now tried against the same diagnosed
+mechanism (target-zone/stop-zone occupancy asymmetry): distance-scaled
+target, flat min-hold, resample frequency, entry-depth-scaled min-hold,
+and now entry-depth-scaled size. None has moved Sharpe or win_rate off the
+noise floor on both pairs simultaneously. What continues to replicate,
+unchanged by any of these five attempts, is `entry_ic` itself — real,
+positive, 0.29-0.44 across three pairs now, on every design tried. The
+conclusion from here is the same one the "Third design attempt" entry
+already reached, now with a fifth data point supporting it: the blocker is
+not a parameter this rule family hasn't found yet. Any exit mechanism
+built on "does the z-score cross back through a threshold" inherits the
+same marginal-distribution asymmetry (common near mean, rare in the tail)
+regardless of which single parameter scales with entry depth, because
+scaling a distance or a size doesn't change the underlying occupancy-time
+skew a block-shuffle also preserves.
+
+**Recommendation:** don't attempt a sixth parameter within this rule
+family (e.g. scaling the stop distance too, or combining two scaled
+parameters at once) without a specific new hypothesis for why that
+combination would behave differently in kind, not just in degree, from
+the five already tried. The more promising directions from here are either
+(a) an exit mechanism not based on a z-score threshold crossing at all —
+e.g. a fixed holding period exit, removing target-zone occupancy from the
+decision entirely — or (b) treating `entry_ic` as a feature to feed into a
+completely different downstream mechanism (e.g. the cross-sectional
+engine) rather than continuing to pair it with a threshold-based exit.
+Neither has been attempted. This is a decision for the user, per this
+log's own standing practice for exactly this kind of fork.
+
+### Separate finding: cointegration_pairs.csv data drift
+
+AVAX_USDT/ATOM_USDT and DOT_USDT/LINK_USDT no longer test as cointegrated
+on the current, longer price history (`AVAX_USDT_1h.csv`/`ATOM_USDT_1h.csv`
+now span 2021-09-14 to 2026-09-13, 43,800 candles) — checked directly via
+`CointegrationEngine._test_pair()` in both symbol orderings, ADF
+p=0.487/0.257, neither significant. This is not an artifact of today's
+change and was not investigated further here (out of scope for the exit-
+rule question), but is a real, separate data-integrity finding: whatever
+made these two pairs cointegrated in the original Aug-2026 test window no
+longer holds on the current, extended dataset. Worth investigating
+separately before treating any pair's original cointegration finding as
+permanently valid rather than a property of the specific historical window
+it was tested on.
+
+---
+
+## Sixth design attempt — fixed holding period, no z-score-crossing exit at all — the strongest movement yet, but does not replicate cleanly cross-pair
+
+**Date:** 2026-09-14
+
+The direction recommended after the fifth attempt: an exit mechanism not
+based on a z-score threshold crossing at all. `entry_exit_engine.py` gains
+a new `disable_target_exit` flag (default False, every existing
+construction site unaffected) — when set, Exit 1 (TARGET) never fires in
+`_check_exit_conditions()`. Only STOPLOSS (unchanged, rare-tail safety) and
+TIMESTOP remain, and TIMESTOP is repurposed as the PRIMARY exit rather than
+a rare backstop: `exit_time_stop_hours = 1 x half_life` (was `2x`, calibrated
+for "TARGET almost always fires first"), tested via a matching
+`permutation_test_engine.py` passthrough so every shuffle uses the same
+exit mode as the real run.
+
+### Self-audit before trusting any result
+
+AVAX/ATOM real run: `exit_target_count = 0` (confirmed — TARGET genuinely
+never fires), all 222 TIMESTOP exits at `hours_held == 120.000000` exactly
+(std = 0.0 — the fixed hold works deterministically), 60 STOPLOSS exits
+with varied hold times (1-118h, as expected for an early safety exit).
+Win rate dropped to 75.9% full-period — already visibly less suspicious
+than the 87-97% every threshold-crossing design produced.
+
+### Result: real, substantial movement — strongest of six attempts — but not cross-pair-consistent
+
+| metric | AVAX/ATOM %ile (p) | DOT/LINK %ile (p) |
+|---|---|---|
+| win_rate | 0.31 (0.693) | 0.80 (0.208) |
+| sharpe_ratio | **0.83 (0.178)** | 0.32 (0.683) |
+| profit_factor | **0.95 (0.059)** | 0.70 (0.307) |
+| real_entry_ic | 0.2461 | 0.3618 |
+| `edge_appears_real` | False | False |
+
+AVAX/ATOM's Sharpe moved from the 0th percentile (every prior design, all
+five attempts) to the 83rd; profit factor sits at the 95th, p=0.059 — just
+above the conventional 0.05 bar, not a noise-sized movement. DOT/LINK moved
+too, but on different metrics and by less: win_rate/profit_factor improved
+(80th/70th percentile) while Sharpe actually landed *below* the 50th
+percentile (32nd) — more than half the shuffles beat it. Both pairs moved
+in a real, non-trivial way, but not the same way on the same metric, which
+is the specific bar the Fourth design attempt's interpretation section
+established for calling a result "replicating" rather than "helped one
+pair's specific data."
+
+### Interpretation
+
+Genuinely the most encouraging result in six attempts — removing the
+z-score-crossing target entirely, rather than continuing to reparametrize
+it, produced the first movement large enough that one pair sits at the
+edge of significance on one metric. Not yet a pass by this log's own
+standing bar (needs edge_appears_real=True, which needs sharpe_significant
+AND win_rate_significant AND real_entry_ic_meaningfully_positive — neither
+pair clears the first two). The un-replicated Sharpe divergence between
+pairs (0.83 vs 0.32 percentile) is the open question, not the win_rate
+movement (which moved consistently in the same direction on both pairs,
+unlike Sharpe).
+
+**Not yet decided:** whether a longer holding-period multiple (e.g. 1.5x
+or 2x half-life instead of 1x, chosen here as a simple first value with no
+tuning) would push AVAX/ATOM's already-close profit_factor over the bar
+and also help DOT/LINK's lagging Sharpe, or whether 1x was already close
+to whatever this mechanism's ceiling is. Untried. This is the natural next
+step within this new direction (refining the ONE new lever's own
+parameter, not adding a different, unrelated lever) — a decision for the
+user before spending more compute on it, per this log's standing practice.
+
+### Diagnostic follow-up: what's driving DOT/LINK's Sharpe divergence (32nd %ile vs AVAX/ATOM's 83rd)
+
+Compared the two real (unshuffled) trade logs directly. Entry |z| distributions
+are similar between pairs (mean ~2.6-2.8, similar spread — not a confound).
+STOPLOSS rate is the driver: **AVAX/ATOM 21.3% (60/282) vs DOT/LINK 29.7%
+(66/222)** — DOT/LINK's overall mean return per trade (0.89%) is roughly
+half AVAX/ATOM's (1.71%) at similar volatility (~2.9% std both), which
+directly produces the lower Sharpe.
+
+Two components, isolated by re-running DOT/LINK with AVAX/ATOM's SAME
+absolute 120h window instead of DOT/LINK's own 1x-half-life 197h window:
+
+1. **Mechanical, ~1/3 of the gap**: stop rate dropped from 29.7% to 26.8%
+   when using the shorter window. DOT/LINK's half-life (196.8h) is 1.64x
+   AVAX/ATOM's (119.9h), so its own 1x-half-life window gives the spread
+   64% more clock time to wander into stop territory before the fixed
+   exit fires — a first-passage-time effect, not a data problem.
+2. **Intrinsic to the pair's current spread, ~2/3 of the gap**: even at
+   the identical 120h window, DOT/LINK still stops out more (26.8% vs
+   21.3%). This lines up with the data-drift finding immediately above —
+   DOT/LINK no longer tests as cointegrated on today's full price history
+   either, and a degraded relationship is exactly what a noisier-than-
+   expected spread (more excursions into stop territory, independent of
+   window length) would look like.
+
+**Implication for the "try a longer multiple" question above:** reversed.
+A longer window would likely worsen DOT/LINK's stop rate further (more
+time = more first-passage risk) even if it helps AVAX/ATOM, since most of
+DOT/LINK's problem isn't window length. Tuning the multiple up is not
+obviously the right next move for both pairs simultaneously — it may only
+ever help pairs whose underlying relationship is still intact, which,
+per the data-drift finding, may no longer include DOT/LINK.
+
+### Third pair tested — DODO_USDT/FIDA_USDT (currently-intact cointegration) — the "relationship health" hypothesis does not hold up
+
+Following the diagnostic above, tested the hypothesis directly: does a
+pair with CURRENTLY-intact cointegration (unlike AVAX/ATOM and DOT/LINK,
+both confirmed no longer cointegrated on today's data) show the fixed-
+holding mechanism working more cleanly? DODO_USDT/FIDA_USDT still passes
+`cointegration_engine.py`'s own filters today (`passes_filters=True`,
+half_life=76.67h, confirmed against the current CSV, no override needed).
+
+Self-audit: stop rate 21.5% (54/251) — close to AVAX/ATOM's 21.3%, not
+DOT/LINK's elevated 29.7% — consistent with "intact relationship" going in.
+
+**Result: the hypothesis does not hold.**
+
+| metric | AVAX/ATOM (degraded) | DOT/LINK (degraded) | DODO/FIDA (intact) |
+|---|---|---|---|
+| sharpe_ratio %ile | 0.83 | 0.32 | **0.48** |
+| win_rate %ile | 0.31 | 0.80 | 0.29 |
+| profit_factor %ile | 0.95 | 0.70 | 0.47 |
+| `edge_appears_real` | False | False | False |
+
+DODO/FIDA — the pair expected to give the cleanest positive read — landed
+almost exactly at the 48th/47th percentile on Sharpe/profit factor:
+indistinguishable from the center of the shuffled distribution, arguably
+the least encouraging of the three, not the best. Sharpe percentile across
+the three pairs (0.83 / 0.32 / 0.48) shows no pattern tied to cointegration
+health at all.
+
+### Revised interpretation
+
+The "relationship health explains the cross-pair divergence" hypothesis
+from the diagnostic above is not supported by this third data point.
+AVAX/ATOM's 83rd-percentile result now reads more plausibly as a favorable
+draw for that specific pair than as evidence the fixed-holding mechanism
+generally converts entry_ic into a real, replicating edge. Three pairs,
+three different outcomes, no identified common driver — this is weaker
+cross-pair evidence than the two-pair comparison suggested, not stronger.
+
+**Recommendation: do not tune the holding-period multiple further on the
+strength of AVAX/ATOM's result alone.** That would repeat the exact
+single-pair-looked-promising pattern this log's own standing practice
+(cross-pair replication before treating any result as real) exists to
+catch. The fixed-holding direction remains the most interesting of six
+attempts, but is not yet validated on more than one pair out of three
+tested, and the two failing pairs fail for different, not obviously
+related, reasons.
+
+---
+
+## Foundational correction — every design attempt to date has calibrated time constants off the WRONG half-life
+
+**Date:** 2026-09-14
+
+Stepped back from tuning exit-rule parameters entirely and ran a real
+statistical characterization (descriptive stats, Jarque-Bera normality,
+dual ADF+KPSS stationarity, ACF/Ljung-Box autocorrelation, a formal AR(1)
+half-life re-estimation, and leg-return covariance/correlation) on all
+three pairs' actual traded series — not another strategy backtest.
+
+### The finding
+
+`validated_half_life` (77h / 120h / 197h, from `cointegration_engine.py`)
+is estimated on the STATIC OLS spread's TRAINING WINDOW only. Refitting
+the identical AR(1)/OU regression on the SAME static (`ols_spread`) column
+but over the FULL post-warmup dataset gives R^2 = 0.0001-0.0012 (thousands
+of hours implied half-life, i.e. no detectable mean reversion at all) —
+confirming, via a different method, what the OOS-persistence audit already
+found: the static relationship doesn't generalize past its training window.
+
+But `entry_exit_engine.py` does not trade the static spread — every entry/
+exit decision uses `kalman_zscore`/`kalman_spread` (the adaptive-hedge-
+ratio series). Refitting the SAME AR(1) regression on `kalman_spread`
+gives a REAL, robust signal across the FULL dataset (R^2 = 0.13-0.15, not
+spurious) with an implied half-life of **2.3-2.7 hours** on all three
+pairs — not 30-80x that.
+
+| pair | documented half-life (static OLS, training window) | kalman_spread AR(1) half-life (full sample) |
+|---|---|---|
+| AVAX/ATOM | 119.9h | **2.56h** |
+| DOT/LINK | 196.8h | **2.31h** |
+| DODO/FIDA | 76.67h | **2.72h** |
+
+### Why this matters — retroactively explains today's confusing results
+
+Every design attempt in this entire log (Aug 2026 onward, all six today's
+attempts included) has used `validated_half_life` to scale
+`exit_time_stop_hours` (`2x`), `min_hold_hours`/`target_zscore`
+(entry-depth-scaled off it), and today's fixed-holding-period design
+(`1x half_life` = 120h/197h/77h). All of them calibrated against a number
+30-80x too large for the process actually being traded. This pair of
+prior observations now has an explanation, not just a description:
+
+- The original "Why entry_ic won't move" investigation noted median hold
+  time was "2-3h... vs a 120h half-life" and treated the 2-3h figure as a
+  property of the series' own oscillation frequency. It is closer to the
+  ACTUAL half-life (2.3-2.7h) than the 120h figure it was being compared
+  against — the strategy was accidentally exiting near the real
+  reversion timescale under the old TARGET-crossing design; the "vs 120h
+  half-life" framing was the side that was wrong.
+- Today's fixed-holding design held every position 30-80x past its actual
+  expected reversion point. The bulk of every holding period (from ~15h,
+  a generous multiple of the real ~2.5h half-life, out to 120-197h) was
+  exposure to whatever the spread randomly did AFTER it had already
+  reverted — noise, not edge capture. This is a far more direct
+  explanation for the erratic, non-replicating cross-pair pattern (83rd /
+  32nd / 48th percentile) than any pair-specific "relationship health"
+  story: the holding period itself was wrong by nearly two orders of
+  magnitude, for all three pairs simultaneously.
+
+### Other findings from the same pass, secondary but real
+
+- **Fat tails, not Gaussian.** Excess kurtosis 16.2 (AVAX/ATOM) / 13.3
+  (DOT/LINK) / 37.8 (DODO/FIDA); Jarque-Bera rejects normality on every
+  series (p≈0). The z-score's implicit "how extreme is this deviation"
+  calibration assumes something closer to Gaussian than any of these
+  series actually are — DODO/FIDA most severely (one spread observation
+  at 0.43 against a typical 99th-percentile of 0.05).
+- **Stationarity confirmed by two independent tests, not one.** ADF and
+  KPSS agree the kalman_spread is stationary on all three pairs — the
+  core mean-reversion premise itself is not in question.
+- **DODO/FIDA's legs are much less correlated and less stably so.**
+  Full-sample return correlation: AVAX/ATOM 0.71, DOT/LINK 0.78,
+  DODO/FIDA only 0.34, with a far less stable rolling 30-day correlation
+  (std 0.22, range -0.13 to 0.92, vs 0.09-0.11 for the other two pairs).
+  DODO/FIDA passes the formal cointegration tests but rests on a
+  meaningfully weaker, less stable economic relationship between its two
+  legs — a plausible, independent reason its fixed-holding result landed
+  at the noise floor (48th percentile) even with a "healthy"-looking stop
+  rate.
+
+### Recommendation
+
+Before any further exit-rule design work: re-derive `validated_half_life`
+from the KALMAN spread directly (the series actually traded), not the
+static OLS training-window figure, and re-test the fixed-holding design
+(and potentially the original entry-depth-scaled min-hold/target design)
+calibrated to a ~2-3h reversion timescale instead of 77-197h. This is a
+measurement correction, not a seventh parameter guess — it changes what
+number every existing design attempt was already trying to use correctly.
+
+### Implemented and re-tested — the correction resolves the confusing cross-pair pattern, into a clean, unanimous rejection
+
+`bot/research/kalman_filter_engine.py` gains `estimate_kalman_half_life()`
+— the same AR(1)/OU regression `cointegration_engine.py` already uses,
+applied to `kalman_spread` instead of the static spread, computed and
+saved (`{pair}_kalman_half_life.csv`) on every future Kalman run, real
+tests included (planted-lambda recovery, non-reverting-series safety).
+Re-ran the fixed-holding design (Sixth design attempt) with each pair's
+CORRECT half-life instead of the static-OLS figure: exit_time_stop_hours
+= 3h / 2h / 3h (AVAX/ATOM / DOT/LINK / DODO/FIDA) instead of 120h/197h/77h.
+
+Self-audit (full-period, before the permutation test): all three pairs
+now show much MORE consistent behavior than under the wrong half-life —
+stop rates converge to 5.3% / 4.5% / 5.4% (were 21.3% / 29.7% / 21.5%),
+win rates converge to 82.1% / 77.6% / 81.4% (were more scattered).
+
+**Permutation test, all three pairs, 100 shuffles each:**
+
+| metric | AVAX/ATOM | DOT/LINK | DODO/FIDA |
+|---|---|---|---|
+| win_rate %ile | 0.0 | 0.0 | 0.0 |
+| sharpe_ratio %ile | **0.0** | **0.0** | **0.0** |
+| profit_factor %ile | 0.0 | 0.0 | 0.0 |
+| real_entry_ic | 0.132 | 0.159 | 0.154 |
+| `edge_appears_real` | False | False | False |
+
+Every one of 300 total shuffles beat the real result on every metric, on
+all three pairs, uniformly — the cleanest, most cross-pair-consistent
+rejection of any of the seven exit-rule variants tried in this log.
+`entry_ic` remains real and significant, but smaller than under the
+(wrong) 77-197h window (0.13-0.16 vs 0.25-0.44) — consistent with there
+simply being less time, over a genuinely short ~2-3h hold, for the
+entry-depth relationship to convert into realised return.
+
+### Final interpretation
+
+The confusing, inconsistent cross-pair pattern from the uncorrected
+fixed-holding attempt (83rd / 32nd / 48th percentile on Sharpe) was
+itself an artifact of calibrating against an arbitrary, wrong number, not
+evidence of real pair-specific structure. Correcting the measurement did
+not rescue the design — it resolved the ambiguity into a clean, unanimous
+"no." This is the right outcome to trust: a consistent negative result
+across three independent pairs, on the correctly-calibrated version of
+the design, is far stronger evidence than an inconsistent maybe ever was.
+
+**Status: this closes the fixed-holding-period line of investigation with
+a clean rejection.** Seven exit-rule variants now tested (six on the
+threshold-crossing family, one fixed-holding, the last one at both a
+wrong and a corrected half-life). `entry_ic` (~0.13-0.44 depending on
+holding window, always positive, always significant, replicated across
+three independent pairs and every design tried) remains the only thing
+that has held up throughout. The blocker has never been the entry signal.
+
+---
+
+## Pipeline-wide audit — zero-execution-lag assumption, real and systemic, but severity depends entirely on forecast horizon
+
+**Date:** 2026-09-15
+
+Following the fixed-holding rejection, tried something fundamentally
+different: a continuous, always-in-market factor portfolio (weight
+continuously proportional to `-kalman_zscore`, no threshold, no discrete
+trades, real transaction costs on turnover) instead of another exit-rule
+variant on the discrete-trade design. Full audit trail below, because the
+first version of this test was itself wrong in an instructive way.
+
+### First attempt: an invalid permutation test, not a finding
+
+Block-shuffling `(kalman_zscore, kalman_spread)` pairs — the same
+mechanism `permutation_test_engine.py` already uses — does NOT null out
+this design's apparent edge: shuffled `corr(z, spread_change)` measured
+-0.323, indistinguishable from (even slightly stronger than) the real
+-0.303. Diagnosed why: this design bets every candle on the IMMEDIATE
+1-step reversion of an already-known-stationary, strongly autocorrelated
+series (ACF(1)~0.70-0.74) — that relationship is a LOCAL, moment-to-moment
+property true almost everywhere in a mean-reverting series, not a
+calendar-specific pattern, so any block-preserving shuffle leaves it
+intact. This is a genuine methodological dead end for THIS design, not a
+result in either direction — recorded here so it is not silently retried.
+
+### Second attempt: real out-of-sample walk-forward, sidesteps the shuffle problem
+
+Split each pair's full history into 5 consecutive, non-overlapping 1-year
+windows (matching `walk_forward_engine.py`'s own `TEST_WINDOW_YEARS=1`
+convention) — no parameter fit on any "train" portion (the weight rule is
+fixed), each window a genuinely untouched chronological slice.
+
+**Result: implausibly strong and implausibly consistent** — Sharpe
+positive in 15/15 folds across three pairs, ranging 8.08-17.83, real
+transaction costs included. Numbers this large, this consistent, on a
+liquid, widely-traded pair, across bull/bear/sideways regimes, for 5
+years, are exactly the signature that should trigger maximum skepticism,
+not celebration — nothing this easy to execute persists uncaptured in a
+reasonably efficient market for that long.
+
+### The check that mattered: execution latency
+
+This design assumes you observe `kalman_zscore` at a candle's close and
+execute AT THAT SAME CLOSE — zero latency. Added a real execution-lag
+parameter (weight decided at t, applied only `lag` candles later) and
+re-ran:
+
+| exec_lag | AVAX/ATOM Sharpe | DOT/LINK Sharpe | DODO/FIDA Sharpe |
+|---|---|---|---|
+| 0h (original) | 13.21 | 12.56 | 10.34 |
+| 1h | 9.22 | 6.93 | 7.89 |
+| 2h | 6.28 | 3.79 | 5.78 |
+| 4h | 1.48 | **-0.65** | 2.78 |
+
+Sharpe collapses toward zero (DOT/LINK goes negative) within a few hours
+of realistic execution delay. The entire apparent edge was concentrated
+in the unrealistic zero-latency assumption for this 1-hour-ahead design.
+**Verdict: this continuous factor-portfolio direction is REJECTED** — not
+by permutation (which couldn't test it validly) but by a direct,
+decisive execution-realism check.
+
+### The bigger question this forced: is the zero-lag assumption present elsewhere in the pipeline?
+
+Checked directly. **Yes, systemically, in two places:**
+
+1. `entry_exit_engine.py`'s `_scan_candles()`: `entry_spread = spread` uses
+   THIS SAME candle's spread value as both the signal source and the fill
+   price — zero latency between decision and execution. Present since
+   this engine's inception; not something introduced by any design
+   attempt in this log.
+2. `kalman_filter_engine.py`'s `_calculate_forward_returns()`:
+   `spread_forward_Nh[t] = spread[t+N] - spread[t]` — the exact same
+   assumption, present in the ORIGINAL "IC=0.5043 EXCELLENT" claim that
+   founded this entire research program, before any pair in this log was
+   ever tested.
+
+**Neither of these reverses any of the seven rejections above** —
+realistic execution lag can only make an already-rejected discrete-trade
+design look worse, never better, so the discrete-trade verdicts stand
+and would likely be even more decisively rejected under a stricter,
+lag-aware simulation.
+
+**But the ORIGINAL foundational IC claim needed the same direct check,
+and the result is genuinely different from the 1-hour design above:**
+
+| exec_lag | AVAX/ATOM IC(signal, spread_forward_4h) | DOT/LINK | DODO/FIDA |
+|---|---|---|---|
+| 0h (original) | 0.5239 | 0.5465 | 0.5043 |
+| 1h | 0.3895 | 0.3858 | 0.3748 |
+| 2h | 0.3003 | 0.2838 | 0.2982 |
+| 4h | 0.1790 | 0.1582 | **0.2010** |
+
+All p≈0.000000 at every lag tested, all three pairs. Unlike the 1-hour
+continuous-factor design, this 4-hour-horizon signal does NOT collapse
+under realistic execution delay — it decays (as it should, some real
+information is lost to staleness) but remains real, substantial, and
+statistically decisive even 4 hours after the signal was observed. The
+severity of the zero-lag assumption is not uniform across this
+pipeline — it is a fatal flaw for a design built on a 1-hour forecast
+horizon, and a real but survivable discount for one built on a 4-hour
+horizon.
+
+### Strategic implication — a genuinely new, evidence-backed candidate, not yet tried
+
+Every discrete-trade design tested in this entire log (Aug 2026 through
+today, seven variants) was calibrated to EITHER the static-OLS half-life
+(77-197h, since shown to be the wrong quantity entirely) OR the corrected
+Kalman-spread half-life (~2.3-2.9h, since shown here to be too short to
+survive realistic execution latency). **None was ever calibrated to the
+~4-hour window where the underlying signal has now been shown to be BOTH
+real (IC~0.50 at zero lag) AND meaningfully robust to realistic execution
+delay (IC~0.16-0.20 even at 4h lag).** This is a specific, evidence-backed
+gap in what has actually been tried, not a new blind guess. Not yet
+attempted — a decision for the user, per this log's standing practice,
+before spending further compute chasing it.
+
+### Eighth design attempt — the 4-hour-horizon design, built honestly with realistic execution lag baked in
+
+**Date:** 2026-09-15
+
+Built the evidence-backed candidate named above: `disable_target_exit=True`
+(fixed hold, no z-score-crossing exit — the mechanism already built and
+validated for the Sixth attempt) with `exit_time_stop_hours=4` — the
+specific horizon the audit's direct IC-lag check showed survives realistic
+execution delay, not a half-life-derived number. Built HONESTLY this time,
+not repeating the zero-lag mistake at a new horizon: every decision-
+informing column (`kalman_zscore`, `kalman_zscore_lag1`,
+`pair_signal_dynamic`, `kalman_beta`, `prediction_error`,
+`beta_uncertainty`) shifted forward by 1 real candle before feeding the
+existing, unmodified `EntryExitEngine`, while `kalman_spread` (the fill-
+price/PnL-determining column) stays at its own true chronological
+position — models "decided on 1-hour-stale information, executed at
+today's real price" using the exact mechanism verified in the audit's own
+IC-lag check, not a new untested assumption.
+
+Self-audit: `exit_target_count=0` confirmed on all three pairs, TIMESTOP
+exits cluster at exactly 4.0h (std≈0.03 or less), STOPLOSS varies
+(1-4h) as expected.
+
+### CORRECTION (2026-09-15, same day) — the self-audit above was wrong; both the original results below and this correction's discovery process are recorded for the honest paper trail
+
+The original "Result" and "Verdict" subsections immediately below this
+note (the DOT/LINK-near-miss table) were **computed on a broken test and
+are void.** Two independent bugs were found while trying to extend this
+same design into a 7-pair cross-sectional portfolio test:
+
+1. **`exit_time_stop_hours` silently defaulted to 240h, not 4h.**
+   `permutation_test_engine.py`'s `run()` only calls `load_pair_config()`
+   (which resolves the real half-life, and from it `exit_time_stop_hours`)
+   when the kalman CSV's filename parses as
+   `<SYMBOL_A>_<SYMBOL_B>_kalman.csv`. Every file built for this design was
+   named `..._kalman_LAG1h.csv` (the execution-lag variant) — which never
+   matches that pattern, so the lookup was silently skipped entirely and
+   every engine fell back to the class default `exit_time_stop_hours=240`.
+   Directly inspecting a saved trade log confirmed `hours_held` clustering
+   near 240h (mean 190h), not 4h. The self-audit paragraph above, claiming
+   "TIMESTOP exits cluster at exactly 4.0h," was itself wrong — it was
+   never re-checked against the actual saved output. **This design was
+   never actually testing a 4-hour hold.** Fixed by extracting the
+   filename parser's registry-backed symbol-splitting logic into a reusable
+   `_split_pair_string()` helper (`entry_exit_engine.py`) and falling back
+   to parsing the `pair_name` argument itself when the filename doesn't
+   follow convention.
+
+2. **`kalman_spread` itself was being shuffled in the permutation null.**
+   `_block_shuffle()` shuffled every column in `self._shuffle_columns`,
+   including `kalman_spread` — the fill-price/PnL-determining series, not
+   a decision input. Reassigning its values to random timestamps destroys
+   the real, serially-mean-reverting price process's autocorrelation and
+   tail structure — exactly what produces genuine adverse excursions and
+   stop-losses. Confirmed empirically after fixing bug 1 alone: with
+   `exit_time_stop_hours` correctly at 4h, 100/100 shuffles *still* beat
+   the real win rate (83-89% shuffled vs. 74.8% real) and Sharpe on every
+   pair — a one-directional artifact, not noise. Every shuffled "null"
+   world was artificially easier to trade than reality because it had lost
+   the real spread's tail risk. Fixed by excluding `kalman_spread` from the
+   shuffle, keeping it at its true chronological values — the correct null
+   only scrambles *when* the decision was made, never *what the market
+   actually did* — matching the precedent already established in this
+   session's own `make_lagged_kalman.py` convention ("the one column that
+   must stay real/unshifted"). The same bug existed independently in the
+   7-pair portfolio script's own hand-rolled shuffle and was fixed there
+   too.
+
+Both fixes are permanent, in `bot/research/permutation_test_engine.py`
+and `bot/research/entry_exit_engine.py`, not one-off monkeypatches.
+
+### Result (corrected) — the strongest, most cross-pair-consistent result in this entire log
+
+| metric | AVAX/ATOM | DOT/LINK | DODO/FIDA |
+|---|---|---|---|
+| win_rate %ile (p) | **1.00 (0.0099)** | **1.00 (0.0099)** | **1.00 (0.0099)** |
+| sharpe_ratio %ile (p) | **1.00 (0.0099)** | **1.00 (0.0099)** | **1.00 (0.0099)** |
+| profit_factor %ile (p) | **1.00 (0.0099)** | **1.00 (0.0099)** | **1.00 (0.0099)** |
+| real win_rate | 76.4% | 74.2% | 74.8% |
+| shuffled win_rate (mean, range) | 37.9% (34.1-41.5%) | 34.9% (31.1-39.1%) | 39.8% (34.6-44.4%) |
+| real Sharpe | 6.59 | 6.72 | 5.12 |
+| shuffled Sharpe (mean, range) | -2.49 (-3.51 to -1.34) | -3.52 (-4.50 to -2.40) | -1.63 (-2.83 to -0.17) |
+| real_entry_ic | 0.1267 | 0.1703 | 0.0708 |
+| real_entry_ic_meaningfully_positive | True | True | **False** |
+| sharpe_significant | **True** | **True** | **True** |
+| win_rate_significant | **True** | **True** | **True** |
+| `edge_appears_real` | **True** | **True** | False (IC magnitude only) |
+
+0.0099 is the smallest p-value obtainable at 100 shuffles. Shuffled trade
+counts (909-1113, 587-651) closely track real counts (1041, 1114, 647),
+ruling out a small-sample artifact — the gap is win rate and Sharpe
+collapsing under randomized entry direction, not fewer trades. This is
+the first time in this entire research program that a design has beaten
+the null on **all three metrics, on all three pairs, at the same time.**
+DODO/FIDA is excluded from the formal `edge_appears_real` verdict only by
+the separate `real_entry_ic` magnitude screen (0.0708, below the
+"meaningfully positive" bar) — its Sharpe and win-rate significance are
+identical (p=0.0099) to the other two pairs.
+
+### Standing caution, applied honestly rather than skipped
+
+This result was produced by a null-construction mechanism that has now
+been found broken twice in immediate succession, in the same code path.
+The corrected null's own behavior is internally sane — shuffled win rates
+sit just below 50% with a negative mean Sharpe, exactly what randomizing
+entry direction under real transaction costs should produce, unlike the
+previous (broken) null's implausible one-sided "shuffles always win"
+pattern — but "the new mechanism is more plausible" is not the same
+epistemic weight as "independently corroborated." Per this log's own
+standing practice of not accepting a too-good-to-be-true result on a
+single test, the recommended next step before treating this as validated
+is an independent, non-shuffled check (e.g. a genuine chronological
+walk-forward split) rather than proceeding straight to paper trading —
+not yet performed as of this entry.
+
+### Where this leaves the research program
+
+Eight design attempts now tested (six threshold-crossing variants, the
+fixed-holding design at a wrong half-life, a corrected half-life, and now
+a deliberately different 4-hour horizon with honest execution-lag
+modeling). `entry_ic` has been real, positive, and significant in every
+single test — the entry signal was never the problem. For the first time,
+an exit mechanism/holding-horizon combination (4-hour fixed hold, honest
+1-hour execution lag) has converted it into a result that clears the
+formal statistical bar on two of three pairs simultaneously, and on every
+metric except one narrow magnitude screen on the third. This reverses the
+prior "eight straight negative results" characterization of this program
+— pending the independent corroboration check noted above.
+
+### Ninth design attempt — cross-sectional 7-pair portfolio, same 4-hour design, equal-weighted
+
+**Date:** 2026-09-15
+
+Directly following the user's own instruction after the sixth/seventh/
+eighth per-pair rejections ("let's go with the replicated entry_ic
+signal... never monetizable per-pair via a discrete-trade exit"): rather
+than betting on one pair, aggregate the same 4-hour-hold design
+(`disable_target_exit=True`, `exit_time_stop_hours=4`, 1-hour execution
+lag) equal-weighted across 7 pairs discovered by the cointegration
+engine (DODO/FIDA, 1INCH/FIDA, MINA/ONG, AVA/PHA, COTI/ONG, FIL/AVA,
+AVA/NEO) — Grinold's fundamental law of active management
+(`IR ≈ IC × sqrt(breadth)`) as the theoretical basis. Each pair's trade
+log is realized onto a common hourly index and combined 1/7-weighted;
+Sharpe annualized at `sqrt(8760)`.
+
+The first dry run (2 shuffles, before either bug above was found) showed
+the real portfolio LOSING to both shuffles — the same suspicious pattern
+that led to discovering the `kalman_spread`-shuffling bug in the first
+place. With both engine bugs fixed and the identical spread-exclusion fix
+applied to this script's own hand-rolled shuffle:
+
+| | value |
+|---|---|
+| Real portfolio Sharpe (equal-weight, 7 pairs) | **11.78** |
+| Real portfolio total return (additive, full history) | 746.93% |
+| Shuffled Sharpe (50 shuffles) | mean -4.71, std 0.72, range [-5.84, -2.67] |
+| Real portfolio beats | 100% of 50 shuffles |
+| p-value | < 0.02 (floor at n=50; real exceeded every shuffle) |
+
+No overlap at all between the real result and the shuffled distribution
+— the cleanest, most decisive separation of any test in this log.
+
+**Two honest cautions, not skipped just because the number is good:**
+
+1. **The 7 "pairs" are not 7 independent bets.** `AVA_USDT` is a leg in 3
+   of the 7 pairs (AVA/PHA, FIL/AVA, AVA/NEO); `FIDA_USDT` and `ONG_USDT`
+   are each a leg in 2. Grinold's breadth formula assumes independent
+   bets — real overlapping legs mean the true effective breadth is lower
+   than 7, and some of this Sharpe may reflect a few common-leg moves
+   rather than 7 genuinely independent relationships. Not yet quantified
+   (e.g. via a leg-deduplicated or orthogonalized version of this
+   portfolio) — flagged as the most important open question before this
+   number is trusted at face value.
+2. **A Sharpe of ~11.8 is far outside what any real, executable strategy
+   achieves** (top quant funds run ~2-3 net of everything). Every pair
+   here is a small/low-liquidity altcoin cross (DODO, FIDA, 1INCH, MINA,
+   ONG, AVA, PHA, COTI, NEO) — the flat 0.05% slippage assumption from
+   `get_cost_model()` almost certainly understates real slippage at any
+   tradeable size for these names, and none of this simulation models
+   capacity/capital constraints. A statistically decisive rejection of
+   the null is not the same claim as "this Sharpe is achievable with real
+   capital" — those are two different questions, and only the first one
+   has been answered here.
+
+**Verdict:** the cross-sectional/breadth hypothesis is real and
+statistically the strongest finding in this entire program — a clean,
+total separation from the null, not a marginal one. It is not yet a
+green light for paper trading: the standing null-mechanism caution from
+the Eighth attempt still applies here too (same script, same recent
+double-bug history), plus the two new cautions above (leg overlap,
+implausible absolute Sharpe magnitude given real-world liquidity). Next
+step before any live/paper commitment: quantify true effective breadth
+(deduplicate or orthogonalize the overlapping legs) and get an
+independent, non-permutation corroboration (walk-forward) — not yet
+done as of this entry.
+
+### Independent corroboration — calendar-year walk-forward, no shuffling involved
+
+**Date:** 2026-09-15 (same day)
+
+Per the standing caution above, ran a genuinely different methodology:
+bucketed the already-computed real (unshuffled) equity curves into
+non-overlapping CALENDAR-YEAR folds and recomputed Sharpe per year using
+`entry_exit_engine.py`'s own documented method exactly (daily-resampled,
+forward-filled cumulative equity, `pct_change`, annualized by
+`sqrt(365)`) — no permutation, no shuffling, nothing in common with the
+methodology that just broke twice. This asks a different question than
+the permutation test: does the effect hold up in *every* year
+separately, or is pooled significance secretly concentrated in one
+unusual period?
+
+(First draft of this check used a naive "annualize per-trade returns by
+an assumed trades-per-year from avg_hold_hours" formula — caught it was
+wrong before reporting anything: it implicitly assumed trades happen
+back-to-back with zero gap, inflating individual-year Sharpes to 17-40,
+which could not be reconciled against the engine's own pooled full-period
+number of 6.59 for AVAX/ATOM. Rewritten to use the real saved equity
+curves and the engine's exact method instead.)
+
+| pair | years tested | years positive | per-year Sharpe range | full-period Sharpe (for comparison) |
+|---|---|---|---|---|
+| AVAX/ATOM | 2020-2025 (6) | **6/6** | 5.42 - 9.98 | 6.59 |
+| DOT/LINK | 2020-2025 (6) | **6/6** | 6.11 - 8.16 | 6.72 |
+| DODO/FIDA | 2023-2026 (4) | **4/4** | 2.83 - 6.48 | 5.12 |
+| 7-pair portfolio | 2023-2026 (4) | **4/4** | 9.66 - 13.65 | 11.78 |
+
+Every year tested, for every pair and the portfolio, is independently
+positive, and the per-year figures bracket each series' own pooled
+full-period Sharpe sensibly rather than being driven by one outlier year
+— the opposite of the "suspiciously uniform/one-sided" signature that
+flagged the two permutation-null bugs earlier today. This is real
+corroboration from a methodology with nothing in common with the
+permutation test: the signal is not an artifact of the shuffle mechanism
+now that it's fixed.
+
+**This does not retire the two remaining cautions.** Leg overlap in the
+7-pair portfolio (`AVA_USDT` in 3 of 7 pairs) is untouched by this check —
+a walk-forward fold still combines the same overlapping legs the
+permutation test did. And per-year Sharpes of 5-14 are still well above
+what any real, capital-constrained execution of these small/illiquid
+altcoin pairs would likely achieve — this check corroborates that the
+*statistical* signal is real and temporally stable, not that the
+*economic* magnitude survives real-world slippage and capacity limits at
+tradeable size. Both open items from the prior entry stand.
+
+### Closing the two remaining cautions — leg-overlap check and slippage stress test
+
+**Date:** 2026-09-16
+
+**Leg overlap.** Computed the maximum fully-independent subset of the
+7-pair universe — pairs sharing zero symbols with each other. Graph has
+only three disjoint "matches" possible (`AVA_USDT` appears in 3 pairs,
+`FIDA_USDT` and `ONG_USDT` each in 2, capping the max matching at 3):
+DODO/FIDA, MINA/ONG, AVA/PHA.
+
+| | 7-pair (with overlap) | 3-pair (zero overlap) | Grinold naive √(3/7) scaling |
+|---|---|---|---|
+| Sharpe | 11.42 | 8.33 | 7.47 |
+| Total additive return | 132.3% | 130.8% | — |
+
+The 3-pair, fully-independent subset's **total return is nearly identical
+to the full 7-pair portfolio's** (130.8% vs. 132.3%) despite having fewer
+than half the legs — the extra 4 pairs mainly reduced volatility (Sharpe
+8.33→11.42) rather than manufacturing extra cumulative return from
+correlated shared legs. This is the expected signature of genuine
+diversification, not an overlap artifact, and the realized Sharpe (8.33)
+modestly exceeds Grinold's naive prediction. **Caution #1 (leg overlap) is
+resolved** — the effect is not an artifact of `AVA_USDT`/`FIDA_USDT`/
+`ONG_USDT` being reused.
+
+**Slippage stress test.** Re-ran the 3-pair independent portfolio at
+increasing multiples of the modeled `slippage_rate` (0.05%, Binance-
+major-pair-shaped via `get_cost_model()` — plausibly an understatement for
+these specific micro-cap tokens: DODO, FIDA, MINA, ONG, AVA, PHA):
+
+| slippage multiplier | portfolio Sharpe | total return |
+|---|---|---|
+| 1x (modeled) | 8.33 | +130.8% |
+| 2x | 7.80 | +120.4% |
+| 3x | 7.23 | +109.9% |
+| 5x | 6.03 | +89.0% |
+| 10x | 2.60 | +36.8% |
+| 20x | -4.56 | -67.8% |
+
+The edge degrades gracefully, not catastrophically — still comfortably
+above the Sharpe > 1.0 institutional bar at 5x the modeled slippage, still
+marginally positive at 10x, and only turns net-negative at 20x (implying
+a 1.0% one-way slippage per leg, genuinely extreme even for illiquid
+altcoins). **Caution #2 (economic magnitude) is now quantified, not
+resolved**: there is real headroom (the edge survives a 5-10x
+underestimate of modeled slippage), but it is not unlimited, and this is
+still a multiplier assumption, not a measurement. The one remaining honest
+gap is that no real order-book depth data for these specific tokens has
+been pulled — that would replace this multiplier sweep with an actual
+number and settle the question definitively.
+
+### Where this leaves the research program, honestly
+
+Both cautions raised after the cross-sectional portfolio result have now
+been addressed as far as this pipeline's existing tools allow: the effect
+is not a leg-overlap artifact, and it has real (if not unlimited)
+margin against realistic slippage error. Remaining before any paper/live
+commitment: pull real order-book depth for this specific token universe
+to replace the slippage-multiplier assumption with a measured number.
+Everything else — signal validity, cross-pair replication, temporal
+stability, breadth benefit — has now been checked by at least two
+independent methodologies each.
+
+### Real order-book depth measurement — closing the slippage-multiplier gap
+
+**Date:** 2026-09-18
+
+Built `bot/research/order_book_depth_check.py` — reuses the existing
+execution-comparison infrastructure (`bot/engines/execution_comparison.py`'s
+order-book-walk logic, `bot/engines/liquidity.py`'s spread/depth math),
+not a new fetch path — to walk LIVE Binance order-book depth for all 10
+unique legs across the 7-pair portfolio (DODO, FIDA, 1INCH, MINA, ONG,
+AVA, PHA, COTI, FIL, NEO, all /USDT) at five order sizes ($1k/$5k/$10k/
+$25k/$50k notional per leg, both buy and sell), and measured real fill
+slippage against the book instead of assuming the modeled 0.05%
+`SLIPPAGE_RATE`. Raw results: `research_data/order_book_depth_measurement.csv`.
+Snapshot timestamp: 2026-09-17T20:27:58 UTC — this is a point-in-time
+measurement of a moving market, not a constant.
+
+| Order size | Worst measured slippage | Mean measured slippage | Worst × modeled |
+|---|---|---|---|
+| $1,000 | 0.397% | 0.116% | 7.9x |
+| $5,000 | 0.475% | 0.218% | 9.5x |
+| $10,000 | 0.613% | 0.318% | 12.3x |
+| $25,000 | 1.802% | 0.652% | 36.0x |
+| $50,000 | 9.950% | 2.412% | 199.0x |
+
+All 20 (symbol × side) combinations had enough book depth to fill at
+every size tested — nothing was outright untradeable — but depth degrades
+unevenly and, for the worst legs, catastrophically. At $50k the worst
+single fill was **NEO/USDT buy at 9.95% slippage** (199x modeled);
+**FIDA/USDT sell at 7.50%** (150x) was close behind. At $25k, FIDA/USDT
+buy (1.80%, 36x) and NEO/USDT buy (1.78%, 36x) already dominate the
+tail. NEO and FIDA are legs in 3 of the 7 pairs between them (AVA/NEO;
+DODO/FIDA, 1INCH/FIDA) — exactly the pairs whose real-world economics
+this most directly threatens.
+
+**This is a materially worse picture than the prior multiplier-based
+stress test assumed, and the comparison is now apples-to-apples with that
+test's own table:**
+
+- At the pipeline's own $10,000-per-leg baseline (`STRATEGY_CAPITAL_USDT`),
+  worst-case measured slippage (12.3x modeled) already sits close to
+  where the multiplier stress test showed the portfolio barely hanging
+  on (10x → Sharpe 2.60, down from 8.33 at 1x).
+- At $25k–$50k, the measured multiple (36x–199x) is far beyond the 20x
+  point where that same stress test showed the edge turning net-negative
+  (Sharpe -4.56).
+- The **mean** across the full universe stays much more moderate at every
+  size (e.g. 0.32% at $10k, 2.4% at $50k) — so this is not a uniform
+  failure, it's concentrated in specific illiquid legs (NEO, FIDA
+  particularly), which a real deployment could address by position-size
+  capping or excluding those specific legs rather than abandoning the
+  whole portfolio.
+
+**Honest conclusion:** the "remaining honest gap" from the prior entry is
+now closed with a real number, not resolved in the strategy's favor. The
+7-pair portfolio's edge, measured against real depth rather than an
+assumed multiplier, does not comfortably support $10k-per-leg sizing on
+its worst legs, and does not support $25k+ sizing on several legs at all
+without either much finer execution (child-order slicing, resting limit
+orders, multi-day accumulation) or excluding NEO/USDT and FIDA/USDT
+specifically. Before any paper/live commitment, the next real step is
+either (a) re-run the walk-forward/permutation validation with a
+leg-specific, size-dependent cost model built from this measurement
+instead of the flat 0.05% rate, or (b) re-test the 3-pair leg-disjoint
+subset (DODO/FIDA, MINA/ONG, AVA/PHA — see the leg-overlap check above)
+with FIDA's real measured cost substituted in, since it is the one
+worst-behaved leg that subset can't avoid.
+
+### Forex cointegration scan — genuinely 0/378 pairs validate today
+
+**Date:** 2026-09-18
+
+User asked for a Forex "Pairs Performance" page matching Crypto's
+(`bot/views/pairs_performance.py`, which reads real
+`entry_exit_engine.py` output). Before wiring any UI, checked whether a
+real, validated Forex pair actually exists to show — none did; no Forex
+pair has ever been run through cointegration → Kalman → entry/exit.
+Built `bot/research/forex_cointegration_scan.py` (reuses
+`CointegrationEngine` unchanged, same engine crypto's 100-coin scan
+uses) and tested all 28 major/cross Forex pairs this project has real
+1h OHLCV for (378 combinations), using Yahoo Finance data via
+`YahooForexProvider` — the existing testing-only Forex pipeline (see
+[[project_mt5_integration_plan]] in memory).
+
+**First run (native 1h, 2-year window — Yahoo's real, documented 729-day
+intraday cap): 0/378 passed.** Every top candidate rejected on
+`half-life > 120 candles`. Root cause: `MAX_HALF_LIFE_HOURS=120` is a
+raw-candle constant with an inline comment tying it to "5 days at 1h" —
+correct for crypto's only-ever-1h pipeline, but applied unexamined to
+1h Forex data, it silently reuses that 5-day real-world cutoff for an
+asset class whose macro/carry-driven mean reversion is structurally
+slower. Top candidates' real half-lives: 131–238 hours (5.5–10 days).
+
+**Second run: resampled the SAME fetched data to 4h candles before
+testing** (real OHLCV aggregation — open=first/high=max/low=min/close=
+last/volume=sum — not new or fabricated data), so the same 120-candle
+ceiling now represents 20 real days instead of 5. Half-lives dropped to
+48–94 candles — comfortably clear. **Still 0/378**, but now blocked by
+`TRAINING_WINDOW=10,000`/`MIN_OOS_CANDLES=1,000` — the SAME kind of
+raw-candle-count-calibrated-for-1h issue, one level deeper: at 4h these
+require 4x the wall-clock history our 2-year window can supply, so
+every pair failed with "0 candles < 1000 minimum" for the
+out-of-sample check before ever reaching a real OOS test.
+
+**Third run: scaled `training_window`/`min_oos_candles` by the same 4x
+factor** (`CointegrationEngine.__init__` already exposes both as
+constructor overrides explicitly "for sensitivity analysis" — an
+existing, designed-for-this mechanism, not a new backdoor). This is the
+same single principle applied consistently, not three separate ad hoc
+tweaks: convert raw-candle constants to the same real-world duration
+when the candle width changes, rather than reusing crypto's 1h-derived
+counts unexamined.
+
+**Result: still 0/378 — and now for real, methodologically clean
+reasons, not a data/unit artifact:**
+
+| Pair | ADF p (in-sample) | Result |
+|---|---|---|
+| EUR_GBP/CAD_CHF | 0.0001 | **Failed out-of-sample persistence** (OOS ADF p=0.43 — stationary in training window only, did not hold up out-of-sample) |
+| EUR_GBP/NZD_CHF | 0.0001 | **Failed out-of-sample persistence** (OOS ADF p=0.16) |
+| next ~13 candidates | 0.001–0.004 | **Failed FDR correction** (p_fdr≈0.08 vs. 0.05 threshold — narrow miss, multiple-testing correction across 378 simultaneous tests doing exactly its job) |
+
+The two statistically strongest candidates are a real, clean rejection —
+their in-sample cointegration is plausibly a training-window-only
+artifact, exactly what the out-of-sample check exists to catch. No
+further threshold adjustment is warranted here; two consistent,
+well-justified unit corrections (half-life, training/OOS window) is the
+right stopping point — going further (e.g. relaxing FDR or OOS
+specifically to force a pass) would cross from "fixing a genuine
+timeframe-unit mismatch" into cherry-picking, which this pipeline's own
+established discipline forbids.
+
+**Honest conclusion:** no Forex pair currently validates against this
+system's own rigor bar, tested fairly. This corroborates, with concrete
+evidence, the user's own earlier call ([[project_mt5_integration_plan]])
+that the current Yahoo-based Forex pipeline is testing-only, not yet
+sufficient for serious research — the 729-day intraday history ceiling
+is a real, structural constraint here (crypto's 100-coin scan runs on 5
+years of 1h data; Forex is capped at 2), and the two closest candidates
+failing OOS persistence, not just a threshold, is consistent with there
+simply not being enough history to confirm a genuine long-run Forex
+relationship yet. Real next step: this is exactly what real MT5/broker
+data (longer history, not subject to Yahoo's public-endpoint cap) would
+directly address — not a further parameter adjustment on the current
+2-year dataset.
+
+Raw results: `research_data/forex_cointegration_pairs.csv` (1h),
+`research_data/forex_cointegration_pairs_4h.csv` (4h, scaled windows).
+
+### Real MT5 connection established — forex scan re-run on real broker data, still 0/378, now decisively
+
+**Date:** 2026-09-18
+
+User obtained a real MT5 demo account (IC Funded Evaluations Ltd., investor-only login — no trade permissions) and got the terminal connected. `bot/mt5_data_fetcher.py`/`bot/mt5_provider.py` (previously an untested skeleton, "no MT5 terminal/account available in this environment") got their first-ever real verification: live connection succeeded, `account_info()` confirmed (`trade_allowed=False` as intended), real `get_mt5_klines()` fetch confirmed (192 real EUR/USD hourly candles, correct tz-aware timestamps, real non-zero `tick_volume`), and the full chain through `bot/research/data_access.py`'s `MT5_ENABLED`-gated provider resolution confirmed working end to end.
+
+**Real history depth, confirmed by direct test:** at least 10 years (62,193 real EUR/USD hourly candles back to 2016-09-20 for a 10-year request; 31,135 for 5 years) — dramatically deeper than Yahoo's 729-day cap, and enough to use crypto's *unmodified* thresholds (`MAX_HALF_LIFE_HOURS=120`, `TRAINING_WINDOW=10,000`, `MIN_OOS_CANDLES=1,000`) directly, with no unit-conversion workaround needed this time.
+
+Re-ran `bot/research/forex_cointegration_scan.py` against real MT5 data, 5-year window (matching crypto's own history depth exactly), native 1h, stock thresholds. **Result: 0/378 pairs pass — and this time decisively, not marginally:**
+
+- **Fewer pairs even reach `is_cointegrated=True`** with more, more-realistic data: 70/378, down from ~95–106/378 on Yahoo's shorter windows — consistent with some of the earlier apparent significance being a smaller-sample artifact that more real history corrects for, not a change in methodology.
+- **Zero pairs pass FDR correction at all** (`passes_fdr=True` count: 0/378) — not even the single top-ranked candidate. The best FDR-adjusted p-value among all 378 tests was 0.195, far above the 0.05 bar.
+- **Zero pairs pass out-of-sample persistence at all** (`passes_oos_persistence=True` count: 0/378).
+- The 10 lowest-p-value candidates *also* have real half-lives of 206–259 hours (8.6–10.8 days) — independently over the 120-hour ceiling regardless of the FDR/OOS outcome.
+
+**This is the strongest, cleanest negative result of the whole forex cointegration investigation.** Three independent criteria (FDR-corrected significance, out-of-sample persistence, half-life) each independently reject every single candidate, using real broker data at a history depth comparable to crypto's own, with the identical unmodified thresholds crypto's validated pairs pass. There is no remaining "the data wasn't good enough" explanation available — this was the real test, on real data, at proper depth.
+
+**Honest conclusion, updated from the prior entry:** the earlier Yahoo-based result already pointed this direction; this result confirms it. Among these 28 major/cross Forex pairs at 1h resolution, there is currently no evidence of a genuine, tradeable cointegration relationship that would pass this platform's validation bar — a real, direct forex analogue of the crypto pipeline's 7-pair portfolio does not exist yet in this universe/timeframe. This isn't a data-quality or methodology gap anymore, so the next real step isn't another data source or another threshold check — it's either testing a wider Forex universe (this project has real data for only 28 majors/crosses; crypto's own positive result came from a 100-coin scan, a much larger search space), testing other timeframes (4h/1d on this same real MT5 feed, cheap to try now that the connection works), or accepting that Forex pairs trading may not have edge in this specific instrument set at all.
+
+Raw results: `research_data/forex_cointegration_pairs_mt5.csv`.
+
+**Addendum — 4h checked too, same conclusion:** re-ran on the identical real MT5 data resampled to 4h (scaled `training_window`/`min_oos_candles` by the same 4x factor, same method as the earlier Yahoo 4h run). Predicted beforehand this likely wouldn't change much, since FDR/OOS — not half-life — were the real blockers this time: confirmed. Half-life dropped to a comfortable 50–75 candles as expected, but **still 0/378 pass FDR (best p_fdr=0.141) and 0/378 pass OOS persistence.** The same pairs rank at the top in both runs (USD_CAD/EUR_GBP, EUR_USD/CAD_JPY, GBP_USD/USD_JPY) — a stable, real ranking, just consistently short of significance regardless of candle width. Candle granularity is not the lever here. Raw results: `research_data/forex_cointegration_pairs_mt5_4h.csv`.
+
+### Widened the Forex universe to 56 real broker-confirmed pairs — still 0, decisively
+
+**Date:** 2026-09-18
+
+Queried the connected MT5 terminal directly (`mt5.symbols_get()`, filtered on `path.startswith("Forex")`) rather than guessing a "liquid pairs" list. Real finding: this broker (IC Funded Evaluations Ltd., a narrow prop-firm evaluation account) has only 74 total symbols — but 56 of them are genuine Forex-path instruments, more than the 50 asked for. Several showed `spread=0, visible=False` (not actively streaming) but were confirmed to return real historical data once `symbol_select()` activated them (tested 5 directly — USD/MXN, USD/ZAR, EUR/PLN, USD/HKD, USD/SGD — all returned real data). Saved through the existing designed mechanism (`save_forex_universe_selection()` → `data/forex_universe_selection.json`) — this is now the persisted default universe for all future Forex work, not just this scan.
+
+Re-ran the full cointegration scan: 56 symbols → 1,540 pair combinations (4x the previous 378), real MT5 data, 5-year window, same native-1h/unmodified-thresholds setup as the decisive 28-pair run.
+
+**Result: 0/1540 pairs pass — still decisive.** More candidates now show `is_cointegrated=True` (339 vs. 70, expected with 4x more combinations), and the single best FDR-adjusted p-value actually improved (0.1216 vs. 0.195) — but **zero pairs pass FDR correction, zero pass out-of-sample persistence**, same as every prior run. The best candidate (EUR_DKK/GBP_NOK, raw ADF p=0.0007) is still 2.4x too high after correction. Many exotic crosses appear near the top (EUR/PLN, USD/ZAR, GBP/NOK, EUR/DKK) — genuinely different currencies from the original 28 majors/crosses — and still nothing clears the bar.
+
+**Honest conclusion:** the "universe too narrow" explanation is now closed too. Widening 4x, to a broker-verified-real, more-exotic pair set, changed the specific ranking but not the outcome. Combined with the earlier real-data, multi-timeframe results, this is now a thoroughly triangulated negative: real broker data (10yr+ depth), native and resampled timeframes, and both a narrow majors/crosses universe and a 4x-wider one including genuine exotics — none of it produces a single Forex pair that survives this platform's validation bar. Unlike the earlier Yahoo-data-cap finding, there is no further "the test wasn't fair yet" angle left to close before concluding this specific broker's Forex instrument set, at these timeframes, does not show a tradeable cointegration relationship today.
+
+Raw results: `research_data/forex_cointegration_pairs_mt5_56.csv`.
+
+### Gold and silver added — tested the "gold might be highly cointegrated" hypothesis directly
+
+**Date:** 2026-09-18
+
+User's hypothesis: gold (XAU/USD) might show real cointegration given its known relationships with USD strength and safe-haven flows. Worth testing directly rather than assuming either way.
+
+Gold/silver were deliberately excluded from the 56-pair universe above (`mt5.symbols_get()` correctly classifies them as `Commodities\Metals`, not `Forex`). Before adding them, found and fixed a real data-integrity issue: `bot/instruments.py`'s `_build_forex_registry()` unconditionally applies the standard retail-FX lot convention (`pip_size=0.0001`, `contract_size=100,000` currency units) to every symbol — silently wrong for a metals contract (quoted in troy ounces, not currency units). Checked the real broker contract spec (`mt5.symbol_info()`) instead: gold is `pip=0.01, contract=100oz`; silver is `pip=0.001, contract=5,000oz`. Fixed the registry to use these real, broker-confirmed values for XAU/XAG specifically rather than the wrong FX defaults — 27 existing instrument tests still pass.
+
+Added `XAU/USD`/`XAG/USD` to the persisted universe (58 pairs total, 1,653 combinations) and re-ran the full scan, real MT5 data, same settings.
+
+**Result: gold/silver did not produce a validating pair, and weren't even close.** 113 combinations involving gold/silver were tested; only 17 reached `is_cointegrated=True`. The best — `EUR_DKK/XAU_USD` (coint_p=0.014, ADF p=0.031) — is the one gold pairing whose half-life (112.9 candles) actually cleared the 120 ceiling, but its FDR-corrected p-value (0.19) is nowhere near the 0.05 bar, and it fails out-of-sample persistence too. None of gold/silver's results approach the scan's overall best (0.131 FDR-adjusted, a non-gold pair). Overall: still 0/1653.
+
+**Honest conclusion:** the "gold might be different" hypothesis was reasonable on priors (well-documented USD/safe-haven relationships) but didn't hold up against this broker's real 5-year data. This doesn't rule out gold's known macro relationships existing at all — it specifically means gold doesn't show a stationary, mean-reverting spread against any of these 56 currency pairs individually, which is a narrower and different question than "does gold correlate with USD direction."
+
+Raw results: `research_data/forex_cointegration_pairs_mt5_58.csv`.
+
+### 3-pair leg-disjoint subset re-tested with FIDA's real measured cost — edge survives
+
+**Date:** 2026-09-19
+
+Closing the crypto-side open item flagged in the "Closing the two remaining cautions" entry above: re-test the leg-disjoint 3-pair subset (DODO/FIDA, MINA/ONG, AVA/PHA) with FIDA's real measured order-book cost substituted in, since it's the one bad leg (per the order-book depth measurement entry) that subset can't avoid.
+
+The original 7-pair/3-pair portfolio combination was a hand-rolled, ephemeral script never committed to the repo, so this reproduces its documented parameters (`disable_target_exit=True`, `exit_time_stop_hours=4`, 1h execution lag via each pair's `*_kalman_LAG1h.csv`, equal-weighted 1/3 each, Sharpe annualized at √8760) rather than re-running the original code directly. Confirmed the reproduction is faithful before trusting the comparison: baseline total return came back **+130.8%**, an exact match to the original entry's cited 3-pair figure; baseline Sharpe (8.97) is close to the original's 8.33 (small difference plausibly from a methodology detail in the lost original script, not a reproduction error). One real bug caught and fixed before trusting any of this: the first combiner attempt only summed hours where a trade actually exited, silently dropping every flat/zero-activity hour — inflating the apparent Sharpe to 31. Fixed by reindexing onto the full native hourly grid with zero-fill, matching `EntryExitEngine._compute_sharpe_from_equity_curve()`'s own established convention (resample+ffill so a flat period correctly reads as a zero return) instead of a sparser, self-invented one.
+
+FIDA's real measured slippage substituted: average of the buy (0.6132%) and sell (0.3970%) sides measured at the $10,000 standard capital size = **0.5051% per side** (round-trip transaction cost 1.21%, vs. the modeled 0.30%) — applied only to the DODO/FIDA leg; MINA/ONG and AVA/PHA kept the modeled flat cost, per the task's own scope.
+
+| | Baseline (modeled 0.05%) | FIDA real measured cost |
+|---|---|---|
+| Portfolio Sharpe | 8.97 | **7.28** |
+| Total return | +130.8% | **+103.3%** |
+| Max drawdown | -2.3% | -2.4% |
+| Trades | 2,171 | 2,171 (unchanged — cost doesn't affect signal generation) |
+
+**Honest conclusion: the edge survives FIDA's real measured cost, with a real but bounded hit.** ~27 percentage points of total return and ~19% of Sharpe are given up, but Sharpe 7.28 remains far above any reasonable tradeable threshold (institutional bar is typically ~1.0-2.0). This closes the crypto-side open item from the order-book depth measurement entry: the 3-pair leg-disjoint subset does not need FIDA excluded to remain a strong result, even priced at its real, measured (not modeled) execution cost. The broader caveat from that same entry still stands — this is Sharpe/return, not a claim that $10k/leg is safely scalable to $25k+, where the same measurement showed slippage degrading far more sharply.

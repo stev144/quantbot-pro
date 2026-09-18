@@ -51,6 +51,11 @@ ALLOWED_HOSTS = [
     # again on this router too; if phone access breaks again, check the
     # current IP with `ipconfig` and update this list.
     "192.168.178.91",
+    # claude code changed: new — WiFi IP changed again, now on a
+    # 172.16.1.x network (confirmed via `ipconfig` — DHCP-leased, same
+    # caveat as above: check `ipconfig` and update this list again if
+    # phone access breaks after reconnecting to a different network).
+    "172.16.1.177",
     # claude code changed: new — Railway deployment. Leading-dot wildcard
     # matches any *.up.railway.app subdomain (Django's documented syntax
     # for ALLOWED_HOSTS wildcards), covering the default domain Railway

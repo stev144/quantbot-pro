@@ -13,12 +13,24 @@
 #      stale but real, previously-cached snapshot) and renders a labeled
 #      "STALE DATA" banner instead of a dead end.
 #
-# get_klines() itself is patched at bot.views.dashboard's import site to
-# deterministically force the failure path (a real live outage isn't
-# reproducible on demand) — the fallback logic under test here is our own
-# view code's reaction to that failure, not exchange behavior, matching
-# the precedent already set by test_kalman_research_lab_integration.py's
-# patching of load_ohlcv at its point of use.
+# get_klines() itself is patched to deterministically force the failure
+# path (a real live outage isn't reproducible on demand) — the fallback
+# logic under test here is our own view code's reaction to that failure,
+# not exchange behavior, matching the precedent already set by
+# test_kalman_research_lab_integration.py's patching of load_ohlcv at its
+# point of use.
+#
+# claude code changed: Data-Layer Audit "wire into the dashboard too" —
+# the patch target moved from "bot.views.dashboard.get_klines" to
+# "bot.data_fetcher.get_klines". dashboard.py no longer calls get_klines()
+# directly at all; it goes through BinanceKlinesProvider.get_recent_bars(),
+# which calls it via `data_fetcher.get_klines(...)` (a module-attribute
+# access resolved at call time, not a name bound at import time) —
+# patching the attribute on its SOURCE module is what actually intercepts
+# that call now. Patching the old "bot.views.dashboard.get_klines" target
+# would silently no-op (no such attribute exists there anymore) and these
+# tests would either error on a missing attribute or, worse, hit live
+# Binance instead of the deterministic forced failure they require.
 
 import os
 import pickle
@@ -78,7 +90,7 @@ class DashboardStaleFallbackTest(TestCase):
     def test_live_failure_with_no_cache_at_all_shows_the_original_error(self):
         # claude code changed: the pre-existing behavior — no stale
         # fallback of any kind exists — must be completely unchanged.
-        with patch("bot.views.dashboard.get_klines", return_value=pd.DataFrame()):
+        with patch("bot.data_fetcher.get_klines", return_value=pd.DataFrame()):
             resp = self.client.get("/", {"symbol": self.symbol})
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Failed to fetch market data")
@@ -86,7 +98,7 @@ class DashboardStaleFallbackTest(TestCase):
 
     def test_live_failure_with_a_stale_cache_shows_the_stale_banner_not_the_error(self):
         self._write_stale_cache(_synthetic_ohlcv(), saved_at=time.time() - 3600)
-        with patch("bot.views.dashboard.get_klines", return_value=pd.DataFrame()):
+        with patch("bot.data_fetcher.get_klines", return_value=pd.DataFrame()):
             resp = self.client.get("/", {"symbol": self.symbol})
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
@@ -98,7 +110,7 @@ class DashboardStaleFallbackTest(TestCase):
         # claude code changed: the common case — nothing about this
         # feature should be visible when the live fetch just works.
         self._write_stale_cache(_synthetic_ohlcv(), saved_at=time.time() - 3600)  # present but must be ignored
-        with patch("bot.views.dashboard.get_klines", return_value=_synthetic_ohlcv()):
+        with patch("bot.data_fetcher.get_klines", return_value=_synthetic_ohlcv()):
             resp = self.client.get("/", {"symbol": self.symbol})
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, "STALE DATA")
@@ -110,7 +122,7 @@ class DashboardStaleFallbackTest(TestCase):
         # somewhere unrelated on the page. Patches get_klines so this
         # stays a fast, deterministic markup check rather than a real
         # live fetch + full backtest.
-        with patch("bot.views.dashboard.get_klines", return_value=_synthetic_ohlcv()):
+        with patch("bot.data_fetcher.get_klines", return_value=_synthetic_ohlcv()):
             resp = self.client.get("/", {"symbol": self.symbol})
         html = resp.content.decode()
         self.assertIn("data-slow-nav", html)
