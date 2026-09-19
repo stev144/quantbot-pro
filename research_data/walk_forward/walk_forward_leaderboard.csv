@@ -1,3 +1,32 @@
-pair_name,n_folds,n_folds_scored,oos_trades,oos_win_rate,oos_sharpe,oos_profit_factor,oos_max_drawdown,walk_forward_efficiency,passed
-AVAX_USDT_ATOM_USDT,3,3,310,0.9194,11.1982,10.6488,-0.004,1.0412,True
-DOT_USDT_LINK_USDT,3,3,377,0.8727,9.3737,6.5321,-0.0171,0.9298,True
+pair_name,n_folds,n_folds_scored,oos_trades,oos_win_rate,oos_sharpe,oos_profit_factor,oos_max_drawdown,walk_forward_efficiency,passed,error_reason
+1INCH_USDT_FIDA_USDT,2,2,174,0.8736,8.9938,7.4561,-0.0175,1.2481,True,
+ARDR_USDT_PUNDIX_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'ARDR_USDT_PUNDIX_USDT' from either the kalman CSV filename ('research_data\ARDR_USDT_PUNDIX_USDT_kalman.csv') or the pair_name argument itself. 'ARDR_USDT_PUNDIX_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+AUDIO_USDT_C98_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'AUDIO_USDT_C98_USDT' from either the kalman CSV filename ('research_data\AUDIO_USDT_C98_USDT_kalman.csv') or the pair_name argument itself. 'AUDIO_USDT_C98_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+AVA_USDT_NEO_USDT,2,2,177,0.8136,2.7975,5.3582,-0.0202,0.4723,False,
+AVA_USDT_PHA_USDT,2,2,196,0.8316,4.2719,3.4489,-0.0507,0.6544,True,
+AVAX_USDT_ATOM_USDT,3,3,300,0.8533,9.026,6.5918,-0.0103,1.349,True,
+BAND_USDT_C98_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'BAND_USDT_C98_USDT' from either the kalman CSV filename ('research_data\BAND_USDT_C98_USDT_kalman.csv') or the pair_name argument itself. 'BAND_USDT_C98_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+COMP_USDT_ARDR_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'COMP_USDT_ARDR_USDT' from either the kalman CSV filename ('research_data\COMP_USDT_ARDR_USDT_kalman.csv') or the pair_name argument itself. 'COMP_USDT_ARDR_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+COTI_USDT_ONG_USDT,2,2,161,0.8571,7.3126,5.2504,-0.02,1.0491,True,
+DEXE_USDT_ALGO_USDT,3,3,229,0.8515,3.8064,3.3836,-0.0473,0.8165,True,
+DIA_USDT_ARDR_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'DIA_USDT_ARDR_USDT' from either the kalman CSV filename ('research_data\DIA_USDT_ARDR_USDT_kalman.csv') or the pair_name argument itself. 'DIA_USDT_ARDR_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+DODO_USDT_FIDA_USDT,2,2,159,0.8742,4.9749,3.8402,-0.0367,0.7276,True,
+DOT_USDT_ARDR_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'DOT_USDT_ARDR_USDT' from either the kalman CSV filename ('research_data\DOT_USDT_ARDR_USDT_kalman.csv') or the pair_name argument itself. 'DOT_USDT_ARDR_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+DOT_USDT_LINK_USDT,3,3,303,0.8812,9.1205,6.9818,-0.0152,1.2526,True,
+FET_USDT_BCH_USDT,3,3,358,0.8743,11.8034,8.9815,-0.0077,1.4006,True,
+FET_USDT_DASH_USDT,3,3,334,0.8623,9.6409,6.7658,-0.0126,1.2746,True,
+FIL_USDT_AVA_USDT,2,2,174,0.8448,7.7967,5.6911,-0.0326,1.1098,True,
+IOTA_USDT_ARDR_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'IOTA_USDT_ARDR_USDT' from either the kalman CSV filename ('research_data\IOTA_USDT_ARDR_USDT_kalman.csv') or the pair_name argument itself. 'IOTA_USDT_ARDR_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+LTC_USDT_ZEN_USDT,2,2,206,0.8544,8.2495,6.0286,-0.0183,1.2219,True,
+MASK_USDT_ALICE_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'MASK_USDT_ALICE_USDT' from either the kalman CSV filename ('research_data\MASK_USDT_ALICE_USDT_kalman.csv') or the pair_name argument itself. 'MASK_USDT_ALICE_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+MASK_USDT_TLM_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'MASK_USDT_TLM_USDT' from either the kalman CSV filename ('research_data\MASK_USDT_TLM_USDT_kalman.csv') or the pair_name argument itself. 'MASK_USDT_TLM_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+MINA_USDT_C98_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'MINA_USDT_C98_USDT' from either the kalman CSV filename ('research_data\MINA_USDT_C98_USDT_kalman.csv') or the pair_name argument itself. 'MINA_USDT_C98_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+MINA_USDT_ONG_USDT,2,2,166,0.8373,7.8063,5.9054,-0.0086,1.0522,True,
+NEO_USDT_PUNDIX_USDT,2,2,180,0.85,7.7351,5.41,-0.0145,1.0926,True,
+ONG_USDT_MINA_USDT,2,2,159,0.8679,6.5136,5.676,-0.0118,1.0452,True,
+ONT_USDT_BAND_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'ONT_USDT_BAND_USDT' from either the kalman CSV filename ('research_data\ONT_USDT_BAND_USDT_kalman.csv') or the pair_name argument itself. 'ONT_USDT_BAND_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+ONT_USDT_DODO_USDT,2,2,180,0.8778,6.8532,4.9195,-0.015,1.0218,True,
+ONT_USDT_PUNDIX_USDT,2,2,153,0.8366,4.992,4.3427,-0.0461,0.7904,True,
+ONT_USDT_RIF_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'ONT_USDT_RIF_USDT' from either the kalman CSV filename ('research_data\ONT_USDT_RIF_USDT_kalman.csv') or the pair_name argument itself. 'ONT_USDT_RIF_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+SOL_USDT_MASK_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'SOL_USDT_MASK_USDT' from either the kalman CSV filename ('research_data\SOL_USDT_MASK_USDT_kalman.csv') or the pair_name argument itself. 'SOL_USDT_MASK_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).
+VET_USDT_ARDR_USDT,0,0,0,,,,,,False,WalkForwardEngine.run() could not resolve symbol_a/symbol_b for 'VET_USDT_ARDR_USDT' from either the kalman CSV filename ('research_data\VET_USDT_ARDR_USDT_kalman.csv') or the pair_name argument itself. 'VET_USDT_ARDR_USDT': could not uniquely resolve a symbol_a/symbol_b split against the instrument registry (found 0 candidate split(s): []).

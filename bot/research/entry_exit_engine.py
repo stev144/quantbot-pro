@@ -1412,10 +1412,22 @@ class EntryExitEngine:
                 f"{before_resample:,} -> {len(df):,} candles"
             )
 
-        logger.info(
-            f"  Loaded: {len(df):,} candles "
-            f"({df.index[0].date()} → {df.index[-1].date()})"
-        )
+        # claude code changed: real bug found running walk_forward_engine.py's
+        # full 31-pair pipeline — a fold's train slice can legitimately end up
+        # empty after warmup removal / NaN-dropping above (e.g. a fold whose
+        # train window is barely longer than the Kalman filter's own warmup
+        # period), and df.index[0]/[-1] on an empty index raised an uncaught
+        # IndexError that crashed the entire batch, not just this one fold.
+        # Every downstream step (_scan_candles, _build_trade_log, etc.)
+        # already handles an empty df/trade log as a legitimate "0 trades"
+        # result — this log line was the only place that didn't.
+        if len(df) > 0:
+            logger.info(
+                f"  Loaded: {len(df):,} candles "
+                f"({df.index[0].date()} → {df.index[-1].date()})"
+            )
+        else:
+            logger.warning("  Loaded: 0 candles (empty after warmup/NaN cleaning)")
 
         return df
 

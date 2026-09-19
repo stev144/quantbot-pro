@@ -1451,12 +1451,45 @@ def run_walk_forward_pipeline(
             else:
                 logger.info(f"\n  {pair_name} deserves testing: {reason}")
 
-        verdict = run_walk_forward_for_pair(                                   # Run the full walk-forward for this pair
-            kalman_csv = str(kalman_path),
-            pair_name   = pair_name,
-            output_dir   = output_dir,
-            capital       = capital,
-        )
+        # claude code changed: real bug found running the full 31-pair
+        # pipeline for the first time after fixing the pair_name.split("/")
+        # crash above — a single pair's identity failing to resolve (e.g.
+        # 'ARDR_USDT_PUNDIX_USDT': ARDR/USDT genuinely isn't in
+        # bot.instruments's registry, which only covers fetch_all_symbols.py's
+        # ~20 "tracked" symbols, not the wider cointegration-screening
+        # universe research_data/*_kalman.csv actually spans) raised an
+        # uncaught ValueError that killed the ENTIRE batch — the other 29
+        # perfectly resolvable pairs never got tested at all. A 31-pair
+        # leaderboard job should not die because one pair has a data-
+        # coverage gap; record it as a failed row (with the real reason)
+        # and keep going, the same way the Missing-Piece-4 gate above
+        # already does for a pair that fails ITS check.
+        # claude code changed: broadened from except (ValueError, FileNotFoundError)
+        # — a second, completely unrelated pair-specific failure mode
+        # (IndexError from an empty post-cleaning DataFrame on a different
+        # pair, fixed separately in entry_exit_engine.py's _load_kalman_data())
+        # surfaced immediately after the first fix and killed the batch again.
+        # This loop runs 31+ independent, unrelated units of work — no single
+        # pair's failure mode should be trusted to be the last one ever
+        # found, so this catches broadly rather than re-litigating the
+        # exception whitelist every time a new pair exposes a new edge case.
+        try:
+            verdict = run_walk_forward_for_pair(                               # Run the full walk-forward for this pair
+                kalman_csv = str(kalman_path),
+                pair_name   = pair_name,
+                output_dir   = output_dir,
+                capital       = capital,
+            )
+        except Exception as e:
+            logger.warning(f"\n  {pair_name} could not be walk-forward tested: {e}")
+            verdict = {
+                "pair_name": pair_name, "passed": False,
+                "n_folds": 0, "n_folds_scored": 0, "oos_trades": 0,
+                "oos_win_rate": np.nan, "oos_sharpe": np.nan,
+                "oos_profit_factor": np.nan, "oos_max_drawdown": np.nan,
+                "walk_forward_efficiency": np.nan,
+                "error_reason": str(e),
+            }
         leaderboard_rows.append(verdict)                                       # Add this pair's verdict to the leaderboard
 
     leaderboard_df = pd.DataFrame(leaderboard_rows)                            # Assemble the full cross-pair leaderboard
