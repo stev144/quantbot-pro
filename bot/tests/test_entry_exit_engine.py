@@ -28,6 +28,7 @@ from bot.config.cost_model import UnsupportedAssetClassCostModel
 from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_US_EQUITY
 from bot.research.entry_exit_engine import (  # claude code changed: module under test
     EntryExitEngine, KalmanPositionSizer, _parse_pair_from_kalman_filename,
+    PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — both classes now require an explicit validated_win_rate (no more silent AVAX/ATOM default); these tests exercise mechanics, not real edge, so the shared placeholder is correct here
 )
 
 
@@ -109,6 +110,7 @@ class PairIdentityTest(SimpleTestCase):
         engine = EntryExitEngine(
             pair_name="AAPL/MSFT", symbol_a="AAPL", symbol_b="MSFT",
             output_dir=self.tmp_dir,
+            validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — now required
         )
         trade_log, summary, equity_curve = engine.run(kalman_csv=str(csv_path))
         self.assertEqual(summary.iloc[0]["pair"], "AAPL/MSFT")  # claude code changed: pair identity threaded through, not silently AVAX/ATOM
@@ -120,6 +122,7 @@ class PairIdentityTest(SimpleTestCase):
         engine = EntryExitEngine(
             pair_name="EUR/USD-GBP/USD", symbol_a="EUR/USD", symbol_b="GBP/USD",
             output_dir=self.tmp_dir,
+            validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — now required
         )
         trade_log, summary, equity_curve = engine.run(kalman_csv=str(csv_path))
         self.assertEqual(summary.iloc[0]["pair"], "EUR/USD-GBP/USD")  # claude code changed: no AVAX/ATOM fallback triggered
@@ -141,7 +144,7 @@ class CostModelIntegrationTest(SimpleTestCase):
         # hardcoded FEE_RATE=0.001 / SLIPPAGE_RATE=0.0005 must still be
         # exactly what a default-constructed engine gets, so every existing
         # AVAX/ATOM output stays byte-identical.
-        engine = EntryExitEngine(output_dir=self.tmp_dir)
+        engine = EntryExitEngine(output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         self.assertEqual(engine.fee_rate, 0.001)
         self.assertEqual(engine.slippage_rate, 0.0005)
         self.assertAlmostEqual(engine.total_transaction_cost, 0.003)
@@ -151,8 +154,8 @@ class CostModelIntegrationTest(SimpleTestCase):
         # classes/configurations must produce different cost assumptions
         # when configured." Only two real venues exist today (both CRYPTO);
         # kraken's real fee tier (0.26%) differs from binance's (0.1%).
-        binance_engine = EntryExitEngine(venue_id="binance", output_dir=self.tmp_dir)
-        kraken_engine = EntryExitEngine(venue_id="kraken", output_dir=self.tmp_dir)
+        binance_engine = EntryExitEngine(venue_id="binance", output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
+        kraken_engine = EntryExitEngine(venue_id="kraken", output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         self.assertNotEqual(binance_engine.fee_rate, kraken_engine.fee_rate)
         self.assertNotEqual(
             binance_engine.total_transaction_cost, kraken_engine.total_transaction_cost
@@ -170,7 +173,7 @@ class CostModelIntegrationTest(SimpleTestCase):
         # claude code changed: transparency check — a researcher reading the
         # summary CSV must be able to see which cost assumptions were used,
         # not just infer them from a module constant that no longer applies.
-        engine = EntryExitEngine(asset_class=ASSET_CLASS_CRYPTO, venue_id="kraken", output_dir=self.tmp_dir)
+        engine = EntryExitEngine(asset_class=ASSET_CLASS_CRYPTO, venue_id="kraken", output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         csv_path = Path(self.tmp_dir) / "AVAX_USDT_ATOM_USDT_kalman.csv"
         _write_stoploss_scenario_csv(csv_path)
         _, summary, _ = engine.run(kalman_csv=str(csv_path))
@@ -184,7 +187,7 @@ class KalmanPositionSizerTest(SimpleTestCase):
     dynamic hedge ratio beta) — pure, asset-agnostic arithmetic."""
 
     def test_legs_split_dollar_neutral_by_beta(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25)
+        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: now required
         total, leg_a, leg_b, _ = sizer.size_position(
             zscore=2.5, beta=2.0, beta_uncertainty=0.01, prediction_error=0.005,
         )
@@ -194,13 +197,13 @@ class KalmanPositionSizerTest(SimpleTestCase):
         self.assertAlmostEqual(leg_a + leg_b, total)        # claude code changed: legs must sum back to total, no capital lost/created
 
     def test_high_beta_uncertainty_halves_position(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25)
+        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: now required
         total_low_unc, *_ = sizer.size_position(zscore=2.5, beta=1.0, beta_uncertainty=0.01, prediction_error=0.0)
         total_high_unc, *_ = sizer.size_position(zscore=2.5, beta=1.0, beta_uncertainty=0.50, prediction_error=0.0)
         self.assertAlmostEqual(total_high_unc, total_low_unc * 0.50)  # claude code changed: MAX_BETA_UNCERTAINTY breach -> 0.5x multiplier
 
     def test_below_minimum_position_size_skips_trade(self):
-        sizer = KalmanPositionSizer(capital_usdt=100.0, kelly_safety=0.01)  # claude code changed: tiny capital forces sub-$100 result
+        sizer = KalmanPositionSizer(capital_usdt=100.0, kelly_safety=0.01, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)  # claude code changed: tiny capital forces sub-$100 result; validated_win_rate now required
         total, leg_a, leg_b, _ = sizer.size_position(zscore=2.0, beta=1.0, beta_uncertainty=0.01, prediction_error=0.0)
         self.assertEqual((total, leg_a, leg_b), (0.0, 0.0, 0.0))  # claude code changed: MIN_POSITION_USDT gate returns all-zero, not a tiny trade
 
@@ -241,7 +244,7 @@ class EntryExitSimulationTest(SimpleTestCase):
     def test_confirmed_entry_produces_long_spread_trade_with_correct_direction(self):
         csv_path = Path(self.tmp_dir) / "AVAX_USDT_ATOM_USDT_kalman.csv"
         self._build_stoploss_scenario_csv(csv_path)
-        engine = EntryExitEngine(output_dir=self.tmp_dir)
+        engine = EntryExitEngine(output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         trade_log, summary, equity_curve = engine.run(kalman_csv=str(csv_path))
 
         self.assertEqual(len(trade_log), 1)  # claude code changed: exactly one completed trade
@@ -257,7 +260,7 @@ class EntryExitSimulationTest(SimpleTestCase):
         # different venue.
         csv_path = Path(self.tmp_dir) / "AVAX_USDT_ATOM_USDT_kalman.csv"
         self._build_stoploss_scenario_csv(csv_path)
-        engine = EntryExitEngine(venue_id="kraken", output_dir=self.tmp_dir)
+        engine = EntryExitEngine(venue_id="kraken", output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         trade_log, summary, equity_curve = engine.run(kalman_csv=str(csv_path))
         trade = trade_log.iloc[0]
         self.assertAlmostEqual(trade["fee_cost_pct"], engine.total_transaction_cost, places=6)
@@ -265,7 +268,7 @@ class EntryExitSimulationTest(SimpleTestCase):
     def test_position_legs_sum_to_position_size_in_real_trade(self):
         csv_path = Path(self.tmp_dir) / "AVAX_USDT_ATOM_USDT_kalman.csv"
         self._build_stoploss_scenario_csv(csv_path)
-        engine = EntryExitEngine(output_dir=self.tmp_dir)
+        engine = EntryExitEngine(output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         trade_log, summary, equity_curve = engine.run(kalman_csv=str(csv_path))
         trade = trade_log.iloc[0]
         # claude code changed: was places=2 — the entry-depth-scaled sizing

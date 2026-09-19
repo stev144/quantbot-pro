@@ -136,13 +136,13 @@ from scipy import stats                         # linregress for half-life (OU) 
 # means any future fix to entry_exit_engine.py automatically applies here too.
 from bot.research.entry_exit_engine import (
     EntryExitEngine,                            # The Missing-Piece-4 simulator we reuse per fold
-    KalmanPositionSizer,                        # Kelly sizer — we override its train-derived inputs per fold
     STRATEGY_CAPITAL_USDT,                      # Default capital, kept consistent with Missing Piece 4
     KELLY_SAFETY_FRACTION,                      # Default quarter-Kelly safety factor
     EXIT_TIME_STOP_HOURS,                       # Fallback time stop if a fold's half-life can't be estimated
     VALIDATED_IC,                               # Fallback IC if a fold's TRAIN slice can't produce its own
     VALIDATED_WIN_RATE,                         # Fallback win rate if a fold's TRAIN slice can't produce its own
     VALIDATED_HALF_LIFE,                        # Reference half-life, used to sanity-check each fold's re-estimate
+    PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,     # claude code changed: new — EntryExitEngine now requires an explicit validated_win_rate; this file's own throwaway "loader" instance never calls run(), so its sizer is never touched
 )
 
 # claude code changed: new — per-fold Kalman refit. Previously every fold
@@ -578,6 +578,7 @@ class WalkForwardEngine:
             # which would otherwise see the AVAX/ATOM module default here.
             pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,
             signal_source=self.signal_source,
+            validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — EntryExitEngine now requires this explicitly; this instance only ever calls _load_kalman_data()/_validate_columns() below, never run(), so the sizer it builds is never touched
         )
         df_full = loader._load_kalman_data(kalman_csv)               # Load + clean the full history
         loader._validate_columns(df_full)                            # Confirm all required Kalman columns exist
@@ -1028,38 +1029,31 @@ class WalkForwardEngine:
     ) -> EntryExitEngine:
         """
         Construct an EntryExitEngine configured for one fold's train or test
-        run, with its Kelly position sizer overridden to use THIS fold's
-        train-derived parameters instead of entry_exit_engine.py's
-        AVAX/ATOM-specific module-level defaults.
+        run, using THIS fold's train-derived Kelly parameters instead of
+        entry_exit_engine.py's AVAX/ATOM-specific module-level defaults.
 
-        We do not modify entry_exit_engine.py to add these as constructor
-        arguments — EntryExitEngine.sizer is a plain public attribute, so
-        we simply replace it after construction with a KalmanPositionSizer
-        built from this fold's own numbers. Every other piece of
-        EntryExitEngine (entry/exit rules, cost model, exit logic) is left
-        completely untouched and fully shared with Missing Piece 4.
+        claude code changed: was a two-step "construct, then replace
+        engine.sizer afterward" — a workaround from when EntryExitEngine's
+        own constructor didn't accept validated_ic/validated_win_rate at all
+        and always built its sizer from AVAX/ATOM's module constants. Now
+        that EntryExitEngine threads these straight into its own sizer (and
+        raises if validated_win_rate is missing, instead of silently
+        defaulting), passing them at construction does the same job in one
+        step with no workaround needed. Every other piece of EntryExitEngine
+        (entry/exit rules, cost model, exit logic) remains fully shared with
+        Missing Piece 4.
         """
 
-        engine = EntryExitEngine(                                           # Standard engine construction
+        return EntryExitEngine(
             capital_usdt          = capital_usdt,                            # This fold's capital baseline
             exit_time_stop_hours    = exit_time_stop_h,                        # This fold's re-calibrated time stop
             kelly_safety              = self.kelly_safety,                       # Project-standard quarter-Kelly safety
             output_dir                  = output_dir,                             # Keep this run's files isolated
             pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,             # claude code changed: new
             signal_source=self.signal_source,                                       # claude code changed: new
+            validated_ic=validated_ic,                                              # claude code changed: now passed at construction — THIS fold's train-derived IC
+            validated_win_rate=validated_win_rate,                                  # claude code changed: now passed at construction — THIS fold's train-derived win rate
         )
-
-        # Override the sizer with THIS fold's train-derived IC and win rate,
-        # instead of the AVAX/ATOM-specific VALIDATED_IC / VALIDATED_WIN_RATE
-        # constants EntryExitEngine's __init__ would otherwise default to.
-        engine.sizer = KalmanPositionSizer(
-            capital_usdt         = capital_usdt,                              # Same capital as the engine itself
-            kelly_safety           = self.kelly_safety,                          # Same safety factor as the engine itself
-            validated_ic             = validated_ic,                              # THIS fold's train-derived IC
-            validated_win_rate         = validated_win_rate,                          # THIS fold's train-derived win rate
-        )
-
-        return engine                                                          # Hand back the fully configured engine
 
 
     def _write_slice_csv(self, df_slice: pd.DataFrame, path: Path) -> None:

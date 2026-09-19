@@ -241,9 +241,32 @@ SIGNAL_SOURCE_COLUMNS: Dict[str, Dict[str, str]] = {
 }
 
 # Validated research results from our pipeline (do not change without re-running research)
+# claude code changed: VALIDATED_IC / VALIDATED_WIN_RATE are AVAX/ATOM's own
+# full-sample numbers, and model_governance_log.md has since shown they were
+# never actually valid even for AVAX/ATOM itself. Neither KalmanPositionSizer
+# nor EntryExitEngine defaults to either of these anymore — see
+# KalmanPositionSizer.__init__'s validated_win_rate requirement below. They
+# remain here only because walk_forward_engine.py imports them as its own
+# EXPLICIT, logged, well-reasoned bootstrap fallback (used only before any
+# fold has a real train-derived number of its own) — never reintroduce them
+# as a silent default in THIS module.
 VALIDATED_IC:        float = 0.5245    # IC confirmed by feature_validator
 VALIDATED_WIN_RATE:  float = 0.6900    # Average win rate across 2020-2025
 VALIDATED_HALF_LIFE: float = 119.9     # Half-life in hours from cointegration_engine
+
+# claude code changed: new — the ONLY sanctioned use of a fixed win-rate
+# constant in this module now. Used exclusively by (a) callers that construct
+# EntryExitEngine solely to reuse its private _load_kalman_data()/
+# _validate_columns() loader and never call run() or touch the sizer at all
+# (permutation_test_engine.py's and walk_forward_engine.py's own "loader"
+# instances), and (b) permutation_test_engine.py's real/shuffled replica runs,
+# where the SAME constant is applied identically to the real run and every
+# shuffle — win_rate/sharpe_ratio/profit_factor are exactly invariant to a
+# uniform positive Kelly-baseline scalar applied to every trade in a run, so
+# the permutation verdict is provably unaffected by which value this is. NOT
+# safe to use anywhere dollar P&L or real capital sizing is read from the
+# output — those callers must supply their own real validated_win_rate.
+PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT: float = 0.55
 
 # ── Entry rules ───────────────────────────────────────────────────────────────
 
@@ -630,7 +653,18 @@ class TradeRecord:
 
 class KalmanPositionSizer:
     """
-    Kelly Criterion position sizer calibrated to the AVAX/ATOM Kalman strategy.
+    Kelly Criterion position sizer for the Kalman pairs strategy — pair-agnostic.
+
+    claude code changed: was "calibrated to the AVAX/ATOM Kalman strategy",
+    with validated_win_rate defaulting to AVAX/ATOM's own VALIDATED_WIN_RATE
+    (0.69) — silently reused for every pair's real position sizing unless a
+    caller happened to override it (only walk_forward_engine.py's fold-level
+    engines did). model_governance_log.md has since shown 0.69 was never
+    actually valid even for AVAX/ATOM itself. validated_win_rate is now a
+    required argument with no default — see __init__ below — so every caller
+    must supply this pair's own real win rate (or, only where the value is
+    provably irrelevant to the result — see PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT's
+    own comment above — an explicit, clearly-labeled placeholder).
 
     The Kelly Criterion answers: given a known edge (IC) and known variance
     of returns, what fraction of capital should I risk on each trade?
@@ -673,8 +707,8 @@ class KalmanPositionSizer:
         capital_usdt:         float = STRATEGY_CAPITAL_USDT,
         kelly_safety:         float = KELLY_SAFETY_FRACTION,
         max_position_fraction: float = MAX_POSITION_FRACTION,
-        validated_ic:         float = VALIDATED_IC,
-        validated_win_rate:   float = VALIDATED_WIN_RATE,
+        validated_ic:         Optional[float] = None,   # claude code changed: was VALIDATED_IC — see class docstring; unused in the actual sizing formula below (win_rate-only), kept for reporting/logging only
+        validated_win_rate:   Optional[float] = None,   # claude code changed: was VALIDATED_WIN_RATE — no cross-pair default; required, see the raise below
     ) -> None:
         """
         Initialise the position sizer with strategy parameters.
@@ -690,18 +724,53 @@ class KalmanPositionSizer:
         max_position_fraction : float
             Hard cap on single position as fraction of total capital.
 
-        validated_ic : float
-            IC confirmed by feature_validator_v2_institutional.py (0.5245).
+        validated_ic : Optional[float]
+            Reporting/logging only — never fed into the sizing formula below
+            (that only ever used win_rate). No default; leave unset if unknown.
 
         validated_win_rate : float
-            Average win rate across 2020-2025 (0.69).
+            REQUIRED. This pair's own real win rate — e.g. from a
+            walk-forward train fold, or (only where the result is provably
+            invariant to the value — see PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT's
+            comment) an explicitly acknowledged placeholder. There is no
+            cross-pair default: AVAX/ATOM's old 0.69 is not valid for any
+            other pair, and model_governance_log.md has since shown it was
+            never actually valid even for AVAX/ATOM itself.
+
+        Raises
+        ------
+        ValueError
+            If validated_win_rate is not supplied. This position sizer used
+            to silently default to AVAX/ATOM's own (now known-invalid) 0.69
+            for every pair — fixed by requiring an explicit value instead.
         """
+        # claude code changed: whole docstring body above rewritten — was
+        # "IC confirmed by feature_validator_v2_institutional.py (0.5245)" /
+        # "Average win rate across 2020-2025 (0.69)", stated as if those were
+        # this constructor's own correct defaults rather than one pair's
+        # (invalid) numbers.
+
+        if validated_win_rate is None:
+            raise ValueError(
+                "KalmanPositionSizer requires an explicit validated_win_rate "
+                "— there is no cross-pair default. This constructor used to "
+                "silently default to AVAX/ATOM's own VALIDATED_WIN_RATE "
+                "(0.69), and model_governance_log.md has since shown that "
+                "number was never actually valid even for AVAX/ATOM itself. "
+                "Pass this pair's own real win rate (e.g. computed from a "
+                "walk-forward train fold — see walk_forward_engine.py), or, "
+                "only if you are certain the result does not depend on this "
+                "value (e.g. a loader-only instance that never calls run(), "
+                "or a permutation-test replica where the same constant is "
+                "applied identically to the real run and every shuffle), "
+                "pass PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT explicitly."
+            )
 
         self.capital         = capital_usdt          # Total strategy capital
         self.kelly_safety    = kelly_safety           # Quarter-Kelly safety factor
         self.max_fraction    = max_position_fraction  # Hard position cap
-        self.ic              = validated_ic           # 0.5245 from our research
-        self.win_rate        = validated_win_rate     # 0.69 from stability analysis
+        self.ic              = validated_ic           # Reporting only — see docstring
+        self.win_rate        = validated_win_rate     # This pair's own real win rate
 
         # Compute base Kelly fraction from our validated win rate
         # Kelly formula: f = win_rate - (1 - win_rate) / win_loss_ratio
@@ -996,13 +1065,18 @@ class EntryExitEngine:
             (e.g. a caller writing its own scratch slice).
 
         validated_half_life / validated_ic / validated_win_rate : Optional[float]
-            Pre-existing "known good" baselines for THIS pair, used only
-            for the sanity-check/reporting in _build_strategy_summary() and
-            _print_performance_report() — never for position sizing. There
-            is no cross-pair source of truth for these, so they default to
-            None ("not yet validated") rather than silently reusing
-            AVAX/ATOM's VALIDATED_IC / VALIDATED_WIN_RATE, which
-            research_data/model_governance_log.md has since shown were
+            Pre-existing "known good" baselines for THIS pair. validated_ic
+            is reporting-only (_build_strategy_summary()/
+            _print_performance_report()). validated_half_life feeds only the
+            time-stop sanity check. validated_win_rate claude code changed:
+            IS now fed into real position sizing (KalmanPositionSizer's
+            Kelly fraction) — leaving it None will raise at construction
+            time once the sizer is built below, rather than silently
+            defaulting to AVAX/ATOM's own VALIDATED_WIN_RATE the way this
+            engine used to. There is no cross-pair source of truth for any
+            of these, so they default to None ("not yet validated") rather
+            than silently reusing AVAX/ATOM's VALIDATED_IC / VALIDATED_WIN_RATE,
+            which research_data/model_governance_log.md has since shown were
             never actually valid even for AVAX/ATOM itself.
         """
         # claude code changed: the six "pair_name / symbol_a / ... validated_win_rate" paragraphs above are a new docstring addition (no "#" possible inside the string itself)
@@ -1067,10 +1141,19 @@ class EntryExitEngine:
         self.slippage_rate = _costs["slippage_rate"]
         self.total_transaction_cost = 2 * (self.fee_rate + self.slippage_rate)   # round trip: both sides, entry + exit
 
-        # Initialise position sizer with our validated research parameters
+        # claude code changed: now threads THIS pair's validated_ic/
+        # validated_win_rate through to the sizer — was constructed with
+        # neither, so KalmanPositionSizer always fell back to its own
+        # AVAX/ATOM-specific defaults regardless of which pair this engine
+        # was actually running (self.validated_win_rate above was stored for
+        # reporting but never reached the sizer). If self.validated_win_rate
+        # is still None here (no caller supplied one), this now raises — see
+        # KalmanPositionSizer's own error message for how to fix a caller.
         self.sizer = KalmanPositionSizer(
             capital_usdt=capital_usdt,
             kelly_safety=kelly_safety,
+            validated_ic=self.validated_ic,
+            validated_win_rate=self.validated_win_rate,
         )
 
         # State tracking — these update as we scan through candles
@@ -2564,6 +2647,7 @@ def run_entry_exit_simulation(
     capital:                 float = STRATEGY_CAPITAL_USDT,
     require_passes_filters:  bool  = True,   # claude code changed: new param — see docstring
     resample_hours:          Optional[int] = None,   # claude code changed: new param — see CANDLE_RESAMPLE_HOURS module comment
+    validated_win_rate:      Optional[float] = None,   # claude code changed: new, required — see docstring and KalmanPositionSizer's own error
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Standalone entry point for the entry/exit simulation.
@@ -2602,6 +2686,26 @@ def run_entry_exit_simulation(
         spreads revert at very different speeds, and testing DOT/LINK
         with AVAX/ATOM's half-life would size its time-stop wrong and
         make its sanity check meaningless.
+
+    validated_win_rate : float
+        claude code changed: new, REQUIRED — this pair's own real win rate,
+        fed into KalmanPositionSizer's Kelly fraction for real position
+        sizing. No default: this function used to construct EntryExitEngine
+        without passing one at all, which meant every run silently used
+        AVAX/ATOM's own VALIDATED_WIN_RATE (0.69) for its Kelly baseline
+        regardless of which pair was actually being tested — and
+        model_governance_log.md has since shown 0.69 was never actually
+        valid even for AVAX/ATOM itself. Omitting this now raises inside
+        EntryExitEngine's construction below.
+
+        If you don't have a real one yet (e.g. this is the first, full-
+        sample discovery run for a brand-new pair, before any walk-forward
+        fold has trained one), pass an explicit, honest placeholder and
+        treat this run's dollar P&L / equity curve as illustrative only —
+        win_rate/sharpe_ratio/profit_factor (the metrics that actually
+        decide whether a pair has edge) are exactly invariant to a uniform
+        Kelly-baseline constant applied to every trade in the run, so they
+        remain trustworthy regardless of which placeholder you choose.
 
     Returns
     -------
@@ -2682,13 +2786,17 @@ def run_entry_exit_simulation(
     logger.info(f"  Half-life : {validated_half_life}h")                    # claude code changed: was two separate lines logging hardcoded VALIDATED_IC / VALIDATED_WIN_RATE
 
     # claude code changed: comment + constructor args below are new — pair identity/half-life now threaded into the engine instead of relying on module constants
-    # Initialise the engine. validated_ic/validated_win_rate are
-    # intentionally left unset (None) — see note above.
+    # Initialise the engine. validated_ic is intentionally left unset (None)
+    # — see note above; it's reporting-only, never fed into sizing.
+    # validated_win_rate is REQUIRED (claude code changed) — threaded through
+    # from this function's own now-required parameter, instead of being
+    # silently left unset and defaulting to AVAX/ATOM's inside the sizer.
     engine = EntryExitEngine(
         pair_name=pair_name,                            # claude code changed: new arg
         symbol_a=symbol_a,                               # claude code changed: new arg
         symbol_b=symbol_b,                               # claude code changed: new arg
         validated_half_life=validated_half_life,        # claude code changed: new arg
+        validated_win_rate=validated_win_rate,          # claude code changed: new arg — see this function's own docstring
         exit_time_stop_hours=exit_time_stop_hours,      # claude code changed: new arg — was implicitly EXIT_TIME_STOP_HOURS=240 for every pair
         resample_hours=resample_hours,                   # claude code changed: new arg
         capital_usdt=capital,
@@ -2722,9 +2830,12 @@ def run_entry_exit_simulation(
 if __name__ == "__main__":
     """
     Run from project root:
-        python -m bot.research.entry_exit_engine
-        python -m bot.research.entry_exit_engine --kalman-csv research_data/DOT_USDT_LINK_USDT_kalman.csv --allow-filtered-pair
+        python -m bot.research.entry_exit_engine --validated-win-rate 0.55
+        python -m bot.research.entry_exit_engine --kalman-csv research_data/DOT_USDT_LINK_USDT_kalman.csv --allow-filtered-pair --validated-win-rate 0.55
     """
+    # claude code changed: --validated-win-rate is now required (see the
+    # argparse block below) — running with no args at all no longer works,
+    # by design: there is no more silent AVAX/ATOM win-rate fallback.
     # claude code changed: the second "python -m ..." example line above is new (string literal — no inline "#" possible); everything below in this block is new, replacing a plain 5-line run_entry_exit_simulation(...) call with hardcoded args
     import argparse                                                              # claude code changed: new
 
@@ -2782,6 +2893,21 @@ if __name__ == "__main__":
             "resampling (native 1h candles)."                                   # claude code changed: new
         ),                                                                       # claude code changed: new
     )                                                                            # claude code changed: new
+    parser.add_argument(                                                       # claude code changed: new
+        "--validated-win-rate",                                                # claude code changed: new
+        type=float,                                                            # claude code changed: new
+        required=True,                                                         # claude code changed: new — no default; see run_entry_exit_simulation()'s docstring for why
+        help=(                                                                 # claude code changed: new
+            "This pair's own real win rate, used for Kelly position sizing "  # claude code changed: new
+            "(0.0-1.0). Required — this used to silently default to "         # claude code changed: new
+            "AVAX/ATOM's own 0.69 for every pair, which model_governance_"    # claude code changed: new
+            "log.md has since shown was never actually valid even for "       # claude code changed: new
+            "AVAX/ATOM itself. If you don't have a real one yet (first-time " # claude code changed: new
+            "discovery for a new pair), pass an honest placeholder (e.g. "    # claude code changed: new
+            "0.55) — win_rate/sharpe_ratio/profit_factor are exactly "        # claude code changed: new
+            "invariant to this choice; only dollar P&L/equity are not."       # claude code changed: new
+        ),                                                                      # claude code changed: new
+    )                                                                            # claude code changed: new
     args = parser.parse_args()                                                  # claude code changed: new
 
     run_entry_exit_simulation(                                                  # claude code changed: was called with hardcoded kalman_csv/output_dir/capital values
@@ -2790,4 +2916,5 @@ if __name__ == "__main__":
         capital=args.capital,                                                   # claude code changed: was STRATEGY_CAPITAL_USDT
         require_passes_filters=not args.allow_filtered_pair,                   # claude code changed: new
         resample_hours=args.resample_hours,                                    # claude code changed: new
+        validated_win_rate=args.validated_win_rate,                            # claude code changed: new
     )

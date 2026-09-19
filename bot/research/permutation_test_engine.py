@@ -101,7 +101,11 @@ import pandas as pd                             # DataFrame operations
 
 # Reused unchanged — this module's only job is to control what data
 # EntryExitEngine sees, never to reimplement its decision logic.
-from bot.research.entry_exit_engine import EntryExitEngine, STRATEGY_CAPITAL_USDT
+from bot.research.entry_exit_engine import (
+    EntryExitEngine,
+    STRATEGY_CAPITAL_USDT,
+    PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — EntryExitEngine now requires an explicit validated_win_rate; see its own docstring for why this constant is safe here (real+shuffled runs get the identical constant, and win_rate/sharpe_ratio/profit_factor are provably invariant to it)
+)
 
 # claude code changed: new — the percentile/p-value/significance math in
 # _compare() below was extracted verbatim into permutation_stats.py so
@@ -316,6 +320,7 @@ class PermutationTestEngine:
             symbol_a=self._pair_identity.get("symbol_a"),
             symbol_b=self._pair_identity.get("symbol_b"),
             signal_source=self.signal_source,
+            validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — EntryExitEngine now requires this explicitly; this instance only ever calls _load_kalman_data()/_validate_columns() below, never run(), so the sizer it builds is never touched
         )
         df_real = loader._load_kalman_data(kalman_csv)                    # Same cleaned loader as everywhere else
         loader._validate_columns(df_real)
@@ -500,6 +505,7 @@ class PermutationTestEngine:
             "symbol_a":     identity.get("symbol_a"),
             "symbol_b":     identity.get("symbol_b"),
             "validated_half_life": identity.get("validated_half_life"),
+            "validated_win_rate": PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — EntryExitEngine now requires this explicitly; applied identically to the real run and every shuffle, so win_rate/sharpe_ratio/profit_factor (the metrics _compare() actually uses) are provably invariant to it
             "signal_source": self.signal_source,   # claude code changed: new
             "disable_target_exit": self.disable_target_exit,   # claude code changed: new
         }
