@@ -113,8 +113,21 @@ class BlockShuffleTest(SimpleTestCase):
             obj="kalman_zscore_lag1 must exactly track the shuffled kalman_zscore's own lag, at every row",
         )
 
-    def test_required_columns_move_together_as_a_unit(self):
-        """kalman_beta and kalman_spread both carry the same row-position
+    def test_decision_columns_move_together_as_a_unit(self):
+        # claude code changed: was test_required_columns_move_together_as_a_unit,
+        # asserting shuffled["kalman_beta"] == shuffled["kalman_spread"]. That
+        # was true under _block_shuffle()'s OLD behavior, before the real bug
+        # fix documented in its own module comment ("kalman_spread is the
+        # fill-price/PnL-determining series, not a decision input... must
+        # stay at its own true chronological values") — kalman_spread is now
+        # deliberately EXCLUDED from shuffling, so asserting it still moves
+        # with kalman_beta made this test fail against current, correct
+        # behavior, not a regression. Split into two tests: this one covers
+        # the still-true half of the original claim (decision columns that
+        # DO get shuffled move together in lockstep) using two columns that
+        # are both actually shuffled; the next test covers kalman_spread's
+        # own, opposite invariant.
+        """kalman_beta and prediction_error both carry the same row-position
         marker — after shuffling, a given row's values for both columns
         must still match each other, proving they were relocated in
         lockstep rather than independently."""
@@ -124,8 +137,26 @@ class BlockShuffleTest(SimpleTestCase):
         shuffled = engine._block_shuffle(df)
 
         pd.testing.assert_series_equal(
-            shuffled["kalman_beta"], shuffled["kalman_spread"], check_names=False,
-            obj="all non-lag1 required columns must be relocated together, not independently",
+            shuffled["kalman_beta"], shuffled["prediction_error"], check_names=False,
+            obj="all non-lag1, non-spread required columns must be relocated together, not independently",
+        )
+
+    def test_kalman_spread_stays_at_its_own_true_chronological_values(self):
+        # claude code changed: new — the other half of the split above.
+        """kalman_spread is the fill-price/PnL-determining series, not a
+        decision input (see _block_shuffle()'s own comment for the real bug
+        this fixed: shuffling it like every other column destroyed the
+        real, serially-mean-reverting price process the null hypothesis is
+        supposed to preserve). It must stay at its own original row's
+        value — unlike every other required column, which gets relocated."""
+        df = _make_marked_df(30)
+        engine = PermutationTestEngine(block_size_candles=5, random_seed=9, output_dir=self.tmp_dir)
+
+        shuffled = engine._block_shuffle(df)
+
+        pd.testing.assert_series_equal(
+            shuffled["kalman_spread"], df["kalman_spread"], check_names=False,
+            obj="kalman_spread must remain unshuffled, at its own true chronological values",
         )
 
 
