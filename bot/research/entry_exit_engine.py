@@ -772,12 +772,24 @@ class KalmanPositionSizer:
         self.ic              = validated_ic           # Reporting only — see docstring
         self.win_rate        = validated_win_rate     # This pair's own real win rate
 
-        # Compute base Kelly fraction from our validated win rate
+        # Compute base Kelly fraction from this pair's win rate
         # Kelly formula: f = win_rate - (1 - win_rate) / win_loss_ratio
         # For mean-reversion pairs trading: win_loss_ratio ≈ win_rate / (1-win_rate)
-        # This gives: f* = 2 × win_rate - 1 = 2(0.69) - 1 = 0.38
-        loss_rate         = 1.0 - self.win_rate          # 0.31
-        win_loss_ratio    = self.win_rate / loss_rate     # 0.69/0.31 = 2.22
+        # claude code changed: real bug fix — this comment claimed the
+        # formula below "gives f* = 2 x win_rate - 1 = 2(0.69) - 1 = 0.38",
+        # which is simply wrong algebra, independent of which win_rate is
+        # plugged in. Substituting win_loss_ratio = win_rate/loss_rate into
+        # f = win_rate - loss_rate/win_loss_ratio actually simplifies to
+        # f = win_rate - loss_rate^2/win_rate = (win_rate^2 - loss_rate^2)/win_rate
+        # = (win_rate - loss_rate)/win_rate (since win_rate + loss_rate = 1)
+        # — at win_rate=0.69 that's (0.69-0.31)/0.69 = 0.5507, not 0.38.
+        # Confirmed directly against real KalmanPositionSizer log output
+        # ("Full Kelly : 0.5507 (55.1%)"), not just re-derived on paper.
+        # This gives: f* = (win_rate - loss_rate) / win_rate = 1 - loss_rate/win_rate
+        #             = (0.69 - 0.31) / 0.69 = 0.5507 at win_rate=0.69 (a worked
+        #             example only — win_rate is this pair's own real value, not a default)
+        loss_rate         = 1.0 - self.win_rate          # 0.31 at win_rate=0.69
+        win_loss_ratio    = self.win_rate / loss_rate     # 0.69/0.31 = 2.22 at win_rate=0.69
         self.base_kelly   = (
             self.win_rate - loss_rate / win_loss_ratio    # Full Kelly fraction
         )
