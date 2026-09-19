@@ -92,6 +92,7 @@
 from __future__ import annotations              # Modern type hints in Python 3.8+
 
 import logging                                  # Structured logging — same format as every other module
+import math                                     # claude code changed: new — math.isfinite() guards against a non-cointegrated pair's inf/nan half-life
 import shutil                                   # Clean up per-permutation scratch directories
 from pathlib import Path                        # Cross-platform file paths
 from typing import Dict, List, Optional         # Type annotations
@@ -279,22 +280,41 @@ class PermutationTestEngine:
             try:
                 pair_config = load_pair_config(slash_pair_name, require_passes_filters=False)
                 half_life = pair_config["half_life_h"]
-                self._pair_identity["validated_half_life"]  = half_life
-                # claude code changed: new — in disable_target_exit mode,
-                # TIMESTOP is the PRIMARY exit (TARGET never fires), not a
-                # rare backstop, so it uses 1x half-life (the theoretical
-                # time for 50% reversion) rather than the old 2x-half-life
-                # backstop value, which was calibrated for "TARGET almost
-                # always fires first, TIMESTOP is a rare safety net."
-                time_stop_multiple = 1.0 if self.disable_target_exit else 2.0
-                self._pair_identity["exit_time_stop_hours"] = round(time_stop_multiple * half_life)
+                # claude code changed: real bug fix — a non-cointegrated pair's OU/AR(1)
+                # fit has mean-reversion speed <= 0, which makes half-life
+                # (ln(2)/speed) mathematically inf or nan; cointegration_engine.py
+                # stores that value as-is for a rejected pair (e.g. AVAX_USDT/ATOM_USDT,
+                # adf p=0.4874, half_life_hours=inf in cointegration_pairs.csv — the
+                # very pair this module's docstring was written to test). Without this
+                # guard, `round(2 * inf)` raises OverflowError("cannot convert float
+                # infinity to integer"), which isn't caught by the except clause below
+                # (it only catches FileNotFoundError/ValueError) and crashed this pair's
+                # entire permutation test run before a single shuffle executed.
+                if not math.isfinite(half_life):
+                    logger.warning(
+                        f"  '{pair_name}' has a non-finite half-life ({half_life}h) — "
+                        f"its OU/AR(1) fit shows no real mean-reversion (a rejected, "
+                        f"non-cointegrated pair). Falling back to the class default "
+                        f"exit_time_stop_hours=240 and skipping the half-life sanity "
+                        f"check, same as when no cointegration_pairs.csv row is found."
+                    )
+                else:
+                    self._pair_identity["validated_half_life"]  = half_life
+                    # claude code changed: new — in disable_target_exit mode,
+                    # TIMESTOP is the PRIMARY exit (TARGET never fires), not a
+                    # rare backstop, so it uses 1x half-life (the theoretical
+                    # time for 50% reversion) rather than the old 2x-half-life
+                    # backstop value, which was calibrated for "TARGET almost
+                    # always fires first, TIMESTOP is a rare safety net."
+                    time_stop_multiple = 1.0 if self.disable_target_exit else 2.0
+                    self._pair_identity["exit_time_stop_hours"] = round(time_stop_multiple * half_life)
                 if not pair_config["passes_filters"]:
                     logger.warning(
                         f"  '{pair_name}' did not pass cointegration_engine.py's own "
                         f"filters, but this permutation test is running anyway using "
                         f"its real half-life ({half_life}h) and a time-stop of "
-                        f"{round(2 * half_life)}h derived from it — a deliberate "
-                        f"test of a rejected pair."
+                        f"{'240h (class default — half-life is non-finite)' if not math.isfinite(half_life) else f'{round(2 * half_life)}h derived from it'} — "
+                        f"a deliberate test of a rejected pair."
                     )
             except (FileNotFoundError, ValueError) as e:
                 logger.warning(
