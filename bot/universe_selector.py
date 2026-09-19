@@ -63,9 +63,19 @@ EXCLUDED_BASE_ASSETS = {
 
 OUTPUT_PATH = Path("data") / "universe_selection.json"
 
-# claude code changed: 50 -> 100 — second universe expansion (20 -> 50 -> 100),
-# same liquidity-ranked/history-checked selection logic, just a bigger target.
-DEFAULT_TARGET_SIZE = 100
+# claude code changed: 100 -> 120 — third universe expansion (20 -> 50 -> 100 -> 120).
+# Directly motivated by a real gap found running walk_forward_engine.py's
+# full pipeline: 9 symbols referenced by already-produced research_data/
+# *_kalman.csv artifacts (from an earlier, larger universe selection) had
+# fallen out of a 100-target re-run's liquidity ranking. Re-ran the real
+# selector at target_size=120 (real ccxt calls against Binance, same as
+# always) to check rather than assume: 6 of the 9 (C98, ALICE, TLM, RIF,
+# COMP, MASK) genuinely qualify again within the top 120 by today's real
+# liquidity ranking. Only 3 (ARDR, BAND, AUDIO) still don't, even at 120 —
+# those remain registered separately via bot.instruments.RESEARCH_ONLY_CRYPTO_SYMBOLS,
+# not folded into this target size, since they're demonstrably not part of
+# the live liquidity ranking at any target size tested so far.
+DEFAULT_TARGET_SIZE = 120
 DEFAULT_PRIMARY_MIN_YEARS = 5.0
 DEFAULT_FALLBACK_MIN_YEARS = 4.0
 DEFAULT_QUOTE = "USDT"
