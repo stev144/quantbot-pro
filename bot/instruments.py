@@ -44,7 +44,7 @@ from datetime import datetime, timezone  # claude code changed: multi-provider F
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from bot.fetch_all_symbols import INTERVAL, SYMBOLS, symbol_to_filename
+from bot.fetch_all_symbols import INTERVAL, OUTPUT_DIR, SYMBOLS, symbol_to_filename   # claude code changed: OUTPUT_DIR new — RESEARCH_ONLY_CRYPTO_SYMBOLS' dynamic discovery needs it
 from bot.forex_data_fetcher import (
     INTERVAL as FOREX_INTERVAL,
     SYMBOLS as FOREX_SYMBOLS,
@@ -188,40 +188,49 @@ def read_provenance_marker(ohlcv_path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
-# claude code changed: originally 9 symbols (ARDR, C98, ALICE, TLM, BAND,
-# RIF, MASK, AUDIO, COMP) — real bug found running walk_forward_engine.py's
-# full pipeline: each is referenced by an already-produced
-# research_data/*_kalman.csv pairs-trading artifact (from an earlier
-# universe_selector.py run) but wasn't in the then-current 100-symbol
-# liquidity selection. Rather than assume they were permanently too
-# illiquid, re-ran the REAL selector (real ccxt calls against Binance) at
-# target_size=120: 6 of the 9 (C98, ALICE, TLM, RIF, COMP, MASK) genuinely
-# qualify again within the top 120 by today's real liquidity ranking, so
-# universe_selector.py's DEFAULT_TARGET_SIZE was raised 100 -> 120 and
-# data/universe_selection.json regenerated for real — those 6 are now
-# ordinary SYMBOLS entries, not listed here. Only these remaining 3
-# (ARDR, BAND, AUDIO) are still demonstrably below the liquidity cutoff
-# even at target_size=120 (confirmed by that same real re-run, not
-# assumed) — each still backed by a genuine, real ~5-year
-# data/{SYMBOL}_USDT_1h.csv history (verified directly, same schema/depth
-# as every SYMBOLS entry), just not liquid enough today to be part of the
-# live, actively-fetched, freshness-monitored universe
-# (test_universe_selection.py asserts SYMBOLS is EXACTLY target_size;
-# test_data_freshness.py assumes every SYMBOLS entry gets regularly
-# refreshed — these 3 are stale one-off research snapshots, not that).
-# Registered here instead, with a distinct data_source, purely so
-# bot.instruments can resolve identity for the pairs that already
-# reference them (entry_exit_engine.py/walk_forward_engine.py need this)
-# — this is NOT a second universe list in the sense _build_crypto_registry()'s
-# own docstring below warns against (a competing, independently-hand-typed
-# guess at "the top-N most liquid symbols"); it's a small, explicit,
-# honestly-labeled registration of instruments confirmed real but
-# intentionally outside that concept. If a future re-run's liquidity
-# ranking brings any of these 3 back into SYMBOLS, _build_crypto_registry()
-# below already defers to the live entry over this one.
-RESEARCH_ONLY_CRYPTO_SYMBOLS: Tuple[str, ...] = (
-    "ARDR/USDT", "BAND/USDT", "AUDIO/USDT",
-)
+# claude code changed: was a hardcoded 9-symbol tuple, then a hardcoded
+# 3-symbol tuple (ARDR, BAND, AUDIO) after 6 of the original 9 re-qualified
+# into SYMBOLS at target_size=120 — real bug found immediately after
+# raising the target size and re-running the live universe selection for
+# real: DIA/USDT (a symbol that HAD been live-tracked, with a real
+# research_data/*_kalman.csv pairs artifact depending on it) fell OUT of
+# the fresh 120-symbol ranking, breaking DIA_USDT_ARDR_USDT the exact same
+# way ARDR/BAND/AUDIO/etc. broke originally. A hand-maintained tuple can
+# never keep up with this — universe_selector.py's own module docstring
+# says liquidity rankings "genuinely drift", so EVERY re-run risks bumping
+# some previously-tracked symbol out, and a fixed list only ever protects
+# the specific symbols someone happened to notice breaking last time.
+#
+# Fixed properly this time: derived dynamically from data/*_1h.csv itself
+# (every real, already-fetched raw price history on disk) instead of a
+# fixed list of names. Any USDT-quoted symbol with a real raw CSV, that
+# isn't already in SYMBOLS, is registered as research-only. This is
+# self-healing — the NEXT symbol a universe re-run bumps out (there will
+# be one; it's not a hypothetical) gets covered automatically, with zero
+# code change needed, as long as its raw data file is still on disk. Not
+# a second universe list in the sense _build_crypto_registry()'s own
+# docstring below warns against (a competing, independently-hand-typed
+# guess at "the top-N most liquid symbols") — it doesn't rank or select
+# anything, it just recognizes instruments this platform already has real
+# data for. If a future re-run's liquidity ranking brings any of these
+# back into SYMBOLS, _build_crypto_registry() below already defers to the
+# live entry over this one.
+def _discover_research_only_crypto_symbols() -> Tuple[str, ...]:
+    if not OUTPUT_DIR.exists():
+        return ()
+    live = set(SYMBOLS)
+    found = []
+    for csv_path in sorted(OUTPUT_DIR.glob(f"*_USDT_{INTERVAL}.csv")):
+        stem = csv_path.name[: -len(f"_{INTERVAL}.csv")]   # "ARDR_USDT_1h.csv" -> "ARDR_USDT"
+        if not stem.endswith("_USDT"):
+            continue   # claude code changed: defensive — every file matched the glob above already, but keeps this correct if a non-USDT-quoted file ever lands in data/
+        canonical = stem[: -len("_USDT")] + "/USDT"
+        if canonical not in live:
+            found.append(canonical)
+    return tuple(found)
+
+
+RESEARCH_ONLY_CRYPTO_SYMBOLS: Tuple[str, ...] = _discover_research_only_crypto_symbols()
 
 
 def _build_crypto_registry() -> Dict[str, Instrument]:
