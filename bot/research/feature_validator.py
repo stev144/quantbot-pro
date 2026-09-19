@@ -38,7 +38,6 @@ import json                                    # JSON serialization
 import hashlib                                 # Feature versioning via hash
 from datetime import datetime                  # Timestamps
 import concurrent.futures                      # Parallel processing (optional)
-from bot import data_fetcher
 from bot.instruments import UnsupportedAnnualizationError, UnsupportedTimeframeError, periods_per_year  # claude code changed: new — Phase 1B hardening, section 7
 
 # claude code changed: real bug fix. This used to be a blanket

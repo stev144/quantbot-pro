@@ -120,6 +120,25 @@ class ForexCostModel(CostModel):
         self.spread_pips = spread_pips
 
     def _pip_size(self) -> float:
+        # claude code changed: real bug fix — was a hardcoded "/JPY" ->
+        # 0.01, else 0.0001 heuristic with no awareness of non-currency
+        # instruments. Gold/silver (XAU/USD, XAG/USD) fell into the
+        # "else" branch and got FX's 0.0001 pip size applied to a ~$4,000
+        # metal price, understating slippage_rate by ~4 orders of
+        # magnitude (2.28e-08 instead of a real ~2.3e-06 at 1 pip).
+        # bot.instruments._build_forex_registry() already has the real,
+        # broker-confirmed pip_size for every registered Forex instrument
+        # (including the metals-specific fix from earlier this session) —
+        # this reuses that single source of truth instead of a second,
+        # incomplete heuristic. Falls back to the original JPY/default
+        # heuristic only if the pair isn't registered at all, which
+        # shouldn't happen for any pair this class is ever constructed
+        # for, but keeps this method total rather than raising.
+        from bot.instruments import get_instrument
+
+        instrument = get_instrument(self.pair)
+        if instrument is not None and instrument.pip_size is not None:
+            return instrument.pip_size
         return self._JPY_QUOTE_PIP_SIZE if self.pair.endswith("/JPY") else self._DEFAULT_PIP_SIZE
 
     def _reference_price(self) -> float:
