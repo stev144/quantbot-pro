@@ -188,6 +188,35 @@ def read_provenance_marker(ohlcv_path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
+# claude code changed: new — real bug found running walk_forward_engine.py's
+# full pipeline: 9 symbols (ARDR, C98, ALICE, TLM, BAND, RIF, MASK, AUDIO,
+# COMP) are referenced by already-produced research_data/*_kalman.csv
+# pairs-trading artifacts (from an earlier universe_selector.py run), each
+# backed by a genuine, real ~5-year data/{SYMBOL}_USDT_1h.csv history
+# (verified directly — same schema/depth as every SYMBOLS entry) — but none
+# are in the CURRENT liquidity-ranked selection (each ranks below the top
+# ~358 candidates by today's quote volume, so universe_selector.py never
+# even history-checks them). Deliberately NOT added to
+# data/universe_selection.json/SYMBOLS itself — that file is the live,
+# actively-fetched, freshness-monitored universe (test_universe_selection.py
+# asserts it's EXACTLY target_size; test_data_freshness.py assumes every
+# entry gets regularly refreshed), and these 9 are neither: they're stale,
+# one-off research snapshots from whenever the wider cointegration scan that
+# produced them last ran, not part of the regularly-refreshed live universe.
+# Registered here instead, with a distinct data_source, purely so
+# bot.instruments can resolve identity for the pairs that already reference
+# them (entry_exit_engine.py/walk_forward_engine.py need this) — this is NOT
+# a second universe list in the sense _build_crypto_registry()'s own
+# docstring below warns against (a competing, independently-hand-typed guess
+# at "the top-N most liquid symbols"); it's a small, explicit, honestly-
+# labeled registration of instruments confirmed real but intentionally
+# outside that concept.
+RESEARCH_ONLY_CRYPTO_SYMBOLS: Tuple[str, ...] = (
+    "ARDR/USDT", "C98/USDT", "ALICE/USDT", "TLM/USDT", "BAND/USDT",
+    "RIF/USDT", "MASK/USDT", "AUDIO/USDT", "COMP/USDT",
+)
+
+
 def _build_crypto_registry() -> Dict[str, Instrument]:
     """
     claude code changed: new. Derives every CRYPTO instrument from
@@ -195,6 +224,10 @@ def _build_crypto_registry() -> Dict[str, Instrument]:
     rather than re-declaring it. base_currency/quote_currency are parsed
     from the canonical "BASE/QUOTE" form every symbol in SYMBOLS already
     uses (verified: all 20 are "*/USDT").
+
+    claude code changed: also registers RESEARCH_ONLY_CRYPTO_SYMBOLS (see
+    its own comment above) with a distinct data_source, so callers can tell
+    a live-tracked instrument from a research-only one if it ever matters.
     """
     registry: Dict[str, Instrument] = {}
     for symbol in SYMBOLS:
@@ -207,6 +240,19 @@ def _build_crypto_registry() -> Dict[str, Instrument]:
             venue="binance",
             timeframe=INTERVAL,
             data_source="fetch_all_symbols",
+        )
+    for symbol in RESEARCH_ONLY_CRYPTO_SYMBOLS:
+        if symbol in registry:   # claude code changed: defensive — a future universe re-run could legitimately re-select one of these; never overwrite a live entry with a research-only one
+            continue
+        base, _, quote = symbol.partition("/")
+        registry[symbol] = Instrument(
+            canonical_symbol=symbol,
+            asset_class=ASSET_CLASS_CRYPTO,
+            base_currency=base or None,
+            quote_currency=quote or None,
+            venue="binance",
+            timeframe=INTERVAL,
+            data_source="research_only",
         )
     return registry
 

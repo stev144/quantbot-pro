@@ -100,12 +100,22 @@ class InstrumentRegistryTest(SimpleTestCase):
         self.assertEqual(equity, [])
 
     def test_symbols_for_asset_class_matches_fetch_all_symbols(self):
-        """claude code changed: the exact backward-compatibility guarantee
-        — spec.py's SUPPORTED_ASSETS must still be the same 20 crypto
-        symbols it always was, just sourced from the registry now instead
-        of importing SYMBOLS directly."""
+        """claude code changed: was a strict equality — the exact backward-
+        compatibility guarantee that spec.py's SUPPORTED_ASSETS is sourced
+        from the registry, not a second hand-typed copy of SYMBOLS. Relaxed
+        to "every live SYMBOLS entry is present, in the same relative order"
+        (assertEqual on the SYMBOLS-only subsequence) now that the registry
+        also carries bot.instruments.RESEARCH_ONLY_CRYPTO_SYMBOLS — real
+        instruments with real historical data, deliberately outside SYMBOLS
+        itself (see that constant's own comment: they're not part of the
+        live, freshness-monitored universe, so they don't belong in SYMBOLS,
+        but bot.instruments still needs to resolve their identity for
+        already-produced research artifacts that reference them)."""
         from bot.fetch_all_symbols import SYMBOLS
-        self.assertEqual(symbols_for_asset_class(ASSET_CLASS_CRYPTO), list(SYMBOLS))
+        from bot.instruments import RESEARCH_ONLY_CRYPTO_SYMBOLS
+        registry_symbols = symbols_for_asset_class(ASSET_CLASS_CRYPTO)
+        self.assertEqual([s for s in registry_symbols if s not in RESEARCH_ONLY_CRYPTO_SYMBOLS], list(SYMBOLS))
+        self.assertEqual(len(registry_symbols), len(SYMBOLS) + len(RESEARCH_ONLY_CRYPTO_SYMBOLS))
 
     def test_all_three_target_asset_classes_are_real_values(self):
         """CRYPTO/US_EQUITY/FOREX must all be valid, branchable values —

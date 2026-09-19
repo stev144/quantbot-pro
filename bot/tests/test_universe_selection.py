@@ -89,10 +89,22 @@ class UniverseConsolidationTest(SimpleTestCase):
     """
 
     def test_instrument_registry_size_matches_persisted_selection(self):
-        from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO
+        # claude code changed: was a strict len() equality — relaxed the
+        # same way and for the same reason as test_instruments.py's
+        # test_symbols_for_asset_class_matches_fetch_all_symbols: the
+        # registry now also carries bot.instruments.RESEARCH_ONLY_CRYPTO_SYMBOLS,
+        # real instruments deliberately kept outside the persisted, live,
+        # freshness-monitored universe_selection.json. The persisted
+        # selection's own symbols must still all be present in the
+        # registry — that's the actual "no drift" guarantee this test
+        # exists for — the registry is just allowed to additionally know
+        # about a small, explicit, honestly-labeled set of research-only
+        # instruments the persisted selection was never meant to cover.
+        from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, RESEARCH_ONLY_CRYPTO_SYMBOLS
         data = _load_selection()
         registry_symbols = symbols_for_asset_class(ASSET_CLASS_CRYPTO)
-        self.assertEqual(len(registry_symbols), len(data["symbols"]))
+        self.assertEqual(set(data["symbols"]) - set(registry_symbols), set(), "persisted selection has a symbol missing from the registry")
+        self.assertEqual(len(registry_symbols), len(data["symbols"]) + len(RESEARCH_ONLY_CRYPTO_SYMBOLS))
 
     def test_cointegration_and_cross_section_universes_match_registry(self):
         from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO
