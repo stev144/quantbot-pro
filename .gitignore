@@ -76,6 +76,26 @@ research_data/permutation_test/MASK_USDT_ALICE_USDT/*
 !research_data/permutation_test/MASK_USDT_TLM_USDT/
 research_data/permutation_test/MASK_USDT_TLM_USDT/*
 !research_data/permutation_test/MASK_USDT_TLM_USDT/permutation_verdict.csv
+# claude code changed: whitelist the remaining 6 pairs from the same
+# 14+3 re-test batch (session was interrupted before this follow-up landed)
+!research_data/permutation_test/MINA_USDT_C98_USDT/
+research_data/permutation_test/MINA_USDT_C98_USDT/*
+!research_data/permutation_test/MINA_USDT_C98_USDT/permutation_verdict.csv
+!research_data/permutation_test/ONT_USDT_BAND_USDT/
+research_data/permutation_test/ONT_USDT_BAND_USDT/*
+!research_data/permutation_test/ONT_USDT_BAND_USDT/permutation_verdict.csv
+!research_data/permutation_test/ONT_USDT_RIF_USDT/
+research_data/permutation_test/ONT_USDT_RIF_USDT/*
+!research_data/permutation_test/ONT_USDT_RIF_USDT/permutation_verdict.csv
+!research_data/permutation_test/SOL_USDT_MASK_USDT/
+research_data/permutation_test/SOL_USDT_MASK_USDT/*
+!research_data/permutation_test/SOL_USDT_MASK_USDT/permutation_verdict.csv
+!research_data/permutation_test/VET_USDT_ARDR_USDT/
+research_data/permutation_test/VET_USDT_ARDR_USDT/*
+!research_data/permutation_test/VET_USDT_ARDR_USDT/permutation_verdict.csv
+!research_data/permutation_test/DODO_USDT_FIDA_USDT/
+research_data/permutation_test/DODO_USDT_FIDA_USDT/*
+!research_data/permutation_test/DODO_USDT_FIDA_USDT/permutation_verdict.csv
 !research_data/walk_forward/
 research_data/walk_forward/*
 !research_data/walk_forward/walk_forward_leaderboard.csv

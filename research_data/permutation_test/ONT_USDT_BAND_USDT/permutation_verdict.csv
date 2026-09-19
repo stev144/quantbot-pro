@@ -1,2 +1,2 @@
 pair_name,n_trades,win_rate,sharpe_ratio,profit_factor,entry_ic,avg_hold_hours,win_rate_percentile,win_rate_p_value,sharpe_ratio_percentile,sharpe_ratio_p_value,profit_factor_percentile,profit_factor_p_value,real_entry_ic,real_entry_ic_meaningfully_positive,sharpe_significant,win_rate_significant,edge_appears_real
-DOT_USDT_LINK_USDT,535,0.8766,7.173,7.2046,0.3948,34.9,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.3948,True,True,True,True
+ONT_USDT_BAND_USDT,308,0.8312,5.2653,4.5012,0.3779,35.1,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.3779,True,True,True,True
