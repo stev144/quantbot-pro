@@ -1,0 +1,2 @@
+pair_name,n_trades,win_rate,sharpe_ratio,profit_factor,entry_ic,avg_hold_hours,win_rate_percentile,win_rate_p_value,sharpe_ratio_percentile,sharpe_ratio_p_value,profit_factor_percentile,profit_factor_p_value,real_entry_ic,real_entry_ic_meaningfully_positive,sharpe_significant,win_rate_significant,edge_appears_real
+DOT_USDT_ARDR_USDT,397,0.8262,6.518,4.4841,0.3435,33.3,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.3435,True,True,True,True

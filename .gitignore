@@ -45,6 +45,37 @@ research_data/permutation_test/AVAX_USDT_ATOM_USDT/*
 !research_data/permutation_test/DOT_USDT_LINK_USDT/
 research_data/permutation_test/DOT_USDT_LINK_USDT/*
 !research_data/permutation_test/DOT_USDT_LINK_USDT/permutation_verdict.csv
+# claude code changed: new — same lightweight-verdict-only pattern, extended
+# to the pairs re-tested with the corrected (post-kalman_spread-shuffle-bug)
+# permutation_test_engine.py, so their verdicts persist without committing
+# each pair's ~2.4GB of shuffle output.
+!research_data/permutation_test/ARDR_USDT_PUNDIX_USDT/
+research_data/permutation_test/ARDR_USDT_PUNDIX_USDT/*
+!research_data/permutation_test/ARDR_USDT_PUNDIX_USDT/permutation_verdict.csv
+!research_data/permutation_test/AUDIO_USDT_C98_USDT/
+research_data/permutation_test/AUDIO_USDT_C98_USDT/*
+!research_data/permutation_test/AUDIO_USDT_C98_USDT/permutation_verdict.csv
+!research_data/permutation_test/BAND_USDT_C98_USDT/
+research_data/permutation_test/BAND_USDT_C98_USDT/*
+!research_data/permutation_test/BAND_USDT_C98_USDT/permutation_verdict.csv
+!research_data/permutation_test/COMP_USDT_ARDR_USDT/
+research_data/permutation_test/COMP_USDT_ARDR_USDT/*
+!research_data/permutation_test/COMP_USDT_ARDR_USDT/permutation_verdict.csv
+!research_data/permutation_test/DIA_USDT_ARDR_USDT/
+research_data/permutation_test/DIA_USDT_ARDR_USDT/*
+!research_data/permutation_test/DIA_USDT_ARDR_USDT/permutation_verdict.csv
+!research_data/permutation_test/DOT_USDT_ARDR_USDT/
+research_data/permutation_test/DOT_USDT_ARDR_USDT/*
+!research_data/permutation_test/DOT_USDT_ARDR_USDT/permutation_verdict.csv
+!research_data/permutation_test/IOTA_USDT_ARDR_USDT/
+research_data/permutation_test/IOTA_USDT_ARDR_USDT/*
+!research_data/permutation_test/IOTA_USDT_ARDR_USDT/permutation_verdict.csv
+!research_data/permutation_test/MASK_USDT_ALICE_USDT/
+research_data/permutation_test/MASK_USDT_ALICE_USDT/*
+!research_data/permutation_test/MASK_USDT_ALICE_USDT/permutation_verdict.csv
+!research_data/permutation_test/MASK_USDT_TLM_USDT/
+research_data/permutation_test/MASK_USDT_TLM_USDT/*
+!research_data/permutation_test/MASK_USDT_TLM_USDT/permutation_verdict.csv
 !research_data/walk_forward/
 research_data/walk_forward/*
 !research_data/walk_forward/walk_forward_leaderboard.csv
