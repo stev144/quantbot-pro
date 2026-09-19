@@ -566,7 +566,39 @@ class WalkForwardEngine:
         # Piece 4 already relies on, so walk-forward and the full-sample run
         # are always looking at identically cleaned data.
         scratch_dir = pair_output_dir / "_loader_scratch"            # Disposable dir, only used to init the loader
-        symbol_a, symbol_b = pair_name.split("/")                    # claude code changed: new — needed below, and by signal_source="ols" (load_pair_config() lookup inside _load_kalman_data())
+        # claude code changed: real bug found — was `pair_name.split("/")`,
+        # which assumes pair_name arrives in "SYMBOL_A/SYMBOL_B" slash form.
+        # Every real caller (discover_pairs()/run_walk_forward_pipeline(),
+        # and this module's own __main__ --pair example) actually passes
+        # the underscore-joined form ("AVAX_USDT_ATOM_USDT"), which has no
+        # "/" at all — .split("/") returned a single-element list and
+        # unpacking into two variables crashed immediately, for every
+        # pair, every time this ran via the dynamic pipeline (only a
+        # hand-crafted slash-form pair_name, which no real caller supplies,
+        # would ever have worked). Fixed the same way permutation_test_engine.py's
+        # own identical bug was fixed: try parsing identity from the kalman
+        # CSV's own filename first (most robust — doesn't depend on the
+        # caller's pair_name format at all), fall back to disambiguating
+        # pair_name itself via the instrument registry. Both also return a
+        # correctly slash-formed pair_name, used below and in
+        # _run_single_fold() wherever EntryExitEngine needs identity for
+        # signal_source="ols"'s load_pair_config() lookup — passing the raw
+        # underscore pair_name there instead would silently break that
+        # lookup, the same class of bug permutation_test_engine.py already
+        # found and fixed for itself.
+        from bot.research.entry_exit_engine import _parse_pair_from_kalman_filename, _split_pair_string   # claude code changed: new — local import matches permutation_test_engine.py's own existing convention for these two helpers
+
+        try:
+            slash_pair_name, symbol_a, symbol_b = _parse_pair_from_kalman_filename(kalman_csv)
+        except ValueError:
+            try:
+                slash_pair_name, symbol_a, symbol_b = _split_pair_string(pair_name)
+            except ValueError as e:
+                raise ValueError(
+                    f"WalkForwardEngine.run() could not resolve symbol_a/symbol_b "
+                    f"for '{pair_name}' from either the kalman CSV filename "
+                    f"('{kalman_csv}') or the pair_name argument itself. {e}"
+                ) from e
         loader = EntryExitEngine(                                     # claude code changed: added resample_hours=
             capital_usdt=self.capital_usdt, output_dir=str(scratch_dir),
             resample_hours=self.resample_hours,                       # claude code changed: new — df_full (and every fold sliced from it) comes out already at this candle width
@@ -576,7 +608,7 @@ class WalkForwardEngine:
             # class doesn't have); signal_source="ols" needs self.pair_name
             # to look up the static hedge ratio via load_pair_config(),
             # which would otherwise see the AVAX/ATOM module default here.
-            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,
+            pair_name=slash_pair_name, symbol_a=symbol_a, symbol_b=symbol_b,   # claude code changed: was pair_name=pair_name (raw, underscore) — see the real bug note above
             signal_source=self.signal_source,
             validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — EntryExitEngine now requires this explicitly; this instance only ever calls _load_kalman_data()/_validate_columns() below, never run(), so the sizer it builds is never touched
         )
@@ -607,6 +639,9 @@ class WalkForwardEngine:
             result, oos_trades = self._run_single_fold(
                 fold_id      = i,
                 pair_name    = pair_name,
+                slash_pair_name = slash_pair_name,   # claude code changed: new — resolved once above, threaded down instead of re-derived per fold
+                symbol_a     = symbol_a,              # claude code changed: new
+                symbol_b     = symbol_b,              # claude code changed: new
                 train_start  = train_start,
                 train_end    = train_end,
                 test_start   = test_start,
@@ -796,11 +831,14 @@ class WalkForwardEngine:
         self,
         fold_id:          int,
         pair_name:         str,
-        train_start:         pd.Timestamp,
-        train_end:            pd.Timestamp,
-        test_start:            pd.Timestamp,
-        test_end:               pd.Timestamp,
-        pair_output_dir:         Path,
+        slash_pair_name:    str,   # claude code changed: new — resolved once by run(), see its own comment for why this can't just be re-derived here via pair_name.split("/")
+        symbol_a:            str,   # claude code changed: new — was re-derived here via pair_name.split("/"), which crashed on the underscore-joined form every real caller actually passes
+        symbol_b:              str,   # claude code changed: new
+        train_start:             pd.Timestamp,
+        train_end:                pd.Timestamp,
+        test_start:                pd.Timestamp,
+        test_end:                   pd.Timestamp,
+        pair_output_dir:             Path,
     ) -> Tuple[FoldResult, Optional[pd.DataFrame]]:
         """
         Execute one walk-forward fold end to end:
@@ -823,12 +861,16 @@ class WalkForwardEngine:
         # ── Refit a fresh Kalman filter for THIS fold only ────────────────────
         # claude code changed: was `df_full.loc[...]` — a slice of ONE Kalman
         # filter run over the pair's entire history, which gave every fold's
-        # test window strictly more filter-convergence time than its own
+        # test period strictly more filter-convergence time than its own
         # train window (test is always the later, more mature part of that
         # single continuous run). See _refit_kalman_for_fold()'s docstring.
-        symbol_a, symbol_b = pair_name.split("/")
+        # claude code changed: `symbol_a, symbol_b = pair_name.split("/")`
+        # used to be re-derived right here — crashed on the underscore-joined
+        # pair_name every real caller passes (see run()'s own comment on the
+        # same bug). Now received as this method's own params, resolved once
+        # by run() instead of re-parsed (and re-crashing) per fold.
         fold_kalman_df = self._refit_kalman_for_fold(
-            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,
+            pair_name=slash_pair_name, symbol_a=symbol_a, symbol_b=symbol_b,   # claude code changed: was pair_name=pair_name (raw, underscore)
             train_start=train_start, train_end=train_end, test_end=test_end,
             fold_dir=fold_dir,
         )
@@ -866,7 +908,7 @@ class WalkForwardEngine:
             validated_ic       = VALIDATED_IC,                            # Bootstrap default — TRAIN hasn't taught us anything yet
             validated_win_rate  = VALIDATED_WIN_RATE,                      # Bootstrap default, same reasoning
             output_dir           = str(fold_dir / "train_run"),            # Keep train's own outputs isolated
-            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,     # claude code changed: new — needed for signal_source="ols"'s load_pair_config() lookup; train_slice_kalman.csv's filename can't be parsed for identity
+            pair_name=slash_pair_name, symbol_a=symbol_a, symbol_b=symbol_b,   # claude code changed: was pair_name=pair_name (raw, underscore) — needed in slash form for signal_source="ols"'s load_pair_config() lookup; train_slice_kalman.csv's filename can't be parsed for identity
         )
         train_trades, train_summary, _ = train_engine.run(kalman_csv=str(train_csv))
 
@@ -909,7 +951,7 @@ class WalkForwardEngine:
             validated_ic        = train_entry_ic,                            # TRAIN-derived — TEST never sees its own IC
             validated_win_rate   = train_win_rate,                            # TRAIN-derived — TEST never sees its own win rate
             output_dir            = str(fold_dir / "test_run"),               # Keep test's own outputs isolated
-            pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,        # claude code changed: new — same reason as train_engine above
+            pair_name=slash_pair_name, symbol_a=symbol_a, symbol_b=symbol_b,   # claude code changed: was pair_name=pair_name (raw, underscore) — same reason as train_engine above
         )
         test_trades, test_summary, _ = test_engine.run(kalman_csv=str(test_csv))
 
