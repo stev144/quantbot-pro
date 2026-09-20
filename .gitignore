@@ -96,6 +96,36 @@ research_data/permutation_test/VET_USDT_ARDR_USDT/*
 !research_data/permutation_test/DODO_USDT_FIDA_USDT/
 research_data/permutation_test/DODO_USDT_FIDA_USDT/*
 !research_data/permutation_test/DODO_USDT_FIDA_USDT/permutation_verdict.csv
+# claude code changed: whitelist the 9 walk-forward-passing pairs that were
+# still missing a fresh permutation verdict after the 14+3 batch (recovered
+# session, remaining9 batch)
+!research_data/permutation_test/FET_USDT_BCH_USDT/
+research_data/permutation_test/FET_USDT_BCH_USDT/*
+!research_data/permutation_test/FET_USDT_BCH_USDT/permutation_verdict.csv
+!research_data/permutation_test/FET_USDT_DASH_USDT/
+research_data/permutation_test/FET_USDT_DASH_USDT/*
+!research_data/permutation_test/FET_USDT_DASH_USDT/permutation_verdict.csv
+!research_data/permutation_test/1INCH_USDT_FIDA_USDT/
+research_data/permutation_test/1INCH_USDT_FIDA_USDT/*
+!research_data/permutation_test/1INCH_USDT_FIDA_USDT/permutation_verdict.csv
+!research_data/permutation_test/FIL_USDT_AVA_USDT/
+research_data/permutation_test/FIL_USDT_AVA_USDT/*
+!research_data/permutation_test/FIL_USDT_AVA_USDT/permutation_verdict.csv
+!research_data/permutation_test/MINA_USDT_ONG_USDT/
+research_data/permutation_test/MINA_USDT_ONG_USDT/*
+!research_data/permutation_test/MINA_USDT_ONG_USDT/permutation_verdict.csv
+!research_data/permutation_test/COTI_USDT_ONG_USDT/
+research_data/permutation_test/COTI_USDT_ONG_USDT/*
+!research_data/permutation_test/COTI_USDT_ONG_USDT/permutation_verdict.csv
+!research_data/permutation_test/DEXE_USDT_ALGO_USDT/
+research_data/permutation_test/DEXE_USDT_ALGO_USDT/*
+!research_data/permutation_test/DEXE_USDT_ALGO_USDT/permutation_verdict.csv
+!research_data/permutation_test/AVA_USDT_PHA_USDT/
+research_data/permutation_test/AVA_USDT_PHA_USDT/*
+!research_data/permutation_test/AVA_USDT_PHA_USDT/permutation_verdict.csv
+!research_data/permutation_test/AVA_USDT_NEO_USDT/
+research_data/permutation_test/AVA_USDT_NEO_USDT/*
+!research_data/permutation_test/AVA_USDT_NEO_USDT/permutation_verdict.csv
 !research_data/walk_forward/
 research_data/walk_forward/*
 !research_data/walk_forward/walk_forward_leaderboard.csv
