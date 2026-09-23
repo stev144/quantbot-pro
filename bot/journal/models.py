@@ -270,6 +270,28 @@ class TradeRecord(models.Model):
     venue = models.CharField(max_length=20, default="binance", blank=True)
 
 
+    # ---- Pair-trade linking ----
+    # claude code changed: new — live pairs-trading pilot. A stat-arb
+    # pair trade always opens TWO TradeRecord rows (one per leg/symbol) —
+    # there is no schema for a single row to represent both legs. These
+    # two nullable fields link them: both legs of one pair trade share
+    # the same pair_trade_id, and leg distinguishes which side of the
+    # spread each row represents. Nullable/blank so every pre-existing
+    # single-symbol row (the regime bot's trades) is unaffected — this
+    # is a purely additive migration, same discipline as the Provenance
+    # and Venue blocks above. The existing unique-OPEN constraint below
+    # is scoped to (symbol, venue), not pair_trade_id, so two legs (two
+    # different symbols) being simultaneously OPEN was already
+    # unblocked before this field existed — no constraint change needed.
+    pair_trade_id = models.UUIDField(null=True, blank=True, db_index=True)
+    leg = models.CharField(
+        max_length=1,
+        null=True,
+        blank=True,
+        choices=[("A", "Leg A"), ("B", "Leg B")],
+    )
+
+
     # ---- Status ----
 
     # "OPEN"  — trade is currently live on the exchange

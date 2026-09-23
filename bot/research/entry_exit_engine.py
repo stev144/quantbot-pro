@@ -709,6 +709,7 @@ class KalmanPositionSizer:
         max_position_fraction: float = MAX_POSITION_FRACTION,
         validated_ic:         Optional[float] = None,   # claude code changed: was VALIDATED_IC — see class docstring; unused in the actual sizing formula below (win_rate-only), kept for reporting/logging only
         validated_win_rate:   Optional[float] = None,   # claude code changed: was VALIDATED_WIN_RATE — no cross-pair default; required, see the raise below
+        min_position_usdt:    float = MIN_POSITION_USDT,   # claude code changed: new param — live pairs-trading pilot. Was a bare module-level constant read directly inside size_position() below, with no way for any caller to override it. Default preserves every existing call site's behavior exactly (still $100, still calibrated for the $10k/leg backtest reference scale) — a caller sizing at a genuinely different capital tier (e.g. a small pilot) can now pass its own real floor instead of getting every trade silently zeroed by a floor calibrated for 300x more capital.
     ) -> None:
         """
         Initialise the position sizer with strategy parameters.
@@ -771,6 +772,7 @@ class KalmanPositionSizer:
         self.max_fraction    = max_position_fraction  # Hard position cap
         self.ic              = validated_ic           # Reporting only — see docstring
         self.win_rate        = validated_win_rate     # This pair's own real win rate
+        self.min_position_usdt = min_position_usdt    # claude code changed: new — see __init__ param comment
 
         # Compute base Kelly fraction from this pair's win rate
         # Kelly formula: f = win_rate - (1 - win_rate) / win_loss_ratio
@@ -905,8 +907,10 @@ class KalmanPositionSizer:
         max_usdt      = self.capital * self.max_fraction
         total_usdt    = min(adjusted_usdt, max_usdt)
 
-        # Apply minimum position check: below MIN_POSITION_USDT, skip the trade
-        if total_usdt < MIN_POSITION_USDT:
+        # Apply minimum position check: below this instance's own floor, skip the trade.
+        # claude code changed: was the bare module constant MIN_POSITION_USDT — now
+        # self.min_position_usdt (defaults to that same constant, see __init__).
+        if total_usdt < self.min_position_usdt:
             return 0.0, 0.0, 0.0, signal_strength   # Signal: do not trade
 
         # ── Step 6: Split into two legs using Kalman β ────────────────────────
@@ -1050,6 +1054,7 @@ class EntryExitEngine:
         require_confirmation:  bool  = REQUIRE_LAG_CONFIRMATION,
         capital_usdt:          float = STRATEGY_CAPITAL_USDT,
         kelly_safety:          float = KELLY_SAFETY_FRACTION,
+        min_position_usdt:     float = MIN_POSITION_USDT,   # claude code changed: new param — threads through to KalmanPositionSizer's own new param (see its __init__ comment); default preserves existing behavior exactly
         output_dir:            str   = "research_data",
         pair_name:             Optional[str]   = None,   # claude code changed: new param
         symbol_a:              Optional[str]   = None,   # claude code changed: new param
@@ -1166,6 +1171,7 @@ class EntryExitEngine:
             kelly_safety=kelly_safety,
             validated_ic=self.validated_ic,
             validated_win_rate=self.validated_win_rate,
+            min_position_usdt=min_position_usdt,   # claude code changed: new — see this constructor's own param comment
         )
 
         # State tracking — these update as we scan through candles

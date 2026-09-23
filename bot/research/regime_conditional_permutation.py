@@ -81,6 +81,7 @@ def run_regime_conditional_permutation_test(
     metrics: Sequence[str] = tuple(DEFAULT_METRICS),
     significance_percentile: float = SIGNIFICANCE_PERCENTILE,
     min_obs: int = MIN_REGIME_OBS,
+    rebalance_frequency: int = 1,   # claude code changed: real bug fix, caught by actually running this end-to-end (not caught by any existing test — every existing test in test_regime_conditional_permutation.py runs on a small synthetic panel where the cost artifact is too small to notice). evaluate_cross_sectional_oos()'s own default (rebalance_frequency=1, hourly full-book turnover) was never threaded through here as a parameter at all, so every call silently used it — the EXACT "rebalance every single hour" behavior run_cross_sectional_oos.py's own module comment documents as having produced "a >10,000% cumulative-cost, Sharpe -20-to-70 artifact on the real 100-asset run" before that file was fixed to default to 24 (daily). That fix never propagated here. Default kept at 1 for backward compatibility with any existing caller of this exact function (same discipline as every other default in this codebase) — bot/research_lab/tools/regime_tools.py's run_cross_sectional_regime_conditional_test() is responsible for passing a realistic value (24, matching run_cross_sectional_research()'s own default) explicitly, not this function silently assuming one.
 ) -> Dict:
     """
     Real (observed) run: evaluate_cross_sectional_oos() once, unshuffled,
@@ -105,6 +106,7 @@ def run_regime_conditional_permutation_test(
     real_oos = evaluate_cross_sectional_oos(
         df, timestamp_col=timestamp_col, asset_col=asset_col, feature_col=feature_col,
         forward_return_col=forward_return_col, config=config, top_k=top_k, long_short=long_short, cost_rate=cost_rate,
+        rebalance_frequency=rebalance_frequency,
     )
     real_by_regime_full = evaluate_cross_sectional_oos_by_regime(
         real_oos, regime_labels, regime_dimension=regime_dimension, cost_rate=cost_rate, min_obs=min_obs,
@@ -120,6 +122,7 @@ def run_regime_conditional_permutation_test(
         shuffled_oos = evaluate_cross_sectional_oos(
             shuffled_df, timestamp_col=timestamp_col, asset_col=asset_col, feature_col=feature_col,
             forward_return_col=forward_return_col, config=config, top_k=top_k, long_short=long_short, cost_rate=cost_rate,
+            rebalance_frequency=rebalance_frequency,
         )
         shuffled_by_regime = evaluate_cross_sectional_oos_by_regime(
             shuffled_oos, regime_labels, regime_dimension=regime_dimension, cost_rate=cost_rate, min_obs=min_obs,

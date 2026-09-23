@@ -27,7 +27,7 @@ from bot.research_lab.models import ResearchExperiment
 from bot.research_lab.policy_gate import evaluate_policy
 from bot.research_lab.spec import ResearchSpec, validate_spec
 from bot.research_lab.tools import run_tool
-from bot.research_lab.verdict import compute_verdict, compute_verdict_conditional, compute_verdict_pairs  # claude code changed: +compute_verdict_conditional (Conditional Hypothesis Integrity fix), +compute_verdict_pairs (Advanced Quant Research Capability Architecture)
+from bot.research_lab.verdict import compute_verdict, compute_verdict_conditional, compute_verdict_pairs, compute_verdict_regime_conditional  # claude code changed: +compute_verdict_conditional (Conditional Hypothesis Integrity fix), +compute_verdict_pairs (Advanced Quant Research Capability Architecture), +compute_verdict_regime_conditional (Regime-Conditional Research wiring)
 
 DEFAULT_RANDOM_SEED = 42
 
@@ -311,6 +311,38 @@ def _execute_feature_hypothesis(experiment: ResearchExperiment, spec: ResearchSp
     if "inspect_dataset" in allowed_tools:
         result = run_tool("inspect_dataset", spec.risk_tier, asset=spec.asset)
         tool_log.append(result.to_dict())
+
+    # claude code changed: new — Regime-Conditional Research wiring. A
+    # feature hypothesis that names a regime_of_interest takes a
+    # completely separate path: one MEDIUM-tier tool call
+    # (run_regime_conditional_test) that already does its own IC/FDR per
+    # regime cell plus the direct interaction test, rather than the plain
+    # overall calculate_feature/run_statistical_test/run_fdr_correction
+    # sequence below. Falls through to the plain path (with a warning) if
+    # the tool isn't allowed at this spec's risk_tier — never silently
+    # drops the regime request without saying so.
+    if feature_name is not None and spec.regime_of_interest:
+        if "run_regime_conditional_test" in allowed_tools:
+            result = run_tool(
+                "run_regime_conditional_test", spec.risk_tier, asset=spec.asset, feature_name=feature_name,
+                horizon=spec.target.get("horizon"), regime_of_interest=spec.regime_of_interest,
+                random_seed=experiment.random_seed,
+            )
+            tool_log.append(result.to_dict())
+            if result.status == "success":
+                verdict_result = compute_verdict_regime_conditional(result.output.get("regime_conditional_status"))
+                _finalize_experiment(experiment, tool_log, warnings, result.output, None, verdict_result)
+            else:
+                warnings.append(f"run_regime_conditional_test failed: {result.error}")
+                verdict_result = compute_verdict_regime_conditional(None)
+                _finalize_experiment(experiment, tool_log, warnings, None, None, verdict_result)
+            return
+        else:
+            warnings.append(
+                f"regime_of_interest={spec.regime_of_interest!r} was requested but run_regime_conditional_test "
+                f"is not allowed at risk_tier={spec.risk_tier!r} (requires MEDIUM) — falling back to plain, "
+                f"non-regime-conditional feature research below"
+            )
 
     if feature_name is None:
         warnings.append("no feature named in the confirmed specification — statistical test skipped")

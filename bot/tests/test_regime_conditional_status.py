@@ -150,3 +150,70 @@ class RegimeConditionalStatusTest(SimpleTestCase):
         sig = inspect.signature(compute_regime_conditional_status)
         self.assertIn("regime_of_interest", sig.parameters)
         self.assertEqual(sig.parameters["regime_of_interest"].default, inspect.Parameter.empty)
+
+
+# claude code changed: new — OOS/permutation regime-conditional wiring,
+# cross-sectional side. Mirrors RegimeConditionalStatusTest's own
+# _FakeOOS pattern exactly, entering via ic_report=None (the default)
+# instead of a real RegimeConditionalICReport.
+class CrossSectionalRegimeConditionalStatusTest(SimpleTestCase):
+    def test_insufficient_data_when_no_oos_evidence_at_all(self):
+        result = compute_regime_conditional_status("TRENDING_UP")
+        self.assertEqual(result.status, "INSUFFICIENT_DATA")
+
+    def test_insufficient_data_for_a_never_observed_regime(self):
+        class _FakeOOS:
+            pooled_by_regime = {}
+        result = compute_regime_conditional_status("TRENDING_UP", oos_by_regime=_FakeOOS())
+        self.assertEqual(result.status, "INSUFFICIENT_DATA")
+
+    def test_insufficient_sample_for_a_thin_regime(self):
+        class _FakeOOS:
+            pooled_by_regime = {"TRENDING_UP": {"sufficient_sample": False, "metrics": {}}}
+        result = compute_regime_conditional_status("TRENDING_UP", oos_by_regime=_FakeOOS())
+        self.assertEqual(result.status, "INSUFFICIENT_SAMPLE")
+
+    def test_research_negative_when_oos_net_return_is_not_positive(self):
+        class _FakeOOS:
+            pooled_by_regime = {"TRENDING_UP": {"sufficient_sample": True, "metrics": {"mean_net_return": -0.001}}}
+        result = compute_regime_conditional_status("TRENDING_UP", oos_by_regime=_FakeOOS())
+        self.assertEqual(result.status, "RESEARCH_NEGATIVE")
+
+    def test_oos_supported_is_the_floor_never_regime_dependent(self):
+        # claude code changed: the real point of this test — REGIME_DEPENDENT
+        # requires a direct interaction test that has no cross-sectional
+        # equivalent, so a positive OOS result with no permutation evidence
+        # yet must land on OOS_SUPPORTED, never on REGIME_DEPENDENT or any
+        # of the IC-path's lower rungs.
+        class _FakeOOS:
+            pooled_by_regime = {"TRENDING_UP": {"sufficient_sample": True, "metrics": {"mean_net_return": 0.002}}}
+        result = compute_regime_conditional_status("TRENDING_UP", oos_by_regime=_FakeOOS())
+        self.assertEqual(result.status, "OOS_SUPPORTED")
+
+    def test_permutation_supported_chain(self):
+        class _FakeOOS:
+            pooled_by_regime = {"TRENDING_UP": {"sufficient_sample": True, "metrics": {"mean_net_return": 0.002}}}
+        permutation_verdict = {"status": "OK", "edge_appears_real": True}
+        result = compute_regime_conditional_status(
+            "TRENDING_UP", oos_by_regime=_FakeOOS(), permutation_verdict_for_regime=permutation_verdict,
+        )
+        self.assertEqual(result.status, "ECONOMICALLY_SUPPORTED")
+
+    def test_demoted_to_research_negative_when_permutation_fails(self):
+        class _FakeOOS:
+            pooled_by_regime = {"TRENDING_UP": {"sufficient_sample": True, "metrics": {"mean_net_return": 0.002}}}
+        permutation_verdict = {"status": "OK", "edge_appears_real": False}
+        result = compute_regime_conditional_status(
+            "TRENDING_UP", oos_by_regime=_FakeOOS(), permutation_verdict_for_regime=permutation_verdict,
+        )
+        self.assertEqual(result.status, "RESEARCH_NEGATIVE")
+
+    def test_economically_supported_requires_net_return_above_threshold(self):
+        class _FakeOOS:
+            pooled_by_regime = {"TRENDING_UP": {"sufficient_sample": True, "metrics": {"mean_net_return": 0.0000001}}}
+        permutation_verdict = {"status": "OK", "edge_appears_real": True}
+        result = compute_regime_conditional_status(
+            "TRENDING_UP", oos_by_regime=_FakeOOS(), permutation_verdict_for_regime=permutation_verdict,
+            min_economic_net_return_bps=1.0,
+        )
+        self.assertEqual(result.status, "RESEARCH_NEGATIVE")

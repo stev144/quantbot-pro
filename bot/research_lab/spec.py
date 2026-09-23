@@ -202,6 +202,19 @@ class ResearchSpec:
     asset_class: Optional[str] = None
     timeframe: Optional[str] = None
     hypothesis_type: str = "feature"  # claude code changed: new — "feature" | "conditional", see module docstring
+    # claude code changed: new — Regime-Conditional Research wiring. Only
+    # meaningful when hypothesis_type=="feature". Optional and independent
+    # of everything else on purpose (same pattern as asset_class above):
+    # None means "plain feature research, no regime conditioning" — every
+    # existing spec/experiment is completely unaffected. A value must be
+    # one of bot.research.regime_labels' real taxonomy values (e.g.
+    # "LOW_VOLATILITY", "TRENDING_UP_LOW_VOLATILITY") — not validated here
+    # (this module has no regime-taxonomy import), checked for real by
+    # bot.research.regime_conditional_status.compute_regime_conditional_status()
+    # at execution time, which honestly reports INSUFFICIENT_DATA for a
+    # regime value that was never actually observed rather than failing
+    # spec validation on a value it can't yet cross-check.
+    regime_of_interest: Optional[str] = None
     features: List[str] = field(default_factory=list)
     # claude code changed: was List[str] (never populated/used). Now a real,
     # validated list of {"feature": str, "operator": "<"|"<="|">"|">=",
@@ -266,6 +279,7 @@ class ResearchSpec:
             "asset_class": self.asset_class,
             "timeframe": self.timeframe,
             "hypothesis_type": self.hypothesis_type,
+            "regime_of_interest": self.regime_of_interest,
             "features": list(self.features),
             "conditions": [dict(c) for c in self.conditions],  # claude code changed: deep-ish copy — conditions are now dicts, not strings
             "direction": self.direction,
@@ -285,6 +299,7 @@ class ResearchSpec:
             asset_class=data.get("asset_class"),
             timeframe=data.get("timeframe"),
             hypothesis_type=data.get("hypothesis_type", "feature"),
+            regime_of_interest=data.get("regime_of_interest"),
             features=list(data.get("features", [])),
             conditions=[dict(c) for c in data.get("conditions", [])],
             direction=data.get("direction"),

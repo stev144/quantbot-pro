@@ -4,5 +4,5 @@
 # bot.research_lab.tools.base.run_tool() must import this package first
 # (not just base.py directly) or the registry will be empty.
 
-from bot.research_lab.tools import dataset_tools, statistical_tools, research_tools, conditional_tools  # noqa: F401  # claude code changed: +conditional_tools, Conditional Hypothesis Integrity fix
+from bot.research_lab.tools import dataset_tools, statistical_tools, research_tools, conditional_tools, regime_tools  # noqa: F401  # claude code changed: +conditional_tools, Conditional Hypothesis Integrity fix; +regime_tools, Regime-Conditional Research wiring
 from bot.research_lab.tools.base import ToolResult, run_tool  # noqa: F401

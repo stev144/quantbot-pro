@@ -58,6 +58,8 @@ ALLOWED_TOOLS = {
     "run_backtest",
     "run_parameter_sensitivity",
     "run_cross_sectional_ranking_test",   # claude code changed: new — statistics-infrastructure mission, Milestone B4. Real, tested (bot/tests/test_oos_validator.py's CrossSectionalOOSSyntheticProofTest/CrossSectionalPermutationSyntheticProofTest, 11 tests) Type C evaluator + permutation test + FDR sweep, same MEDIUM risk shape as run_cointegration_test/run_backtest (a real statistical test, no path to live execution).
+    "run_regime_conditional_test",   # claude code changed: new — Regime-Conditional Research wiring. Real IC/FDR per regime cell + a direct interaction test (bot/research_lab/tools/regime_tools.py), same MEDIUM risk shape as run_cointegration_test (heavier than a single feature_validator.py call, no path to live execution).
+    "run_cross_sectional_regime_conditional_test",   # claude code changed: new — OOS/permutation regime-conditional wiring, cross-sectional side (bot/research_lab/tools/regime_tools.py). Real OOS + permutation evidence per regime for a cross-sectional ranking hypothesis, same MEDIUM risk shape as run_cross_sectional_ranking_test (a real, heavier statistical test, no path to live execution).
     "generate_research_report",
 }
 
@@ -88,7 +90,7 @@ MAX_PAIRS_PER_EXPERIMENT = 1
 # live execution regardless of declared risk_tier).
 TOOLS_BY_RISK_TIER = {
     "LOW": {"inspect_dataset", "calculate_feature", "run_statistical_test", "run_fdr_correction", "run_conditional_test", "generate_research_report"},
-    "MEDIUM": {"run_cointegration_test", "run_backtest", "run_parameter_sensitivity", "run_cross_sectional_ranking_test"},
+    "MEDIUM": {"run_cointegration_test", "run_backtest", "run_parameter_sensitivity", "run_cross_sectional_ranking_test", "run_regime_conditional_test", "run_cross_sectional_regime_conditional_test"},
 }
 
 

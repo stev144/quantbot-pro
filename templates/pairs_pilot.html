@@ -1,0 +1,146 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+
+{% comment %}
+   claude code changed: new template — Pairs Pilot monitor. Real
+   TradeRecord query (bot/views/pairs_pilot_data.py), one equity curve +
+   one drawdown curve per pilot pair (DODO/FIDA, MINA/ONG, AVA/PHA) —
+   built from CLOSED pair-trades only. Every pair correctly renders an
+   honest empty state until bot/core/pairs_bot_runner.py actually starts
+   producing trades — not a placeholder number.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="pairs_pilot" %}
+
+<div class="term-body">
+
+    {% for p in pairs %}
+    <div class="term-section" style="margin-bottom:20px">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ p.display_name }}</span>
+            <span class="term-section-meta">source: TradeRecord (strategy=PairsTrading_{{ p.pair_name }})</span>
+        </div>
+        <div class="term-section-body">
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Closed Trades</div><div class="metric-value stat-number" data-target="{{ p.n_trades }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Net P&amp;L ($)</div><div class="metric-value stat-number {% if p.net_pnl > 0 %}pos{% elif p.net_pnl < 0 %}neg{% endif %}" data-target="{{ p.net_pnl }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Win Rate</div>
+                    {% if p.win_rate != None %}
+                    <div class="metric-value stat-number" data-target="{{ p.win_rate }}" data-decimals="1" data-suffix="%">0%</div>
+                    {% else %}
+                    <div class="metric-value small text-dim">No closed trades yet</div>
+                    {% endif %}
+                </div>
+                <div class="metric-tile"><div class="metric-label">Max Drawdown ($)</div><div class="metric-value stat-number neg" data-target="{{ p.max_drawdown }}" data-decimals="2">0</div></div>
+            </div>
+
+            {% if p.open_legs_count > 0 %}
+            <div class="unavailable-inline" style="margin-bottom:16px">{{ p.open_legs_count }} leg(s) currently open or mid-sequence for this pair — excluded from the curves below until both legs close.</div>
+            {% endif %}
+
+            {% if p.equity_curve|length > 0 %}
+            <div class="two-col">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Equity Curve</div>
+                    <div class="chart-box"><canvas id="equityChart_{{ p.slug }}"></canvas></div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Drawdown ($)</div>
+                    <div class="chart-box"><canvas id="drawdownChart_{{ p.slug }}"></canvas></div>
+                </div>
+            </div>
+            {% else %}
+            <div class="unavailable">No closed pair-trades yet for {{ p.display_name }} — 0 completed round-trips in TradeRecord right now.</div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+
+</div>
+
+{% include "partials/_footer.html" with label="Pairs Pilot" note="real TradeRecord query, grouped by pair_trade_id — expect zero rows until pairs_bot_runner.py starts running" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>
+<script>
+    window.pairsPilotData = [
+        {% for p in pairs %}
+        { slug: "{{ p.slug }}", equity: {{ p.equity_curve_json|safe }}, drawdown: {{ p.drawdown_curve_json|safe }} }{% if not forloop.last %},{% endif %}
+        {% endfor %}
+    ];
+
+    var pairsPilotChartInstances = [];
+
+    function renderCharts() {
+        pairsPilotChartInstances.forEach(destroyChart);
+        pairsPilotChartInstances = [];
+
+        var equityColor = themeColor('--neutral');
+        var ddColor = themeColor('--negative');
+        var scales = chartCommonScales({ xTitle: 'Trade #' });
+
+        window.pairsPilotData.forEach(function (d) {
+            var equityCtx = document.getElementById('equityChart_' + d.slug);
+            if (equityCtx && d.equity.length > 0) {
+                pairsPilotChartInstances.push(new Chart(equityCtx, {
+                    type: 'line',
+                    data: {
+                        labels: d.equity.map(function (_, i) { return i + 1; }),
+                        datasets: [{
+                            label: 'Cumulative P&L ($)',
+                            data: d.equity,
+                            borderColor: equityColor,
+                            backgroundColor: chartAreaFill(equityColor),
+                            fill: true,
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            tension: 0,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false }, tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } } },
+                        scales: scales
+                    }
+                }));
+            }
+
+            var ddCtx = document.getElementById('drawdownChart_' + d.slug);
+            if (ddCtx && d.drawdown.length > 0) {
+                pairsPilotChartInstances.push(new Chart(ddCtx, {
+                    type: 'line',
+                    data: {
+                        labels: d.drawdown.map(function (_, i) { return i + 1; }),
+                        datasets: [{
+                            label: 'Drawdown ($)',
+                            data: d.drawdown,
+                            borderColor: ddColor,
+                            backgroundColor: chartAreaFill(ddColor),
+                            fill: true,
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            tension: 0,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false }, tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } } },
+                        scales: scales
+                    }
+                }));
+            }
+        });
+    }
+
+    renderCharts();
+    onThemeChange(renderCharts);
+</script>
+{% endblock %}

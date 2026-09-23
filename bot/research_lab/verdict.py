@@ -286,3 +286,49 @@ def compute_verdict_pairs(cointegration_test: Optional[Dict]) -> VerdictResult:
     # the accepted range is a real caveat, not a footnote).
     explanation.append("cointegrated on the raw test, but rejected by the half-life/tradability filter — a partial finding")
     return VerdictResult("PARTIALLY_SUPPORTED", explanation)
+
+
+# claude code changed: new — Regime-Conditional Research wiring. Maps
+# bot.research.regime_conditional_status's own 9-state vocabulary
+# (NO_EVIDENCE/STATISTICALLY_DETECTABLE/REGIME_DEPENDENT/OOS_SUPPORTED/
+# PERMUTATION_SUPPORTED/ECONOMICALLY_SUPPORTED/RESEARCH_NEGATIVE/
+# INSUFFICIENT_SAMPLE/INSUFFICIENT_DATA) — a finer-grained, regime-
+# specific evidence ladder — down onto ResearchExperiment.verdict's own,
+# separate 9-state taxonomy (VERDICT_CHOICES above), which reserves
+# exactly ONE slot, REGIME_DEPENDENT, for this purpose (see
+# compute_verdict()'s own docstring: "a real state in the taxonomy but
+# this MVP pass has no regime-stratified tool output"). Only the 5 states
+# reachable by bot/research_lab/tools/regime_tools.py's deliberately
+# IC+interaction-only scope are handled — OOS_SUPPORTED/
+# PERMUTATION_SUPPORTED/ECONOMICALLY_SUPPORTED/RESEARCH_NEGATIVE would
+# need that tool's OOS/permutation stages wired in first (named, not
+# silently assumed, in that tool's own module docstring); if one somehow
+# reaches this function anyway (e.g. a future caller that DID supply
+# oos_by_regime), it maps to REGIME_DEPENDENT too rather than raising —
+# an honest floor, not a crash, for evidence stronger than this mapping
+# was designed to distinguish.
+def compute_verdict_regime_conditional(regime_conditional_status: Optional[Dict]) -> VerdictResult:
+    """
+    Deterministic verdict for a regime-conditional FEATURE hypothesis,
+    from bot.research_lab.tools.regime_tools.run_regime_conditional_test()'s
+    evidence shape (specifically its "regime_conditional_status" key, a
+    RegimeConditionalStatus.to_dict() — has 'status'/'explanation' keys).
+    """
+    if regime_conditional_status is None:
+        return VerdictResult("INSUFFICIENT_DATA", ["no regime-conditional test evidence was produced"])
+
+    status = regime_conditional_status.get("status")
+    inner_explanation = list(regime_conditional_status.get("explanation", []))
+
+    if status in ("INSUFFICIENT_DATA", "INSUFFICIENT_SAMPLE"):
+        return VerdictResult("INSUFFICIENT_DATA", inner_explanation)
+    if status == "NO_EVIDENCE":
+        return VerdictResult("INCONCLUSIVE", inner_explanation + ["neither the overall feature nor this specific regime survives FDR correction"])
+    if status == "STATISTICALLY_DETECTABLE":
+        return VerdictResult(
+            "REQUIRES_REVIEW",
+            inner_explanation + ["a statistically real signal exists somewhere (overall or this regime), but the direct interaction test did not confirm it is actually SPECIFIC to this regime — worth a closer look, not yet a regime-dependent finding"],
+        )
+    # REGIME_DEPENDENT, and (see docstring above) anything stronger that
+    # might reach this function before the OOS/permutation stages exist.
+    return VerdictResult("REGIME_DEPENDENT", inner_explanation)

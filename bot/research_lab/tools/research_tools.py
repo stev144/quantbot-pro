@@ -19,6 +19,7 @@ from bot.backtesting.backtester import backtest
 from bot.engines.strategy_scorer import StrategyScorer
 from bot.research.cointegration_engine import CointegrationEngine, MIN_PRICE
 from bot.research.kalman_filter_engine import KalmanFilterEngine   # claude code changed: new — Phase 1D, Objective 8 (Kalman Research Integration)
+from bot.instruments import ASSET_CLASS_CRYPTO   # claude code changed: new — Regime-Conditional Research wiring session, closing a real forex gap (see run_cross_sectional_ranking_test below)
 from bot.research.run_cross_sectional_oos import AVAILABLE_FEATURES, run_cross_sectional_research   # claude code changed: new — statistics-infrastructure mission, Milestone B4
 from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
@@ -292,13 +293,15 @@ def run_cross_sectional_ranking_test(
     top_k_values: tuple = (1, 3, 5, 10),
     n_permutations: int = 20,   # claude code changed: new — lower than the 100 a standalone/offline run uses (bot/research/run_cross_sectional_oos.py's own default), so a typed tool call inside an interactive Research Lab session returns in a reasonable time; the smallest achievable p-value at N=20 is 1/21 (~0.048), still enough to clear the standard 0.05 significance bar for a clearly real effect — a researcher who wants a tighter estimate re-runs the standalone script directly with a higher N.
     long_short: bool = True,
+    asset_class: str = ASSET_CLASS_CRYPTO,   # claude code changed: new — real gap found and closed. run_cross_sectional_research() has supported asset_class=ASSET_CLASS_FOREX since Forex Integration Stage 3 (real forex data via bot.instruments.resolve_ohlcv_path() -> the real MT5-backed files, confirmed by reading run_forex_cross_section_research()'s own source — not the stale "yahoo_finance" label in _PROVENANCE_BY_ASSET_CLASS's fingerprint-metadata dict, which is cosmetic only), but this tool never threaded it through — every Research Lab call was silently CRYPTO regardless of what a Forex-hypothesis caller asked for. Default preserves every existing call site's behavior exactly.
 ) -> dict:
     """
     Wraps bot.research.run_cross_sectional_oos.run_cross_sectional_research()
     unchanged — computes cross_section_engine.py's real features across
     the CURRENT universe (never hardcoded — bot.universe_selector's own
-    dynamic selection), reshapes to long format, and runs the full Type C
-    evaluator + within-timestamp permutation test + top-K FDR sweep
+    dynamic selection for CRYPTO, the real MT5-backed 58-pair universe for
+    FOREX), reshapes to long format, and runs the full Type C evaluator +
+    within-timestamp permutation test + top-K FDR sweep
     (bot/research/cross_sectional_permutation_test.py) as one declared
     hypothesis family. No new statistics computed in this wrapper.
 
@@ -316,5 +319,5 @@ def run_cross_sectional_ranking_test(
         }
     return run_cross_sectional_research(
         hypothesis_name=hypothesis_name, top_k_values=top_k_values,
-        n_permutations=n_permutations, long_short=long_short,
+        n_permutations=n_permutations, long_short=long_short, asset_class=asset_class,
     )

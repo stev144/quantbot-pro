@@ -1,2 +1,2 @@
 pair_name,n_trades,win_rate,sharpe_ratio,profit_factor,entry_ic,avg_hold_hours,win_rate_percentile,win_rate_p_value,sharpe_ratio_percentile,sharpe_ratio_p_value,profit_factor_percentile,profit_factor_p_value,real_entry_ic,real_entry_ic_meaningfully_positive,sharpe_significant,win_rate_significant,edge_appears_real
-DEXE_USDT_ALGO_USDT,399,0.817,5.1445,3.1645,0.2065,33.1,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.2065,True,True,True,True
+DEXE_USDT_ALGO_USDT,397,0.8589,8.3771,7.3036,0.3266,33.5,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.3266,True,True,True,True

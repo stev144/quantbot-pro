@@ -26,6 +26,17 @@
 #  10. Venue readiness (Binance + Kraken adapters) — claude code changed: new — Step 17
 #  11. Full pipeline dry run — signal to narrative, no order
 #  12. Edge case tests — flat market + volatility spike
+#  13. Pairs signal engine — claude code changed: new — Pairs Pilot. Real
+#      historical prices (data/*.csv) through bot/pairs/signal_engine.py's
+#      online Kalman + the real, validated entry/exit rules it reuses.
+#  14. Pairs position sizer — claude code changed: new — Pairs Pilot.
+#      Confirms the $15 pilot sizing floor is below entry_exit_engine.py's
+#      own $100 research floor, and KalmanPositionSizer's real Kelly
+#      formula produces sane output at $33/pair capital.
+#  15. Pairs margin dry-run — claude code changed: new — Pairs Pilot. Full
+#      open->close cycle through BinanceIsolatedMarginAdapter, real public
+#      prices, every write simulated, zero credentials required, test
+#      TradeRecord rows deleted afterward regardless of outcome.
 # ============================================================
 import os          # For retrieving environment variables
 import sys         # For sys.exit() on critical failure
@@ -140,7 +151,7 @@ class TestResults:
             return False
 
         print()
-        print("All tests passed — safe to run bot_runner.py")
+        print("All tests passed — safe to run bot_runner.py or bot/core/pairs_bot_runner.py")
         print()
         return True
 
@@ -252,6 +263,25 @@ def test_imports(results: TestResults):
         ]),
         ("Simulation helpers", [
             "bot.engines.simulation",
+        ]),
+        # claude code changed: new — live pairs-trading pilot
+        ("PairsSignalEngine", [
+            "bot.pairs.signal_engine",
+        ]),
+        ("PairsKalmanOnline", [
+            "bot.pairs.kalman_online",
+        ]),
+        ("BinanceIsolatedMarginAdapter", [
+            "bot.pairs.margin_adapter",
+        ]),
+        ("PairsExecutionEngine", [
+            "bot.pairs.execution",
+        ]),
+        ("PairsTradeLogger", [
+            "bot.pairs.trade_logger",
+        ]),
+        ("PairsConfig", [
+            "bot.pairs.config",
         ]),
     ]
 
@@ -786,6 +816,215 @@ def test_edge_cases(results: TestResults):
         results.fail_test("Edge cases", f"{type(e).__name__}: {e}")
 
 
+# claude code changed: new — live pairs-trading pilot. Structural/sanity
+# check against REAL historical price data already on disk (data/*.csv),
+# not synthetic — but deliberately NOT a re-run of the byte-exact
+# historical-replay verification (647/647 trades matched against a fresh
+# EntryExitEngine.run()) that was done once during implementation. Doing
+# that exact check here on every dry-run would make this test brittle to
+# legitimate future rounding/precision changes, not just real
+# regressions — this checks structural correctness and bounded output
+# instead (z-score reaches a ready state, every decision has a valid
+# action, z-score never exceeds its own winsor limit).
+def test_pairs_signal_engine(results: TestResults):
+    """Tests bot/pairs/signal_engine.py's online Kalman + entry/exit
+    pipeline (bot/pairs/kalman_online.py + the real, validated
+    EntryExitEngine methods it reuses) against real historical prices."""
+
+    print()
+    print("── 13. PAIRS SIGNAL ENGINE ──────────────────────────")
+
+    try:
+        from bot.pairs.config import PairConfig
+        from bot.pairs.signal_engine import PairSignalEngine
+
+        data_dir = os.path.join(PROJECT_ROOT, "data")
+        path_a = os.path.join(data_dir, "DODO_USDT_1h.csv")
+        path_b = os.path.join(data_dir, "FIDA_USDT_1h.csv")
+
+        if not (os.path.exists(path_a) and os.path.exists(path_b)):
+            results.skip_test("Pairs signal engine", f"Reference price data not found at {path_a} / {path_b}")
+            return
+
+        df_a = pd.read_csv(path_a, parse_dates=["timestamp"])[["timestamp", "close"]].rename(columns={"close": "price_a"})
+        df_b = pd.read_csv(path_b, parse_dates=["timestamp"])[["timestamp", "close"]].rename(columns={"close": "price_b"})
+        merged = pd.merge(df_a, df_b, on="timestamp", how="inner").sort_values("timestamp").tail(1000).reset_index(drop=True)
+
+        cfg = PairConfig(
+            pair_name="DODO_USDT/FIDA_USDT", symbol_a="DODO_USDT", symbol_b="FIDA_USDT",
+            binance_symbol_a="DODO/USDT", binance_symbol_b="FIDA/USDT",
+            hedge_ratio=0.796409, intercept=-1.278017, validated_win_rate=0.8735,
+            capital_usdt=33.33,
+        )
+        engine = PairSignalEngine(cfg)
+        results.pass_test("PairSignalEngine constructed (Kalman state seeded from cointegration_pairs.csv values)")
+
+        bootstrap_rows = merged.iloc[:-50]
+        live_rows = merged.iloc[-50:]
+        engine.bootstrap_from_history(list(zip(bootstrap_rows.price_a, bootstrap_rows.price_b)))
+
+        zscore_ready = len(engine._zscore_roller._values) >= engine._zscore_roller.min_periods
+        if not zscore_ready:
+            results.fail_test("Pairs signal engine bootstrap", f"z-score not ready after {len(bootstrap_rows)} real historical candles")
+        else:
+            results.pass_test(f"Bootstrap reaches z-score-ready state after {len(bootstrap_rows)} real historical candles")
+
+        valid_actions = {"NONE", "ENTER", "HOLD", "EXIT"}
+        seen_actions = set()
+        for _, row in live_rows.iterrows():
+            decision = engine.process_candle(row.timestamp, row.price_a, row.price_b)
+            assert decision.action in valid_actions, f"Invalid action: {decision.action}"
+            seen_actions.add(decision.action)
+            if decision.native and decision.native.zscore is not None:
+                assert abs(decision.native.zscore) <= 5.0001, f"z-score outside its own winsor limit: {decision.native.zscore}"
+
+        results.pass_test(f"process_candle() returns well-formed decisions over {len(live_rows)} more real candles (actions seen: {sorted(seen_actions)})")
+
+    except Exception as e:
+        results.fail_test("Pairs signal engine", f"{type(e).__name__}: {e}")
+        print(f"  Traceback: {traceback.format_exc()}")
+
+
+BINANCE_MIN_NOTIONAL_USDT = 5.0  # confirmed live via ccxt for all 6 pilot symbols — see the approved plan
+
+
+def test_pairs_position_sizer(results: TestResults):
+    """Confirms bot/pairs/config.py's MIN_POSITION_USDT_OVERRIDE ($15) is
+    below entry_exit_engine.py's own module-level MIN_POSITION_USDT
+    (100.0, calibrated for the $10k/leg backtest reference size), AND —
+    the actual regression this section exists to catch — that a real
+    entry at this pilot's REAL configured per-pair capital produces a
+    NON-ZERO position whose smaller leg still clears Binance's real $5
+    minNotional, for every pilot pair's own hedge ratio. This test
+    originally hardcoded a stale $33.33 and only asserted total >= 0,
+    which passed even when size_position() silently returned $0,$0,$0 —
+    exactly the bug this rewrite is designed to never let back in
+    unnoticed (see bot/pairs/config.py's TOTAL_PILOT_CAPITAL_USDT
+    comment for the full story of how that was found)."""
+
+    print()
+    print("── 14. PAIRS POSITION SIZER ─────────────────────────")
+
+    try:
+        from bot.pairs.config import MIN_POSITION_USDT_OVERRIDE, load_pair_configs
+        from bot.research.entry_exit_engine import MIN_POSITION_USDT as RESEARCH_MIN_POSITION_USDT, KalmanPositionSizer
+
+        assert MIN_POSITION_USDT_OVERRIDE < RESEARCH_MIN_POSITION_USDT, (
+            f"pilot override (${MIN_POSITION_USDT_OVERRIDE}) is not lower than the research "
+            f"module's own ${RESEARCH_MIN_POSITION_USDT} floor — every pilot trade would size to zero"
+        )
+        results.pass_test(
+            f"Pilot MIN_POSITION_USDT_OVERRIDE (${MIN_POSITION_USDT_OVERRIDE}) is correctly below "
+            f"entry_exit_engine.py's own ${RESEARCH_MIN_POSITION_USDT} floor"
+        )
+
+        pair_configs = load_pair_configs()
+        for cfg in pair_configs:
+            sizer = KalmanPositionSizer(
+                capital_usdt=cfg.capital_usdt, kelly_safety=0.25, validated_ic=None,
+                validated_win_rate=cfg.validated_win_rate, min_position_usdt=MIN_POSITION_USDT_OVERRIDE,
+            )
+            # a threshold-level entry (z=2.0, the minimum that can ever fire) — the
+            # worst case for clearing Binance's minimum, since size scales UP from here
+            total, leg_a, leg_b, strength = sizer.size_position(
+                zscore=2.0, beta=cfg.hedge_ratio, beta_uncertainty=0.02, prediction_error=0.005
+            )
+
+            assert total > 0, (
+                f"{cfg.pair_name}: a threshold-level entry (z=2.0) sized to $0 at this pilot's "
+                f"real ${cfg.capital_usdt:.2f} capital — every real signal on this pair would be silently skipped"
+            )
+            assert abs((leg_a + leg_b) - total) < 0.01, f"{cfg.pair_name}: leg_a+leg_b (${leg_a + leg_b}) does not reconcile with total (${total})"
+            smaller_leg = min(leg_a, leg_b)
+            assert smaller_leg >= BINANCE_MIN_NOTIONAL_USDT, (
+                f"{cfg.pair_name}: smaller leg (${smaller_leg:.2f}) is below Binance's real "
+                f"${BINANCE_MIN_NOTIONAL_USDT} minNotional even at a threshold-level entry — "
+                f"this pair's orders would be rejected by the exchange"
+            )
+            results.pass_test(
+                f"{cfg.pair_name} (beta={cfg.hedge_ratio:.3f}) at ${cfg.capital_usdt:.2f} capital, "
+                f"threshold entry: total=${total:.2f} leg_a=${leg_a:.2f} leg_b=${leg_b:.2f} — clears Binance's ${BINANCE_MIN_NOTIONAL_USDT} minimum"
+            )
+
+    except Exception as e:
+        results.fail_test("Pairs position sizer", f"{type(e).__name__}: {e}")
+
+
+def test_pairs_margin_dry_run(results: TestResults):
+    """Exercises the full BinanceIsolatedMarginAdapter + PairsExecutionEngine
+    open -> close sequence in dry-run: real PUBLIC price fetches (no
+    credentials needed — see bot/pairs/margin_adapter.py's own dry-run
+    convention), every write (transfer/borrow/order/repay) simulated
+    locally. Any TradeRecord rows this creates are deleted in a finally
+    block regardless of outcome — this is a structural test, its output
+    must never linger in the real trade history the Pairs Pilot
+    dashboard (bot/views/pairs_pilot.py) reads from."""
+
+    print()
+    print("── 15. PAIRS MARGIN DRY-RUN ─────────────────────────")
+
+    pair_trade_id_to_clean = None
+    try:
+        import ccxt
+        from bot.pairs.config import PairConfig
+        from bot.pairs.execution import PairsExecutionEngine
+        from bot.pairs.signal_engine import SignalDecision
+        from bot.research.entry_exit_engine import TradeRecord as ResearchTradeRecord
+        from bot.journal.models import TradeRecord
+
+        exchange = ccxt.binance()
+        exchange.load_markets()
+        results.pass_test("Binance markets loaded (public endpoint, no credentials needed)")
+
+        cfg = PairConfig(
+            pair_name="DODO_USDT/FIDA_USDT", symbol_a="DODO_USDT", symbol_b="FIDA_USDT",
+            binance_symbol_a="DODO/USDT", binance_symbol_b="FIDA/USDT",
+            hedge_ratio=0.796409, intercept=-1.278017, validated_win_rate=0.8735,
+            capital_usdt=30.0,
+        )
+        exec_engine = PairsExecutionEngine(exchange, dry_run=True)
+
+        price_a = exec_engine.adapter.get_ticker_price(cfg.binance_symbol_a)
+        price_b = exec_engine.adapter.get_ticker_price(cfg.binance_symbol_b)
+        results.pass_test(f"Real ticker prices fetched: {cfg.binance_symbol_a}=${price_a} {cfg.binance_symbol_b}=${price_b}")
+
+        fake_trade = ResearchTradeRecord(
+            trade_id=1, entry_timestamp=pd.Timestamp.utcnow(), entry_zscore=-2.5, entry_signal=2.5,
+            entry_beta=cfg.hedge_ratio, entry_spread=-0.01, direction="LONG_SPREAD",
+            position_usdt=30.0, leg_a_usdt=16.0, leg_b_usdt=14.0, kelly_fraction=0.2,
+            signal_strength="NORMAL", stop_zscore=4.0, target_zscore=0.25, min_hold_hours=1.0,
+        )
+        decision = SignalDecision(action="ENTER", direction="LONG_SPREAD", trade=fake_trade)
+
+        pair_trade_id = exec_engine.open_pair_trade(cfg, decision)
+        assert pair_trade_id is not None, "open_pair_trade() returned None"
+        pair_trade_id_to_clean = pair_trade_id
+        assert exec_engine.has_open_position(cfg.pair_name), "position not tracked as open after open_pair_trade()"
+        legs = TradeRecord.objects.filter(pair_trade_id=pair_trade_id)
+        assert legs.count() == 2, f"expected 2 linked TradeRecord legs, found {legs.count()}"
+        results.pass_test(f"open_pair_trade() simulated both legs and journaled 2 linked TradeRecord rows (pair_trade_id={pair_trade_id})")
+
+        equity = exec_engine.compute_mark_to_market_equity([cfg])
+        assert equity > 0, f"mark-to-market equity non-positive right after opening a funded position: {equity}"
+        results.pass_test(f"compute_mark_to_market_equity() reflects the open position: ${equity:.2f}")
+
+        closed_ok = exec_engine.close_pair_trade(cfg, exit_reason="TEST")
+        assert closed_ok, "close_pair_trade() returned False"
+        assert not exec_engine.has_open_position(cfg.pair_name), "position still tracked open after close_pair_trade()"
+        still_open = TradeRecord.objects.filter(pair_trade_id=pair_trade_id, status="OPEN").count()
+        assert still_open == 0, f"{still_open} leg(s) still OPEN after close_pair_trade()"
+        results.pass_test("close_pair_trade() unwound both legs and updated both TradeRecord rows to closed status")
+
+    except Exception as e:
+        results.fail_test("Pairs margin dry-run", f"{type(e).__name__}: {e}")
+        print(f"  Traceback: {traceback.format_exc()}")
+    finally:
+        if pair_trade_id_to_clean is not None:
+            from bot.journal.models import TradeRecord
+            deleted, _ = TradeRecord.objects.filter(pair_trade_id=pair_trade_id_to_clean).delete()
+            print(f"  (test cleanup: removed {deleted} TradeRecord row(s) this test created)")
+
+
 # ============================================================
 # MAIN — runs all tests and prints report
 # ============================================================
@@ -817,6 +1056,9 @@ def main():
     test_venue_readiness(results)   # claude code changed: new — Step 17
     test_full_pipeline(results, df)
     test_edge_cases(results)
+    test_pairs_signal_engine(results)      # claude code changed: new — Pairs Pilot, section 13
+    test_pairs_position_sizer(results)     # claude code changed: new — Pairs Pilot, section 14
+    test_pairs_margin_dry_run(results)     # claude code changed: new — Pairs Pilot, section 15
 
     all_passed = results.print_summary()
 
