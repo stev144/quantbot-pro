@@ -49,6 +49,27 @@
             </div>
 
             <!-- ================= VERDICT PANEL ================= -->
+            {% comment %}
+               claude code changed: cointegration-gate warning — a pair can
+               pass permutation/walk-forward (which only test whether the
+               entry/exit rule beats a shuffled null of this data) while
+               cointegration_engine.py's own ADF/OOS-persistence test says
+               the two-asset relationship isn't genuinely mean-reverting.
+               Shown above the EDGE APPEARS REAL badge so that badge is
+               never read as an unqualified "tradeable edge" claim on its own.
+            {% endcomment %}
+            {% if performance.cointegration and not performance.cointegration.passes_filters %}
+            <div class="term-panel" style="margin-bottom:16px; border-left: 3px solid var(--neg, #e5484d)">
+                <span class="badge neg">FAILS COINTEGRATION GATE</span>
+                <div class="chart-caption" style="margin-top:6px">
+                    cointegration_engine.py rejects this pair: {{ performance.cointegration.reject_reason|default:"not cointegrated" }}.
+                    Any "edge appears real" or "walk-forward passed" verdict below is diagnostic only —
+                    it shows the entry/exit rule beats a shuffled null of this data, not that the
+                    underlying two-asset relationship is a genuine, tradeable, mean-reverting spread.
+                </div>
+            </div>
+            {% endif %}
+
             <div class="term-panel" style="margin-bottom:16px">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px">
                     <span style="font-weight:600">Statistical Verdict</span>

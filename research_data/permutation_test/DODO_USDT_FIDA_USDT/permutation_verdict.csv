@@ -1,2 +1,2 @@
 pair_name,n_trades,win_rate,sharpe_ratio,profit_factor,entry_ic,avg_hold_hours,win_rate_percentile,win_rate_p_value,sharpe_ratio_percentile,sharpe_ratio_p_value,profit_factor_percentile,profit_factor_p_value,real_entry_ic,real_entry_ic_meaningfully_positive,sharpe_significant,win_rate_significant,edge_appears_real
-DODO_USDT_FIDA_USDT,332,0.8735,6.7126,5.2943,0.3274,33.7,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.3274,True,True,True,True
+DODO_FIDA,335,0.8716,6.7168,5.2838,0.3336,33.7,1.0,0.009900990099009901,1.0,0.009900990099009901,1.0,0.009900990099009901,0.3336,True,True,True,True

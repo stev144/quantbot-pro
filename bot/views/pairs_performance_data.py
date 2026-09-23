@@ -28,6 +28,7 @@ from bot.views.research_lab_data import RESEARCH_DATA_DIR
 
 PERMUTATION_DIR = os.path.join(RESEARCH_DATA_DIR, "permutation_test")
 WALK_FORWARD_LEADERBOARD = os.path.join(RESEARCH_DATA_DIR, "walk_forward", "walk_forward_leaderboard.csv")
+COINTEGRATION_PAIRS_CSV = os.path.join(RESEARCH_DATA_DIR, "cointegration_pairs.csv")  # claude code changed: new — cointegration-gate lookup, see _read_cointegration_status()
 
 
 def discover_pairs():
@@ -111,6 +112,35 @@ def _read_walk_forward_row(long_name: str):
     return {k: (None if pd.isna(v) else v) for k, v in row.items()}
 
 
+def _read_cointegration_status(prefix: str):
+    # claude code changed: new — a pair can show a real, statistically
+    # significant permutation/walk-forward result on a spread that isn't
+    # actually cointegrated (permutation testing only checks whether the
+    # entry/exit rule beats a shuffled null of THIS data; it says nothing
+    # about whether the underlying two-asset relationship is genuinely
+    # mean-reverting — that's cointegration_engine.py's job, a separate
+    # statistical claim). Without this, the page could show an unqualified
+    # "EDGE APPEARS REAL" for a pair cointegration_engine.py already
+    # rejected. Symbol order in cointegration_pairs.csv's "pair_name"
+    # column isn't guaranteed to match prefix's own A_B order (the
+    # universe scan assigns symbol_a/symbol_b by scan order, not by this
+    # page's display convention), so both orderings are checked.
+    if not os.path.exists(COINTEGRATION_PAIRS_CSV):
+        return {}
+    parts = prefix.split("_")
+    if len(parts) != 2:
+        return {}
+    a, b = f"{parts[0]}_USDT", f"{parts[1]}_USDT"
+    df = pd.read_csv(COINTEGRATION_PAIRS_CSV)
+    match = df[(df["symbol_a"] == a) & (df["symbol_b"] == b)]
+    if match.empty:
+        match = df[(df["symbol_a"] == b) & (df["symbol_b"] == a)]
+    if match.empty:
+        return {}
+    row = match.iloc[0].to_dict()
+    return {k: (None if pd.isna(v) else v) for k, v in row.items()}
+
+
 def get_pair_performance(prefix: str) -> dict:
     """
     Full performance picture for one pair, assembled from
@@ -138,4 +168,5 @@ def get_pair_performance(prefix: str) -> dict:
         "summary": _read_strategy_summary(prefix),
         "permutation": _read_permutation_verdict(long_name),
         "walk_forward": _read_walk_forward_row(long_name),
+        "cointegration": _read_cointegration_status(prefix),  # claude code changed: new — see _read_cointegration_status()
     }
