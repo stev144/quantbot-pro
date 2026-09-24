@@ -92,6 +92,8 @@ class PairConfig:
     intercept: float         # OLS seed alpha, from cointegration_pairs.csv
     validated_win_rate: float  # from permutation_verdict.csv, real per-pair value
     capital_usdt: float
+    passes_filters: bool     # claude code changed: new — cointegration_pairs.csv's current static-validation status. Deliberately NOT a load-time gate here (config.py stays permissive so every configured pair can still run and be observed, e.g. AVA_PHA kept active for comparison after it started failing) — bot/pairs/health.py is where this becomes an actual NORMAL/DEGRADED/INVALIDATED decision.
+    reject_reason: str       # "" if passes_filters is True — real text from cointegration_pairs.csv otherwise
 
 
 def _to_binance_symbol(underscore_symbol: str) -> str:
@@ -139,6 +141,8 @@ def _build_pair_config(pair_name: str) -> PairConfig:
         intercept=float(coint_row["intercept"]),
         validated_win_rate=win_rate,
         capital_usdt=PER_PAIR_CAPITAL_USDT,
+        passes_filters=str(coint_row.get("passes_filters")) == "True",
+        reject_reason=coint_row.get("reject_reason") or "",
     )
 
 

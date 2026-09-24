@@ -16,13 +16,45 @@
 
 <div class="term-body">
 
+    {% if not health_snapshot_available %}
+    <div class="unavailable-inline" style="margin-bottom:16px">
+        Live pair health unavailable: {{ health_snapshot_reason }} — the metrics below still reflect real TradeRecord history, but no NORMAL/DEGRADED/INVALIDATED status can be shown until the bot writes a fresh heartbeat.
+    </div>
+    {% endif %}
+
     {% for p in pairs %}
     <div class="term-section" style="margin-bottom:20px">
         <div class="term-section-head">
             <span class="term-section-title">{{ p.display_name }}</span>
-            <span class="term-section-meta">source: TradeRecord (strategy=PairsTrading_{{ p.pair_name }})</span>
+            <span style="display:flex; align-items:center; gap:8px">
+                {% if p.health %}
+                    {% if p.health.state == "NORMAL" %}
+                    <span class="badge pos">&#x1F7E2; NORMAL</span>
+                    {% elif p.health.state == "DEGRADED" %}
+                    <span class="badge warn">&#x1F7E1; DEGRADED</span>
+                    {% else %}
+                    <span class="badge neg">&#x1F534; INVALIDATED</span>
+                    {% endif %}
+                {% else %}
+                    <span class="badge dim">HEALTH UNKNOWN</span>
+                {% endif %}
+                <span class="term-section-meta">source: TradeRecord (strategy=PairsTrading_{{ p.pair_name }})</span>
+            </span>
         </div>
         <div class="term-section-body">
+
+            {% if p.health and p.health.state != "NORMAL" %}
+            <div class="unavailable-inline" style="margin-bottom:16px">{{ p.health.summary }}</div>
+            {% endif %}
+
+            {% if p.health %}
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Seed &beta;</div><div class="metric-value stat-number" data-target="{{ p.health.seed_beta }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Current &beta;</div><div class="metric-value stat-number" data-target="{{ p.health.current_beta }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Drift</div><div class="metric-value stat-number" data-target="{{ p.health.beta_drift_ratio }}" data-decimals="0" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Sign Reversed</div><div class="metric-value small {% if p.health.beta_sign_reversed %}neg{% endif %}">{{ p.health.beta_sign_reversed|yesno:"YES,no" }}</div></div>
+            </div>
+            {% endif %}
             <div class="term-grid term-grid-4" style="margin-bottom:16px">
                 <div class="metric-tile"><div class="metric-label">Closed Trades</div><div class="metric-value stat-number" data-target="{{ p.n_trades }}" data-decimals="0">0</div></div>
                 <div class="metric-tile"><div class="metric-label">Net P&amp;L ($)</div><div class="metric-value stat-number {% if p.net_pnl > 0 %}pos{% elif p.net_pnl < 0 %}neg{% endif %}" data-target="{{ p.net_pnl }}" data-decimals="2">0</div></div>

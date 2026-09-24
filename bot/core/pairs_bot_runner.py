@@ -36,6 +36,7 @@ import sys
 import time
 import logging
 import logging.handlers
+import io
 import os
 from dataclasses import dataclass, field
 from typing import Optional
@@ -64,6 +65,7 @@ from bot.journal.models import TradeRecord
 from bot.pairs.config import load_pair_configs, PairConfig
 from bot.pairs.signal_engine import PairSignalEngine
 from bot.pairs.execution import PairsExecutionEngine
+from bot.pairs.health import evaluate_pair_health, write_health_snapshot, PairHealthState
 
 # ── SAFETY ───────────────────────────────────────────────────
 # DRY_RUN = True  -> every leg fill/borrow/repay/transfer is simulated
@@ -96,11 +98,31 @@ def setup_logging():
     )
     file_handler = logging.handlers.RotatingFileHandler(
         filename=LOG_FILE_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",  # claude code changed: explicit — without this, RotatingFileHandler falls back to locale.getpreferredencoding() (cp1252 on this machine), same failure mode as the console handler below, even though it happened not to crash on this file yet
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)
 
-    console_handler = logging.StreamHandler()
+    # claude code changed: real bug found 2026-09-24 — plain
+    # logging.StreamHandler() defaults to sys.stderr, and on this machine,
+    # when launched as a background/piped process, sys.stderr sometimes
+    # ends up without a working .reconfigure(encoding="utf-8") (the
+    # module-level reconfigure block above silently no-ops via its
+    # hasattr guard), leaving Python's default Windows console codepage
+    # (cp1252) in effect. ccxt's DEBUG-level logging of full exchange
+    # responses occasionally contains a character cp1252 can't encode,
+    # which crashed console_handler.emit() with UnicodeEncodeError twice
+    # per startup (confirmed via two separate restarts' captured output).
+    # Python's logging module swallows the exception itself (doesn't
+    # crash the bot), so this never stopped trading — but it silently
+    # dropped whatever that console line was meant to show. Explicitly
+    # wrapping the raw buffer in a UTF-8 TextIOWrapper with
+    # errors="backslashreplace" fixes it unconditionally, without
+    # depending on whether the earlier reconfigure() call happened to work.
+    console_stream = sys.stdout
+    if hasattr(console_stream, "buffer"):
+        console_stream = io.TextIOWrapper(console_stream.buffer, encoding="utf-8", errors="backslashreplace")
+    console_handler = logging.StreamHandler(console_stream)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)
 
@@ -138,34 +160,28 @@ def _fetch_last_closed_candle(exchange, symbol: str, timeframe: str):
 
 BOOTSTRAP_CANDLES = 1000  # comfortably above ZSCORE_WINDOW(504)+WARMUP_CANDLES(168) — Binance's own klines limit ceiling
 
-# claude code changed: new — live beta-drift guard. cointegration_engine.py's
-# passes_filters gate (bot/pairs/config.py) only checks the STATIC,
-# full-history relationship at config-load time; it says nothing about
-# whether the online Kalman filter's CURRENT tracked hedge ratio still
-# resembles that seed. Real, confirmed finding 2026-09-24: MINA/ONG's
-# recent-data beta flipped sign (+1.625 seed -> -0.307 replicated-live)
-# while still passing the static test — this pair's "spread" is no
-# longer the relationship that was validated, and nothing was watching
-# for it. BETA_DRIFT_MAX_RATIO=0.5 means more than a 50% change in
-# magnitude from the seed blocks new entries; a sign flip always blocks
-# regardless of magnitude (categorically worse than a large same-sign
-# move). Existing open positions are never force-closed by this guard —
-# only NEW entries are refused — matching this file's existing
-# conservative-on-ambiguity pattern (see reconcile_pairs()).
-BETA_DRIFT_MAX_RATIO = 0.5
+# claude code changed: 2026-09-24 — the ad-hoc BETA_DRIFT_MAX_RATIO=0.5
+# guard that was here was superseded by bot/pairs/health.py after a real
+# historical-evidence audit showed 50% drift does NOT predict worse trade
+# outcomes (see that module's docstring for the full investigation).
+# PairHealthState/evaluate_pair_health() is now the single authoritative
+# health source, used identically by the entry gate below, the heartbeat
+# log, and the dashboard.
+# claude code changed: DEFAULT_ENTRY_POLICY — which health states still
+# permit a new entry. NORMAL always does; DEGRADED is blocked by default
+# per the governance requirement that degraded pairs never silently keep
+# trading, but is a named, single place to override later if evidence
+# ever justifies trading through a specific DEGRADED condition; INVALIDATED
+# is never enterable, full stop — deliberately not made configurable.
+ENTRY_ALLOWED_STATES = {PairHealthState.NORMAL}
 
 
-def _check_beta_drift(seed_beta: float, current_beta: float) -> tuple[bool, str]:
-    """Returns (drifted, reason). A sign flip is always flagged; otherwise
-    flagged when |current - seed| / |seed| exceeds BETA_DRIFT_MAX_RATIO."""
-    if seed_beta == 0:
-        return False, ""  # can't compute a ratio; nothing sane to compare against
-    if (seed_beta > 0) != (current_beta > 0):
-        return True, f"sign flip (seed={seed_beta:.4f}, current={current_beta:.4f})"
-    drift_ratio = abs(current_beta - seed_beta) / abs(seed_beta)
-    if drift_ratio > BETA_DRIFT_MAX_RATIO:
-        return True, f"{drift_ratio:.0%} drift from seed (seed={seed_beta:.4f}, current={current_beta:.4f})"
-    return False, ""
+def _entry_refusal_reason(health) -> Optional[str]:
+    """None if the entry is allowed to proceed on health grounds; else the
+    exact log message to emit instead of opening the trade."""
+    if health.state in ENTRY_ALLOWED_STATES:
+        return None
+    return f"ENTRY REFUSED — PAIR {health.state.value} — {health.summary()}"
 
 
 def bootstrap_session(session: PairSession, exchange) -> None:
@@ -274,18 +290,20 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
         )
 
         if decision.action == "ENTER":
-            drifted, drift_reason = _check_beta_drift(cfg.hedge_ratio, session.signal_engine.current_beta)
+            health = evaluate_pair_health(
+                cfg.pair_name, cfg.hedge_ratio, session.signal_engine.current_beta,
+                cfg.passes_filters, cfg.reject_reason,
+            )
+            refusal = _entry_refusal_reason(health)
             if not exec_engine.is_pair_tradeable(cfg.pair_name):
                 logger.warning(f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but pair is disabled — not opening.")
             elif exec_engine.has_open_position(cfg.pair_name):
                 logger.error(f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but a position is already tracked open — not opening a second.")
-            elif drifted:
-                # claude code changed: new — see BETA_DRIFT_MAX_RATIO's comment above.
-                logger.warning(
-                    f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but REFUSED — "
-                    f"online beta has drifted from the validated seed: {drift_reason}. "
-                    f"This pair's current spread may no longer represent the validated relationship."
-                )
+            elif refusal is not None:
+                # claude code changed: new — see bot/pairs/health.py. Replaces the earlier
+                # ad-hoc BETA_DRIFT_MAX_RATIO check with the full NORMAL/DEGRADED/INVALIDATED
+                # policy (cointegration gate + sign reversal + drift magnitude).
+                logger.warning(f"[PairsBotRunner:{cfg.pair_name}] {refusal}")
             else:
                 exec_engine.open_pair_trade(cfg, decision)
 
@@ -395,18 +413,37 @@ def run_bot():
                         f"[PairsBotRunner] HEARTBEAT | loop={loop_count} | "
                         f"mark_to_market_equity=${equity:.2f} | drawdown_guard_tripped={tripped}"
                     )
+                    health_results = {}
                     for session in sessions:
-                        seed_beta = session.pair_config.hedge_ratio
-                        current_beta = session.signal_engine.current_beta
-                        drifted, drift_reason = _check_beta_drift(seed_beta, current_beta)
-                        logger.info(
-                            f"[PairsBotRunner]   {session.pair_config.pair_name}: "
-                            f"last_action={session.last_action} | "
-                            f"open={exec_engine.has_open_position(session.pair_config.pair_name)} | "
-                            f"tradeable={exec_engine.is_pair_tradeable(session.pair_config.pair_name)} | "
-                            f"seed_beta={seed_beta:.4f} | current_beta={current_beta:.4f}"
-                            f"{' | BETA DRIFT: ' + drift_reason if drifted else ''}"
+                        cfg = session.pair_config
+                        health = evaluate_pair_health(
+                            cfg.pair_name, cfg.hedge_ratio, session.signal_engine.current_beta,
+                            cfg.passes_filters, cfg.reject_reason,
                         )
+                        health_results[cfg.pair_name] = health
+                        is_open = exec_engine.has_open_position(cfg.pair_name)
+                        logger.info(
+                            f"[PairsBotRunner]   {cfg.pair_name}: "
+                            f"last_action={session.last_action} | "
+                            f"open={is_open} | "
+                            f"tradeable={exec_engine.is_pair_tradeable(cfg.pair_name)} | "
+                            f"health={health.state.value} | "
+                            f"seed_beta={health.seed_beta:.4f} | current_beta={health.current_beta:.4f} | "
+                            f"drift={health.beta_drift_ratio:.0%} | sign_reversed={health.beta_sign_reversed}"
+                            f"{' | ' + ', '.join(health.reason_codes) if health.reason_codes else ''}"
+                        )
+                        # claude code changed: new — item 11's requirement: an open
+                        # position whose pair health has degraded/invalidated since
+                        # entry must be clearly visible, without ever auto-closing it
+                        # (that's a separate, unresearched decision — see the audit
+                        # report's "remaining risks").
+                        if is_open and health.state != PairHealthState.NORMAL:
+                            icon = "\U0001F534" if health.state == PairHealthState.INVALIDATED else "⚠"
+                            logger.warning(
+                                f"[PairsBotRunner]   {icon} {cfg.pair_name} — OPEN POSITION — "
+                                f"PAIR {health.state.value} — {health.summary()}"
+                            )
+                    write_health_snapshot(health_results)  # claude code changed: new — see bot/pairs/health.py's module docstring; the dashboard (a separate process) reads this
                 except Exception as e:
                     logger.error(f"[PairsBotRunner] Heartbeat computation failed: {e}")
                 last_heartbeat_time = now

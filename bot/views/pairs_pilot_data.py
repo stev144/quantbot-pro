@@ -15,6 +15,7 @@
 
 from bot.journal.models import TradeRecord
 from bot.pairs.config import PAIR_NAMES
+from bot.pairs.health import read_health_snapshot
 
 
 def get_pairs_pilot_state():
@@ -23,6 +24,14 @@ def get_pairs_pilot_state():
     OPEN) — a pair-trade with only one leg closed so far is reported
     separately as a mismatched/in-progress leg, never partially folded
     into the equity curve, since that would understate its real P&L."""
+    # claude code changed: new — bot/pairs/health.py's live NORMAL/DEGRADED/
+    # INVALIDATED status, written by the bot process itself each heartbeat
+    # (see that module's docstring for why this is a file snapshot, not a
+    # direct in-process read — the dashboard and the bot are separate
+    # processes). One read here, looked up per pair below, rather than
+    # re-reading the file once per pair in the loop.
+    health_snapshot = read_health_snapshot()
+
     pairs_data = []
     for pair_name in PAIR_NAMES:
         strategy_tag = f"PairsTrading_{pair_name}"
@@ -59,6 +68,11 @@ def get_pairs_pilot_state():
         losses = sum(1 for t in closed_trades if t["net_pnl"] <= 0)
         n_trades = len(closed_trades)
 
+        if health_snapshot["available"]:
+            health = health_snapshot["pairs"].get(pair_name)
+        else:
+            health = None
+
         pairs_data.append({
             "pair_name": pair_name,
             "slug": pair_name.replace("/", "_").replace("_USDT", ""),
@@ -72,5 +86,10 @@ def get_pairs_pilot_state():
             "max_drawdown": max(drawdown_curve) if drawdown_curve else 0.0,
             "equity_curve": equity_curve,
             "drawdown_curve": drawdown_curve,
+            "health": health,  # claude code changed: new — dict with state/seed_beta/current_beta/beta_drift_ratio/beta_sign_reversed/summary/reason_codes, or None if no live snapshot is available yet (bot not running / stale)
         })
-    return pairs_data
+    return {
+        "pairs": pairs_data,
+        "health_snapshot_available": health_snapshot["available"],
+        "health_snapshot_reason": health_snapshot.get("reason"),  # claude code changed: surfaced so the template can explain WHY health is missing (item 20: never silently show nothing)
+    }

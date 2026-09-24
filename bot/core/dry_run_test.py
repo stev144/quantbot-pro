@@ -855,6 +855,7 @@ def test_pairs_signal_engine(results: TestResults):
             binance_symbol_a="DODO/USDT", binance_symbol_b="FIDA/USDT",
             hedge_ratio=0.796409, intercept=-1.278017, validated_win_rate=0.8735,
             capital_usdt=33.33,
+            passes_filters=True, reject_reason="",  # claude code changed: PairConfig gained these fields for bot/pairs/health.py's cointegration-gate check — this section constructs one directly rather than via load_pair_configs(), so it must supply them too
         )
         engine = PairSignalEngine(cfg)
         results.pass_test("PairSignalEngine constructed (Kalman state seeded from cointegration_pairs.csv values)")
@@ -981,6 +982,7 @@ def test_pairs_margin_dry_run(results: TestResults):
             binance_symbol_a="DODO/USDT", binance_symbol_b="FIDA/USDT",
             hedge_ratio=0.796409, intercept=-1.278017, validated_win_rate=0.8735,
             capital_usdt=30.0,
+            passes_filters=True, reject_reason="",  # claude code changed: see the identical note in test_pairs_signal_engine above
         )
         exec_engine = PairsExecutionEngine(exchange, dry_run=True)
 
