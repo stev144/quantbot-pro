@@ -138,6 +138,35 @@ def _fetch_last_closed_candle(exchange, symbol: str, timeframe: str):
 
 BOOTSTRAP_CANDLES = 1000  # comfortably above ZSCORE_WINDOW(504)+WARMUP_CANDLES(168) — Binance's own klines limit ceiling
 
+# claude code changed: new — live beta-drift guard. cointegration_engine.py's
+# passes_filters gate (bot/pairs/config.py) only checks the STATIC,
+# full-history relationship at config-load time; it says nothing about
+# whether the online Kalman filter's CURRENT tracked hedge ratio still
+# resembles that seed. Real, confirmed finding 2026-09-24: MINA/ONG's
+# recent-data beta flipped sign (+1.625 seed -> -0.307 replicated-live)
+# while still passing the static test — this pair's "spread" is no
+# longer the relationship that was validated, and nothing was watching
+# for it. BETA_DRIFT_MAX_RATIO=0.5 means more than a 50% change in
+# magnitude from the seed blocks new entries; a sign flip always blocks
+# regardless of magnitude (categorically worse than a large same-sign
+# move). Existing open positions are never force-closed by this guard —
+# only NEW entries are refused — matching this file's existing
+# conservative-on-ambiguity pattern (see reconcile_pairs()).
+BETA_DRIFT_MAX_RATIO = 0.5
+
+
+def _check_beta_drift(seed_beta: float, current_beta: float) -> tuple[bool, str]:
+    """Returns (drifted, reason). A sign flip is always flagged; otherwise
+    flagged when |current - seed| / |seed| exceeds BETA_DRIFT_MAX_RATIO."""
+    if seed_beta == 0:
+        return False, ""  # can't compute a ratio; nothing sane to compare against
+    if (seed_beta > 0) != (current_beta > 0):
+        return True, f"sign flip (seed={seed_beta:.4f}, current={current_beta:.4f})"
+    drift_ratio = abs(current_beta - seed_beta) / abs(seed_beta)
+    if drift_ratio > BETA_DRIFT_MAX_RATIO:
+        return True, f"{drift_ratio:.0%} drift from seed (seed={seed_beta:.4f}, current={current_beta:.4f})"
+    return False, ""
+
 
 def bootstrap_session(session: PairSession, exchange) -> None:
     """Replays the most recent real closed candles (fetched fresh from
@@ -245,10 +274,18 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
         )
 
         if decision.action == "ENTER":
+            drifted, drift_reason = _check_beta_drift(cfg.hedge_ratio, session.signal_engine.current_beta)
             if not exec_engine.is_pair_tradeable(cfg.pair_name):
                 logger.warning(f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but pair is disabled — not opening.")
             elif exec_engine.has_open_position(cfg.pair_name):
                 logger.error(f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but a position is already tracked open — not opening a second.")
+            elif drifted:
+                # claude code changed: new — see BETA_DRIFT_MAX_RATIO's comment above.
+                logger.warning(
+                    f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but REFUSED — "
+                    f"online beta has drifted from the validated seed: {drift_reason}. "
+                    f"This pair's current spread may no longer represent the validated relationship."
+                )
             else:
                 exec_engine.open_pair_trade(cfg, decision)
 
@@ -359,11 +396,16 @@ def run_bot():
                         f"mark_to_market_equity=${equity:.2f} | drawdown_guard_tripped={tripped}"
                     )
                     for session in sessions:
+                        seed_beta = session.pair_config.hedge_ratio
+                        current_beta = session.signal_engine.current_beta
+                        drifted, drift_reason = _check_beta_drift(seed_beta, current_beta)
                         logger.info(
                             f"[PairsBotRunner]   {session.pair_config.pair_name}: "
                             f"last_action={session.last_action} | "
                             f"open={exec_engine.has_open_position(session.pair_config.pair_name)} | "
-                            f"tradeable={exec_engine.is_pair_tradeable(session.pair_config.pair_name)}"
+                            f"tradeable={exec_engine.is_pair_tradeable(session.pair_config.pair_name)} | "
+                            f"seed_beta={seed_beta:.4f} | current_beta={current_beta:.4f}"
+                            f"{' | BETA DRIFT: ' + drift_reason if drifted else ''}"
                         )
                 except Exception as e:
                     logger.error(f"[PairsBotRunner] Heartbeat computation failed: {e}")

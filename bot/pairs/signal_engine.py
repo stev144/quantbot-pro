@@ -81,6 +81,21 @@ class PairSignalEngine:
     def open_trade(self) -> Optional[ResearchTradeRecord]:
         return self.engine.current_trade
 
+    @property
+    def current_beta(self) -> float:
+        # claude code changed: new — live beta-drift guard. Exposes the
+        # online Kalman filter's current tracked hedge ratio publicly so
+        # pairs_bot_runner.py can compare it against the pair's seed
+        # hedge_ratio without reaching into self._state directly. Real
+        # need found 2026-09-24: a fresh 19-symbol cointegration re-scan
+        # plus a same-window bootstrap replication showed MINA/ONG's
+        # recent-data beta has flipped sign relative to its seed
+        # (+1.625 -> -0.307) while the pair still passes the STATIC,
+        # full-history cointegration test — the online state and the
+        # static gate can disagree, and nothing was watching the online
+        # side before this.
+        return float(self._state.theta[0])
+
     def _advance_state(self, price_a: float, price_b: float) -> Optional[NativeStepResult]:
         """Shared by process_candle() and bootstrap_candle(): runs the
         Kalman step, warmup-gated z-score update, and 1h lag buffering —
