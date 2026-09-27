@@ -2156,3 +2156,27 @@ Fixed in `bot/config/cost_model.py`'s `ForexCostModel._pip_size()`: now looks up
 `entry_exit_engine.py`'s previous commit generalized the module from an AVAX/ATOM-hardcoded script into a pair-agnostic CLI (`--kalman-csv`, `--allow-filtered-pair`, etc.) and, per that generalization, derives each pair's time-stop as `2 × validated_half_life` looked up per-pair from `cointegration_pairs.csv`, instead of every pair sharing one hardcoded `EXIT_TIME_STOP_HOURS=240` regardless of its own half-life. `research_data/AVAX_ATOM_{trade_log,equity_curve,strategy_summary}.csv` were committed alongside that change but with stale numbers from before the derivation was wired up (`exit_time_stop_h=4`, `half_life_hours=4`) — not what running the new code actually produces for AVAX/ATOM.
 
 `AVAX_USDT/ATOM_USDT` no longer tests as cointegrated in current `cointegration_pairs.csv` data at all (`passes_filters=False`, ADF p=0.4874 — already documented earlier in this log as a known, accepted fact, not new). `load_pair_config()`'s default `require_passes_filters=True` therefore raises on it and the engine falls back to `VALIDATED_HALF_LIFE=119.9h` (a legacy constant named after AVAX/ATOM but not actually validated for it, per this log's own earlier entries), giving `exit_time_stop_hours=round(2*119.9)=240`. Re-ran `python -m bot.research.entry_exit_engine` (no args — the module's own default, still pointed at AVAX/ATOM) and confirmed the regenerated files are **byte-identical** to what was already sitting in the working tree, so this is a deterministic, reproducible refresh of the reference/demo pair's output under the now-generalized code, not an in-progress experiment or a new validated result. AVAX/ATOM's `validated_ic`/`validated_win_rate` remain correctly blank (no fabricated fallback), consistent with it being a known-rejected pair used only as the module's worked example.
+
+---
+
+## Contagion Engine — Full-Universe Validation Result Recovered and Closed Out
+
+**Date:** 2026-09-26
+**Verdict:** RESEARCH_NEGATIVE — real, complete result; no deployable feature. Do not build execution code against contagion features without new evidence.
+
+A full-repository audit turned up something that had fallen through the cracks: `bot/research/contagion_engine.py` had already been run across essentially the entire tracked universe — `research_data/*_contagion.csv` (raw per-symbol contagion features, 100+ symbols) and `research_data/contagion_validation/*_contagion_validated.csv` (per-symbol `FeatureValidator` output) both exist and are real — but the result was never pooled into a family-wide verdict or written up anywhere. This entry closes that gap; it reflects a result that already existed, not new computation.
+
+`research_data/contagion_validation/contagion_validated_features_pooled.csv` — **2,156 real (symbol, feature) validations**, real block-permutation significance + Bonferroni/FDR correction (same methodology as every other feature-validation result in this log):
+
+| Recommendation | Count |
+|---|---|
+| STRONG KEEP | 0 |
+| KEEP | 0 |
+| REVIEW | 592 |
+| DELETE | 1,564 |
+
+Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (statistically significant after correction, REVIEW-tier). No (symbol, feature) pair reaches STRONG KEEP/KEEP. The contagion hypothesis (one asset's move "catching up" to a divergence from a correlated leader, `divergence_*`/`catch_up_signal_*`/`btc_return_*` features) shows the same pattern as every other feature family audited this session: real, FDR-significant signal exists in places, but it is economically too weak to clear this project's own deployment bar.
+
+**Why this matters beyond contagion itself:** this is now the fourth independent feature family (alongside crypto cross-sectional, the representative-sample core feature set, and PCA residual stat-arb) to land in exactly this same place — statistically real, economically too weak. That consistency across unrelated hypothesis shapes is itself evidence worth weighing: it looks less like each individual hypothesis failing for its own reason, and more like this project's crypto cost structure (~0.15% real taker fee) sets a floor that most single-feature signals in this universe don't clear, regardless of the feature's construction. See [[project_crypto_cross_sectional_no_survivors]] for the parallel finding on cross-sectional ranking.
+
+**How to apply:** don't re-run `contagion_engine.py` expecting a different answer without new evidence (a materially different feature construction, a lower-cost venue, or a longer/different sample). The raw per-symbol files remain on disk for anyone who wants to re-slice them differently.
