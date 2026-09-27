@@ -67,7 +67,17 @@ PERMUTATION_DIR = os.path.join(BASE_DIR, "research_data", "permutation_test")
 # $11.27/leg_b=$18.73 — both comfortably clear $5. User's explicit choice
 # among three options (raise capital / trade fewer pairs / override the
 # cap) when this was surfaced.
-TOTAL_PILOT_CAPITAL_USDT = 300.0
+#
+# claude code changed: raised 300.0 -> 500.0 (user's explicit request,
+# 2026-09-26). Raising capital only ever widens the minNotional margin
+# from the $300 case above (worst leg was already $11.27, comfortably
+# above Binance's $5 floor) — no re-verification of the floor problem is
+# needed the way it was when capital was lowered from $100. At $500
+# ($166.67/pair), MINA/ONG's worst case (30% cap = $50 total) gives
+# leg_a=$18.79/leg_b=$31.21 — both scale up proportionally, still clears.
+# Requires a pairs_bot_runner.py restart to take effect — bot/pairs/
+# config.py's module-level constants are read once at process import.
+TOTAL_PILOT_CAPITAL_USDT = 500.0
 PAIR_NAMES = [
     "DODO_USDT/FIDA_USDT",
     "MINA_USDT/ONG_USDT",

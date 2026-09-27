@@ -70,6 +70,19 @@ def get_pairs_pilot_state():
 
         if health_snapshot["available"]:
             health = health_snapshot["pairs"].get(pair_name)
+            # claude code changed: real bug fix — pairs_pilot.html's DRIFT tile
+            # renders this as a "N%" counter with data-decimals="0", but
+            # beta_drift_ratio is a plain ratio (e.g. 0.72, 1.19), not a
+            # percentage. toFixed(0) on any ratio in [0.5, 1.5) rounds to
+            # exactly "1" regardless of its real value, so every pair showed
+            # "1%" (or "0%" below 0.5) no matter how much its beta had
+            # actually drifted — caught by comparing the dashboard against
+            # the real logs/pairs_health_snapshot.json values directly.
+            # Scaling to a real percentage here (view layer), not in the
+            # template, matches this project's convention of keeping
+            # arithmetic out of templates.
+            if health is not None:
+                health = dict(health, beta_drift_pct=health["beta_drift_ratio"] * 100)
         else:
             health = None
 

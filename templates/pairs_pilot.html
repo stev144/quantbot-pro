@@ -51,7 +51,7 @@
             <div class="term-grid term-grid-4" style="margin-bottom:16px">
                 <div class="metric-tile"><div class="metric-label">Seed &beta;</div><div class="metric-value stat-number" data-target="{{ p.health.seed_beta }}" data-decimals="4">0</div></div>
                 <div class="metric-tile"><div class="metric-label">Current &beta;</div><div class="metric-value stat-number" data-target="{{ p.health.current_beta }}" data-decimals="4">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Drift</div><div class="metric-value stat-number" data-target="{{ p.health.beta_drift_ratio }}" data-decimals="0" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Drift</div><div class="metric-value stat-number" data-target="{{ p.health.beta_drift_pct }}" data-decimals="0" data-suffix="%">0%</div></div>
                 <div class="metric-tile"><div class="metric-label">Sign Reversed</div><div class="metric-value small {% if p.health.beta_sign_reversed %}neg{% endif %}">{{ p.health.beta_sign_reversed|yesno:"YES,no" }}</div></div>
             </div>
             {% endif %}
