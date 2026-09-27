@@ -292,6 +292,26 @@ class TradeRecord(models.Model):
     )
 
 
+    # ---- DCA-cycle linking ----
+    # claude code changed: new — DCA/Martingale research engine (Phase 1
+    # slice, bot/research/dca_engine.py). A DCA cycle can open up to 7
+    # TradeRecord rows (1 initial + up to 6 DCA levels) before it closes —
+    # there is no schema for one row to represent a multi-fill averaged
+    # position, same structural problem the pair-trade fields above
+    # already solved for a different shape (2 simultaneous legs instead
+    # of up to 7 sequential fills). Mirrors that exact precedent: all
+    # rows sharing one cycle share the same cycle_id, and dca_level
+    # distinguishes which fill each row represents (0 = initial leg, 1-6
+    # = DCA level N). Nullable/blank so every pre-existing row (regime
+    # bot, pairs pilot) is unaffected — purely additive, same discipline
+    # as every other block in this model. Not yet written by any live
+    # code path — this migration exists so the schema is ready before
+    # paper/live execution is built (Phase 18-19), which is explicitly
+    # OUT of scope for this first research-only slice.
+    cycle_id = models.UUIDField(null=True, blank=True, db_index=True)
+    dca_level = models.IntegerField(null=True, blank=True)
+
+
     # ---- Status ----
 
     # "OPEN"  — trade is currently live on the exchange
