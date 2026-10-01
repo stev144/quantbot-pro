@@ -1,8 +1,9 @@
 # ============================================================
 # bot/views/pairs_pilot_data.py
 # claude code changed: new file — live Pairs Pilot monitor. Real
-# TradeRecord query for the 3 pilot pairs (bot/pairs/config.py's
-# PAIR_NAMES), one equity curve + drawdown curve per pair — distinct
+# TradeRecord query for all pilot pairs (bot/pairs/config.py's
+# PAIR_NAMES — 10 monitored, only the entry-eligible subset ever
+# produces real trades), one equity curve + drawdown curve per pair — distinct
 # from bot/views/pairs_performance_data.py, which visualizes OFFLINE
 # research_data/*.csv backtest output, not live trades. Mirrors
 # bot/views/terminal_data.py::get_execution_state()'s pattern (real

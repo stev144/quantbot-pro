@@ -199,7 +199,7 @@ class PairSignalEngine:
                 entry_zscore=decision.zscore,
                 entry_signal=decision.pair_signal,
                 entry_beta=decision.beta_pred,
-                entry_spread=self._prev_native.spread,
+                entry_spread=decision.spread,   # claude code changed: Stage 2D — was self._prev_native.spread (candle t) while entry_zscore/beta come from `decision` (candle t−1): one record now uses one candle
                 direction=direction,
                 position_usdt=total,
                 leg_a_usdt=leg_a,

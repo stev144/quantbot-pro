@@ -856,6 +856,7 @@ def test_pairs_signal_engine(results: TestResults):
             hedge_ratio=0.796409, intercept=-1.278017, validated_win_rate=0.8735,
             capital_usdt=33.33,
             passes_filters=True, reject_reason="",  # claude code changed: PairConfig gained these fields for bot/pairs/health.py's cointegration-gate check — this section constructs one directly rather than via load_pair_configs(), so it must supply them too
+            is_entry_eligible=True,  # claude code changed: PairConfig gained this field for the 10-pair monitoring expansion (bot/pairs/monitor_engine.py) — PairSignalEngine (tested here) is only ever constructed for entry-eligible pairs, so this section's synthetic config must say so too
         )
         engine = PairSignalEngine(cfg)
         results.pass_test("PairSignalEngine constructed (Kalman state seeded from cointegration_pairs.csv values)")
@@ -919,7 +920,16 @@ def test_pairs_position_sizer(results: TestResults):
             f"entry_exit_engine.py's own ${RESEARCH_MIN_POSITION_USDT} floor"
         )
 
-        pair_configs = load_pair_configs()
+        # claude code changed: only entry-eligible pairs ever get a real
+        # KalmanPositionSizer in the live runner (bot/core/pairs_bot_runner.py
+        # constructs PairMonitorEngine — no sizer at all — for the rest, see
+        # bot/pairs/monitor_engine.py). KalmanPositionSizer itself raises on
+        # validated_win_rate=None, which every non-eligible pair now
+        # correctly resolves to (bot/pairs/config.py's _load_validated_win_rate),
+        # so iterating all pair_configs here would fail this section for a
+        # reason that isn't actually a bug — this loop must match what the
+        # real runner does, not the full monitored universe.
+        pair_configs = [c for c in load_pair_configs() if c.is_entry_eligible]
         for cfg in pair_configs:
             sizer = KalmanPositionSizer(
                 capital_usdt=cfg.capital_usdt, kelly_safety=0.25, validated_ic=None,
@@ -983,6 +993,7 @@ def test_pairs_margin_dry_run(results: TestResults):
             hedge_ratio=0.796409, intercept=-1.278017, validated_win_rate=0.8735,
             capital_usdt=30.0,
             passes_filters=True, reject_reason="",  # claude code changed: see the identical note in test_pairs_signal_engine above
+            is_entry_eligible=True,  # claude code changed: see the identical note in test_pairs_signal_engine above
         )
         exec_engine = PairsExecutionEngine(exchange, dry_run=True)
 

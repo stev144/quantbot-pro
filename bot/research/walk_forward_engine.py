@@ -160,6 +160,8 @@ from bot.research.entry_exit_engine import (
 # from convergence time outside what its own train window provided.
 from bot.research.kalman_filter_engine import KalmanFilterEngine, MIN_PRICE as KALMAN_MIN_PRICE
 from bot.research.cointegration_engine import CointegrationEngine
+from bot.quant_core.half_life import ar1_half_life   # claude code changed: Stage 2D — exact AR(1) half-life of the FIXED-β residual, no fallback
+from bot.quant_core.metrics import walk_forward_efficiency   # claude code changed: Stage 2D — WFE fails closed
 
 warnings.filterwarnings('ignore')               # Suppress non-critical warnings, matching project convention
 
@@ -820,6 +822,8 @@ class WalkForwardEngine:
             half_life_h = half_life_h,
         )
         fold_kalman_df = fold_engine.run(data_dir=str(kalman_scratch), output_dir=str(kalman_scratch))
+        fold_kalman_df.attrs["fold_train_cointegrated"] = bool(pair_result.is_cointegrated)   # claude code changed: Stage 2D — Engle–Granger verdict on THIS fold's TRAIN window
+        fold_kalman_df.attrs["fold_train_coint_reason"] = pair_result.reject_reason or ""   # claude code changed: Stage 2D
         return fold_kalman_df
 
 
@@ -877,6 +881,12 @@ class WalkForwardEngine:
 
         # ── Slice the data ──────────────────────────────────────────────────────
         train_df = fold_kalman_df.loc[train_start:train_end]             # Everything TRAIN is allowed to see
+        if not fold_kalman_df.attrs.get("fold_train_cointegrated", False):   # claude code changed: Stage 2D — a half-life (and the time stop derived from it) is only
+            result.skipped     = True                                        # claude code changed: defined for a residual shown to be mean-reverting: the fold's own TRAIN
+            result.skip_reason = ("fold TRAIN window not cointegrated (Engle–Granger): "   # claude code changed: must pass Engle–Granger, otherwise the fold fails closed
+                                  + fold_kalman_df.attrs.get("fold_train_coint_reason", "no verdict recorded"))   # claude code changed: Stage 2D
+            logger.warning(f"    Fold {fold_id} failed: {result.skip_reason}")   # claude code changed: Stage 2D
+            return result, None   # claude code changed: Stage 2D
         test_df  = fold_kalman_df.loc[test_start:test_end]               # Everything TEST will be scored on
 
         if len(train_df) < self.min_train_trades or len(test_df) < self.min_test_candles:
@@ -888,15 +898,22 @@ class WalkForwardEngine:
             logger.warning(f"    Fold {fold_id} skipped: {result.skip_reason}")
             return result, None                                         # No OOS trades to report for a skipped fold
 
-        # ── Re-calibrate half-life from TRAIN's spread only ───────────────────
-        half_life_hours = self._estimate_half_life_hours(train_df["kalman_spread"])
-        if pd.isna(half_life_hours) or half_life_hours <= 0:            # OU calibration failed or non-mean-reverting
-            half_life_hours = HALF_LIFE_FALLBACK_HOURS                  # Fall back to a safe project default
-            logger.warning(
-                f"    Fold {fold_id}: half-life estimate invalid — "
-                f"falling back to {half_life_hours:.0f}h"
-            )
-        result.half_life_hours = half_life_hours                        # Record whichever value we ended up using
+        # ── Re-calibrate half-life from TRAIN's FIXED-β residual only ─────────
+        # claude code changed: Stage 2D (Stage 2C §8). Was estimated on the Kalman
+        # INNOVATION (kalman_spread), whose AR(1) half-life measures filter memory
+        # (2–6 h whatever the true value); the 24 h sanity guard then rejected it
+        # and a 120 h constant was substituted — all 71 recorded folds show exactly
+        # 120.0. Now: the static residual (ols_spread, β/α fitted on this fold's
+        # TRAIN by _refit_kalman_for_fold) on the hourly grid, exact AR(1) formula,
+        # and an invalid estimate FAILS the fold. No fallback, no cross-pair band.
+        hl_result = self._estimate_half_life_hours(train_df["ols_spread"])
+        if not hl_result.ok:
+            result.skipped     = True
+            result.skip_reason = f"half-life {hl_result.status.value}: {hl_result.reason} (no fallback — fold fails closed)"
+            logger.warning(f"    Fold {fold_id} failed: {result.skip_reason}")
+            return result, None
+        half_life_hours = hl_result.value.half_life_hours
+        result.half_life_hours = half_life_hours                        # The estimate actually used (never a substitute)
 
         # ── Simulate TRAIN to derive win rate / entry IC ───────────────────────
         train_csv = fold_dir / "train_slice_kalman.csv"                  # Where the sliced TRAIN data will live
@@ -913,28 +930,21 @@ class WalkForwardEngine:
         train_trades, train_summary, _ = train_engine.run(kalman_csv=str(train_csv))
 
         if train_summary.empty or train_summary.iloc[0]["n_total_trades"] < self.min_train_trades:
-            # TRAIN itself didn't produce enough trades to trust — this fold
-            # is not skipped outright (TEST may still be scored), but it
-            # falls back to the project's module-level validated defaults
-            # rather than a noisy, low-sample-size estimate.
-            result.used_fallback_params = True                           # Flag this fold as using fallback params
-            train_win_rate = VALIDATED_WIN_RATE                          # Fall back to the project default
-            train_entry_ic = VALIDATED_IC                                 # Fall back to the project default
-            train_n_trades  = 0 if train_summary.empty else int(train_summary.iloc[0]["n_total_trades"])
-            train_sharpe     = np.nan                                     # No reliable train Sharpe to report
-            logger.warning(
-                f"    Fold {fold_id}: only {train_n_trades} TRAIN trades — "
-                f"using module defaults (IC={VALIDATED_IC}, win_rate={VALIDATED_WIN_RATE}) instead"
-            )
-        else:
-            s = train_summary.iloc[0]                                     # TRAIN's own summary row
-            train_n_trades  = int(s["n_total_trades"])                     # How many trades TRAIN itself produced
-            train_win_rate   = float(s["win_rate"])                         # TRAIN's own win rate — feeds TEST's Kelly sizing
-            train_sharpe      = float(s["sharpe_ratio"])                     # TRAIN's own Sharpe — feeds WFE later
-            # TRAIN's entry IC can itself be NaN (e.g. thin sample) — fall
-            # back to the project default rather than propagating NaN into
-            # the position sizer for TEST.
-            train_entry_ic = float(s["entry_ic"]) if not pd.isna(s["entry_ic"]) else VALIDATED_IC
+            # claude code changed: Stage 2D — TRAIN too thin to estimate anything:
+            # the fold FAILS. It used to continue with VALIDATED_WIN_RATE (0.69) and
+            # VALIDATED_IC (0.5245), constants from another pair, which then sized
+            # and scored TEST as if they had been learned here.
+            train_n_trades = 0 if train_summary.empty else int(train_summary.iloc[0]["n_total_trades"])
+            result.skipped     = True
+            result.skip_reason = (f"only {train_n_trades} TRAIN trades (< {self.min_train_trades}) — "
+                                  f"no fallback parameters; fold fails closed")
+            logger.warning(f"    Fold {fold_id} failed: {result.skip_reason}")
+            return result, None
+        s = train_summary.iloc[0]                                     # TRAIN's own summary row
+        train_n_trades  = int(s["n_total_trades"])                     # How many trades TRAIN itself produced
+        train_win_rate   = float(s["win_rate"])                         # TRAIN's own win rate — feeds TEST's Kelly sizing
+        train_sharpe      = float(s["sharpe_ratio"])                     # TRAIN's own Sharpe — feeds WFE later
+        train_entry_ic = float(s["entry_ic"]) if not pd.isna(s["entry_ic"]) else np.nan   # claude code changed: Stage 2D — NaN stays NaN (was VALIDATED_IC = 0.5245 from another pair)
 
         result.train_n_trades = train_n_trades                             # Record for the fold report
         result.train_win_rate  = train_win_rate                             # Record for the fold report
@@ -975,88 +985,23 @@ class WalkForwardEngine:
     # HALF-LIFE (ORNSTEIN-UHLENBECK) RE-CALIBRATION
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _estimate_half_life_hours(self, spread: pd.Series) -> float:
+    def _estimate_half_life_hours(self, residual: pd.Series):   # claude code changed: Stage 2D — returns a quant_core Result, never a substitute value
+        """Exact AR(1) half-life (hours) of a FIXED-β residual series.
+
+        claude code changed: Stage 2D. Delegates to
+        bot.quant_core.half_life.ar1_half_life on the complete hourly grid
+        (gaps stay gaps; no regression pair spans a missing candle). The
+        previous implementation's first-order formula, p-value gate, and
+        sanity band anchored on another pair's VALIDATED_HALF_LIFE are gone.
+        The fold's Kalman output is hourly, so candle_hours = 1 (the old code
+        multiplied an hourly estimate by resample_hours — a unit error).
+        min_obs = 30 is the minimum this method already required.
         """
-        Re-estimate the spread's mean-reversion half-life from a TRAIN slice
-        only, using the same Ornstein-Uhlenbeck calibration methodology as
-        statistical_edge.py elsewhere in this pipeline.
-
-        The OU process:    d(spread) = λ (μ - spread) dt + noise
-        Discretised:        Δspread_t = a + b · spread_{t-1} + ε_t
-        Mean-reversion speed:  b  (must be negative for genuine reversion)
-        Half-life (in candles): -ln(2) / b
-        Half-life (in hours):    half-life (in candles) × CANDLE_HOURS
-
-        This is deliberately re-computed per fold, per pair — the whole
-        point of walk-forward is that a spread's reversion speed measured
-        on 2020-2022 data should NOT be assumed to still hold in 2024, and
-        a different pair's spread should never borrow AVAX/ATOM's number.
-
-        Returns
-        -------
-        float
-            Half-life in hours, or np.nan if the spread shows no
-            statistically meaningful mean reversion on this slice.
-        """
-
-        spread_clean = spread.replace([np.inf, -np.inf], np.nan).dropna()   # Guard against inf/NaN contaminating the fit
-        if len(spread_clean) < 30:                                          # Too few points for a trustworthy regression
-            return np.nan
-
-        lagged   = spread_clean.shift(1).dropna()                           # spread_{t-1}
-        delta    = spread_clean.diff().dropna()                             # Δspread_t = spread_t - spread_{t-1}
-        aligned  = pd.concat([lagged, delta], axis=1, join="inner")         # Align indices between the two series
-        aligned.columns = ["lagged", "delta"]                               # Name the columns for clarity
-
-        if len(aligned) < 30:                                               # Still too few points after alignment
-            return np.nan
-
-        # Ordinary least squares: Δspread = a + b · spread_{t-1}
-        # scipy.stats.linregress gives us the slope (b), its p-value, and
-        # the intercept in one call — no need for a heavier stats dependency.
-        fit = stats.linregress(aligned["lagged"], aligned["delta"])
-        b_coefficient = fit.slope                                           # Mean-reversion speed coefficient
-        p_value       = fit.pvalue                                          # Statistical significance of that speed
-
-        if b_coefficient >= 0 or p_value > 0.05:                            # Not mean-reverting, or not significantly so
-            return np.nan                                                   # Caller falls back to a safe default
-
-        # claude code changed: was `half_life_candles * CANDLE_HOURS` (CANDLE_HOURS
-        # hardcoded 1.0, assuming native 1h candles). train_df's candles are now
-        # self.resample_hours wide when resampling is active (see
-        # WalkForwardEngine.__init__) — using the fixed 1.0 here would silently
-        # understate the recalibrated half-life by that same factor, badly
-        # distorting the derived time-stop (2 x half-life) for every fold.
-        half_life_candles = -np.log(2) / b_coefficient                      # Standard OU half-life formula
-        candle_hours       = self.resample_hours if self.resample_hours else CANDLE_HOURS
-        half_life_hours    = half_life_candles * candle_hours                # Convert candles → hours
-
-        # ── Sanity band ────────────────────────────────────────────────────────
-        # A statistically significant, negative b_coefficient is NOT the same
-        # thing as a trustworthy half-life — a lag-1 regression on a noisy
-        # hourly spread can easily fit fast noise decay and report a
-        # half-life of a few hours even when it's "significant" by p-value
-        # alone. Reject anything wildly outside a sane band around the
-        # full-sample reference rather than handing a corrupted time stop
-        # to the simulator; the caller falls back to a safe default instead.
-        too_fast = half_life_hours < HALF_LIFE_SANITY_MIN_HOURS
-        too_slow = half_life_hours > VALIDATED_HALF_LIFE * HALF_LIFE_SANITY_MAX_RATIO
-        if too_fast or too_slow:
-            logger.warning(
-                f"    Half-life estimate {half_life_hours:.1f}h is outside the "
-                f"sane band [{HALF_LIFE_SANITY_MIN_HOURS:.0f}h, "
-                f"{VALIDATED_HALF_LIFE * HALF_LIFE_SANITY_MAX_RATIO:.0f}h] around the "
-                f"{VALIDATED_HALF_LIFE:.0f}h reference — rejecting as likely noise, "
-                f"not a real structural reversion speed"
-            )
-            return np.nan                                                      # Caller falls back to a safe default
-
-        return float(half_life_hours)                                        # Hand back the re-calibrated half-life
-
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # HELPERS: BUILD A CONFIGURED ENGINE / WRITE A DATA SLICE
-    # ─────────────────────────────────────────────────────────────────────────
+        r = residual.replace([np.inf, -np.inf], np.nan)
+        if r.index.tz is None:
+            r.index = r.index.tz_localize("UTC")
+        grid = pd.date_range(r.index.min(), r.index.max(), freq="h", tz=r.index.tz)
+        return ar1_half_life(r.reindex(grid), candle_hours=CANDLE_HOURS, min_obs=30)
 
     def _build_engine(
         self,
@@ -1305,10 +1250,13 @@ class WalkForwardEngine:
             f"OOS max drawdown {max_drawdown:.1%} "
             f"{'within' if max_drawdown >= OOS_MAX_DRAWDOWN_PCT else 'exceeds'} {OOS_MAX_DRAWDOWN_PCT:.0%}"
         )
-        if not pd.isna(wfe):                                                           # Only check WFE if it was computable
+        wfe_check = walk_forward_efficiency(oos_sharpe, is_sharpe_reference) if not pd.isna(wfe) else None   # claude code changed: Stage 2D
+        if wfe_check is not None and wfe_check.ok:                                     # claude code changed: Stage 2D
             (passed if wfe >= WFE_MIN else failed).append(
                 f"Walk-Forward Efficiency {wfe:.2f} {'≥' if wfe >= WFE_MIN else '<'} {WFE_MIN}"
             )
+        else:                                                                          # claude code changed: Stage 2D — an incomputable WFE is a FAILED criterion, it no longer drops out of the verdict
+            failed.append("Walk-Forward Efficiency not computable (IS reference missing or <= 0) — FAIL")
 
         for item in passed:                                                            # Print every threshold that cleared
             print(f"  ✓ {item}")

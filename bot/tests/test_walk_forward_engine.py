@@ -17,6 +17,7 @@
 # path is a known coverage gap, not an oversight.
 
 import shutil
+from unittest import mock   # claude code changed: Stage 2D
 import tempfile
 from pathlib import Path
 
@@ -159,51 +160,74 @@ class EstimateHalfLifeTest(SimpleTestCase):
         idx = pd.date_range("2020-01-01", periods=n, freq="1h")
         return pd.Series(spread, index=idx)
 
-    def test_genuine_mean_reversion_recovered_within_sane_band(self):
-        true_half_life_candles = 100  # claude code changed: comfortably inside [24h, 119.9*5=599.5h]
-        phi = np.exp(-np.log(2) / true_half_life_candles)  # claude code changed: AR(1) coefficient implied by the target half-life
+    # claude code changed: Stage 2D — the estimator now returns a bot.quant_core
+    # Result and applies the Stage 2C §8 contract: exact AR(1) half-life of a
+    # FIXED-β residual, 0 < φ < 1 valid, no fallback, no sanity band anchored on
+    # another pair's VALIDATED_HALF_LIFE. Mean reversion itself is established by
+    # the fold-train Engle–Granger gate (FoldCointegrationGateTest below), not
+    # by a slope p-value on normal tables.
+
+    def test_genuine_mean_reversion_recovered(self):
+        true_half_life_candles = 100
+        phi = np.exp(-np.log(2) / true_half_life_candles)
         spread = self._simulate_ou_spread(n=1000, phi=phi, seed=1)
+        res = self.engine._estimate_half_life_hours(spread)
+        self.assertTrue(res.ok)
+        self.assertAlmostEqual(res.value.half_life_hours, true_half_life_candles, delta=2)
 
-        half_life = self.engine._estimate_half_life_hours(spread)
-
-        self.assertFalse(pd.isna(half_life))  # claude code changed: must not be rejected — this is a genuine, plausible reversion
-        self.assertAlmostEqual(half_life, true_half_life_candles, delta=2)  # claude code changed: near-deterministic decay recovers precisely
-
-    def test_implausibly_fast_decay_rejected_by_sanity_band(self):
-        """Direct regression test for the historical bug: a genuinely fast-
-        decaying AR(1) series (analogous to the real ~2.5h noise-decay
-        case) is statistically significant but must still be rejected as
-        implausible for this pair's spread."""
-        phi = np.exp(-np.log(2) / 2)  # claude code changed: true half-life ~2 candles, well below HALF_LIFE_SANITY_MIN_HOURS
+    def test_fast_decay_is_a_valid_estimate_not_a_fallback(self):
+        """The 24 h band existed to reject the Kalman-innovation artefact; on a
+        fixed-β residual a genuine 2-candle half-life is a valid estimate."""
+        phi = np.exp(-np.log(2) / 2)
         spread = self._simulate_ou_spread(n=200, phi=phi, seed=2)
+        res = self.engine._estimate_half_life_hours(spread)
+        self.assertTrue(res.ok)
+        self.assertAlmostEqual(res.value.half_life_hours, 2.0, delta=0.2)
 
-        half_life = self.engine._estimate_half_life_hours(spread)
-
-        self.assertTrue(pd.isna(half_life))  # claude code changed: must be rejected, not silently accepted
-
-    def test_implausibly_slow_decay_rejected_by_sanity_band(self):
-        phi = np.exp(-np.log(2) / 700)  # claude code changed: true half-life ~700h, beyond VALIDATED_HALF_LIFE * 5 = 599.5h
+    def test_slow_decay_is_estimated_not_replaced(self):
+        phi = np.exp(-np.log(2) / 700)
         spread = self._simulate_ou_spread(n=3000, phi=phi, seed=3)
+        res = self.engine._estimate_half_life_hours(spread)
+        self.assertTrue(res.ok)
+        self.assertGreater(res.value.half_life_hours, 300)
+        self.assertNotEqual(res.value.half_life_hours, 120.0)       # the retired fallback value
 
-        half_life = self.engine._estimate_half_life_hours(spread)
+    def test_explosive_series_rejected(self):
+        spread = self._simulate_ou_spread(n=500, phi=1.01, seed=4, initial_value=1.0)
+        res = self.engine._estimate_half_life_hours(spread)
+        self.assertFalse(res.ok)
 
-        self.assertTrue(pd.isna(half_life))  # claude code changed: must be rejected as implausibly slow
+    def test_too_few_points_untestable(self):
+        spread = pd.Series(np.arange(10, dtype=float), index=pd.date_range("2020-01-01", periods=10, freq="1h"))
+        res = self.engine._estimate_half_life_hours(spread)
+        self.assertFalse(res.ok)
+        self.assertIsNone(res.value)                                 # no substitute value of any kind
 
-    def test_non_mean_reverting_random_walk_returns_nan(self):
-        rng = np.random.default_rng(4)  # claude code changed: reproducible synthetic spread
-        spread = pd.Series(
-            np.cumsum(rng.normal(0, 1, 1000)),  # claude code changed: pure random walk, no reversion at all
-            index=pd.date_range("2020-01-01", periods=1000, freq="1h"),
-        )
 
-        half_life = self.engine._estimate_half_life_hours(spread)
+class FoldCointegrationGateTest(SimpleTestCase):
+    """claude code changed: Stage 2D — a fold whose TRAIN window does not pass
+    Engle–Granger fails closed before any half-life or simulation is used."""
 
-        self.assertTrue(pd.isna(half_life))  # claude code changed: b_coefficient should not be significantly negative
-
-    def test_too_few_points_returns_nan(self):
-        spread = pd.Series(np.arange(10, dtype=float), index=pd.date_range("2020-01-01", periods=10, freq="1h"))  # claude code changed: below the 30-point minimum
-        half_life = self.engine._estimate_half_life_hours(spread)
-        self.assertTrue(pd.isna(half_life))  # claude code changed: guard clause, not a crash
+    def test_non_cointegrated_fold_train_fails_closed(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            engine = WalkForwardEngine(output_dir=tmp)
+            idx = pd.date_range("2020-01-01", periods=2000, freq="1h", tz="UTC")
+            fake = pd.DataFrame({"kalman_spread": 0.0, "ols_spread": 0.0}, index=idx)
+            fake.attrs["fold_train_cointegrated"] = False
+            fake.attrs["fold_train_coint_reason"] = "Engle-Granger p=0.6000 >= 0.05"
+            with mock.patch.object(WalkForwardEngine, "_refit_kalman_for_fold", return_value=fake):
+                result, oos = engine._run_single_fold(
+                    fold_id=1, pair_name="A_USDT_B_USDT", slash_pair_name="A_USDT/B_USDT",
+                    symbol_a="A_USDT", symbol_b="B_USDT",
+                    train_start=idx[0], train_end=idx[999], test_start=idx[1000], test_end=idx[-1],
+                    pair_output_dir=Path(tmp),
+                )
+            self.assertTrue(result.skipped)
+            self.assertIn("not cointegrated", result.skip_reason)
+            self.assertIsNone(oos)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class BuildOosEquityCurveTest(SimpleTestCase):

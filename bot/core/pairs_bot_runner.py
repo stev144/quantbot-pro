@@ -2,7 +2,13 @@
 # bot/core/pairs_bot_runner.py
 # claude code changed: new file — live pairs-trading pilot, Step 4 (final).
 #
-# Master loop for the 3-pair pilot (DODO/FIDA, MINA/ONG, AVA/PHA).
+# Master loop for the pairs pilot: 10 pairs monitored (real, live Kalman
+# beta tracking + NORMAL/DEGRADED/INVALIDATED health for all 10), but
+# only the pairs currently passing the real cointegration gate are
+# entry-eligible and can actually trade (today: DODO/FIDA, MINA/ONG —
+# see bot/pairs/config.py's is_entry_eligible/ENTRY_ELIGIBLE_PAIR_NAMES
+# and bot/pairs/monitor_engine.py for why the other pairs are
+# structurally incapable of trading rather than just gated off).
 # Mirrors bot/core/bot_runner.py's proven shape (a per-unit Session
 # dataclass, a standalone per-unit process_*_candle() function each
 # session's errors are caught inside, worst-status-wins retry timing,
@@ -64,6 +70,7 @@ from bot.config.logging_config import LOG_MAX_BYTES, LOG_BACKUP_COUNT
 from bot.journal.models import TradeRecord
 from bot.pairs.config import load_pair_configs, PairConfig
 from bot.pairs.signal_engine import PairSignalEngine
+from bot.pairs.monitor_engine import PairMonitorEngine
 from bot.pairs.execution import PairsExecutionEngine
 from bot.pairs.health import evaluate_pair_health, write_health_snapshot, PairHealthState
 
@@ -134,13 +141,21 @@ def setup_logging():
 
 @dataclass
 class PairSession:
-    """One per pilot pair. Bundles the pair's own signal engine (its own
-    Kalman state, its own EntryExitEngine instance) with tracking for
-    the loop — mirrors bot_runner.py's VenueSession, but per-pair
-    instead of per-venue since all 3 pairs share ONE
-    PairsExecutionEngine/Binance account."""
+    """One per pilot pair. Bundles the pair's own engine (its own Kalman
+    state) with tracking for the loop — mirrors bot_runner.py's
+    VenueSession, but per-pair instead of per-venue since all pairs share
+    ONE PairsExecutionEngine/Binance account.
+
+    claude code changed: `engine` is now PairSignalEngine (full
+    entry/exit + Kalman, for the pair_config.is_entry_eligible pairs) OR
+    PairMonitorEngine (Kalman beta tracking only, for the
+    monitoring-only pairs — see bot/pairs/monitor_engine.py). Both
+    expose the same `.current_beta` property, which is all the
+    heartbeat/health code below needs; process_pair_candle() branches on
+    pair_config.is_entry_eligible for everything else (entry/exit
+    decisions only ever run for the entry-eligible engine type)."""
     pair_config: PairConfig
-    signal_engine: PairSignalEngine
+    engine: "PairSignalEngine | PairMonitorEngine"
     last_candle_ts: Optional[int] = None  # ms epoch of the last CLOSED candle processed, dedupes re-polls
     last_action: str = "NONE"
 
@@ -187,11 +202,13 @@ def _entry_refusal_reason(health) -> Optional[str]:
 def bootstrap_session(session: PairSession, exchange) -> None:
     """Replays the most recent real closed candles (fetched fresh from
     Binance right now, not from potentially-stale data/*.csv files) through
-    the signal engine's state-only update path, so it can generate a real
-    signal on its first LIVE candle instead of needing ~1 week of cold-start
+    the engine's state-only update path, so it can generate a real signal
+    (entry-eligible pairs) or a real tracked beta (monitoring-only pairs)
+    on its first LIVE candle instead of needing ~1 week of cold-start
     accumulation. Never triggers a trade decision — see
     PairSignalEngine.bootstrap_candle()'s docstring for why that's
-    structurally impossible here (it never touches self.engine.current_trade)."""
+    structurally impossible here (it never touches self.engine.current_trade);
+    PairMonitorEngine.update() has no trade-decision path to touch at all."""
     logger = logging.getLogger(__name__)
     cfg = session.pair_config
 
@@ -208,15 +225,24 @@ def bootstrap_session(session: PairSession, exchange) -> None:
         return
 
     price_pairs = [(closed_a[ts], closed_b[ts]) for ts in common_ts]
-    session.signal_engine.bootstrap_from_history(price_pairs)
     session.last_candle_ts = common_ts[-1]
 
-    zscore_ready = session.signal_engine._zscore_roller._values and len(session.signal_engine._zscore_roller._values) >= session.signal_engine._zscore_roller.min_periods
-    logger.info(
-        f"[PairsBotRunner:{cfg.pair_name}] Bootstrapped {len(price_pairs)} historical candles "
-        f"({pd.Timestamp(common_ts[0], unit='ms', tz='UTC')} -> {pd.Timestamp(common_ts[-1], unit='ms', tz='UTC')}) | "
-        f"z-score ready: {bool(zscore_ready)}"
-    )
+    if cfg.is_entry_eligible:
+        session.engine.bootstrap_from_history(price_pairs)
+        zscore_ready = session.engine._zscore_roller._values and len(session.engine._zscore_roller._values) >= session.engine._zscore_roller.min_periods
+        logger.info(
+            f"[PairsBotRunner:{cfg.pair_name}] Bootstrapped {len(price_pairs)} historical candles "
+            f"({pd.Timestamp(common_ts[0], unit='ms', tz='UTC')} -> {pd.Timestamp(common_ts[-1], unit='ms', tz='UTC')}) | "
+            f"z-score ready: {bool(zscore_ready)}"
+        )
+    else:
+        for price_a, price_b in price_pairs:
+            session.engine.update(price_a, price_b)
+        logger.info(
+            f"[PairsBotRunner:{cfg.pair_name}] Bootstrapped {len(price_pairs)} historical candles "
+            f"({pd.Timestamp(common_ts[0], unit='ms', tz='UTC')} -> {pd.Timestamp(common_ts[-1], unit='ms', tz='UTC')}) | "
+            f"MONITOR_ONLY | current_beta={session.engine.current_beta:.4f}"
+        )
 
 
 def reconcile_pairs(pair_configs: list[PairConfig], exec_engine: PairsExecutionEngine) -> None:
@@ -281,7 +307,21 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
         session.last_candle_ts = ts_a
         timestamp = pd.Timestamp(ts_a, unit="ms", tz="UTC")
 
-        decision = session.signal_engine.process_candle(timestamp, price_a, price_b)
+        if not cfg.is_entry_eligible:
+            # claude code changed: monitoring-only pair (see bot/pairs/monitor_engine.py)
+            # — advance Kalman beta tracking only. No signal, no sizing, no
+            # entry/exit: this engine type structurally has no trade-decision
+            # path to call (PairMonitorEngine never constructs an
+            # EntryExitEngine at all), so there is nothing else to do here.
+            session.engine.update(price_a, price_b)
+            session.last_action = "MONITOR_ONLY"
+            logger.info(
+                f"[PairsBotRunner:{cfg.pair_name}] {timestamp} | MONITOR_ONLY | "
+                f"current_beta={session.engine.current_beta:.4f}"
+            )
+            return "ok"
+
+        decision = session.engine.process_candle(timestamp, price_a, price_b)
         session.last_action = decision.action
 
         logger.info(
@@ -291,7 +331,7 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
 
         if decision.action == "ENTER":
             health = evaluate_pair_health(
-                cfg.pair_name, cfg.hedge_ratio, session.signal_engine.current_beta,
+                cfg.pair_name, cfg.hedge_ratio, session.engine.current_beta,
                 cfg.passes_filters, cfg.reject_reason,
             )
             refusal = _entry_refusal_reason(health)
@@ -373,7 +413,21 @@ def run_bot():
 
     reconcile_pairs(pair_configs, exec_engine)
 
-    sessions = [PairSession(pair_config=cfg, signal_engine=PairSignalEngine(cfg)) for cfg in pair_configs]
+    # claude code changed: entry-eligible pairs get a full PairSignalEngine
+    # (Kalman + EntryExitEngine + KalmanPositionSizer — can trade); the
+    # other, monitoring-only pairs get the lighter PairMonitorEngine
+    # (Kalman beta tracking only — structurally cannot trade, see
+    # bot/pairs/monitor_engine.py). PairSignalEngine's constructor would
+    # raise (KalmanPositionSizer requires a real validated_win_rate) if
+    # built for a pair whose config.py resolved validated_win_rate=None,
+    # so this branch is required, not just tidier.
+    sessions = [
+        PairSession(
+            pair_config=cfg,
+            engine=PairSignalEngine(cfg) if cfg.is_entry_eligible else PairMonitorEngine(cfg),
+        )
+        for cfg in pair_configs
+    ]
 
     logger.info("[PairsBotRunner] Bootstrapping signal engines from recent real history...")
     for session in sessions:
@@ -417,7 +471,7 @@ def run_bot():
                     for session in sessions:
                         cfg = session.pair_config
                         health = evaluate_pair_health(
-                            cfg.pair_name, cfg.hedge_ratio, session.signal_engine.current_beta,
+                            cfg.pair_name, cfg.hedge_ratio, session.engine.current_beta,
                             cfg.passes_filters, cfg.reject_reason,
                         )
                         health_results[cfg.pair_name] = health

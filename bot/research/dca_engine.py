@@ -62,6 +62,7 @@ import pandas as pd
 from bot.config.execution_costs import FEE_RATE, SLIPPAGE_RATE
 from bot.engines.simulation import apply_slippage
 from bot.instruments import resolve_ohlcv_path
+from bot.pairs.kalman_online import RollingZScore, ZSCORE_MIN_PERIODS, ZSCORE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +373,14 @@ def _close_cycle(cycle: _OpenCycle, timestamp, price: float, config: DCAConfig, 
         "profit": round(net_pnl, 6),
         "gross_profit": round(gross_pnl, 6),
         "r_multiple": round(r_multiple, 6),
-        "holding_candles": len(cycle.fills),   # claude code changed: fill count, not candle count — see module docstring note below
+        # claude code changed: real bug fix — was len(cycle.fills) (a FILL
+        # count, mislabeled as "holding_candles"; cycle_n_fills below
+        # already reports that correctly under its real name). This now
+        # reuses cycle.candles_held, the actual per-candle counter this
+        # class already maintains for the max_cycle_candles check — the
+        # real number of candles the position was open, which matters for
+        # "how long does this strategy keep capital trapped."
+        "holding_candles": cycle.candles_held,
         "rsi": None,
         # ── DCA-specific, additive-only (safe — no existing caller reads an exhaustive key set) ──
         "cycle_max_level_reached": len(cycle.fills) - 1,
@@ -460,11 +468,26 @@ def simulate_dca_cycles(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -
 # PHASE 8 — CYCLE ANALYTICS THAT REFUSE TO LET WIN RATE HIDE TAIL RISK
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-def summarize_dca_cycles(trades: List[Dict]) -> Dict:
+def summarize_dca_cycles(trades: List[Dict], config: DCAConfig = BASELINE_CONFIG) -> Dict:
     """Aggregates simulate_dca_cycles() output into the metric set Phase 8
     explicitly asked for — deliberately reporting worst-case and
     unresolved-cycle figures at least as prominently as win rate, per
-    Phase 26 ("no false confidence")."""
+    Phase 26 ("no false confidence").
+
+    claude code changed: real bug fix, caught by external review, not by
+    this module's own tests (a real test-coverage gap — see the new
+    regression tests this fix ships with). config is now a REQUIRED
+    context (defaults to BASELINE_CONFIG for existing callers, but every
+    caller running a non-baseline config must pass its own) because
+    "full ladder exhaustion" must be measured against the CONFIGURED
+    number of levels, not against whatever level happened to be the
+    deepest one actually reached in this particular trade list. The old
+    code (`max(max_level_counts.keys())`) silently mislabeled the deepest
+    OBSERVED level as "full exhaustion" — on a dataset where the ladder's
+    true final level (e.g. level 6) never once got triggered, every
+    level-5 cycle would have been wrongly counted as fully exhausted, even
+    though real capital/ammunition remained unused at level 6.
+    """
     if not trades:
         return {"n_cycles": 0}
 
@@ -483,9 +506,19 @@ def summarize_dca_cycles(trades: List[Dict]) -> Dict:
         lvl = t["cycle_max_level_reached"]
         max_level_counts[lvl] = max_level_counts.get(lvl, 0) + 1
 
-    n_exhausted = sum(1 for t in trades if t["cycle_max_level_reached"] == max(max_level_counts.keys()))
+    configured_max_level = len(config.levels)   # claude code changed: the real fix — was max(max_level_counts.keys())
+    n_exhausted = sum(1 for t in trades if t["cycle_max_level_reached"] == configured_max_level)
     total_max_deployed = max((t["cycle_max_capital_deployed"] for t in trades), default=0.0)
     total_net_profit = sum(profits)
+
+    # claude code changed: real bug fix, also caught by external review —
+    # DATA_END_STILL_OPEN ("the dataset ended before we know the outcome")
+    # and MAX_CYCLE_CANDLES_TIMEOUT ("our own research rule force-closed
+    # it") are economically different events that were only separated in
+    # the unresolved_reasons sub-dict, not in the headline metrics anyone
+    # skimming the summary would actually look at first.
+    unresolved_reasons = {r: sum(1 for t in unresolved if t["cycle_exit_reason"] == r)
+                           for r in set(t["cycle_exit_reason"] for t in unresolved)}
 
     # claude code changed: profit concentration (Phase 8) — what fraction
     # of TOTAL net profit comes from the single best cycle. A number close
@@ -498,8 +531,9 @@ def summarize_dca_cycles(trades: List[Dict]) -> Dict:
         "n_cycles": n_cycles,
         "n_resolved_cycles": len(resolved),
         "n_unresolved_cycles": len(unresolved),   # claude code changed: NEVER silently dropped — see simulate_dca_cycles()
-        "unresolved_reasons": {r: sum(1 for t in unresolved if t["cycle_exit_reason"] == r)
-                                for r in set(t["cycle_exit_reason"] for t in unresolved)},
+        "n_unresolved_data_end": unresolved_reasons.get("DATA_END_STILL_OPEN", 0),
+        "n_unresolved_timeout": unresolved_reasons.get("MAX_CYCLE_CANDLES_TIMEOUT", 0),
+        "unresolved_reasons": unresolved_reasons,   # full breakdown retained for any other exit_reason value
         "cycle_win_rate_pct_of_resolved": round(len(wins) / len(resolved) * 100, 2) if resolved else None,
         "avg_resolved_cycle_profit": round(sum(t["profit"] for t in resolved) / len(resolved), 4) if resolved else None,
         "avg_resolved_loss": round(sum(t["profit"] for t in losses_among_resolved) / len(losses_among_resolved), 4) if losses_among_resolved else None,
@@ -507,6 +541,7 @@ def summarize_dca_cycles(trades: List[Dict]) -> Dict:
         "best_cycle_profit": round(sorted_by_profit[-1]["profit"], 4),
         "max_capital_deployed_any_cycle": round(total_max_deployed, 2),
         "max_dca_level_distribution": max_level_counts,
+        "configured_max_level": configured_max_level,   # claude code changed: new — makes the exhaustion definition auditable, not implicit
         "ladder_full_exhaustion_count": n_exhausted,
         "ladder_full_exhaustion_pct": round(n_exhausted / n_cycles * 100, 2),
         "total_net_profit": round(total_net_profit, 4),
@@ -610,7 +645,7 @@ def run_dca_permutation_test(
     initial_price = close[0]
 
     real_trades = simulate_dca_cycles(df, config)
-    real_summary = summarize_dca_cycles(real_trades)
+    real_summary = summarize_dca_cycles(real_trades, config)
     real_profit = real_summary["total_net_profit"]
     real_ratio = real_summary["profit_to_max_exposure_ratio"] or 0.0
 
@@ -623,7 +658,7 @@ def run_dca_permutation_test(
         shuffled_prices = np.concatenate([[initial_price], _reconstruct_price_path(initial_price, shuffled_returns)])
         shuffled_df = pd.DataFrame({"close": shuffled_prices}, index=df.index[: len(shuffled_prices)])
         shuffled_trades = simulate_dca_cycles(shuffled_df, config)
-        shuffled_summary = summarize_dca_cycles(shuffled_trades)
+        shuffled_summary = summarize_dca_cycles(shuffled_trades, config)
         shuffled_profits.append(shuffled_summary["total_net_profit"])
         shuffled_ratios.append(shuffled_summary["profit_to_max_exposure_ratio"] or 0.0)
         if (i + 1) % 20 == 0:
@@ -653,6 +688,259 @@ def run_dca_permutation_test(
         "p_value_profit_to_max_exposure_ratio": round(p_value_ratio, 4),
         "edge_appears_real": bool(p_value_profit < 0.05 and p_value_ratio < 0.05),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# INTELLIGENT-DCA RESEARCH, EXPERIMENT 1 — Z-SCORE
+#
+# claude code changed: new. Purely OBSERVATIONAL research, per the pasted
+# spec's own Section 9: "Do not assume Z-score < -2 = buy. Instead
+# investigate the conditional relationship." This does NOT gate, block,
+# or resize any DCA decision — the blind baseline (BASELINE_CONFIG,
+# simulate_dca_cycles()) is untouched and unmodified, exactly as the
+# spec's Section 2 requires. This only ANSWERS: at the moment each DCA
+# level actually fired in the real historical backtest, what was the
+# rolling Z-score of price, and did that value carry any information
+# about how the cycle eventually turned out?
+#
+# REUSED, NOT DUPLICATED: bot.pairs.kalman_online.RollingZScore — the
+# same class already reused by pca_engine.py this session, same
+# ZSCORE_WINDOW (504 candles / 3 weeks of 1h data) the Kalman pairs pilot
+# itself uses. No new Z-score implementation.
+#
+# NO LOOK-AHEAD (Section 12): RollingZScore is inherently causal — each
+# candle's Z-score is computed only from that candle and everything
+# before it (deque-based trailing window), so a Z-score value that
+# appears at fill timestamp T never uses information from T+1 onward.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+def compute_price_zscore_series(
+    df: pd.DataFrame,
+    window: int = ZSCORE_WINDOW,
+    min_periods: int = ZSCORE_MIN_PERIODS,
+) -> pd.Series:
+    """Rolling Z-score of log(close), via the existing RollingZScore class.
+    Returns a Series aligned to df's index; None (converted to NaN) for
+    any candle before min_periods have accumulated — never fabricated."""
+    roller = RollingZScore(window=window, min_periods=min_periods)
+    log_price = np.log(df["close"])
+    values = [roller.update(v) for v in log_price.values]
+    return pd.Series(values, index=df.index, dtype=float)
+
+
+def research_feature_at_dca_events(
+    df: pd.DataFrame,
+    config: DCAConfig,
+    feature_series: pd.Series,
+    feature_col_name: str,
+) -> pd.DataFrame:
+    """
+    Generic version of Experiment 1's event-extraction logic — pulled out
+    once a second feature family (ATR/volatility, Experiment 2) needed
+    the identical join, rather than copy-pasting it a second time. Runs
+    the UNMODIFIED blind baseline (simulate_dca_cycles), then for every
+    DCA-level fill (level >= 1 — deliberately excluding the initial entry
+    at level 0, since the research question is specifically about
+    moments where price has ALREADY moved against an open position)
+    across every cycle, records feature_series's value at that exact
+    instant alongside the eventual cycle outcome.
+
+    feature_series must already be computed causally (no look-ahead) —
+    this function only performs the timestamp lookup and join; it has no
+    way to detect a feature that peeked at future candles, so that
+    responsibility sits with whichever compute_*_series() function built
+    feature_series (see compute_price_zscore_series/compute_atr_ratio_series
+    for how each satisfies it).
+
+    Returns one row per DCA-level fill, column named feature_col_name for
+    the feature's value, plus:
+      - cycle_final_profit / cycle_exit_reason / cycle_final_level_reached:
+        how the CYCLE THIS FILL BELONGS TO eventually turned out (a fill
+        at level 2 in a cycle that later reached level 6 and lost money
+        is tagged with that cycle's real, eventual outcome — not a
+        fabricated per-fill P&L, which doesn't exist for an intermediate
+        DCA leg on its own)
+      - levels_remaining_at_fill: how much ladder capacity was left when
+        this fill happened
+      - hours_from_fill_to_resolution: real elapsed time from this fill
+        to the cycle's eventual close (or data-end if still open)
+
+    Multiple rows can belong to the same cycle (a cycle that reached
+    level 4 contributes 4 rows, one per DCA level, all sharing the same
+    eventual outcome) — deliberate, see Experiment 1's original docstring
+    for why.
+    """
+    trades = simulate_dca_cycles(df, config)
+
+    rows = []
+    for trade in trades:
+        for fill in trade["cycle_fills"]:
+            if fill["level"] == 0:
+                continue   # initial entry, not a DCA event
+            ts = fill["timestamp"]
+            feature_value = feature_series.get(ts)
+            hours_to_resolution = (trade["exit_time"] - ts).total_seconds() / 3600.0
+            rows.append({
+                "cycle_entry_time": trade["entry_time"],   # real, unique per-cycle identifier — see summarize_feature_experiment()'s de-duplication
+                "fill_timestamp": ts,
+                "fill_level": fill["level"],
+                "fill_price": fill["price"],
+                feature_col_name: feature_value,
+                "cycle_final_profit": trade["profit"],
+                "cycle_exit_reason": trade["cycle_exit_reason"],
+                "cycle_final_level_reached": trade["cycle_max_level_reached"],
+                "levels_remaining_at_fill": len(config.levels) - fill["level"],
+                "hours_from_fill_to_resolution": hours_to_resolution,
+            })
+    return pd.DataFrame(rows)
+
+
+def research_zscore_at_dca_events(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> pd.DataFrame:
+    """EXPERIMENT 1 (Z-score) — thin wrapper over research_feature_at_dca_events()."""
+    return research_feature_at_dca_events(df, config, compute_price_zscore_series(df), "zscore_at_fill")
+
+
+def summarize_feature_experiment(
+    events_df: pd.DataFrame,
+    feature_col: str,
+    bucket_fn: Callable[[float], str],
+    bucket_col_name: str = "feature_bucket",
+) -> pd.DataFrame:
+    """
+    Generic version of Experiment 1's bucket-and-summarize logic. Buckets
+    DCA events by feature_col's value (via caller-supplied bucket_fn —
+    each feature family gets its own economically-sensible regions, not
+    one arbitrary threshold; see Section 9's "very negative / moderately
+    negative / near equilibrium" for Z-score, and the ATR-specific
+    buckets in summarize_atr_experiment for why they differ) and reports
+    the conditional outcome distribution per bucket. A monotonic pattern
+    (deeper feature value -> consistently better or worse outcome) is
+    interesting; a flat/noisy pattern means the feature isn't carrying
+    information for this decision.
+    """
+    if events_df.empty:
+        return pd.DataFrame()
+
+    events_df = events_df.copy()
+    events_df[bucket_col_name] = events_df[feature_col].apply(bucket_fn)
+
+    # claude code changed: "eventual cycle outcome" per fill-event needs
+    # de-duplication by cycle before averaging profit/exhaustion —
+    # otherwise a single 6-level-exhaustion cycle contributes 6 identical
+    # copies of its own outcome, silently overweighting it relative to a
+    # 1-level cycle. Grouped on cycle_entry_time, the real unique-per-
+    # cycle identifier (see research_feature_at_dca_events()).
+    summary_rows = []
+    for bucket_name, group in events_df.groupby(bucket_col_name):
+        cycles_touched = group.drop_duplicates(subset=["cycle_entry_time"])
+        summary_rows.append({
+            bucket_col_name: bucket_name,
+            "n_dca_events": len(group),
+            "n_distinct_cycles_touched": len(cycles_touched),
+            "eventual_ladder_full_exhaustion_rate_pct": round(
+                (cycles_touched["cycle_final_level_reached"] == cycles_touched["cycle_final_level_reached"].max()).mean() * 100, 2
+            ) if len(cycles_touched) else None,
+            "mean_eventual_cycle_profit": round(cycles_touched["cycle_final_profit"].mean(), 4) if len(cycles_touched) else None,
+            "mean_hours_to_resolution": round(group["hours_from_fill_to_resolution"].mean(), 1),
+        })
+    return pd.DataFrame(summary_rows)
+
+
+def _zscore_bucket(z: float) -> str:
+    if pd.isna(z):
+        return "no_zscore_yet"
+    if z <= -3.0:
+        return "very_negative (<= -3.0)"
+    if z <= -1.5:
+        return "moderately_negative (-3.0, -1.5]"
+    return "near_equilibrium (> -1.5)"
+
+
+def summarize_zscore_experiment(events_df: pd.DataFrame) -> pd.DataFrame:
+    """EXPERIMENT 1 (Z-score) — thin wrapper over summarize_feature_experiment()."""
+    return summarize_feature_experiment(events_df, "zscore_at_fill", _zscore_bucket, "zscore_bucket")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# INTELLIGENT-DCA RESEARCH, EXPERIMENT 2 — VOLATILITY / ATR
+#
+# claude code changed: new. Same observational discipline as Experiment 1
+# (Section 7: "do not assume volatility-adjusted spacing is better,
+# measure it" — this experiment only measures the conditional
+# relationship; it does not modify DCA spacing/sizing/gating).
+#
+# REUSED, NOT DUPLICATED: bot.engines.regime_detector.RegimeDetector
+# already computes an ATR ratio (current 14-period ATR / 50-period
+# average ATR) internally, via _calculate_atr_ratio() — but that method
+# is written to return only the CURRENT (last-row) value, meant to be
+# called once per live candle in bot_runner.py's loop, not a full
+# historical series. Rather than call it 43,797 times per asset (a slow
+# Python loop for what's already a vectorized pandas computation
+# underneath), compute_atr_ratio_series() below reuses the EXACT SAME
+# formula and default periods (atr_period=14, atr_avg_period=50,
+# matching RegimeDetector.__init__'s own defaults) as a single vectorized
+# pass over the whole series — same math, not a second ATR
+# implementation with independently-drifting constants.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DEFAULT_ATR_PERIOD = 14
+DEFAULT_ATR_AVG_PERIOD = 50
+# claude code changed: matches RegimeDetector's own atr_extreme_multiplier
+# default exactly — reused as the "extreme volatility" bucket boundary
+# below, not an independently chosen number.
+ATR_EXTREME_MULTIPLIER = 1.7
+
+
+def compute_atr_ratio_series(
+    df: pd.DataFrame,
+    atr_period: int = DEFAULT_ATR_PERIOD,
+    atr_avg_period: int = DEFAULT_ATR_AVG_PERIOD,
+) -> pd.Series:
+    """
+    Vectorized whole-series version of RegimeDetector._calculate_atr_ratio()'s
+    exact formula (True Range -> rolling ATR -> ratio to its own longer-
+    period rolling average). Causal by construction (every value at row i
+    uses only rows <= i via pandas' backward-looking .rolling()) — no
+    look-ahead, matching Section 12's requirement. NaN for the first
+    atr_avg_period rows, same as the source method's own guard (never
+    fabricated as a fake "neutral" 1.0 the way the live, single-value
+    method does for a genuinely missing baseline — that fallback exists
+    there to keep a live trading loop from crashing on cold start, which
+    doesn't apply to offline research over full historical series).
+    """
+    high, low, prev_close = df["high"], df["low"], df["close"].shift(1)
+    true_range = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    current_atr = true_range.rolling(atr_period).mean()
+    avg_atr = true_range.rolling(atr_avg_period).mean()
+    ratio = current_atr / avg_atr.replace(0, np.nan)
+    return ratio
+
+
+def research_atr_ratio_at_dca_events(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> pd.DataFrame:
+    """EXPERIMENT 2 (volatility/ATR) — thin wrapper over research_feature_at_dca_events()."""
+    return research_feature_at_dca_events(df, config, compute_atr_ratio_series(df), "atr_ratio_at_fill")
+
+
+def _atr_ratio_bucket(ratio: float) -> str:
+    if pd.isna(ratio):
+        return "no_atr_yet"
+    if ratio < 0.8:
+        return "low_vol (< 0.8x)"
+    if ratio < 1.3:
+        return "normal_vol (0.8-1.3x)"
+    if ratio < ATR_EXTREME_MULTIPLIER:
+        return f"elevated_vol (1.3-{ATR_EXTREME_MULTIPLIER}x)"
+    return f"extreme_vol (>= {ATR_EXTREME_MULTIPLIER}x)"
+
+
+def summarize_atr_experiment(events_df: pd.DataFrame) -> pd.DataFrame:
+    """EXPERIMENT 2 (volatility/ATR) — thin wrapper over summarize_feature_experiment()."""
+    return summarize_feature_experiment(events_df, "atr_ratio_at_fill", _atr_ratio_bucket, "atr_ratio_bucket")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -851,6 +1139,6 @@ if __name__ == "__main__":
     print("=" * 100)
     result = run_dca_research_oos()
     all_trades = [t for f in result.folds for t in (f.trades or [])]
-    summary = summarize_dca_cycles(all_trades)
+    summary = summarize_dca_cycles(all_trades, BASELINE_CONFIG)
     for k, v in summary.items():
         print(f"  {k}: {v}")

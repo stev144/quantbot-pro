@@ -4,8 +4,8 @@
 
 {% block content %}
 
-{% comment %}
-   claude code changed: full rewrite — institutional quant-terminal
+<!--
+ claude code changed: full rewrite — institutional quant-terminal
    redesign. Replaces the retail-styled single scroll (particle
    background, emoji headers, pulsing gradient cards, animated gauges,
    rotating hero text) with a dense, table-first layout organized into
@@ -38,7 +38,10 @@
    only matches on a single line and was leaking through as literal
    page text instead of being stripped. This block-style comment tag is
    the correct one for multi-line use.
-{% endcomment %}
+
+-->
+  
+
 
 {% if error %}
 {% include "partials/_topbar.html" with active="dashboard" %}

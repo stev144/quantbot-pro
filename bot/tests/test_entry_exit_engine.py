@@ -52,6 +52,8 @@ def _write_stoploss_scenario_csv(path):
         "kalman_spread":       [0.0] * n_flat + [-0.01, -0.05, -0.05],
         "prediction_error":    [0.005] * (n_flat + 3),
         "beta_uncertainty":    [0.01] * (n_flat + 3),
+        "close_a":             [10.0] * (n_flat + 3),   # claude code changed: real leg prices now required for fixed-quantity P&L (audit C-01)
+        "close_b":             [20.0] * (n_flat + 3),   # claude code changed: same
     }).to_csv(path, index=False)
 
 
@@ -230,14 +232,17 @@ class EntryExitSimulationTest(SimpleTestCase):
         # series (see module SCOPE NOTE above).
         n_flat = 12
         rows = {
-            "timestamp": list(pd.date_range("2024-01-01", periods=n_flat + 3, freq="h", tz="UTC")),
-            "kalman_zscore":       [-0.1] * n_flat + [-2.2, -4.0, -0.1],
-            "kalman_zscore_lag1":  [-0.1] * n_flat + [-0.1, -2.2, -4.0],
-            "pair_signal_dynamic": [0.05] * n_flat + [0.5, 0.5, 0.05],
-            "kalman_beta":         [1.5] * (n_flat + 3),
-            "kalman_spread":       [0.0] * n_flat + [-0.01, -0.05, -0.05],
-            "prediction_error":    [0.005] * (n_flat + 3),
-            "beta_uncertainty":    [0.01] * (n_flat + 3),
+            # claude code changed: Stage 2D (d = 1) — decision row, fill row, stop-decision row, exit-fill row, trailing row
+            "timestamp": list(pd.date_range("2024-01-01", periods=n_flat + 5, freq="h", tz="UTC")),
+            "kalman_zscore":       [-0.1] * n_flat + [-2.2, -2.3, -4.0, -0.1, -0.1],
+            "kalman_zscore_lag1":  [-0.1] * n_flat + [-0.1, -2.2, -2.3, -4.0, -0.1],
+            "pair_signal_dynamic": [0.05] * n_flat + [0.5, 0.5, 0.5, 0.05, 0.05],
+            "kalman_beta":         [1.5] * (n_flat + 5),
+            "kalman_spread":       [0.0] * n_flat + [-0.01, -0.01, -0.05, -0.05, -0.05],
+            "prediction_error":    [0.005] * (n_flat + 5),
+            "beta_uncertainty":    [0.01] * (n_flat + 5),
+            "close_a":             [10.0] * (n_flat + 5),   # claude code changed: real leg prices now required for fixed-quantity P&L (audit C-01)
+            "close_b":             [20.0] * (n_flat + 5),   # claude code changed: same
         }
         pd.DataFrame(rows).to_csv(path, index=False)
 

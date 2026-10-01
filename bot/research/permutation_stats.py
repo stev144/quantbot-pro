@@ -81,13 +81,24 @@ def compute_permutation_verdict(
     """
     verdict: Dict = {}
     for metric in metrics:
-        shuffled_values = np.array([r[metric] for r in shuffled if not pd.isna(r.get(metric))])
+        # claude code changed: Stage 2D (Stage 2C §7/§18) — replicas whose metric is
+        # missing/NaN (e.g. a shuffle that produced zero trades) used to be DROPPED,
+        # silently conditioning the null on "replicas that traded" and shrinking it.
+        # Now any unscorable replica makes this metric UNTESTABLE (p = NaN) — the
+        # caller must define a value for such replicas rather than lose them.
+        all_values = [r.get(metric) for r in shuffled]                                       # claude code changed: Stage 2D
+        n_unscorable = sum(1 for v in all_values if v is None or pd.isna(v))                 # claude code changed: Stage 2D
+        shuffled_values = np.array([v for v in all_values if v is not None and not pd.isna(v)], dtype=float)   # claude code changed: Stage 2D
         real_value = real.get(metric)
 
-        if len(shuffled_values) == 0 or real_value is None or pd.isna(real_value):
+        if n_unscorable or len(shuffled_values) == 0 or real_value is None or pd.isna(real_value):   # claude code changed: Stage 2D
             verdict[f"{metric}_percentile"] = np.nan
             verdict[f"{metric}_p_value"] = np.nan
+            verdict[f"{metric}_status"] = (                                                  # claude code changed: Stage 2D — explicit, never silent
+                f"UNTESTABLE: {n_unscorable} of {len(all_values)} replicas unscorable" if n_unscorable
+                else "UNTESTABLE: no real value or no replicas")
             continue
+        verdict[f"{metric}_status"] = "OK"   # claude code changed: Stage 2D
 
         percentile = float(np.mean(shuffled_values <= real_value))
         p_value = float((np.sum(shuffled_values >= real_value) + 1) / (len(shuffled_values) + 1))

@@ -125,6 +125,7 @@ from __future__ import annotations          # Modern type hints
 import logging                              # Structured logging
 import warnings                             # Suppress statistical warnings
 import itertools                            # Generate all pair combinations
+from bot.quant_core.cointegration import engle_granger   # claude code changed: Stage 2D — canonical Engle–Granger (MacKinnon), UNTESTABLE instead of fallback
 
 from typing import Dict, List, Optional, Tuple   # Type hints
 
@@ -287,7 +288,8 @@ class PairResult:
         passes_filters:  bool,
         reject_reason:   str = "",
         timeframe:       str = "1h",  # claude code changed: new — Multi-Asset Foundation Refactor Phase 1B, Objective 2. Defaults to "1h" so every existing call site (all of which predate this parameter) keeps constructing byte-identical PairResults.
-        adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: restored — Phase B (P1-5); accidentally dropped by commit de4fd8b, restored in Phase 1C (Blocker D)
+        adf_pvalue_fdr:  Optional[float] = None,
+        coint_pvalue_fdr: Optional[float] = None,   # claude code changed: Stage 2D — BH-adjusted ENGLE–GRANGER p-value; the selection decision uses this (adf_pvalue_fdr is now diagnostic only)   # claude code changed: restored — Phase B (P1-5); accidentally dropped by commit de4fd8b, restored in Phase 1C (Blocker D)
         passes_fdr:      Optional[bool]  = None,   # claude code changed: restored — Phase B (P1-5); None until run_all()'s correction step assigns it
         oos_adf_pvalue:      Optional[float] = None,   # claude code changed: new — out-of-sample persistence check, see module docstring update
         oos_adf_pvalue_fdr:  Optional[float] = None,   # claude code changed: new — same "provisional then corrected" pattern as adf_pvalue_fdr
@@ -321,7 +323,8 @@ class PairResult:
         # testing correction needs the full cross-pair p-value array, same
         # "provisional then corrected" pattern feature_validator.py uses.
         # None until that step runs.
-        self.adf_pvalue_fdr  = adf_pvalue_fdr
+        self.adf_pvalue_fdr  = adf_pvalue_fdr   # claude code changed: Stage 2D — DIAGNOSTIC ONLY (ordinary DF tables are invalid for an estimated β)
+        self.coint_pvalue_fdr = coint_pvalue_fdr   # claude code changed: Stage 2D — decision column
         self.passes_fdr      = passes_fdr
         # claude code changed: new — real bug found by out-of-sample audit
         # (see module docstring): a pair being stationary within the fixed
@@ -356,6 +359,7 @@ class PairResult:
             "coint_pvalue":    round(self.coint_pvalue, 6),
             "adf_pvalue":      round(self.adf_pvalue, 6),
             "adf_pvalue_fdr":  round(self.adf_pvalue_fdr, 6) if self.adf_pvalue_fdr is not None else None,   # claude code changed: restored — Phase B (P1-5)
+            "coint_pvalue_fdr": round(self.coint_pvalue_fdr, 6) if self.coint_pvalue_fdr is not None else None,   # claude code changed: Stage 2D
             "passes_fdr":      self.passes_fdr,   # claude code changed: restored — Phase B (P1-5)
             "hedge_ratio":     round(self.hedge_ratio, 6),
             "intercept":       round(self.intercept, 6),
@@ -563,7 +567,7 @@ class CointegrationEngine:
                 # is the standard, meaningful measure for "do these two
                 # assets actually move together."
                 pair_corr = prices[symbol_a].diff().corr(prices[symbol_b].diff())
-                if pd.notna(pair_corr) and abs(pair_corr) < self.correlation_prefilter_threshold:
+                if pd.isna(pair_corr) or abs(pair_corr) < self.correlation_prefilter_threshold:   # claude code changed: Stage 2D — a NaN correlation used to PASS the prefilter; now it is skipped (fail closed)
                     logger.info(
                         f"  {symbol_a}/{symbol_b}: SKIPPED — "
                         f"|correlation|={abs(pair_corr):.3f} < {self.correlation_prefilter_threshold} prefilter threshold"
@@ -699,16 +703,22 @@ class CointegrationEngine:
         if not self.pair_results:
             return
 
-        adf_pvalues = np.array([r.adf_pvalue for r in self.pair_results])
+        coint_pvalues = np.array([r.coint_pvalue for r in self.pair_results])   # claude code changed: Stage 2D — BH on Engle–Granger p-values (was ordinary-DF p-values)
         _, fdr_pvalues, _, _ = multipletests(
-            adf_pvalues, alpha=self.coint_threshold, method='fdr_bh'
+            coint_pvalues, alpha=self.coint_threshold, method='fdr_bh'
         )
+        adf_diag = np.array([r.adf_pvalue for r in self.pair_results], dtype=float)   # claude code changed: Stage 2D — diagnostic only
+        adf_fdr_diag = np.full(len(adf_diag), np.nan)   # claude code changed: Stage 2D
+        finite = np.isfinite(adf_diag)   # claude code changed: Stage 2D
+        if finite.any():   # claude code changed: Stage 2D
+            adf_fdr_diag[finite] = multipletests(adf_diag[finite], alpha=self.coint_threshold, method='fdr_bh')[1]   # claude code changed: Stage 2D
 
         n_pass_fdr = 0
         n_downgraded = 0
 
-        for result, p_fdr in zip(self.pair_results, fdr_pvalues):
-            result.adf_pvalue_fdr = float(p_fdr)
+        for result, p_fdr, p_adf_fdr in zip(self.pair_results, fdr_pvalues, adf_fdr_diag):   # claude code changed: Stage 2D
+            result.coint_pvalue_fdr = float(p_fdr)   # claude code changed: Stage 2D — decision
+            result.adf_pvalue_fdr = float(p_adf_fdr)   # claude code changed: Stage 2D — diagnostic only
             result.passes_fdr = bool(p_fdr < self.coint_threshold)
 
             if result.passes_fdr:
@@ -723,7 +733,7 @@ class CointegrationEngine:
                 result.reject_reason = (
                     f"failed FDR-corrected significance "
                     f"(p_fdr={p_fdr:.4f} >= {self.coint_threshold}, "
-                    f"raw ADF p={result.adf_pvalue:.4f} was < threshold "
+                    f"raw Engle-Granger p={result.coint_pvalue:.4f} was < threshold "   # claude code changed: Stage 2D
                     f"but did not survive correction across "
                     f"{len(self.pair_results)} pairs tested)"
                 )
@@ -965,10 +975,11 @@ class CointegrationEngine:
             hedge_ratio * train["price_b"]
         )
 
-        # ── Step 2: ADF test on residuals ─────────────────────────────────────
-        # Tests whether the spread is stationary (mean-reverting)
-        # H0 (null hypothesis): spread has a unit root (NOT stationary)
-        # If we reject H0 (p < threshold): spread IS stationary → cointegrated
+        # ── Step 2: ordinary ADF on the residual — DIAGNOSTIC ONLY ───────────
+        # claude code changed: Stage 2D (Stage 2C §5). An ordinary DF p-value on
+        # an OLS residual ignores that β̂ was estimated to minimise residual
+        # variance, so it over-rejects (Stage 1: 11–15 % false positives at 5 %).
+        # It is still recorded for comparison but no longer decides anything.
         try:
             adf_result = adfuller(
                 spread_train.dropna(),
@@ -976,34 +987,32 @@ class CointegrationEngine:
                 autolag="AIC",      # Use AIC to select optimal lag
                 regression="c",     # Include constant in ADF regression
             )
-            adf_pvalue = float(adf_result[1])    # Extract p-value
+            adf_pvalue = float(adf_result[1])    # Extract p-value (diagnostic)
+        except Exception:   # claude code changed: Stage 2D — a diagnostic failure is recorded as NaN, it does not reject or accept
+            adf_pvalue = float("nan")
 
-        except Exception as e:
+        # ── Engle–Granger test: THE selection decision ────────────────────────
+        # claude code changed: Stage 2D — MacKinnon cointegration p-value via
+        # bot.quant_core.cointegration.engle_granger. If it cannot be computed
+        # (gap/NaN in the window, numerical failure) the pair is UNTESTABLE,
+        # counted in the FDR family at p = 1, never re-tested with another test.
+        eg = engle_granger(train["price_a"], train["price_b"], min_obs=train_end,   # claude code changed: Stage 2D — exactly the declared training window (no new threshold); NaN/gaps inside it → UNTESTABLE
+                          
+                           maxlag=None, autolag="aic")
+        if not eg.ok:
             return PairResult(
                 symbol_a=symbol_a, symbol_b=symbol_b,
                 coint_pvalue=1.0, hedge_ratio=hedge_ratio, intercept=intercept,
-                half_life=np.inf, adf_pvalue=1.0,
+                half_life=np.inf, adf_pvalue=adf_pvalue,
                 is_cointegrated=False, passes_filters=False,
-                reject_reason=f"ADF test failed: {e}",
+                reject_reason=f"UNTESTABLE: {eg.reason}",
                 timeframe=self.timeframe,
                 training_window_candles=train_end,
             )
-
-        # ── Engle-Granger cointegration test (confirmation) ───────────────────
-        # statsmodels provides a direct cointegration test
-        # We use it as a second confirmation alongside our manual ADF
-        try:
-            _, coint_pvalue, _ = coint(
-                train["price_a"],
-                train["price_b"],
-                trend="c",          # Include constant in test regression
-            )
-            coint_pvalue = float(coint_pvalue)
-        except Exception:
-            coint_pvalue = adf_pvalue   # Fall back to ADF p-value
+        coint_pvalue = eg.value.pvalue
 
         # ── Determine cointegration ───────────────────────────────────────────
-        is_cointegrated = adf_pvalue < self.coint_threshold
+        is_cointegrated = coint_pvalue < self.coint_threshold   # claude code changed: Stage 2D — was adf_pvalue (ordinary DF)
 
         if not is_cointegrated:
             return PairResult(
@@ -1012,7 +1021,7 @@ class CointegrationEngine:
                 intercept=intercept, half_life=np.inf,
                 adf_pvalue=adf_pvalue,
                 is_cointegrated=False, passes_filters=False,
-                reject_reason=f"ADF p={adf_pvalue:.4f} > {self.coint_threshold}",
+                reject_reason=f"Engle-Granger p={coint_pvalue:.4f} >= {self.coint_threshold}",   # claude code changed: Stage 2D
                 timeframe=self.timeframe,
                 training_window_candles=train_end,
             )
@@ -1205,7 +1214,10 @@ class CointegrationEngine:
         aligned.columns = ["price_a", "price_b"]
 
         # Forward-fill small gaps (up to 3 periods) — exchange downtime
-        aligned.ffill(limit=3, inplace=True)
+        # claude code changed: Stage 2D — ffill(limit=3) REMOVED: forward-filling invents prices and turns
+        # a gap into zero-change observations (Stage 2C §16). Missing candles are no longer filled; the
+        # dropna() below still removes them as rows (row compression). Replacing that with the canonical
+        # time grid needs the owner's gap policy (g_max / re-seed, Stage 2C §16) — REMAINING DEFECT.
         aligned.dropna(inplace=True)
 
         # Calculate spread using TRAINING-estimated parameters

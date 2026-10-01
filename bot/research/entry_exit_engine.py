@@ -148,6 +148,20 @@ from bot.research.kalman_filter_engine import ZSCORE_WINSOR_LIMIT
 # static, validated hedge ratio (see SIGNAL_SOURCE_COLUMNS' module comment
 # below for why)
 from bot.research.kalman_filter_engine import load_pair_config
+from bot.research.kalman_filter_engine import load_close_series_from_csv   # claude code changed: new — real leg prices for fixed-quantity P&L (audit C-01)
+from bot.pairs.pnl import PairCosts, PairPosition, open_pair_position, close_pair_slice   # claude code changed: new — Phase 1, the single P&L ground truth (PAIRS_PNL_SPECIFICATION.md)
+from bot.quant_core.accounting import leg_notionals, open_position_checked   # claude code changed: Stage 2D — canonical leg split + executable-β domain check
+from bot.quant_core.metrics import HeldInterval, mark_to_market_equity, max_drawdown, profit_factor_dollars   # claude code changed: Stage 2D — dollar PF, mark-to-market equity/drawdown
+from bot.quant_core.provenance import SPEC_VERSION, code_state   # claude code changed: Stage 2D — provenance fields in the summary
+
+_CODE_STATE = None   # claude code changed: Stage 2D — git state read once per process (permutation runs build many engines)
+
+
+def _code_state():   # claude code changed: Stage 2D
+    global _CODE_STATE
+    if _CODE_STATE is None:
+        _CODE_STATE = code_state()
+    return _CODE_STATE
 
 # claude code changed: new — completes the Phase 1C, Step 3 cost-model wiring
 # the module comment near FEE_RATE/SLIPPAGE_RATE/TOTAL_TRANSACTION_COST
@@ -513,6 +527,23 @@ MAX_BETA_UNCERTAINTY: float = 0.10      # Skip entry if beta_uncertainty > 0.10
 # This prevents entering when there are no real trading opportunities
 MIN_SPREAD_STD: float = 0.005           # Minimum meaningful spread volatility
 
+# ── Real leg prices for P&L (audit C-01, 2026-09-29) ─────────────────────────
+# claude code changed: new. Trade P&L used to be expm1(±Δkalman_spread) — the
+# change in the Kalman INNOVATION between entry and exit. That innovation is
+# recomputed every candle with a RE-ESTIMATED α/β, so its change contains
+# filter re-estimation (α_exit − α_entry, (β_exit − β_entry)·log B), not just
+# price moves, and the filter's own adaptation mechanically pulls it back
+# toward zero after any extreme. Independent random walks run through this
+# exact engine showed +1.2% to +1.5% "P&L" per trade at a 74–81% win rate
+# while the fixed-quantity legs actually held lost −0.2% to −0.5% per trade
+# (QUANT_AUDIT_REPORT_2026-09-29.md, C-01). It also omitted the /(1+β) leg
+# normalisation. P&L is now the mark-to-market of the FIXED quantities bought
+# and sold at entry (qty = leg_usdt / entry price), marked at real leg closes.
+# The Kalman spread remains a SIGNAL only.
+PRICE_COL_A: str = "close_a"   # claude code changed: new — real close of symbol_a, joined by timestamp in _load_kalman_data()
+PRICE_COL_B: str = "close_b"   # claude code changed: new — real close of symbol_b
+DEFAULT_PRICE_DATA_DIR: Path = Path(__file__).resolve().parents[2] / "data"   # claude code changed: new — absolute project data/ dir (fetch_all_symbols.py output), so scratch-slice runs don't depend on the working directory
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRADE RECORD DATACLASS
@@ -600,23 +631,48 @@ class TradeRecord:
     partial_exit_zscore: Optional[float] = None   # z-score at the moment of partial exit
 
     # ── P&L ───────────────────────────────────────────────────────────────────
-    # All P&L measured as log-spread return (consistent with Kalman units)
-    gross_pnl_pct:     float = 0.0      # P&L before fees and slippage
-    fee_cost_pct:      float = 0.0      # Total transaction costs (both legs)
-    net_pnl_pct:       float = 0.0      # P&L after all costs
-    net_pnl_usdt:      float = 0.0      # Net P&L in USDT terms
+    # claude code changed: Phase 1 ground truth — every figure below is a
+    # WHOLE-TRADE total (all partial + final slices) from bot/pairs/pnl.py,
+    # per PAIRS_PNL_SPECIFICATION.md §8/§10. The *_pct fields are fractions of
+    # capital_usdt (the gross notional committed at entry). The old
+    # spread-difference P&L (audit C-01) is gone, not kept for compatibility.
+    gross_pnl_pct:     float = 0.0      # claude code changed: Σ mark-to-market P&L / capital (§4, §10)
+    fee_cost_pct:      float = 0.0      # claude code changed: Σ (slippage + fees + borrow) / capital
+    net_pnl_pct:       float = 0.0      # claude code changed: return on capital, ROC (§10)
+    net_pnl_usdt:      float = 0.0      # claude code changed: Σ net P&L over all slices (§8)
+    capital_usdt:      float = 0.0      # claude code changed: new — §10 capital C = gross notional at entry (position_usdt shrinks on a partial exit; this does not)
+    mark_pnl_usdt:     float = 0.0      # claude code changed: new — §4, frictionless price P&L of the fixed quantities
+    slippage_usdt:     float = 0.0      # claude code changed: new — §5
+    fee_usdt:          float = 0.0      # claude code changed: new — §6, per-leg per-fill fees
+    borrow_usdt:       float = 0.0      # claude code changed: new — §7, short-leg borrow interest (0 when no rate was supplied — see EntryExitEngine.borrow_cost_modeled)
 
     # ── Trade quality metrics ──────────────────────────────────────────────────
     max_adverse_zscore: float = 0.0     # Worst z-score move against us (drawdown)
     max_favorable_zscore: float = 0.0   # Best z-score move in our favour (MFE)
     prediction_error_at_entry: float = 0.0   # Kalman prediction error at entry
     beta_uncertainty_at_entry: float = 0.0   # Kalman β uncertainty at entry
+    # ── Fixed leg quantities and real prices (PAIRS_PNL_SPECIFICATION.md §3) ───────────────────
+    # claude code changed: the quantities actually held (§3). Defaults keep
+    # bot/pairs/signal_engine.py's live construction (which never computes
+    # research P&L) working unchanged.
+    entry_price_a:     float = 0.0      # claude code changed: new — symbol_a mark (close) at the entry candle
+    entry_price_b:     float = 0.0      # claude code changed: new — symbol_b mark (close) at the entry candle
+    qty_a:             float = 0.0      # claude code changed: SIGNED units of symbol_a at entry (+ long, − short)
+    qty_b:             float = 0.0      # claude code changed: SIGNED units of symbol_b at entry (sign = −direction·sign(β))
+    exit_price_a:      float = 0.0      # claude code changed: new — symbol_a mark at the final exit candle
+    exit_price_b:      float = 0.0      # claude code changed: new — symbol_b mark at the final exit candle
+    pair_position:     Optional[PairPosition] = None   # claude code changed: new — the bot/pairs/pnl.py position still held (None once closed); not serialised
+    entry_decision_timestamp: Optional[pd.Timestamp] = None   # claude code changed: Stage 2D — information cutoff t of the entry decision; entry_timestamp is the FILL candle t+d
+    exit_decision_timestamp:  Optional[pd.Timestamp] = None   # claude code changed: Stage 2D — cutoff u of the exit decision; exit_timestamp is the FILL candle u+d
+    slice_events: List[Tuple] = field(default_factory=list)   # claude code changed: Stage 2D — (fill_ts, net_pnl, entry_cost_share, qty_a_after, qty_b_after) per realised slice; feeds mark-to-market equity; not serialised
 
     def to_dict(self) -> Dict:
         """Convert trade record to dictionary for DataFrame construction."""
         return {
             "trade_id":                    self.trade_id,
-            "entry_timestamp":             self.entry_timestamp,
+            "entry_decision_timestamp":    self.entry_decision_timestamp,   # claude code changed: Stage 2D — decision cutoff (signal fields refer to this candle)
+            "entry_timestamp":             self.entry_timestamp,            # fill candle (price/quantity fields refer to this candle)
+            "exit_decision_timestamp":     self.exit_decision_timestamp,    # claude code changed: Stage 2D — exit decision cutoff
             "exit_timestamp":              self.exit_timestamp,
             "entry_zscore":                round(self.entry_zscore, 4),
             "entry_signal":                round(self.entry_signal, 4),
@@ -634,6 +690,17 @@ class TradeRecord:
             "exit_zscore":                 round(self.exit_zscore, 4),
             "exit_reason":                 self.exit_reason,
             "hours_held":                  round(self.hours_held, 1),
+            "entry_price_a":               self.entry_price_a,   # claude code changed: new — audit C-01, fixed-quantity P&L inputs
+            "entry_price_b":               self.entry_price_b,   # claude code changed: new
+            "exit_price_a":                self.exit_price_a,    # claude code changed: new
+            "exit_price_b":                self.exit_price_b,    # claude code changed: new
+            "qty_a":                       self.qty_a,           # claude code changed: signed entry quantity (§3)
+            "qty_b":                       self.qty_b,           # claude code changed: signed entry quantity (§3)
+            "capital_usdt":                round(self.capital_usdt, 6),    # claude code changed: new — §10
+            "mark_pnl_usdt":               round(self.mark_pnl_usdt, 6),   # claude code changed: new — §4
+            "slippage_usdt":               round(self.slippage_usdt, 6),   # claude code changed: new — §5
+            "fee_usdt":                    round(self.fee_usdt, 6),        # claude code changed: new — §6
+            "borrow_usdt":                 round(self.borrow_usdt, 6),     # claude code changed: new — §7
             "partial_pnl_usdt":            round(self.partial_pnl_usdt, 2),
             "gross_pnl_pct":               round(self.gross_pnl_pct, 6),
             "fee_cost_pct":                round(self.fee_cost_pct, 6),
@@ -923,8 +990,10 @@ class KalmanPositionSizer:
         #   leg_B = total × β_t / (1 + β_t)
         # This makes the position dollar-neutral in log-price space
         # Any market-wide crypto move affects both legs proportionally
-        leg_a_usdt = total_usdt / (1.0 + beta)          # AVAX leg
-        leg_b_usdt = total_usdt * beta / (1.0 + beta)   # ATOM leg
+        legs = leg_notionals(total_usdt, beta)          # claude code changed: Stage 2D — the single canonical split T/(1+|β|) with the executable-domain check (was T/(1+β), undefined at β=-1 and negative-leg for β<0); identical to the old formula for every β > 0
+        if not legs.ok:                                 # claude code changed: β ≤ 0, β = 0 or non-finite β → SKIP (fail closed), never a sized trade
+            return 0.0, 0.0, 0.0, signal_strength       # claude code changed: same "do not trade" signal as the minimum-size check above
+        leg_a_usdt, leg_b_usdt = legs.value             # claude code changed: N_A, N_B from bot.quant_core.accounting
 
         return total_usdt, leg_a_usdt, leg_b_usdt, signal_strength
 
@@ -1065,7 +1134,11 @@ class EntryExitEngine:
         signal_source:         str  = "kalman",   # claude code changed: new param — "kalman" (adaptive, default, kept for backward-compat) or "ols" (static, validated — see SIGNAL_SOURCE_COLUMNS module comment)
         venue_id:              str  = "binance",   # claude code changed: new param — completes Phase 1C Step 3, see cost_model import comment above
         asset_class:           str  = ASSET_CLASS_CRYPTO,   # claude code changed: new param — same
+        price_data_dir:        Optional[str] = None,   # claude code changed: new — audit C-01. Folder holding {SYMBOL}_1h.csv real closes, joined by timestamp so P&L can be marked on fixed leg quantities; None = DEFAULT_PRICE_DATA_DIR. Ignored when the kalman CSV already carries close_a/close_b.
+        borrow_rate_hourly_a:  Optional[float] = None,   # claude code changed: new — Phase 1 §7, hourly borrow rate of symbol_a's base asset (only charged while A is short). None = not modelled — see borrow_cost_modeled.
+        borrow_rate_hourly_b:  Optional[float] = None,   # claude code changed: new — same, for symbol_b
         disable_target_exit:   bool = False,   # claude code changed: new — exit-rule redesign, "fixed holding period" attempt (model_governance_log.md). False preserves every existing construction site's behavior unchanged. True removes Exit 1 (TARGET, the z-score-crossing check) from _check_exit_conditions() entirely, leaving STOPLOSS (safety, rare-tail) and TIMESTOP as the only two exit paths — TIMESTOP then becomes the PRIMARY, not backstop, exit, so callers using this mode should also pass an exit_time_stop_hours tied to the pair's own half-life (e.g. 1x), not the old 2x-half-life backstop value. The point: TARGET's "does z cross back near its own mean" check is exactly the mechanism diagnosed as producing the same inflated win-rate/Sharpe on shuffled data as on real data (see the "Why entry_ic won't move" and five prior design-attempt entries) — a pure time exit never asks that question at all.
+        execution_delay_candles: int = 1,   # claude code changed: Stage 2D (Stage 2C §2) — d ≥ 1: a decision at the close of candle t fills at the close of candle t+d, for entries AND exits. 1 is the FORCED minimum, not a calibrated value; the primary d is an owner decision (OPEN-1b/1c, live latency)
     ) -> None:
         """
         Initialise the entry/exit engine with all strategy parameters.
@@ -1110,6 +1183,12 @@ class EntryExitEngine:
         self.resample_hours    = resample_hours         # claude code changed: new — see CANDLE_RESAMPLE_HOURS module comment; applied once in _load_kalman_data()
         self.exit_time_stop    = exit_time_stop_hours   # Maximum hours to hold position
         self.disable_target_exit = disable_target_exit  # claude code changed: new — see __init__'s param comment
+        if not (isinstance(execution_delay_candles, (int, np.integer)) and not isinstance(execution_delay_candles, bool)
+                and execution_delay_candles >= 1):   # claude code changed: Stage 2D — same-candle execution is prohibited
+            raise ValueError(f"execution_delay_candles must be an integer >= 1, got {execution_delay_candles!r}")   # claude code changed: Stage 2D
+        self.execution_delay_candles = int(execution_delay_candles)   # claude code changed: Stage 2D
+        self._fill_delay = pd.Timedelta(hours=(resample_hours or 1) * self.execution_delay_candles)   # claude code changed: Stage 2D — d candles in WALL time (candle width = resample_hours or 1h), so a missing candle is never counted as a step
+        self.price_data_dir = Path(price_data_dir) if price_data_dir is not None else DEFAULT_PRICE_DATA_DIR   # claude code changed: new — audit C-01, see __init__'s param comment
         self.exit_partial_z    = exit_partial_zscore    # z-score for partial exit
         self.exit_partial_frac = exit_partial_fraction  # Fraction to close at partial exit
         self.require_confirm   = require_confirmation   # Require lag z-score confirmation
@@ -1156,7 +1235,18 @@ class EntryExitEngine:
         _costs             = get_cost_model(asset_class, venue_id, symbol=_canonical_symbol_a).get_costs()
         self.fee_rate      = _costs["fee_rate"]
         self.slippage_rate = _costs["slippage_rate"]
-        self.total_transaction_cost = 2 * (self.fee_rate + self.slippage_rate)   # round trip: both sides, entry + exit
+        self.total_transaction_cost = 2 * (self.fee_rate + self.slippage_rate)   # claude code changed: DISPLAY ONLY now — the flat-price round-trip fee+slippage rate; P&L comes from self.pair_costs via bot/pairs/pnl.py
+        # claude code changed: new — Phase 1: the ONLY cost inputs research P&L uses (PAIRS_PNL_SPECIFICATION.md §5–§7).
+        # No historical borrow-rate data exists in this repo, so a missing rate is
+        # never guessed: it is charged as 0 and flagged via borrow_cost_modeled
+        # (also written into the strategy summary) so results can't be read as complete.
+        self.borrow_cost_modeled = borrow_rate_hourly_a is not None and borrow_rate_hourly_b is not None   # claude code changed: new
+        self.pair_costs = PairCosts(   # claude code changed: new
+            fee_rate=self.fee_rate, slippage_rate=self.slippage_rate,
+            borrow_rate_hourly_a=borrow_rate_hourly_a or 0.0, borrow_rate_hourly_b=borrow_rate_hourly_b or 0.0,
+        )
+        if not self.borrow_cost_modeled:   # claude code changed: new
+            logger.warning("  Borrow interest NOT modelled (no borrow_rate_hourly_a/_b supplied) — short-leg financing is charged as 0; results are economically incomplete.")
 
         # claude code changed: now threads THIS pair's validated_ic/
         # validated_win_rate through to the sizer — was constructed with
@@ -1273,6 +1363,7 @@ class EntryExitEngine:
 
         # ── Step 5: Calculate equity curve ────────────────────────────────────
         equity_curve = self._build_equity_curve(trade_log, df)
+        self._mtm_equity = self._build_mtm_equity(df)   # claude code changed: Stage 2D — mark-to-market equity on actual capital (drawdown source)
 
         # ── Step 6: Calculate strategy summary ───────────────────────────────
         summary = self._build_strategy_summary(trade_log, equity_curve)
@@ -1319,6 +1410,8 @@ class EntryExitEngine:
             df.set_index("timestamp", inplace=True)
 
         df.sort_index(inplace=True)    # Ensure chronological order
+
+        df = self._attach_leg_prices(df)   # claude code changed: new — audit C-01, real leg closes for fixed-quantity P&L (before any warmup exclusion/resample, so both see them)
 
         # Remove warmup period — Kalman estimates are unreliable during warmup
         # The 'is_warmup' column is set by kalman_filter_engine.py
@@ -1399,7 +1492,7 @@ class EntryExitEngine:
         # reaches scipy.stats.spearmanr (its default nan_policy is
         # 'propagate', not 'omit'). Drop them here, at the source, so every
         # later step in the pipeline is working with clean data.
-        required_for_cleanliness = list(self.cols.values())   # claude code changed: was a hardcoded kalman-only list
+        required_for_cleanliness = list(self.cols.values()) + [PRICE_COL_A, PRICE_COL_B]   # claude code changed: was a hardcoded kalman-only list; price columns added (audit C-01) — a candle with no real price for either leg cannot be traded or marked
         present = [c for c in required_for_cleanliness if c in df.columns]
         before_rows = len(df)
         df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=present)
@@ -1454,6 +1547,48 @@ class EntryExitEngine:
     # STEP 2: VALIDATE COLUMNS
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _attach_leg_prices(self, df: pd.DataFrame) -> pd.DataFrame:   # claude code changed: new — audit C-01
+        """
+        Ensure df carries real close prices for both legs (PRICE_COL_A /
+        PRICE_COL_B), aligned to the kalman CSV's own timestamps.
+
+        If the CSV already has them (e.g. a permutation-test scratch CSV
+        written from an already-loaded frame), they are kept as-is. Otherwise
+        they are joined from price_data_dir/{SYMBOL}_1h.csv via
+        kalman_filter_engine.load_close_series_from_csv() — the same loader
+        the Kalman filter itself was built from. Row t's price is the same
+        un-lagged candle the row's spread comes from, which is exactly the
+        fill-price convention the *_kalman_LAG1h.csv files use (decision
+        columns lagged, spread/fill NOT lagged).
+
+        Fails loudly rather than falling back to the old spread-difference
+        P&L — silently reverting to that formula is the exact defect this
+        replaces (QUANT_AUDIT_REPORT_2026-09-29.md, C-01).
+        """
+        if PRICE_COL_A in df.columns and PRICE_COL_B in df.columns:
+            return df
+        if not self.symbol_a or not self.symbol_b:
+            raise ValueError(
+                "EntryExitEngine needs symbol_a/symbol_b to load real leg prices for P&L "
+                "(audit C-01) — pass them to the constructor, use a kalman CSV whose "
+                "filename names the pair, or include close_a/close_b columns in the CSV."
+            )
+        close_a = load_close_series_from_csv(self.symbol_a, self.price_data_dir)
+        close_b = load_close_series_from_csv(self.symbol_b, self.price_data_dir)
+        df = df.copy()
+        df[PRICE_COL_A] = close_a.reindex(df.index)
+        df[PRICE_COL_B] = close_b.reindex(df.index)
+        n_missing = int(df[[PRICE_COL_A, PRICE_COL_B]].isna().any(axis=1).sum())
+        if n_missing == len(df) and len(df) > 0:
+            raise ValueError(
+                f"No kalman CSV timestamp matched a real price candle for "
+                f"{self.symbol_a}/{self.symbol_b} in {self.price_data_dir} — "
+                f"timestamps/timezone mismatch or wrong price data."
+            )
+        if n_missing:
+            logger.warning(f"  {n_missing} kalman row(s) have no matching real price candle — dropped before simulation")
+        return df
+
     def _validate_columns(self, df: pd.DataFrame) -> None:
         """
         Verify all required Kalman columns are present.
@@ -1465,7 +1600,7 @@ class EntryExitEngine:
         # claude code changed: was a hardcoded kalman-only list — now driven
         # by self.cols so signal_source="ols" validates its own (derived)
         # column set instead of the kalman one it never populates.
-        required = list(self.cols.values())
+        required = list(self.cols.values()) + [PRICE_COL_A, PRICE_COL_B]   # claude code changed: price columns added — audit C-01, P&L is marked on real leg prices
 
         missing = [c for c in required if c not in df.columns]
 
@@ -1528,6 +1663,16 @@ class EntryExitEngine:
         self.trade_id_counter = 0
         self.completed_trades = []
         self.partial_exited = False
+        # claude code changed: Stage 2D (Stage 2C §2/§10) — decisions and fills are
+        # separated in time. A decision taken at the close of candle t (its row)
+        # fills at the close of candle t+d, d = execution_delay_candles >= 1,
+        # located by WALL time (self._fill_delay), never by row count. Same-candle
+        # entry and exit fills are no longer possible.
+        self.pending_entry   = None   # claude code changed: Stage 2D — entry decision awaiting its fill candle
+        self.pending_partial = None   # claude code changed: Stage 2D — partial-exit decision awaiting its fill candle
+        self.pending_exit    = None   # claude code changed: Stage 2D — full-exit decision awaiting its fill candle
+        self.n_entries_skipped_missing_fill = 0   # claude code changed: Stage 2D — entry fill candle absent → SKIP (fail closed), counted
+        delay = self._fill_delay   # claude code changed: Stage 2D
 
         for i, (ts, row) in enumerate(df.iterrows()):
 
@@ -1542,12 +1687,50 @@ class EntryExitEngine:
             spread       = float(row[self.cols["spread"]])             # Raw spread value
             pred_error   = float(row[self.cols["prediction_error"]])   # Filter prediction error (0.0 for ols)
             beta_uncert  = float(row[self.cols["beta_uncertainty"]])   # Filter uncertainty (0.0 for ols)
+            price_a      = float(row[PRICE_COL_A])                     # claude code changed: new — real symbol_a close at this candle (audit C-01 fill/mark price)
+            price_b      = float(row[PRICE_COL_B])                     # claude code changed: new — real symbol_b close at this candle
 
             # Record signal and z-score for the signal log
             signal_values[i] = signal
             zscore_values[i] = zscore
 
-            # ── If currently IN a trade: check exit conditions ─────────────────
+            # ── 1. Fill an entry whose reference candle t+d has arrived ───────── # claude code changed: Stage 2D
+            if self.pending_entry is not None and ts >= self.pending_entry["fill_ts"]:   # claude code changed: Stage 2D
+                decision = self.pending_entry                                              # claude code changed: Stage 2D
+                self.pending_entry = None                                                  # claude code changed: Stage 2D
+                if ts == decision["fill_ts"]:                                              # claude code changed: Stage 2D — exact candle t+d exists
+                    if self._open_trade_from_decision(decision, ts, price_a, price_b):    # claude code changed: Stage 2D
+                        position_status[i] = self.current_trade.direction                  # claude code changed: Stage 2D
+                        position_size[i]   = self.current_trade.position_usdt              # claude code changed: Stage 2D
+                        entry_signal[i]    = True                                          # claude code changed: Stage 2D
+                        n_entries += 1                                                     # claude code changed: Stage 2D
+                        continue   # claude code changed: Stage 2D — exit decisions start at the next cutoff
+                else:                                                                      # claude code changed: Stage 2D
+                    self.n_entries_skipped_missing_fill += 1   # claude code changed: Stage 2D — candle t+d missing: no fill price exists → SKIP, never a substitute price
+
+            # ── 2. Fill exits whose reference candle u+d has arrived ─────────── # claude code changed: Stage 2D
+            if self.current_trade is not None:   # claude code changed: Stage 2D
+                filled_partial = False   # claude code changed: Stage 2D
+                if self.pending_partial is not None and ts >= self.pending_partial["fill_ts"]:   # claude code changed: Stage 2D — exits cannot be skipped: first candle at or after u+d
+                    self._execute_partial_exit(ts, self.pending_partial["zscore"], spread, i, price_a, price_b)   # claude code changed: Stage 2D — fill at the fill candle's prices
+                    self.pending_partial = None   # claude code changed: Stage 2D
+                    exit_signal[i]  = True        # claude code changed: Stage 2D
+                    exit_reasons[i] = "PARTIAL"   # claude code changed: Stage 2D
+                    filled_partial = True         # claude code changed: Stage 2D
+                    n_exits += 1                  # claude code changed: Stage 2D
+                if self.pending_exit is not None and ts >= self.pending_exit["fill_ts"]:   # claude code changed: Stage 2D
+                    decision = self.pending_exit   # claude code changed: Stage 2D
+                    self.pending_exit = None       # claude code changed: Stage 2D
+                    self.current_trade.exit_decision_timestamp = decision["decision_ts"]   # claude code changed: Stage 2D
+                    self._execute_full_exit(ts, decision["zscore"], spread, decision["reason"], price_a, price_b)   # claude code changed: Stage 2D
+                    exit_signal[i]  = True   # claude code changed: Stage 2D
+                    exit_reasons[i] = ("PARTIAL+" + decision["reason"]) if filled_partial else decision["reason"]   # claude code changed: Stage 2D — keep both when a partial and the full exit fill on one candle
+                    position_status[i] = "FLAT"   # claude code changed: Stage 2D
+                    position_size[i]   = 0.0      # claude code changed: Stage 2D
+                    n_exits += 1                  # claude code changed: Stage 2D
+                    continue   # claude code changed: Stage 2D — flat from this fill; the next entry decision is at a later cutoff
+
+            # ── 3. If currently IN a trade: decide exits (they fill at u+d) ─────
             if self.current_trade is not None:
 
                 position_status[i] = self.current_trade.direction
@@ -1567,43 +1750,24 @@ class EntryExitEngine:
                     if zscore > self.current_trade.max_favorable_zscore:
                         self.current_trade.max_favorable_zscore = zscore
 
-                # ── Check partial exit ────────────────────────────────────────
-                # When |z| drops below EXIT_PARTIAL_ZSCORE for the first time
-                # close PARTIAL_FRACTION of the position to lock in some profit
-                if not self.partial_exited:
-                    if abs(zscore) < self.exit_partial_z:
-                        self._execute_partial_exit(ts, zscore, spread, i)
-                        exit_signal[i]  = True
-                        exit_reasons[i] = "PARTIAL"
+                if self.pending_exit is None:   # claude code changed: Stage 2D — no further exit decisions once a full exit is in flight
+                    # ── Partial-exit decision ─────────────────────────────────
+                    # When |z| drops below EXIT_PARTIAL_ZSCORE for the first time
+                    # close PARTIAL_FRACTION of the position (fills at u+d).
+                    if not self.partial_exited and abs(zscore) < self.exit_partial_z:
+                        self.pending_partial = {"decision_ts": ts, "fill_ts": ts + delay, "zscore": zscore}   # claude code changed: Stage 2D — was executed at this candle's own close
                         self.partial_exited = True
-                        n_exits += 1
 
-                # ── Check full exit conditions ────────────────────────────────
-                exit_reason = self._check_exit_conditions(
-                    ts, zscore, spread, i
-                )
+                    # ── Full-exit decision ────────────────────────────────────
+                    exit_reason = self._check_exit_conditions(
+                        ts, zscore, spread, i
+                    )
+                    if exit_reason:
+                        self.pending_exit = {"decision_ts": ts, "fill_ts": ts + delay,   # claude code changed: Stage 2D — was executed at this candle's own close
+                                             "zscore": zscore, "reason": exit_reason}       # claude code changed: Stage 2D
 
-                if exit_reason:
-                    # Execute the exit — close the remaining position
-                    self._execute_full_exit(ts, zscore, spread, exit_reason)
-                    exit_signal[i]  = True
-                    # NOTE: a partial exit and the full exit can legitimately
-                    # fire on the SAME candle (the z-score can cross both the
-                    # partial band and the target band within one hourly bar).
-                    # Overwriting exit_reasons[i] here used to erase the fact
-                    # that a partial exit happened first — the signal log then
-                    # claimed 0 partial exits even when they occurred. Record
-                    # both instead of clobbering.
-                    if exit_reasons[i]:
-                        exit_reasons[i] = f"{exit_reasons[i]}+{exit_reason}"
-                    else:
-                        exit_reasons[i] = exit_reason
-                    position_status[i] = "FLAT"    # Now flat
-                    position_size[i]   = 0.0
-                    n_exits += 1
-
-            # ── If NOT in a trade: check entry conditions ──────────────────────
-            else:
+            # ── 4. If flat with no pending order: decide an entry (fills at t+d) ─
+            elif self.pending_entry is None:   # claude code changed: Stage 2D — one order in flight at a time
                 position_status[i] = "FLAT"        # Currently no position
                 position_size[i]   = 0.0
 
@@ -1626,7 +1790,7 @@ class EntryExitEngine:
                     )
 
                     # Skip if position size is below minimum
-                    if total < MIN_POSITION_USDT:
+                    if total <= 0 or total < self.sizer.min_position_usdt:   # claude code changed: Stage 2D — was the hard-coded module MIN_POSITION_USDT (100), which overrode the instance's own floor (e.g. the live pilot's $15); one authoritative floor now
                         continue
 
                     # claude code changed: new — per-trade stop level, replacing the fixed
@@ -1660,41 +1824,22 @@ class EntryExitEngine:
                         self.exit_min_hold_base_hours * abs(zscore) / self.entry_threshold
                     )
 
-                    # Open new trade record
-                    self.trade_id_counter += 1
-                    self.current_trade = TradeRecord(
-                        trade_id                  = self.trade_id_counter,
-                        entry_timestamp           = ts,
-                        entry_zscore              = zscore,
-                        entry_signal              = signal,
-                        entry_beta                = beta,
-                        entry_spread               = spread,
-                        direction                 = direction,
-                        position_usdt             = total,
-                        leg_a_usdt                = leg_a,
-                        leg_b_usdt                = leg_b,
-                        kelly_fraction            = self.sizer.safe_kelly,
-                        signal_strength           = strength,
-                        stop_zscore               = stop_zscore,   # claude code changed: new
-                        target_zscore             = target_zscore,   # claude code changed: new
-                        min_hold_hours            = min_hold_hours,   # claude code changed: new
-                        max_adverse_zscore        = zscore,    # Initialise to entry
-                        max_favorable_zscore      = zscore,    # Initialise to entry
-                        prediction_error_at_entry = pred_error,
-                        beta_uncertainty_at_entry = beta_uncert,
-                    )
-
-                    self.partial_exited = False    # Reset partial exit flag
-
-                    position_status[i] = direction
-                    position_size[i]   = total
-                    entry_signal[i]    = True
-                    n_entries += 1
+                    # claude code changed: Stage 2D — record the DECISION; the position is
+                    # opened at the fill candle t+d with β frozen from this cutoff.
+                    self.pending_entry = {
+                        "decision_ts": ts, "fill_ts": ts + delay, "direction": direction,
+                        "zscore": zscore, "signal": signal, "beta": beta, "spread": spread,
+                        "total": total, "strength": strength, "stop_zscore": stop_zscore,
+                        "target_zscore": target_zscore, "min_hold_hours": min_hold_hours,
+                        "pred_error": pred_error, "beta_uncert": beta_uncert,
+                    }
 
         logger.info(
             f"  Scan complete: {n_entries} entries, {n_exits} exits, "
             f"{len(self.completed_trades)} completed trades"
         )
+        if self.n_entries_skipped_missing_fill:   # claude code changed: Stage 2D
+            logger.warning(f"  {self.n_entries_skipped_missing_fill} entry decision(s) skipped: fill candle t+d missing")   # claude code changed: Stage 2D
 
         # ── Close any trade still open at the end of data ─────────────────────
         # This prevents open trades from being ignored in the analysis
@@ -1702,8 +1847,10 @@ class EntryExitEngine:
             last_ts     = df.index[-1]
             last_zscore = float(df[self.cols["zscore"]].iloc[-1])   # claude code changed: was hardcoded "kalman_zscore"
             last_spread = float(df[self.cols["spread"]].iloc[-1])   # claude code changed: was hardcoded "kalman_spread"
+            self.current_trade.exit_decision_timestamp = last_ts   # claude code changed: Stage 2D — forced close at the last available close (DATA_END), labelled as such
             self._execute_full_exit(
-                last_ts, last_zscore, last_spread, "DATA_END"
+                last_ts, last_zscore, last_spread, "DATA_END",
+                float(df[PRICE_COL_A].iloc[-1]), float(df[PRICE_COL_B].iloc[-1]),   # claude code changed: real last-candle leg prices — audit C-01
             )
             logger.info("  Closed 1 trade that was still open at end of data")
 
@@ -1720,6 +1867,48 @@ class EntryExitEngine:
         }).set_index("timestamp")
 
         return signal_log_df
+
+
+    def _open_trade_from_decision(self, d: Dict, fill_ts: pd.Timestamp, price_a: float, price_b: float) -> bool:   # claude code changed: Stage 2D — new
+        """Open the position decided at d["decision_ts"] at the fill candle's
+        prices, with β frozen from the decision cutoff. Returns False (SKIP)
+        when β is outside the executable domain."""
+        opened = open_position_checked(d["direction"], d["beta"], d["total"], price_a, price_b, fill_ts)
+        if not opened.ok:
+            logger.debug(f"    ENTRY SKIPPED at {fill_ts}: {opened.reason}")
+            return False
+        pair_position = opened.value
+        self.trade_id_counter += 1
+        self.current_trade = TradeRecord(
+            trade_id                  = self.trade_id_counter,
+            entry_timestamp           = fill_ts,              # fill candle t+d (wall-time reference for holds/time stops)
+            entry_decision_timestamp  = d["decision_ts"],     # information cutoff t
+            entry_zscore              = d["zscore"],
+            entry_signal              = d["signal"],
+            entry_beta                = d["beta"],
+            entry_spread              = d["spread"],
+            direction                 = d["direction"],
+            position_usdt             = d["total"],
+            leg_a_usdt                = pair_position.notional_a,
+            leg_b_usdt                = pair_position.notional_b,
+            kelly_fraction            = self.sizer.safe_kelly,
+            signal_strength           = d["strength"],
+            stop_zscore               = d["stop_zscore"],
+            target_zscore             = d["target_zscore"],
+            min_hold_hours            = d["min_hold_hours"],
+            max_adverse_zscore        = d["zscore"],
+            max_favorable_zscore      = d["zscore"],
+            prediction_error_at_entry = d["pred_error"],
+            beta_uncertainty_at_entry = d["beta_uncert"],
+            entry_price_a             = price_a,
+            entry_price_b             = price_b,
+            qty_a                     = pair_position.qty_a,
+            qty_b                     = pair_position.qty_b,
+            capital_usdt              = pair_position.capital,
+            pair_position             = pair_position,
+        )
+        self.partial_exited = False
+        return True
 
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1783,14 +1972,12 @@ class EntryExitEngine:
             if zscore < 0 and zscore_lag >= 0:
                 return False    # z is negative but was positive last candle — spike
 
-        # Condition 3: Composite signal must agree with z-score direction
-        # pair_signal_dynamic = -z-score by construction, so:
-        #   If z > 0 (short spread signal): pair_signal_dynamic should be negative
-        #   If z < 0 (long spread signal): pair_signal_dynamic should be positive
-        if zscore > 0 and signal > -ENTRY_SIGNAL_MIN:
-            return False    # Z says short but composite signal does not confirm
-        if zscore < 0 and signal < ENTRY_SIGNAL_MIN:
-            return False    # Z says long but composite signal does not confirm
+        # claude code changed: Stage 2D — former "Condition 3" (composite signal must
+        # agree with z) REMOVED as dead logic. Every caller passes signal = −z
+        # (pair_signal_dynamic, pair_signal_ols, live native.pair_signal), so with
+        # |z| ≥ entry_threshold ≥ ENTRY_SIGNAL_MIN the check could never reject a
+        # trade (Stage 2B). No replacement signal is invented here; `signal` stays
+        # in the signature only for call-site compatibility and is not used.
 
         # Condition 4: Beta uncertainty must be acceptable
         # High uncertainty = Kalman is not sure about the hedge ratio
@@ -1923,82 +2110,72 @@ class EntryExitEngine:
 
 
     # ─────────────────────────────────────────────────────────────────────────
+    # P&L — DELEGATED TO bot/pairs/pnl.py (PAIRS_PNL_SPECIFICATION.md)
+    # ─────────────────────────────────────────────────────────────────────────
+    # claude code changed: Phase 1. This engine no longer computes P&L itself. Both
+    # the audit-C-01 spread-difference formula and the interim flat-0.3%
+    # fixed-quantity formula that replaced it are deleted, not kept for
+    # compatibility. Every realised dollar goes through close_pair_slice().
+
+    def _realise_slice(self, ts: pd.Timestamp, fraction: float, price_a: float, price_b: float):   # claude code changed: new
+        """Close `fraction` of the open trade's CURRENT position via
+        bot/pairs/pnl.close_pair_slice() and fold the realised slice into the
+        trade's whole-trade totals (§8, §9). The only place this engine
+        realises P&L."""
+        trade = self.current_trade
+        if trade.pair_position is None:
+            raise ValueError("open trade has no pair_position — cannot compute P&L (PAIRS_PNL_SPECIFICATION.md)")
+        held = trade.pair_position   # claude code changed: Stage 2D — position before this slice (for the entry-cost share below)
+        realised, remaining = close_pair_slice(
+            trade.pair_position, fraction, price_a, price_b, ts, self.pair_costs,
+        )
+        s, f = self.pair_costs.slippage_rate, self.pair_costs.fee_rate   # claude code changed: Stage 2D — entry-side cost carried by this slice, same formula as pnl.py §5/§6
+        entry_share = 0.0   # claude code changed: Stage 2D
+        for q, m0 in ((fraction * held.qty_a, held.entry_mark_a), (fraction * held.qty_b, held.entry_mark_b)):   # claude code changed: Stage 2D
+            fill0 = m0 * (1.0 + s) if q > 0 else m0 * (1.0 - s)   # claude code changed: Stage 2D — buy a long / sell a short
+            entry_share += abs(q) * (s * m0 + f * fill0)          # claude code changed: Stage 2D
+        trade.slice_events.append((ts, realised.net_pnl, entry_share,   # claude code changed: Stage 2D
+                                   remaining.qty_a if remaining else 0.0, remaining.qty_b if remaining else 0.0))   # claude code changed: Stage 2D
+        trade.pair_position  = remaining
+        trade.mark_pnl_usdt += realised.mark_pnl
+        trade.slippage_usdt += realised.slippage_cost
+        trade.fee_usdt      += realised.fee_cost
+        trade.borrow_usdt   += realised.borrow_cost
+        trade.net_pnl_usdt  += realised.net_pnl
+        if remaining is not None:   # claude code changed: shrink only on a PARTIAL exit — on the final exit the log keeps the size held at exit (the pre-existing position_usdt semantics), not 0
+            keep = 1.0 - fraction
+            trade.position_usdt *= keep
+            trade.leg_a_usdt    *= keep
+            trade.leg_b_usdt    *= keep
+        return realised
+
+    # ─────────────────────────────────────────────────────────────────────────
     # EXECUTE PARTIAL EXIT
     # ─────────────────────────────────────────────────────────────────────────
 
     def _execute_partial_exit(
         self,
-        ts:     pd.Timestamp,
-        zscore: float,
-        spread: float,
-        idx:    int,
+        ts:      pd.Timestamp,
+        zscore:  float,
+        spread:  float,            # claude code changed: no longer used for P&L — kept so call sites are unchanged
+        idx:     int,
+        price_a: float = None,     # claude code changed: real symbol_a mark at this candle
+        price_b: float = None,     # claude code changed: real symbol_b mark at this candle
     ) -> None:
         """
-        Close a fraction of the position when z-score first crosses EXIT_PARTIAL_ZSCORE.
-
-        Why partial exit?
-            The full target is |z| < 0.3 (near zero mean reversion).
-            But often the z-score oscillates around the target before
-            fully reverting. A partial exit at |z| < 1.0 locks in
-            partial profit while keeping half the position running
-            toward the full target.
-
-            This is standard risk management for pairs trading:
-            "Take some off the table when you are up, let the rest run."
-
-        The partial exit closes EXIT_PARTIAL_FRACTION (50%) of the position.
-        The remaining 50% continues to be managed by the full exit rules.
-
-        P&L for the partial exit:
-            spread_move = entry_spread - current_spread  (for SHORT_SPREAD)
-            spread_move = current_spread - entry_spread  (for LONG_SPREAD)
-            gross_pnl_pct = expm1(spread_move)   — see _execute_full_exit()'s
-                docstring for the full rationale (same fix, same reasoning).
-            net_pnl_pct = gross_pnl_pct - transaction_cost_on_partial
+        Close EXIT_PARTIAL_FRACTION of the position when |z| first falls below
+        EXIT_PARTIAL_ZSCORE. # claude code changed: Phase 1 — P&L of the closed
+        slice (mark P&L, slippage, per-leg fees, borrow, carrying its pro-rata
+        share of entry costs) comes from bot/pairs/pnl.py, spec §9.
         """
-
+        realised = self._realise_slice(ts, self.exit_partial_frac, price_a, price_b)
         trade = self.current_trade
-
-        # Calculate spread move in the correct direction
-        if trade.direction == "LONG_SPREAD":
-            # We are long spread — profit when spread increases
-            spread_move = spread - trade.entry_spread
-        else:
-            # We are short spread — profit when spread decreases
-            spread_move = trade.entry_spread - spread
-
-        # claude code changed: was `spread_move / abs(trade.entry_spread)` — see
-        # _execute_full_exit()'s docstring/comment for the full rationale (same
-        # bug, same fix, fixed in both places since they duplicated the formula).
-        gross_pnl = np.expm1(spread_move)
-
-        # Transaction cost on the partial close (50% of position × round-trip cost)
-        partial_cost  = self.total_transaction_cost * self.exit_partial_frac
-        net_pnl       = gross_pnl - partial_cost
-        partial_usdt  = trade.position_usdt * self.exit_partial_frac
-
-        # ── Record the realised partial P&L on the trade itself ───────────────
-        # This used to be computed and only logged at DEBUG level, then
-        # discarded — the closed fraction's profit never made it into the
-        # trade's net_pnl_usdt, the equity curve, or the summary stats.
-        # Store it here so _execute_full_exit can fold it into the trade's
-        # final realised P&L.
-        trade.partial_pnl_usdt   += net_pnl * partial_usdt
+        trade.partial_pnl_usdt   += realised.net_pnl
         trade.partial_exit_zscore = zscore
-
-        # Reduce position size by the partial fraction
-        # The remaining position continues with existing trade record
-        trade.position_usdt *= (1.0 - self.exit_partial_frac)
-        trade.leg_a_usdt    *= (1.0 - self.exit_partial_frac)
-        trade.leg_b_usdt    *= (1.0 - self.exit_partial_frac)
-
         logger.debug(
-            f"    PARTIAL EXIT: trade {trade.trade_id} | "
-            f"z={zscore:.2f} | "
-            f"gross={gross_pnl:.4f} | net={net_pnl:.4f} | "
-            f"closed ${partial_usdt:.0f}"
+            f"    PARTIAL EXIT: trade {trade.trade_id} | z={zscore:.2f} | "
+            f"net=${realised.net_pnl:.2f} on ${realised.capital:.0f} closed"
         )
-
 
     # ─────────────────────────────────────────────────────────────────────────
     # EXECUTE FULL EXIT
@@ -2008,118 +2185,38 @@ class EntryExitEngine:
         self,
         ts:          pd.Timestamp,
         zscore:      float,
-        spread:      float,
+        spread:      float,        # claude code changed: no longer used for P&L — kept so call sites are unchanged
         exit_reason: str,
+        price_a:     float = None, # claude code changed: real symbol_a mark at the exit candle
+        price_b:     float = None, # claude code changed: real symbol_b mark at the exit candle
     ) -> None:
         """
-        Close the remaining position and record the completed trade.
-
-        Calculates the final P&L for the trade and stores the complete
-        trade record in self.completed_trades for analysis.
-
-        P&L calculation:
-            The spread is measured in log-price units:
-                spread_t = log(AVAX_t) - α_t - β_t × log(ATOM_t)
-            which is already a log-return-equivalent linear combination of the
-            two legs' prices — a raw CHANGE in spread of 0.02 corresponds
-            directly to a ~2% return on the (dollar-neutral) combined
-            position, the same way a change in log-price corresponds to a
-            simple-return via expm1(). No further normalisation is needed —
-            or economically justified.
-
-            claude code changed: was `spread_move / abs(entry_spread)` —
-            entry_spread is itself a mean-reverting quantity that sits near
-            zero by construction (the strategy only enters when it's several
-            std-devs from ITS OWN rolling mean, but the raw level is
-            unrelated to trade risk or size), so using it as a percentage-of-
-            price denominator was a category error — like computing a
-            stock's return as (price_change / distance-from-its-own-moving-
-            average) instead of (price_change / price). Empirically this
-            produced 83-97% average "returns" per trade for a market-neutral
-            pairs strategy, which is not economically plausible. Confirmed
-            by checking raw spread_move directly: it already averages ~2.7%
-            in magnitude — exactly the range expected for this kind of
-            trade — so it needed no division at all, just the log-return ->
-            simple-return conversion (expm1), included for precision though
-            negligible at these magnitudes. See
-            research_data/model_governance_log.md's "P&L normalisation bug"
-            entry for the full investigation, including why this was missed
-            by every downstream check (win_rate/Sharpe/entry_ic) despite
-            being wrong — they're all internally consistent under either
-            formula, so nothing failed loudly; only comparing the resulting
-            P&L magnitude against economic plausibility caught it.
-
-            For SHORT_SPREAD (entered when spread was too high):
-                We profit when spread falls back to equilibrium
-                gross_pnl_pct = expm1(entry_spread - exit_spread)
-
-            For LONG_SPREAD (entered when spread was too low):
-                We profit when spread rises back to equilibrium
-                gross_pnl_pct = expm1(exit_spread - entry_spread)
-
-            Transaction costs (fee + slippage, both legs, both entry and exit):
-                total_cost = TOTAL_TRANSACTION_COST = 0.3% round trip
-
-            Net P&L in USDT:
-                net_pnl_usdt = trade.position_usdt × net_pnl_pct
+        Close whatever remains and record the completed trade.
+        # claude code changed: Phase 1 — P&L comes from bot/pairs/pnl.py (spec
+        §4–§10). The trade's gross/fee/net *_pct fields are WHOLE-TRADE totals
+        (partial + final slices) divided by capital_usdt, the gross notional
+        committed at entry.
         """
+        trade = self.current_trade
+        self._realise_slice(ts, 1.0, price_a, price_b)
 
-        trade = self.current_trade    # The trade we are closing
+        capital = trade.capital_usdt
+        trade.exit_timestamp = ts
+        trade.exit_zscore    = zscore
+        trade.exit_reason    = exit_reason
+        trade.hours_held     = (ts - trade.entry_timestamp).total_seconds() / 3600.0
+        trade.exit_price_a   = price_a
+        trade.exit_price_b   = price_b
+        trade.gross_pnl_pct  = trade.mark_pnl_usdt / capital
+        trade.fee_cost_pct   = (trade.slippage_usdt + trade.fee_usdt + trade.borrow_usdt) / capital
+        trade.net_pnl_pct    = trade.net_pnl_usdt / capital
 
-        # Hours held — from entry timestamp to this exit timestamp
-        hours_held = (ts - trade.entry_timestamp).total_seconds() / 3600.0
-
-        # ── Calculate gross P&L ───────────────────────────────────────────────
-        if trade.direction == "LONG_SPREAD":
-            # Long spread: we profit when spread rises
-            spread_move = spread - trade.entry_spread
-        else:
-            # Short spread: we profit when spread falls
-            spread_move = trade.entry_spread - spread
-
-        # claude code changed: was `spread_move / abs(trade.entry_spread)` —
-        # see the docstring above for the full rationale. expm1 converts the
-        # log-return (spread_move) to a simple return; identical to
-        # spread_move itself to ~4 decimal places at these magnitudes, kept
-        # for correctness rather than because it changes the numbers here.
-        gross_pnl_pct = np.expm1(spread_move)
-
-        # ── Apply transaction costs ───────────────────────────────────────────
-        # Full round-trip cost: fee + slippage on both legs, entry + exit
-        fee_cost_pct  = self.total_transaction_cost
-        net_pnl_pct   = gross_pnl_pct - fee_cost_pct
-
-        # ── Convert to USDT ───────────────────────────────────────────────────
-        # trade.position_usdt at this point already reflects any partial exit
-        # (it was reduced in _execute_partial_exit), so this correctly prices
-        # only the REMAINING position. The partial exit's own realised P&L
-        # (trade.partial_pnl_usdt) is added back in below — previously it was
-        # dropped entirely, silently understating total trade P&L whenever a
-        # partial exit had fired.
-        remaining_pnl_usdt = trade.position_usdt * net_pnl_pct
-        net_pnl_usdt        = remaining_pnl_usdt + trade.partial_pnl_usdt
-
-        # ── Update trade record with exit information ─────────────────────────
-        trade.exit_timestamp  = ts
-        trade.exit_zscore     = zscore
-        trade.exit_reason     = exit_reason
-        trade.hours_held      = hours_held
-        trade.gross_pnl_pct   = gross_pnl_pct
-        trade.fee_cost_pct    = fee_cost_pct
-        trade.net_pnl_pct     = net_pnl_pct
-        trade.net_pnl_usdt    = net_pnl_usdt
-
-        # Store completed trade
         self.completed_trades.append(trade)
-
         logger.debug(
             f"    EXIT [{exit_reason}]: trade {trade.trade_id} | "
             f"entry z={trade.entry_zscore:.2f} exit z={zscore:.2f} | "
-            f"held {hours_held:.0f}h | "
-            f"net P&L: {net_pnl_pct:.4f} (${net_pnl_usdt:.1f})"
+            f"held {trade.hours_held:.0f}h | net ROC {trade.net_pnl_pct:.4%} (${trade.net_pnl_usdt:.2f})"
         )
-
-        # Clear the current trade — we are now flat
         self.current_trade = None
 
 
@@ -2158,6 +2255,25 @@ class EntryExitEngine:
     # STEP 5: BUILD EQUITY CURVE
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _build_mtm_equity(self, df: pd.DataFrame) -> pd.Series:   # claude code changed: Stage 2D — new
+        """Mark-to-market equity at every candle close, on the engine's actual
+        capital (Stage 2C §13). Entry-side costs are paid in cash at the entry
+        fill; each slice then realises its net P&L plus the entry-cost share it
+        already paid; open quantities are marked at the candle close. Summed
+        over a trade, the cash events equal the trade's net P&L exactly."""
+        held, cash = [], []
+        for t in self.completed_trades:
+            if not t.slice_events:
+                continue
+            cash.append((t.entry_timestamp, -sum(ev[2] for ev in t.slice_events)))   # entry costs paid at the entry fill
+            qa, qb, start = t.qty_a, t.qty_b, t.entry_timestamp
+            for ts, net, entry_share, qa_after, qb_after in t.slice_events:
+                held.append(HeldInterval(start, ts, qa, qb, t.entry_price_a, t.entry_price_b))
+                cash.append((ts, net + entry_share))
+                qa, qb, start = qa_after, qb_after, ts
+        return mark_to_market_equity(self.sizer.capital, df[PRICE_COL_A].astype(float),
+                                     df[PRICE_COL_B].astype(float), held, cash)
+
     def _build_equity_curve(
         self,
         trade_log:  pd.DataFrame,
@@ -2183,7 +2299,7 @@ class EntryExitEngine:
             return pd.DataFrame()
 
         # Start with the initial capital
-        cumulative_pnl_usdt = STRATEGY_CAPITAL_USDT
+        cumulative_pnl_usdt = self.sizer.capital   # claude code changed: Stage 2D — the engine's ACTUAL capital (was the module constant STRATEGY_CAPITAL_USDT = $10,000 regardless of capital_usdt)
 
         equity_rows = []
 
@@ -2195,7 +2311,7 @@ class EntryExitEngine:
                 "net_pnl_usdt":      trade["net_pnl_usdt"],       # This trade's P&L
                 "cumulative_usdt":   cumulative_pnl_usdt,         # Running total
                 "cumulative_return": (                            # % return from start
-                    cumulative_pnl_usdt / STRATEGY_CAPITAL_USDT - 1.0
+                    cumulative_pnl_usdt / self.sizer.capital - 1.0   # claude code changed: Stage 2D — actual capital, was STRATEGY_CAPITAL_USDT
                 ),
                 "exit_reason":       trade["exit_reason"],        # How this trade ended
             })
@@ -2298,9 +2414,8 @@ class EntryExitEngine:
 
         # Profit factor: gross profit / gross loss
         # Above 1.0 = strategy makes more than it loses
-        gross_profit = trade_log[trade_log["net_pnl_pct"] > 0]["net_pnl_pct"].sum()
-        gross_loss   = abs(trade_log[trade_log["net_pnl_pct"] <= 0]["net_pnl_pct"].sum())
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.inf
+        pf_result = profit_factor_dollars(trade_log["net_pnl_usdt"].tolist())   # claude code changed: Stage 2D — in DOLLARS (was summed per-trade %, which mixes position sizes)
+        profit_factor = pf_result.value.value if pf_result.ok else np.nan       # claude code changed: Stage 2D — inf when there are no losing trades; NaN (never a number) when undefined
 
         # ── Sharpe ratio ──────────────────────────────────────────────────────
         # claude code changed: real bug fix. Was `(avg_pnl_pct / pnl_std) *
@@ -2322,7 +2437,13 @@ class EntryExitEngine:
         sharpe = self._compute_sharpe_from_equity_curve(equity_curve)
 
         # ── Drawdown ──────────────────────────────────────────────────────────
-        max_drawdown_pct = equity_curve["drawdown_pct"].min() if not equity_curve.empty else 0.0
+        # claude code changed: Stage 2D — drawdown from MARK-TO-MARKET equity on the
+        # engine's own capital (built in run() by _build_mtm_equity). The realised-
+        # exit equity curve can only see losses once a trade closes, so it
+        # understates drawdown by construction.
+        mtm = getattr(self, "_mtm_equity", None)   # claude code changed: Stage 2D
+        dd_result = max_drawdown(mtm) if mtm is not None else None   # claude code changed: Stage 2D
+        max_drawdown_pct = dd_result.value if (dd_result is not None and dd_result.ok) else np.nan   # claude code changed: Stage 2D — NaN, never a substituted 0.0
 
         # ── Trade duration ────────────────────────────────────────────────────
         avg_hold_hours = trade_log["hours_held"].mean()
@@ -2405,9 +2526,18 @@ class EntryExitEngine:
             "avg_pnl_pct":         round(avg_pnl_pct, 4),
             "avg_winner_pct":      round(avg_winner_pct, 4) if not np.isnan(avg_winner_pct) else np.nan,
             "avg_loser_pct":       round(avg_loser_pct, 4) if not np.isnan(avg_loser_pct) else np.nan,
-            "profit_factor":       round(profit_factor, 4) if not np.isinf(profit_factor) else 999.0,
+            "profit_factor":       round(profit_factor, 4) if np.isfinite(profit_factor) else profit_factor,   # claude code changed: Stage 2D — inf stays inf (no losing trades), was replaced by 999.0
+            "profit_factor_basis": "net_usdt",   # claude code changed: Stage 2D
             "sharpe_ratio":        round(sharpe, 4),
-            "max_drawdown_pct":    round(max_drawdown_pct, 4),
+            "sharpe_basis":        "realised_exit_daily_legacy",   # claude code changed: Stage 2D — return convention / Sharpe frequency are unresolved OWNER decisions (Stage 2C §13); this Sharpe is NOT the corrected metric
+            "max_drawdown_pct":    round(max_drawdown_pct, 4) if np.isfinite(max_drawdown_pct) else np.nan,   # claude code changed: Stage 2D
+            "max_drawdown_basis":  "mark_to_market",   # claude code changed: Stage 2D
+            "execution_delay_candles": self.execution_delay_candles,   # claude code changed: Stage 2D — d (fills at t+d / u+d)
+            "entries_skipped_missing_fill": getattr(self, "n_entries_skipped_missing_fill", 0),   # claude code changed: Stage 2D
+            "cost_status":         "COMPLETE" if self.borrow_cost_modeled else "COST_UNAVAILABLE:borrow",   # claude code changed: Stage 2D — net P&L excludes short-leg borrow when not modelled; never presented as complete
+            "spec_version":        SPEC_VERSION,   # claude code changed: Stage 2D — provenance
+            "code_commit":         _code_state().commit,   # claude code changed: Stage 2D — provenance
+            "code_dirty":          _code_state().dirty,    # claude code changed: Stage 2D — provenance (True = uncommitted changes present)
             "total_pnl_usdt":      round(total_pnl_usdt, 2),
             "avg_hold_hours":      round(avg_hold_hours, 1),
             "median_hold_hours":   round(median_hold_hours, 1),
@@ -2416,6 +2546,7 @@ class EntryExitEngine:
             "exit_stoploss_count": exit_component_counts.get("STOPLOSS", 0),
             "exit_timestop_count": exit_component_counts.get("TIMESTOP", 0),
             "exit_partial_count":  exit_component_counts.get("PARTIAL",  0),
+            "borrow_cost_modeled": self.borrow_cost_modeled,   # claude code changed: new — Phase 1: False means short-leg financing was charged as 0 (economically incomplete)
             "entry_ic":            round(float(ic_val), 4) if not np.isnan(ic_val) else np.nan,
             "entry_ic_pvalue":     round(float(ic_p), 4) if not np.isnan(ic_p) else np.nan,
             "validated_ic":        self.validated_ic if self.validated_ic is not None else np.nan,             # claude code changed: was VALIDATED_IC
@@ -2558,8 +2689,8 @@ class EntryExitEngine:
         print(f"\n  Pair            : {s['pair']}")
         print(f"  Simulation period: {trade_log['entry_timestamp'].min()} "
               f"→ {trade_log['exit_timestamp'].max()}")
-        print(f"  Initial capital  : ${STRATEGY_CAPITAL_USDT:,.0f}")
-        print(f"  Final capital    : ${STRATEGY_CAPITAL_USDT + s['total_pnl_usdt']:,.0f}")
+        print(f"  Initial capital  : ${self.sizer.capital:,.0f}")   # claude code changed: Stage 2D — actual capital
+        print(f"  Final capital    : ${self.sizer.capital + s['total_pnl_usdt']:,.0f}")   # claude code changed: Stage 2D — actual capital
         # claude code changed: real bug fix — was f"({s['total_pnl_pct']:.2%})".
         # total_pnl_pct is trade_log['net_pnl_pct'].sum() — a sum of each
         # trade's OWN return against its own position size, not a portfolio-
@@ -2571,7 +2702,7 @@ class EntryExitEngine:
         # figure was always correct; only this derived percentage was wrong.
         # Now computed directly from the real capital growth this line's own
         # "Final capital" row above already displays.
-        real_return_pct = s['total_pnl_usdt'] / STRATEGY_CAPITAL_USDT
+        real_return_pct = s['total_pnl_usdt'] / self.sizer.capital   # claude code changed: Stage 2D — actual capital
         print(f"  Total P&L        : ${s['total_pnl_usdt']:,.2f} "
               f"({real_return_pct:.2%})")
 

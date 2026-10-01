@@ -175,11 +175,83 @@ class UnresolvedCyclesAreNeverDroppedTest(SimpleTestCase):
         prices = [100, 99, 98, 97]
         config = DCAConfig(initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
         trades = simulate_dca_cycles(_candles(prices), config)
-        summary = summarize_dca_cycles(trades)
+        summary = summarize_dca_cycles(trades, config)
 
         self.assertEqual(summary["n_unresolved_cycles"], 1)
         self.assertEqual(summary["n_resolved_cycles"], 0)
         self.assertIsNone(summary["cycle_win_rate_pct_of_resolved"])   # not fabricated as 0% or 100%
+
+    def test_unresolved_reasons_separated_in_headline_metrics(self):
+        # Real bug, caught by external review: DATA_END_STILL_OPEN and
+        # MAX_CYCLE_CANDLES_TIMEOUT were only distinguishable by digging
+        # into the unresolved_reasons sub-dict -- these are economically
+        # different events ("the dataset ended" vs. "our own research
+        # rule force-closed it") and must be separate headline fields.
+        config = DCAConfig(initial_usdt=6.0, levels=(), max_cycle_candles=3,
+                            fee_rate=0.0, slippage_rate=0.0)
+        # Never activates (stays flat). Held for exactly 3 candles ->
+        # timeout-closed on the last candle -> a fresh cycle immediately
+        # reopens on that same (final) candle -> still open when the
+        # data ends. One timeout, one data-end, unambiguously.
+        prices = [100, 100, 100, 100]
+        trades = simulate_dca_cycles(_candles(prices), config)
+        summary = summarize_dca_cycles(trades, config)
+
+        self.assertEqual(summary["n_unresolved_timeout"], 1)
+        self.assertEqual(summary["n_unresolved_data_end"], 1)
+        self.assertEqual(summary["n_unresolved_cycles"], 2)
+
+
+class LadderExhaustionBugRegressionTest(SimpleTestCase):
+    """Real bug, caught by external review: the original implementation
+    computed 'full ladder exhaustion' as max(level actually reached
+    anywhere in this trade list) rather than the CONFIGURED number of
+    levels. On a dataset where the deepest configured level never once
+    triggers, the old code would wrongly label whatever WAS the deepest
+    observed level as 'fully exhausted' -- silently understating how much
+    ladder capacity actually remained unused. This is the regression test
+    that would have caught it (and did, retroactively, on real EUR/USD
+    and GBP/USD data -- see the governance log)."""
+
+    def test_exhaustion_measured_against_configured_levels_not_observed_max(self):
+        # A 2-level ladder, but the price path only ever triggers level 1 --
+        # level 2 (the true, configured max) is never reached by any cycle.
+        config = DCAConfig(initial_usdt=6.0, levels=(DCALevel(0.05, 2.0), DCALevel(0.50, 4.0)),
+                            profit_activation_pct=0.20, fee_rate=0.0, slippage_rate=0.0)
+        # Falls 6% (triggers level 1, needs a 50% further fall for level 2 -- never happens),
+        # then recovers +20% to exit. Repeats.
+        prices = [100, 94, 94, 112.8, 112.8] * 3
+        trades = simulate_dca_cycles(_candles(prices), config)
+        summary = summarize_dca_cycles(trades, config)
+
+        self.assertEqual(summary["configured_max_level"], 2)
+        # Every cycle here only ever reaches level 1 -- the TRUE level 2 is never hit.
+        self.assertNotIn(2, summary["max_dca_level_distribution"])
+        # The bug being regression-tested: the old code would have called
+        # every level-1 cycle "fully exhausted" (since 1 was the deepest
+        # level anywhere in the data). The fix must report zero.
+        self.assertEqual(summary["ladder_full_exhaustion_count"], 0)
+        self.assertEqual(summary["ladder_full_exhaustion_pct"], 0.0)
+
+
+class HoldingCandlesBugRegressionTest(SimpleTestCase):
+    """Real bug, caught by external review: holding_candles was
+    len(cycle.fills) (a FILL count, already reported correctly elsewhere
+    as cycle_n_fills) mislabeled under a name implying calendar time.
+    Fixed to reuse cycle.candles_held -- the real number of candles
+    elapsed between entry and exit."""
+
+    def test_holding_candles_is_real_elapsed_candles_not_fill_count(self):
+        config = DCAConfig(initial_usdt=6.0, levels=(), profit_activation_pct=0.025,
+                            trailing_pct=0.005, fee_rate=0.0, slippage_rate=0.0)
+        # Only 1 fill (the initial entry, level 0 -- never DCAs, no levels
+        # configured), but the cycle stays open for 5 candles before exiting.
+        prices = [100, 100.5, 101, 103, 105, 104.4]
+        trades = simulate_dca_cycles(_candles(prices), config)
+
+        self.assertEqual(trades[0]["cycle_n_fills"], 1)          # only the initial fill
+        self.assertEqual(trades[0]["holding_candles"], 5)        # but held open for 5 real candles
+        self.assertNotEqual(trades[0]["holding_candles"], trades[0]["cycle_n_fills"])
 
 
 class CatastrophicCrashTest(SimpleTestCase):

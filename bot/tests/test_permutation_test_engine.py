@@ -106,7 +106,7 @@ class BlockShuffleTest(SimpleTestCase):
         engine = PermutationTestEngine(block_size_candles=block_size, random_seed=3, output_dir=self.tmp_dir)  # claude code changed: module under test
 
         shuffled = engine._block_shuffle(df)
-        expected_lag1 = shuffled["kalman_zscore"].shift(1).bfill()
+        expected_lag1 = shuffled["kalman_zscore"].shift(1)   # claude code changed: Stage 2D — no bfill: the first row has no lag (NaN), it is never manufactured from its own z
 
         pd.testing.assert_series_equal(
             shuffled["kalman_zscore_lag1"], expected_lag1, check_names=False,

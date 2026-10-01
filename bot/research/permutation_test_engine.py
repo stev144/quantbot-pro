@@ -486,7 +486,7 @@ class PermutationTestEngine:
         # equals shuffled zscore[i-1] exactly — no boundary mismatch is
         # possible, at any block size. bfill() only ever touches the single
         # leading row, which has no real predecessor either way.
-        shuffled[zscore_lag1_col] = shuffled[zscore_col].shift(1).bfill()
+        shuffled[zscore_lag1_col] = shuffled[zscore_col].shift(1)   # claude code changed: Stage 2D — no .bfill(): the first row has no lag and stays NaN (the simulator drops it) instead of copying its own z
 
         return shuffled                                                             # Same shape, same timestamps, scrambled content
 
@@ -544,7 +544,7 @@ class PermutationTestEngine:
             "n_trades":       int(s["n_total_trades"]),
             "win_rate":        float(s["win_rate"]),
             "sharpe_ratio":     float(s["sharpe_ratio"]),
-            "profit_factor":     float(s["profit_factor"]) if not np.isinf(s["profit_factor"]) else 999.0,
+            "profit_factor":     float(s["profit_factor"]),   # claude code changed: Stage 2D — inf (no losing trades) stays inf, was replaced by 999.0
             "entry_ic":            float(s["entry_ic"]) if not pd.isna(s["entry_ic"]) else np.nan,
             "avg_hold_hours":         float(s["avg_hold_hours"]) if not pd.isna(s["avg_hold_hours"]) else np.nan,
         }

@@ -43,7 +43,7 @@ from bot.engines.order_manager import (
     RateLimitException,
 )
 from bot.pairs.config import PairConfig
-from bot.pairs.margin_adapter import BinanceIsolatedMarginAdapter
+from bot.pairs.margin_adapter import BinanceIsolatedMarginAdapter, CloseQuantityUnavailableException, cover_buy_quantity, remaining_debt_or_raise, sellable_quantity   # claude code changed: quantity helpers
 from bot.pairs.signal_engine import SignalDecision
 from bot.pairs.trade_logger import PairsTradeLogger
 from bot.risk.drawdown_guard import DrawdownGuard
@@ -62,6 +62,8 @@ class OpenPairPosition:
     side_b: str
     qty_a: float
     qty_b: float
+    entry_fees_a: tuple = ()   # claude code changed: new, LIVE-02 — raw (cost, currency) entry fees, carried to the exit log so a non-quote fee (e.g. BNB) is never re-read from TradeRecord.fee_entry as if it were USDT
+    entry_fees_b: tuple = ()   # claude code changed: new, LIVE-02
 
 
 class PairsExecutionEngine:
@@ -184,6 +186,8 @@ class PairsExecutionEngine:
             side_b=side_b,
             qty_a=fill_a.filled_qty,
             qty_b=fill_b.filled_qty,
+            entry_fees_a=fill_a.fees,   # claude code changed: new, LIVE-02
+            entry_fees_b=fill_b.fees,   # claude code changed: new, LIVE-02
         )
         logger.info(f"[PairsExecutionEngine] Opened {pair_config.pair_name} {trade.direction} | pair_trade_id={pair_trade_id}")
         return pair_trade_id
@@ -199,7 +203,7 @@ class PairsExecutionEngine:
                 if account.base_free > 0:
                     self.adapter.close_long(symbol, account.base_free)
                 if account.base_borrowed > 0:
-                    self.adapter.close_short(symbol, account.base_borrowed + account.base_interest)
+                    self._cover_and_repay(symbol)   # claude code changed: was close_short(borrowed + interest): same base-fee / truncation shortfall as the normal close
             except Exception as e:
                 logger.critical(f"[PairsExecutionEngine] Unwind attempt for {symbol} also failed: {e}. MANUAL INTERVENTION REQUIRED.")
 
@@ -221,8 +225,8 @@ class PairsExecutionEngine:
             return False
 
         try:
-            fill_a = self._close_leg(position.symbol_a, position.side_a, position.qty_a)
-            fill_b = self._close_leg(position.symbol_b, position.side_b, position.qty_b)
+            fill_a, interest_a = self._close_leg(position.symbol_a, position.side_a, position.qty_a)   # claude code changed: LIVE-01 — also returns the exchange-reported interest owed on a short leg
+            fill_b, interest_b = self._close_leg(position.symbol_b, position.side_b, position.qty_b)   # claude code changed: LIVE-01
         except (OrderStillOpenException, OrderUnconfirmedException, RateLimitException) as e:
             logger.critical(
                 f"[PairsExecutionEngine] LEG_MISMATCH on close: {pair_config.pair_name} ({e}). "
@@ -231,8 +235,10 @@ class PairsExecutionEngine:
             self._mismatched_pairs.add(pair_config.pair_name)
             return False
 
-        self.trade_logger.log_leg_exit(position.pair_trade_id, "A", fill_a, exit_reason)
-        self.trade_logger.log_leg_exit(position.pair_trade_id, "B", fill_b, exit_reason)
+        self.trade_logger.log_leg_exit(position.pair_trade_id, "A", fill_a, exit_reason,
+                                       interest_qty=interest_a, entry_fees=position.entry_fees_a)   # claude code changed: LIVE-01/LIVE-02
+        self.trade_logger.log_leg_exit(position.pair_trade_id, "B", fill_b, exit_reason,
+                                       interest_qty=interest_b, entry_fees=position.entry_fees_b)   # claude code changed: LIVE-01/LIVE-02
 
         self._refund_collateral_best_effort(position.symbol_a, position.symbol_b)
         del self._open_positions[pair_config.pair_name]
@@ -247,9 +253,41 @@ class PairsExecutionEngine:
         borrowed quantity — interest accrues hourly and this is the one
         place that must look it up, per margin_adapter.close_short()'s
         own docstring."""
+        # claude code changed: LIVE-01 — now returns (fill, interest_qty). interest_qty is
+        # the ACTUAL interest Binance reports as owed on this isolated account
+        # (base units), so the logger can account for buying it back; None for
+        # a long leg (nothing borrowed).
         if opened_side == "BUY":
-            return self.adapter.close_long(symbol, opened_qty)
+            # claude code changed: sell the AUTHORITATIVE free balance, not the gross entry fill:
+            # a buy fee charged in the base asset ('feeSide': 'get') leaves less
+            # than was filled, and selling the gross amount is rejected by Binance.
+            account = self.adapter.get_isolated_account(symbol)
+            qty = sellable_quantity(opened_qty, account.base_free, self.adapter.amount_rules(symbol))
+            if qty < opened_qty:
+                logger.warning(f"[PairsExecutionEngine] {symbol}: closing {qty} of {opened_qty} entered — "
+                               f"free balance {account.base_free} (base-asset fee and/or lot-step rounding).")
+            return self.adapter.close_long(symbol, qty), None
+        return self._cover_and_repay(symbol)
+
+    def _cover_and_repay(self, symbol: str):   # claude code changed: new
+        """Close a short from authoritative exchange state:
+          1. debt = borrowed + interest now owed (isolated account)
+          2. buy cover_buy_quantity(): debt minus base already free, grossed up
+             for a possible base-asset buy fee, rounded UP to the lot step
+          3. repay min(debt now owed, base actually free)
+          4. re-read the account: any principal/interest still owed raises
+             RepaymentIncompleteException (pair disabled) — never silent.
+        Returns (buy_fill, interest_qty) — interest as reported before the buy."""
         account = self.adapter.get_isolated_account(symbol)
-        repay_qty = account.base_borrowed + account.base_interest
-        fill, _repay_result = self.adapter.close_short(symbol, repay_qty)
-        return fill
+        debt = account.base_borrowed + account.base_interest
+        buy_qty = cover_buy_quantity(debt, account.base_free, self.adapter.fee_buffer_rate(symbol),
+                                     self.adapter.amount_rules(symbol))
+        if buy_qty <= 0:
+            raise CloseQuantityUnavailableException(
+                f"{symbol}: free base {account.base_free} already covers debt {debt} — no cover order to log; manual review required")
+        fill = self.adapter.market_buy_to_cover(symbol, buy_qty)
+        after = self.adapter.get_isolated_account(symbol)
+        self.adapter.repay(symbol, min(after.base_borrowed + after.base_interest, after.base_free))
+        final = self.adapter.get_isolated_account(symbol)
+        remaining_debt_or_raise(symbol, final.base_borrowed, final.base_interest)
+        return fill, account.base_interest

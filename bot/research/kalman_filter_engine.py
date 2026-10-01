@@ -201,6 +201,39 @@ if not logger.handlers:                         # Prevent duplicate handlers on 
 DEFAULT_COINTEGRATION_PAIRS_CSV: str = "research_data/cointegration_pairs.csv"
 
 
+def load_close_series_from_csv(symbol_underscore: str, data_dir) -> pd.Series:   # claude code changed: extracted verbatim from KalmanFilterEngine._load_prices_from_csv()'s inner helpers so entry_exit_engine.py can load the same real leg prices for fixed-quantity P&L (audit C-01) without a duplicate loader
+    """One symbol's real close series (UTC DatetimeIndex) from
+    fetch_all_symbols.py's data/{SYM}_1h.csv (or data/forex/... for a
+    registered FX instrument). Raises FileNotFoundError if absent."""
+    from bot.forex_data_fetcher import symbol_to_filename as _forex_symbol_to_filename   # claude code changed: moved with the extracted body
+
+    canonical = symbol_underscore.replace("_", "/", 1)   # claude code changed: moved with the extracted body
+    instrument = get_instrument(canonical)   # claude code changed: moved with the extracted body
+    data_path = Path(data_dir)   # claude code changed: moved with the extracted body
+    if instrument is not None and instrument.asset_class == ASSET_CLASS_FOREX:   # claude code changed: moved with the extracted body
+        path = data_path / "forex" / _forex_symbol_to_filename(canonical)   # claude code changed: moved with the extracted body
+    else:   # claude code changed: moved with the extracted body
+        path = data_path / f"{symbol_underscore}_1h.csv"   # claude code changed: moved with the extracted body
+    if not path.exists():   # claude code changed: moved with the extracted body
+        raise FileNotFoundError(
+            f"{symbol_underscore} CSV not found at {path}. "
+            f"Run fetch_all_symbols.py first to download price data."
+        )
+    df = pd.read_csv(path)   # claude code changed: moved with the extracted body
+    if "timestamp" in df.columns:   # claude code changed: moved with the extracted body
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        df.set_index("timestamp", inplace=True)
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")   # claude code changed: moved with the extracted body
+    df.dropna(subset=["close"], inplace=True)   # claude code changed: moved with the extracted body
+    df.sort_index(inplace=True)   # claude code changed: moved with the extracted body
+    close = df["close"]   # claude code changed: moved with the extracted body
+    logger.info(
+        f"  {symbol_underscore}: {len(close):,} candles "
+        f"({close.index[0].date()} → {close.index[-1].date()})"
+    )
+    return close   # claude code changed: moved with the extracted body
+
+
 def load_pair_config(
     pair_name:               str,
     cointegration_pairs_csv: str  = DEFAULT_COINTEGRATION_PAIRS_CSV,
@@ -355,6 +388,7 @@ SIGNAL_STRONG_THRESHOLD: float = 3.0    # |z-score| above this = strong signal
 
 # Minimum price — prevents log(0) errors for very low-priced assets
 MIN_PRICE:               float = 1e-8
+from bot.quant_core.targets import RETIRED_LABEL_PREFIXES, assert_label_admissible   # claude code changed: Stage 2D — spread_forward_* labels are retired as evidence
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -919,39 +953,8 @@ class KalmanFilterEngine:
         migration (DATA_LAYER_ARCHITECTURE_AUDIT.md, spec §20). Also still
         used by bot/research/cointegration_pipeline_runner.py.
         """
-        from bot.forex_data_fetcher import symbol_to_filename as _forex_symbol_to_filename
-
-        def _resolve_price_csv_path(symbol_underscore: str) -> Path:
-            canonical = symbol_underscore.replace("_", "/", 1)
-            instrument = get_instrument(canonical)
-            data_path = Path(data_dir)
-            if instrument is not None and instrument.asset_class == ASSET_CLASS_FOREX:
-                return data_path / "forex" / _forex_symbol_to_filename(canonical)
-            return data_path / f"{symbol_underscore}_1h.csv"
-
-        def _load_one(symbol: str) -> pd.Series:
-            path = _resolve_price_csv_path(symbol)
-            if not path.exists():
-                raise FileNotFoundError(
-                    f"{symbol} CSV not found at {path}. "
-                    f"Run fetch_all_symbols.py first to download price data."
-                )
-            df = pd.read_csv(path)
-            if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-                df.set_index("timestamp", inplace=True)
-            df["close"] = pd.to_numeric(df["close"], errors="coerce")
-            df.dropna(subset=["close"], inplace=True)
-            df.sort_index(inplace=True)
-            close = df["close"]
-            logger.info(
-                f"  {symbol}: {len(close):,} candles "
-                f"({close.index[0].date()} → {close.index[-1].date()})"
-            )
-            return close
-
         logger.info("Step 1: Loading AVAX and ATOM price data...")
-        return _load_one(self.symbol_a), _load_one(self.symbol_b)
+        return load_close_series_from_csv(self.symbol_a, data_dir), load_close_series_from_csv(self.symbol_b, data_dir)   # claude code changed: body extracted verbatim into module-level load_close_series_from_csv() so entry_exit_engine.py can reuse it for fixed-quantity leg P&L (audit C-01) instead of duplicating it
 
     def _load_prices(
         self,
@@ -1665,7 +1668,7 @@ class KalmanFilterEngine:
         # Max weight = 1.0 (fully trust when filter is very certain)
         # This signal is unique to the Kalman approach — OLS cannot do this
         # because OLS has no concept of dynamic uncertainty
-        max_uncert = uncert.quantile(0.95)    # 95th percentile uncertainty
+        max_uncert = uncert.expanding(min_periods=ZSCORE_MIN_PERIODS).quantile(0.95)   # claude code changed: Stage 2D — was uncert.quantile(0.95) over the FULL series (future data changed every past value); expanding = uses only candles <= t
         uncert_weight = 1.0 - (uncert / max_uncert.clip(1e-10)).clip(0, 1)
         results["pair_signal_uw"] = -z * uncert_weight
 
@@ -1765,6 +1768,10 @@ class KalmanFilterEngine:
         # Use 4h forward return as primary comparison (matches half-life discussion)
         primary_label = "spread_forward_4h"
 
+        if primary_label.startswith(RETIRED_LABEL_PREFIXES):   # claude code changed: Stage 2D — the IC comparison used a retired, non-tradeable label
+            logger.warning(f"  Kalman-vs-OLS IC comparison skipped: '{primary_label}' is a retired label "
+                           f"(Stage 2C §4); use bot.quant_core.targets.tradeable_return")
+            return
         if primary_label not in results.columns:
             logger.warning(f"  {primary_label} not found — skipping comparison")
             return
@@ -2009,6 +2016,7 @@ class KalmanParameterAnalyzer:
         Compare IC for each configuration.
         Return a ranked DataFrame of parameter settings.
         """
+        assert_label_admissible(forward_col)   # claude code changed: Stage 2D — refuses the retired spread_forward_* labels (raises RetiredLabelError)
 
         logger.info("=" * 70)
         logger.info("KALMAN PARAMETER SENSITIVITY ANALYSIS")
@@ -2207,7 +2215,7 @@ def run_kalman_research(
         "\n     df = pd.read_csv('research_data/AVAX_USDT_ATOM_USDT_kalman.csv')"
         "\n     validator = FeatureValidator()"
         "\n     results = validator.validate_all_features_institutional("
-        "\n         df, forward_return_col='spread_forward_4h'"
+        "\n         df, forward_return_col=<a tradeable target — spread_forward_* is RETIRED (Stage 2C §4)>"   # claude code changed: Stage 2D
         "\n     )"
         "\n     Look for: pair_signal_dynamic IC > 0.03 with p < 0.05"
         "\n"

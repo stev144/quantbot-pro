@@ -61,7 +61,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from typing import Optional, Tuple
 
 import ccxt
 
@@ -73,6 +74,19 @@ from bot.engines.order_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# claude code changed: new — execution-quantity failures. Both subclass
+# OrderUnconfirmedException so bot/pairs/execution.py's existing close/open
+# handlers already catch them: the pair is disabled for manual review instead
+# of an order being submitted for more than is held, or a loan silently left open.
+class CloseQuantityUnavailableException(OrderUnconfirmedException):
+    """The authoritative free balance cannot cover a valid close order."""
+
+
+class RepaymentIncompleteException(OrderUnconfirmedException):
+    """Borrowed principal and/or interest is still owed after the repay step."""
+
 
 ORDER_CONFIRM_MAX_ATTEMPTS = 5
 ORDER_CONFIRM_POLL_SECONDS = 2
@@ -87,8 +101,9 @@ class MarginFillResult:
     side: str
     filled_qty: float
     fill_price: float
-    fee_usdt: float
-    fee_asset: str
+    fee_usdt: Optional[float]   # claude code changed: LIVE-02 — the fee's QUOTE-currency value (quote fees as-is, base-asset fees × this fill's price); None when any fee is in a third asset (e.g. BNB) or the exchange returned no fee information. Was ccxt fee.cost read as USDT regardless of currency.
+    fee_asset: str              # claude code changed: LIVE-02 — the single fee currency, "MIXED" if several, "UNKNOWN" if none reported
+    fees: Tuple[Tuple[float, str], ...] = ()   # claude code changed: new, LIVE-02 — raw (cost, currency) pairs exactly as the exchange reported them, one per currency
 
 
 @dataclass
@@ -102,6 +117,148 @@ class IsolatedAccountState:
     quote_free: float
     quote_borrowed: float
     quote_interest: float
+
+
+def extract_fees(order: dict) -> Tuple[Tuple[float, str], ...]:   # claude code changed: new, LIVE-02
+    """Raw (cost, currency) fee pairs from a ccxt-parsed order, one per
+    currency (ccxt aggregates fills per currency when building `fees`).
+    Returns () when the order carries no fee information at all — which is
+    what Binance's order-status (fetch_order) response gives, since it has
+    no fills. An empty result means UNKNOWN, never zero."""
+    fees = []
+    for f in (order.get("fees") or []):
+        if f and f.get("cost") is not None and f.get("currency"):
+            fees.append((float(f["cost"]), str(f["currency"])))
+    if not fees:
+        f = order.get("fee") or {}
+        if f.get("cost") is not None and f.get("currency"):
+            fees.append((float(f["cost"]), str(f["currency"])))
+    return tuple(fees)
+
+
+def split_symbol(symbol: str) -> Tuple[str, str]:   # claude code changed: new, LIVE-02
+    """"DODO/USDT" -> ("DODO", "USDT") for a ccxt unified spot symbol."""
+    base, quote = symbol.split("/", 1)
+    return base, quote.split(":", 1)[0]
+
+
+def value_fees_in_quote(fees, base: str, quote: str, fill_price: float) -> Optional[float]:   # claude code changed: new, LIVE-02
+    """Quote-currency value of raw fees charged on ONE fill:
+         quote-currency fee -> its cost
+         base-asset fee     -> cost × this fill's price (the rate the fee coins traded at)
+         any other asset    -> None (e.g. BNB: no BNB price exists in the fill data,
+                               and none is invented)
+    () (no fee information) -> None: unknown is not zero."""
+    if not fees:
+        return None
+    total = 0.0
+    for cost, currency in fees:
+        if currency == quote:
+            total += cost
+        elif currency == base:
+            total += cost * fill_price
+        else:
+            return None
+    return total
+
+
+def build_fill_result(order_id: str, symbol: str, side: str, created: dict, status: dict) -> "MarginFillResult":   # claude code changed: new, LIVE-02
+    """MarginFillResult from the creation response (fees) and the confirmed
+    status (filled quantity, average price). Fees are taken from the creation
+    response first; the status response is only a fallback."""
+    fees = extract_fees(created) or extract_fees(status)
+    fill_price = float(status["average"] or status["price"])
+    base, quote = split_symbol(symbol)
+    currencies = sorted({c for _, c in fees})
+    return MarginFillResult(
+        order_id=order_id,
+        symbol=symbol,
+        side=side,
+        filled_qty=float(status["filled"]),
+        fill_price=fill_price,
+        fee_usdt=value_fees_in_quote(fees, base, quote, fill_price),
+        fee_asset=currencies[0] if len(currencies) == 1 else ("MIXED" if currencies else "UNKNOWN"),
+        fees=fees,
+    )
+
+
+# ── Execution quantity rules ─────────────────────────────────────────
+# claude code changed: new. Exchange semantics these rely on (verified in the installed ccxt
+# source, ccxt/binance.py): Binance spot/margin fees are 'feeSide': 'get' —
+# charged in the asset RECEIVED (base on a buy, quote on a sell) unless paid
+# in a third asset such as BNB; order quantities are cut DOWN to the LOT_SIZE
+# stepSize (amount_to_precision, TRUNCATE). So a buy of N base units can
+# deliver less than N, and a buy of exactly the debt can land below it.
+# Quantities are therefore taken from the authoritative isolated-account
+# balance/debt, never reconstructed from the entry fill.
+
+@dataclass(frozen=True)
+class AmountRules:
+    step: Optional[float]      # LOT_SIZE stepSize; None = no rounding (dry run)
+    min_qty: Optional[float]   # LOT_SIZE minQty
+
+
+# Binance quantities have at most 8 decimals; snapping to 1e-12 only removes
+# binary floating-point noise (e.g. 0.30000000000000004) so it cannot move a
+# value across a step boundary. It is not a trading-precision rounding.
+_NOISE = Decimal("1e-12")
+
+
+def _step_round(qty: float, step: Optional[float], mode) -> float:
+    if not step:
+        return qty
+    q = Decimal(str(qty)).quantize(_NOISE)
+    s = Decimal(str(step))
+    return float((q / s).to_integral_value(rounding=mode) * s)
+
+
+def floor_to_step(qty: float, step: Optional[float]) -> float:
+    return _step_round(qty, step, ROUND_FLOOR)
+
+
+def ceil_to_step(qty: float, step: Optional[float]) -> float:
+    return _step_round(qty, step, ROUND_CEILING)
+
+
+def sellable_quantity(requested_qty: float, free_base: float, rules: AmountRules) -> float:
+    """Quantity to SELL when closing a long: never more than the authoritative
+    free balance (a base-asset buy fee leaves less than was filled), floored to
+    the step so the order cannot exceed what is held. Raises
+    CloseQuantityUnavailableException rather than submitting an invalid order."""
+    q = floor_to_step(min(requested_qty, free_base), rules.step)
+    if q <= 0 or (rules.min_qty and q < rules.min_qty):
+        raise CloseQuantityUnavailableException(
+            f"cannot close: requested {requested_qty}, free {free_base}, step {rules.step}, min {rules.min_qty} -> {q}"
+        )
+    return q
+
+
+def cover_buy_quantity(debt_qty: float, free_base: float, fee_buffer_rate: float, rules: AmountRules) -> float:
+    """Quantity to BUY to cover a short. The loan (principal + interest, as
+    reported by the exchange) must be repaid in full from base that is actually
+    free, so: need = debt − base already free; if the buy fee is charged in the
+    base asset at rate r, a buy of q delivers q·(1−r), so buy need/(1−r); round
+    UP to the step (ccxt would otherwise truncate below the debt); never below
+    the minimum quantity. Returns 0.0 when free base already covers the debt."""
+    if not (0.0 <= fee_buffer_rate < 1.0):
+        raise ValueError(f"fee_buffer_rate must be in [0, 1), got {fee_buffer_rate}")
+    need = debt_qty - free_base
+    if need <= 0:
+        return 0.0
+    q = ceil_to_step(need / (1.0 - fee_buffer_rate), rules.step)
+    if rules.min_qty and q < rules.min_qty:
+        q = ceil_to_step(rules.min_qty, rules.step)
+    return q
+
+
+def remaining_debt_or_raise(symbol: str, borrowed: float, interest: float) -> float:
+    """Post-repay check: any principal or interest still owed is an error, never silent."""
+    remaining = borrowed + interest
+    if remaining > 0:
+        raise RepaymentIncompleteException(
+            f"{symbol}: {remaining} base still owed after repay (borrowed {borrowed}, interest {interest})"
+        )
+    return 0.0
 
 
 class BinanceIsolatedMarginAdapter:
@@ -236,15 +393,20 @@ class BinanceIsolatedMarginAdapter:
         for _ in range(ORDER_CONFIRM_MAX_ATTEMPTS):
             status = self.exchange.fetch_order(order_id, symbol, params={"marginMode": "isolated"})
             if status["status"] == "closed":
-                return MarginFillResult(
-                    order_id=order_id,
-                    symbol=symbol,
-                    side=side,
-                    filled_qty=float(status["filled"]),
-                    fill_price=float(status["average"] or status["price"]),
-                    fee_usdt=float((status.get("fee") or {}).get("cost", 0.0)),
-                    fee_asset=(status.get("fee") or {}).get("currency", "USDT"),
-                )
+                # claude code changed: LIVE-02 — fees now come from the order-CREATION
+                # response (`order`), which ccxt requests with newOrderRespType=FULL
+                # for spot/margin and which carries per-fill commission +
+                # commissionAsset. The fetch_order status response read before has
+                # no fills, so ccxt returns fee=None there and this used to record a
+                # $0 fee labelled USDT (or, if a fee was present, its raw amount as
+                # USDT whatever its currency). See build_fill_result().
+                fill = build_fill_result(order_id, symbol, side, order, status)
+                if fill.fee_usdt is None:
+                    logger.critical(
+                        f"[MarginAdapter] {symbol} {side} order {order_id}: fee could not be valued in quote currency "
+                        f"(raw fees: {fill.fees or 'none reported'}). Recorded P&L for this leg will be marked UNVALUED."
+                    )
+                return fill
             if status["status"] == "canceled":
                 raise OrderUnconfirmedException(f"{symbol} margin {side} order {order_id} was canceled before fill")
             time.sleep(ORDER_CONFIRM_POLL_SECONDS)
@@ -271,7 +433,51 @@ class BinanceIsolatedMarginAdapter:
             fill_price=fill_price,
             fee_usdt=fee_usdt,
             fee_asset="USDT",
+            fees=((fee_usdt, "USDT"),),   # claude code changed: new, LIVE-02 — the simulated fee is charged in USDT
         )
+
+    # ── Execution quantity inputs ────────────────────────────────────
+    # claude code changed: new
+
+    def amount_rules(self, symbol: str) -> AmountRules:
+        """LOT_SIZE step/min from ccxt market metadata. Dry run: none — the
+        simulator neither truncates quantities nor charges base-asset fees."""
+        if self.dry_run:
+            return AmountRules(step=None, min_qty=None)
+        market = self.exchange.market(symbol)
+        return AmountRules(step=market["precision"]["amount"], min_qty=(market.get("limits") or {}).get("amount", {}).get("min"))
+
+    def fee_buffer_rate(self, symbol: str) -> float:
+        """Worst-case base-asset fee rate used to size a short-cover buy: the
+        market taker rate from ccxt metadata (fees are 'feeSide': 'get'). Dry
+        run: 0 — simulated fees are always USDT. Raises rather than guessing
+        when the metadata has no rate."""
+        if self.dry_run:
+            return 0.0
+        rate = self.exchange.market(symbol).get("taker")
+        if rate is None:
+            raise ValueError(f"{symbol}: no taker fee rate in market metadata — cannot size the cover buy safely")
+        return float(rate)
+
+    def market_buy_to_cover(self, symbol: str, quantity: float) -> MarginFillResult:
+        """Buy base to repay a short (no repay here — see repay())."""
+        fill = self._place_margin_market_order(symbol, "buy", quantity)
+        if self.dry_run:
+            sim = self._sim(symbol)
+            sim["base_free"] += fill.filled_qty
+            sim["quote_free"] -= fill.fill_price * fill.filled_qty + fill.fee_usdt
+        return fill
+
+    def repay(self, symbol: str, base_quantity: float) -> dict:
+        """Repay base_quantity of the borrowed base asset from free base."""
+        base = self.exchange.market(symbol)["base"]
+        if self.dry_run:
+            logger.info(f"[MarginAdapter:DRY_RUN] repay {base_quantity} {base} on {symbol} isolated")
+            sim = self._sim(symbol)
+            sim["base_free"] -= base_quantity
+            sim["base_borrowed"] -= base_quantity
+            return {"simulated": True, "symbol": symbol, "asset": base, "amount": base_quantity}
+        return self.exchange.repay_isolated_margin(symbol, base, base_quantity)
 
     # ── Leg lifecycle ────────────────────────────────────────────────
 
@@ -298,6 +504,7 @@ class BinanceIsolatedMarginAdapter:
         the actual short. Returns (borrow_result, sell_fill)."""
         market = self.exchange.market(symbol)
         base = market["base"]
+        base_quantity = floor_to_step(base_quantity, self.amount_rules(symbol).step)   # claude code changed: borrow exactly what the (step-truncated) sell will sell — previously the unrounded amount was borrowed and the remainder sat idle accruing interest. No-op in dry run.
         if self.dry_run:
             logger.info(f"[MarginAdapter:DRY_RUN] borrow {base_quantity} {base} on {symbol} isolated")
             self._sim(symbol)["base_borrowed"] += base_quantity
@@ -321,15 +528,10 @@ class BinanceIsolatedMarginAdapter:
         has to call get_isolated_account() right before this to size the
         buy-back correctly, so it passes the authoritative repay amount
         as base_quantity directly."""
-        fill = self._place_margin_market_order(symbol, "buy", base_quantity)
-        market = self.exchange.market(symbol)
-        base = market["base"]
-        if self.dry_run:
-            logger.info(f"[MarginAdapter:DRY_RUN] repay {base_quantity} {base} on {symbol} isolated")
-            sim = self._sim(symbol)
-            sim["quote_free"] -= fill.fill_price * fill.filled_qty + fill.fee_usdt
-            sim["base_borrowed"] -= base_quantity
-            repay_result = {"simulated": True, "symbol": symbol, "asset": base, "amount": base_quantity}
-        else:
-            repay_result = self.exchange.repay_isolated_margin(symbol, base, base_quantity)
+        # claude code changed: now composed of market_buy_to_cover() + repay(); same result
+        # as before in dry run. Kept for compatibility — bot/pairs/execution.py no
+        # longer calls it: it sizes the buy with cover_buy_quantity() and repays
+        # only what is actually free (see PairsExecutionEngine._cover_and_repay).
+        fill = self.market_buy_to_cover(symbol, base_quantity)
+        repay_result = self.repay(symbol, base_quantity)
         return fill, repay_result

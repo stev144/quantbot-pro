@@ -6,10 +6,13 @@
 {% comment %}
    claude code changed: new template — Pairs Pilot monitor. Real
    TradeRecord query (bot/views/pairs_pilot_data.py), one equity curve +
-   one drawdown curve per pilot pair (DODO/FIDA, MINA/ONG, AVA/PHA) —
-   built from CLOSED pair-trades only. Every pair correctly renders an
-   honest empty state until bot/core/pairs_bot_runner.py actually starts
-   producing trades — not a placeholder number.
+   one drawdown curve per monitored pair (10 as of the 2026-09-28
+   expansion — only the entry-eligible subset, currently DODO/FIDA and
+   MINA/ONG, ever produces real trades; the rest are monitoring-only,
+   see bot/pairs/config.py) — built from CLOSED pair-trades only. Every
+   pair correctly renders an honest empty state until
+   bot/core/pairs_bot_runner.py actually starts producing trades — not a
+   placeholder number.
 {% endcomment %}
 
 {% include "partials/_topbar.html" with active="pairs_pilot" %}
@@ -51,7 +54,8 @@
             <div class="term-grid term-grid-4" style="margin-bottom:16px">
                 <div class="metric-tile"><div class="metric-label">Seed &beta;</div><div class="metric-value stat-number" data-target="{{ p.health.seed_beta }}" data-decimals="4">0</div></div>
                 <div class="metric-tile"><div class="metric-label">Current &beta;</div><div class="metric-value stat-number" data-target="{{ p.health.current_beta }}" data-decimals="4">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Drift</div><div class="metric-value stat-number" data-target="{{ p.health.beta_drift_pct }}" data-decimals="0" data-suffix="%">0%</div></div>
+                <!-- claude code changed: real bug fix — data-decimals="0" was rounding away genuine, real movement (DODO/FIDA's drift moves within a ~71.6-72.1% band that always rounded to the same "72%"), making live Kalman updates look frozen when they weren't. Bumped to 1 decimal, matching Win Rate's own convention below. -->
+                <div class="metric-tile"><div class="metric-label">Drift</div><div class="metric-value stat-number" data-target="{{ p.health.beta_drift_pct }}" data-decimals="1" data-suffix="%">0%</div></div>
                 <div class="metric-tile"><div class="metric-label">Sign Reversed</div><div class="metric-value small {% if p.health.beta_sign_reversed %}neg{% endif %}">{{ p.health.beta_sign_reversed|yesno:"YES,no" }}</div></div>
             </div>
             {% endif %}

@@ -33,6 +33,7 @@ from typing import Dict, List, Tuple, Optional  # Type hints
 from pathlib import Path                       # Path handling
 from scipy import stats                        # Statistical tests (t-test, Mann-Whitney)
 from statsmodels.stats.multitest import multipletests  # Multiple testing correction
+from bot.quant_core.targets import assert_label_admissible   # claude code changed: Stage 2D — retired (non-tradeable) labels are refused as evidence
 from dataclasses import dataclass, asdict      # Type-safe data structures
 import json                                    # JSON serialization
 import hashlib                                 # Feature versioning via hash
@@ -434,6 +435,7 @@ class FeatureValidator:
             pd.DataFrame: Full validation results, corrected against
             exactly the features present in `df` — nothing wider.
         """
+        assert_label_admissible(forward_return_col)   # claude code changed: Stage 2D — raises RetiredLabelError for spread_forward_*
         results_df = self.validate_all_features_raw(df, forward_return_col)
 
         # Apply multiple testing correction across whatever features were
@@ -480,6 +482,7 @@ class FeatureValidator:
         themselves, at whatever scope their hypothesis family actually is
         (see apply_family_wide_correction() for the intended one).
         """
+        assert_label_admissible(forward_return_col)   # claude code changed: Stage 2D — raises RetiredLabelError for spread_forward_*
 
         logger.info(f"\n{'='*120}")
         logger.info("PHASE 2 INSTITUTIONAL: COMPREHENSIVE FEATURE VALIDATION")
@@ -899,8 +902,23 @@ class FeatureValidator:
                         year_returns_raw[valid_year].values   # .values — NaN-free numpy array
                     )
                     stability_scores[year] = float(ic_year)
-            except:
-                stability_scores[year] = 0.0
+            except Exception as e:
+                # claude code changed: real bug fix, caught by a full
+                # research-engine audit (2026-09-27) — this bare `except:`
+                # previously fabricated stability_scores[year] = 0.0 on
+                # ANY failure (a malformed timestamp, a spearmanr edge
+                # case, anything), silently treating "the computation
+                # broke" as if it were a REAL measured IC of exactly zero
+                # for that year. That fabricated value then fed directly
+                # into stability_consistency = np.std(...), which gates
+                # passed_stability (line ~1014) and therefore the real
+                # STRONG_KEEP/KEEP/REVIEW/DELETE verdict — an error was
+                # silently distorting a real decision. Fixed to match the
+                # SAME honest-exclusion pattern already used two lines up
+                # for "not enough data" (valid_year.sum() <= 50): skip the
+                # year entirely rather than fabricate a data point for it,
+                # and log loudly rather than fail silently.
+                logger.warning(f"  Stability check for year {year} failed, excluding it (not fabricating IC=0.0): {e}")
         
         # Calculate stability consistency (low std = consistent across years)
         stability_consistency = np.std(list(stability_scores.values()))
