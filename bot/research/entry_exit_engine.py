@@ -130,6 +130,7 @@ from __future__ import annotations              # Modern type hints in Python 3.
 import sys                                      # claude code changed: new import — needed for the stdout encoding fix below
 import logging                                  # Structured logging — same as all modules
 import re                                       # claude code changed: new import — needed for _parse_pair_from_kalman_filename()
+import math                                     # claude code changed: Stage 2D Rev B step 8 — FixedFractionSizer input checks
 import warnings                                 # Suppress pandas non-critical warnings
 from dataclasses import dataclass, field        # Clean trade record structure
 from pathlib import Path                        # Cross-platform file paths
@@ -151,6 +152,19 @@ from bot.research.kalman_filter_engine import load_pair_config
 from bot.research.kalman_filter_engine import load_close_series_from_csv   # claude code changed: new — real leg prices for fixed-quantity P&L (audit C-01)
 from bot.pairs.pnl import PairCosts, PairPosition, open_pair_position, close_pair_slice   # claude code changed: new — Phase 1, the single P&L ground truth (PAIRS_PNL_SPECIFICATION.md)
 from bot.quant_core.accounting import leg_notionals, open_position_checked   # claude code changed: Stage 2D — canonical leg split + executable-β domain check
+from bot.quant_core.protocol import CANONICAL, METHODOLOGY_VERSION, CanonicalProtocol   # claude code changed: Stage 2D Rev B step 8 — allocation fraction from the canonical protocol; Steps 9–11 methodology tag
+from bot.quant_core import lifecycle   # claude code changed: Stage 2D Rev B Steps 9–10 — the canonical trade lifecycle shared with live
+from bot.quant_core import provenance as _prov   # claude code changed: Stage 2D Rev B D-4 — canonical input/output provenance
+from bot.quant_core.seed import KalmanSeed, seed_id, validate_seed   # claude code changed: Stage 2D Rev B D-4 — seed lineage of a canonical input
+
+
+class CanonicalProvenanceError(ValueError):   # claude code changed: Stage 2D Rev B D-4
+    """A rule_set="CANONICAL" run was given input without valid canonical
+    provenance. Raised BEFORE any data is read or any output is written."""
+
+
+CANONICAL_RULE_SETS = ("CANONICAL", "CANONICAL_UNCERTIFIED")   # claude code changed: Stage 2D Rev B D-4 — both use the canonical lifecycle; only "CANONICAL" can produce canonical evidence
+from bot.quant_core.status import Result, Status, bad, ok   # claude code changed: Stage 2D Rev B step 8
 from bot.quant_core.metrics import HeldInterval, mark_to_market_equity, max_drawdown, profit_factor_dollars   # claude code changed: Stage 2D — dollar PF, mark-to-market equity/drawdown
 from bot.quant_core.provenance import SPEC_VERSION, code_state   # claude code changed: Stage 2D — provenance fields in the summary
 
@@ -253,6 +267,12 @@ SIGNAL_SOURCE_COLUMNS: Dict[str, Dict[str, str]] = {
         "beta_uncertainty": "ols_beta_uncertainty",  # synthetic constant 0.0 — no adaptive-uncertainty concept for static OLS
     },
 }
+
+# claude code changed: Stage 2D Rev B step 7 (D5) — the intercept α_e paired
+# with each source's β. OPTIONAL in the input (older kalman CSVs lack it): a
+# trade opened without a finite α_e records NaN, and every rule that needs the
+# held spread must fail closed on it.
+SIGNAL_SOURCE_ALPHA_COLUMN: Dict[str, str] = {"kalman": "kalman_alpha", "ols": "ols_alpha"}
 
 # Validated research results from our pipeline (do not change without re-running research)
 # claude code changed: VALIDATED_IC / VALIDATED_WIN_RATE are AVAX/ATOM's own
@@ -468,16 +488,10 @@ EXIT_PARTIAL_FRACTION: float = 0.50 # Fraction to close at partial exit
 # At $10,000 base capital, maximum single position is $10,000
 STRATEGY_CAPITAL_USDT: float = 10_000.0
 
-# Kelly fraction safety multiplier
-# Full Kelly = IC² / variance of returns (mathematically optimal)
-# Quarter-Kelly (0.25) = institutional standard for new strategy deployment
-# After 6 months of live track record matching backtest, increase to 0.40
-KELLY_SAFETY_FRACTION: float = 0.25
-
-# Maximum position size as fraction of total capital
-# Even if Kelly suggests more, never risk more than 30% on one trade
-# This prevents ruin from a single cointegration break event
-MAX_POSITION_FRACTION: float = 0.30
+# claude code changed: Stage 2D Rev B step 8 — KELLY_SAFETY_FRACTION (0.25) and
+# MAX_POSITION_FRACTION (0.30) removed with Kelly sizing. The per-pair
+# allocation and its hard maximum are CanonicalProtocol.pair_allocation_fraction
+# / pair_allocation_hard_max (bot/quant_core/protocol.py).
 
 # Minimum position size — below this, skip the trade (not worth the fee)
 MIN_POSITION_USDT: float = 100.0
@@ -578,6 +592,10 @@ class TradeRecord:
     entry_zscore:      float = 0.0      # Kalman z-score at entry (e.g. +2.3)
     entry_signal:      float = 0.0      # pair_signal_dynamic at entry
     entry_beta:        float = 0.0      # Kalman β at entry (dynamic hedge ratio)
+    allocation_fraction: float = float("nan")   # claude code changed: Stage 2D Rev B step 8 — f in T = f·C_strategy
+    executability:     str = "UNVERIFIED"         # claude code changed: Stage 2D Rev B step 8 — "VERIFIED" only where exchange rules were checked (live real mode)
+    entry_alpha:       float = float("nan")   # claude code changed: Stage 2D Rev B (D5) — α_e = α(t|t) at the decision cutoff; NaN = unknown → held-spread rules fail closed
+    entry_held_spread: float = float("nan")   # claude code changed: Stage 2D Rev B (D5) — ln P_A,t − β_e ln P_B,t − α_e at the decision candle
     entry_spread:      float = 0.0      # Raw Kalman spread value at entry
 
     # ── Direction ─────────────────────────────────────────────────────────────
@@ -665,6 +683,14 @@ class TradeRecord:
     entry_decision_timestamp: Optional[pd.Timestamp] = None   # claude code changed: Stage 2D — information cutoff t of the entry decision; entry_timestamp is the FILL candle t+d
     exit_decision_timestamp:  Optional[pd.Timestamp] = None   # claude code changed: Stage 2D — cutoff u of the exit decision; exit_timestamp is the FILL candle u+d
     slice_events: List[Tuple] = field(default_factory=list)   # claude code changed: Stage 2D — (fill_ts, net_pnl, entry_cost_share, qty_a_after, qty_b_after) per realised slice; feeds mark-to-market equity; not serialised
+    # claude code changed: Stage 2D Rev B Steps 9–10 (C3) — data-completeness of the exit.
+    holding_candles:   int = -1          # wall-clock grid candles from entry fill to exit fill (−1 = not computed: legacy rule set)
+    exit_fill_candle_missing: bool = False   # the exit-fill candle u+d was absent; filled at the first later observed candle
+    missing_exit_fill_timestamps: str = ""   # ISO open times of the absent candle(s), ";"-joined
+    h_compliant:       bool = True       # holding_candles ≤ H and the exit filled on its own candle
+    data_complete:     bool = True       # False for a missing exit-fill candle or a DATA_END-censored trade
+    reconciliation_affected: bool = False   # claude code changed: Stage 2D Rev B D-1 — exited while live reconciliation was pending (never clean evidence; always False in research)
+    reconciliation_gaps: str = ""           # claude code changed: Stage 2D Rev B D-1 — ";"-joined ISO candles live did not receive
 
     def to_dict(self) -> Dict:
         """Convert trade record to dictionary for DataFrame construction."""
@@ -676,13 +702,24 @@ class TradeRecord:
             "exit_timestamp":              self.exit_timestamp,
             "entry_zscore":                round(self.entry_zscore, 4),
             "entry_signal":                round(self.entry_signal, 4),
-            "entry_beta":                  round(self.entry_beta, 4),
-            "entry_spread":                round(self.entry_spread, 6),
+            "entry_beta":                  self.entry_beta,     # claude code changed: Stage 2D Rev B (D5) — full precision (was round(…, 4)); β_e defines the held spread, so the record must reproduce it exactly
+            "entry_alpha":                 self.entry_alpha,    # claude code changed: Stage 2D Rev B (D5)
+            "entry_spread":                self.entry_spread,   # claude code changed: Stage 2D Rev B (D5) — full precision (was round(…, 6))
+            "entry_held_spread":           self.entry_held_spread,   # claude code changed: Stage 2D Rev B (D5)
             "direction":                   self.direction,
             "position_usdt":               round(self.position_usdt, 2),
             "leg_a_usdt":                  round(self.leg_a_usdt, 2),
             "leg_b_usdt":                  round(self.leg_b_usdt, 2),
-            "kelly_fraction":              round(self.kelly_fraction, 4),
+            "kelly_fraction":              round(self.kelly_fraction, 4),   # NaN since Stage 2D Rev B (Kelly removed)
+            "allocation_fraction":         self.allocation_fraction,   # claude code changed: Stage 2D Rev B step 8
+            "holding_candles":             self.holding_candles,                # claude code changed: Stage 2D Rev B C3
+            "exit_fill_candle_missing":    self.exit_fill_candle_missing,       # claude code changed: Stage 2D Rev B C3
+            "missing_exit_fill_timestamps": self.missing_exit_fill_timestamps,  # claude code changed: Stage 2D Rev B C3
+            "h_compliant":                 self.h_compliant,                    # claude code changed: Stage 2D Rev B C3
+            "data_complete":               self.data_complete,                  # claude code changed: Stage 2D Rev B C3
+            "reconciliation_affected":     self.reconciliation_affected,        # claude code changed: Stage 2D Rev B D-1
+            "reconciliation_gaps":         self.reconciliation_gaps,            # claude code changed: Stage 2D Rev B D-1
+            "executability":               self.executability,         # claude code changed: Stage 2D Rev B step 8
             "signal_strength":             self.signal_strength,
             "stop_zscore":                 round(self.stop_zscore, 4),   # claude code changed: new
             "target_zscore":               round(self.target_zscore, 4),   # claude code changed: new
@@ -718,284 +755,46 @@ class TradeRecord:
 # POSITION SIZER CLASS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class KalmanPositionSizer:
-    """
-    Kelly Criterion position sizer for the Kalman pairs strategy — pair-agnostic.
+class FixedFractionSizer:   # claude code changed: Stage 2D Rev B step 8 — replaces KalmanPositionSizer (Kelly REMOVED by owner decision)
+    """Fixed-fraction pair sizing (owner, Stage 2D Rev B; assumption Q17):
 
-    claude code changed: was "calibrated to the AVAX/ATOM Kalman strategy",
-    with validated_win_rate defaulting to AVAX/ATOM's own VALIDATED_WIN_RATE
-    (0.69) — silently reused for every pair's real position sizing unless a
-    caller happened to override it (only walk_forward_engine.py's fold-level
-    engines did). model_governance_log.md has since shown 0.69 was never
-    actually valid even for AVAX/ATOM itself. validated_win_rate is now a
-    required argument with no default — see __init__ below — so every caller
-    must supply this pair's own real win rate (or, only where the value is
-    provably irrelevant to the result — see PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT's
-    own comment above — an explicit, clearly-labeled placeholder).
+        T   = f · C_strategy,   f = pair_allocation_fraction ≤ pair_allocation_hard_max
+        N_A = T / (1 + β),      N_B = β · T / (1 + β)          (β finite and > 0)
 
-    The Kelly Criterion answers: given a known edge (IC) and known variance
-    of returns, what fraction of capital should I risk on each trade?
+    No Kelly fraction, z-score multiplier, uncertainty multiplier or
+    prediction-error multiplier — T is the same for every trade. f is a
+    frozen baseline, NOT an optimised value. A trade is rejected (SKIP) for
+    β ≤ 0 / non-finite β, or T below this instance's minimum position.
+    Exchange executability (stepSize/minQty/minNotional at the fill marks) is
+    checked where exchange rules exist — live real mode — and is recorded as
+    UNVERIFIED in research, which has no exchange rules."""
 
-    Full Kelly formula for a continuous return strategy:
-        kelly_fraction = IC / (std_of_returns / mean_spread_move)
+    def __init__(self, capital_usdt: float = STRATEGY_CAPITAL_USDT,
+                 min_position_usdt: float = MIN_POSITION_USDT,
+                 protocol: CanonicalProtocol = CANONICAL) -> None:
+        if not (math.isfinite(capital_usdt) and capital_usdt > 0):
+            raise ValueError(f"strategy capital must be finite and > 0, got {capital_usdt!r}")
+        self.capital = float(capital_usdt)
+        self.fraction = protocol.pair_allocation_fraction
+        self.hard_max = protocol.pair_allocation_hard_max
+        if self.fraction > self.hard_max:                    # also enforced by CanonicalProtocol; repeated here at the point of use
+            raise ValueError(f"allocation fraction {self.fraction} exceeds hard maximum {self.hard_max}")
+        self.min_position_usdt = float(min_position_usdt)
+        self.total_usdt = self.capital * self.fraction       # T, identical for every trade
+        logger.info(f"FixedFractionSizer: C=${self.capital:,.2f}  f={self.fraction:.2%} (max {self.hard_max:.2%})  "
+                    f"T=${self.total_usdt:,.2f}  floor=${self.min_position_usdt:,.2f}")
 
-    In practice for our strategy:
-        kelly_fraction = (win_rate - loss_rate) / win_loss_ratio
-
-    We apply a 25% safety fraction (quarter-Kelly) as the institutional
-    standard for a strategy in its first deployment phase.
-
-    Position sizing also accounts for:
-        Beta uncertainty: higher uncertainty → smaller position
-        Prediction error: elevated filter error → smaller position
-
-    claude code changed: entry-depth-scaled position size, REINSTATED —
-    see size_position()'s Step 2 comment for the full reasoning. The
-    original "stronger signals get larger positions" was dropped after an
-    audit found STRONG (|z|>=3.0) had a LOWER win rate than NORMAL on both
-    AVAX/ATOM and DOT/LINK — but that audit ran under the pre-P&L-bug-fix,
-    pre-trade-relative-stop code, where a deeper entry was mechanically
-    closer to a FIXED stop level, not because it carried more genuine
-    edge. Both of those confounds are now fixed (see model_governance_log.md,
-    "P&L normalisation bug" and "Structural bias audit" entries), and under
-    the current design `entry_ic` — IC(|entry_z|, realised P&L) — is
-    robustly, cross-pair-replicated POSITIVE (0.33-0.44 across three
-    pairs): deeper entries now demonstrably earn more, not less. Target
-    distance and minimum hold time are already scaled continuously by
-    entry depth (see target_zscore/min_hold_hours below); size was the
-    one dimension still flat at every entry regardless of depth. This is
-    the exit-rule-redesign direction model_governance_log.md's "Fourth
-    design attempt" and "P&L normalisation bug" entries named and left
-    untried: "sizing... scaled continuously by entry_ic-implied edge."
-    """
-
-    def __init__(
-        self,
-        capital_usdt:         float = STRATEGY_CAPITAL_USDT,
-        kelly_safety:         float = KELLY_SAFETY_FRACTION,
-        max_position_fraction: float = MAX_POSITION_FRACTION,
-        validated_ic:         Optional[float] = None,   # claude code changed: was VALIDATED_IC — see class docstring; unused in the actual sizing formula below (win_rate-only), kept for reporting/logging only
-        validated_win_rate:   Optional[float] = None,   # claude code changed: was VALIDATED_WIN_RATE — no cross-pair default; required, see the raise below
-        min_position_usdt:    float = MIN_POSITION_USDT,   # claude code changed: new param — live pairs-trading pilot. Was a bare module-level constant read directly inside size_position() below, with no way for any caller to override it. Default preserves every existing call site's behavior exactly (still $100, still calibrated for the $10k/leg backtest reference scale) — a caller sizing at a genuinely different capital tier (e.g. a small pilot) can now pass its own real floor instead of getting every trade silently zeroed by a floor calibrated for 300x more capital.
-    ) -> None:
-        """
-        Initialise the position sizer with strategy parameters.
-
-        Parameters
-        ----------
-        capital_usdt : float
-            Total capital allocated to this strategy.
-
-        kelly_safety : float
-            Safety multiplier on full Kelly (0.25 = quarter-Kelly).
-
-        max_position_fraction : float
-            Hard cap on single position as fraction of total capital.
-
-        validated_ic : Optional[float]
-            Reporting/logging only — never fed into the sizing formula below
-            (that only ever used win_rate). No default; leave unset if unknown.
-
-        validated_win_rate : float
-            REQUIRED. This pair's own real win rate — e.g. from a
-            walk-forward train fold, or (only where the result is provably
-            invariant to the value — see PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT's
-            comment) an explicitly acknowledged placeholder. There is no
-            cross-pair default: AVAX/ATOM's old 0.69 is not valid for any
-            other pair, and model_governance_log.md has since shown it was
-            never actually valid even for AVAX/ATOM itself.
-
-        Raises
-        ------
-        ValueError
-            If validated_win_rate is not supplied. This position sizer used
-            to silently default to AVAX/ATOM's own (now known-invalid) 0.69
-            for every pair — fixed by requiring an explicit value instead.
-        """
-        # claude code changed: whole docstring body above rewritten — was
-        # "IC confirmed by feature_validator_v2_institutional.py (0.5245)" /
-        # "Average win rate across 2020-2025 (0.69)", stated as if those were
-        # this constructor's own correct defaults rather than one pair's
-        # (invalid) numbers.
-
-        if validated_win_rate is None:
-            raise ValueError(
-                "KalmanPositionSizer requires an explicit validated_win_rate "
-                "— there is no cross-pair default. This constructor used to "
-                "silently default to AVAX/ATOM's own VALIDATED_WIN_RATE "
-                "(0.69), and model_governance_log.md has since shown that "
-                "number was never actually valid even for AVAX/ATOM itself. "
-                "Pass this pair's own real win rate (e.g. computed from a "
-                "walk-forward train fold — see walk_forward_engine.py), or, "
-                "only if you are certain the result does not depend on this "
-                "value (e.g. a loader-only instance that never calls run(), "
-                "or a permutation-test replica where the same constant is "
-                "applied identically to the real run and every shuffle), "
-                "pass PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT explicitly."
-            )
-
-        self.capital         = capital_usdt          # Total strategy capital
-        self.kelly_safety    = kelly_safety           # Quarter-Kelly safety factor
-        self.max_fraction    = max_position_fraction  # Hard position cap
-        self.ic              = validated_ic           # Reporting only — see docstring
-        self.win_rate        = validated_win_rate     # This pair's own real win rate
-        self.min_position_usdt = min_position_usdt    # claude code changed: new — see __init__ param comment
-
-        # Compute base Kelly fraction from this pair's win rate
-        # Kelly formula: f = win_rate - (1 - win_rate) / win_loss_ratio
-        # For mean-reversion pairs trading: win_loss_ratio ≈ win_rate / (1-win_rate)
-        # claude code changed: real bug fix — this comment claimed the
-        # formula below "gives f* = 2 x win_rate - 1 = 2(0.69) - 1 = 0.38",
-        # which is simply wrong algebra, independent of which win_rate is
-        # plugged in. Substituting win_loss_ratio = win_rate/loss_rate into
-        # f = win_rate - loss_rate/win_loss_ratio actually simplifies to
-        # f = win_rate - loss_rate^2/win_rate = (win_rate^2 - loss_rate^2)/win_rate
-        # = (win_rate - loss_rate)/win_rate (since win_rate + loss_rate = 1)
-        # — at win_rate=0.69 that's (0.69-0.31)/0.69 = 0.5507, not 0.38.
-        # Confirmed directly against real KalmanPositionSizer log output
-        # ("Full Kelly : 0.5507 (55.1%)"), not just re-derived on paper.
-        # This gives: f* = (win_rate - loss_rate) / win_rate = 1 - loss_rate/win_rate
-        #             = (0.69 - 0.31) / 0.69 = 0.5507 at win_rate=0.69 (a worked
-        #             example only — win_rate is this pair's own real value, not a default)
-        loss_rate         = 1.0 - self.win_rate          # 0.31 at win_rate=0.69
-        win_loss_ratio    = self.win_rate / loss_rate     # 0.69/0.31 = 2.22 at win_rate=0.69
-        self.base_kelly   = (
-            self.win_rate - loss_rate / win_loss_ratio    # Full Kelly fraction
-        )
-        # Apply safety multiplier — quarter-Kelly for new strategy deployment
-        self.safe_kelly   = self.base_kelly * self.kelly_safety
-
-        logger.info("KalmanPositionSizer initialised")
-        logger.info(f"  Capital           : ${capital_usdt:,.0f}")
-        logger.info(f"  Validated IC      : {validated_ic}")
-        logger.info(f"  Validated win rate: {validated_win_rate:.1%}")
-        logger.info(f"  Full Kelly        : {self.base_kelly:.4f} ({self.base_kelly:.1%})")
-        logger.info(f"  Safe Kelly (25%)  : {self.safe_kelly:.4f} ({self.safe_kelly:.1%})")
-        logger.info(f"  Max single position: {max_position_fraction:.0%} of capital")
-        logger.info(
-            f"  Max position size : "
-            f"${capital_usdt * max_position_fraction:,.0f}"
-        )
-
-    def size_position(
-        self,
-        zscore:           float,
-        beta:             float,
-        beta_uncertainty: float,
-        prediction_error: float,
-    ) -> Tuple[float, float, float, str]:
-        """
-        Calculate the position size for one trade.
-
-        Takes four inputs from the Kalman engine output:
-            zscore           — how extreme is the current divergence?
-            beta             — current dynamic hedge ratio (for leg sizing)
-            beta_uncertainty — how confident is the Kalman in this β?
-            prediction_error — how wrong was the filter recently?
-
-        Returns
-        -------
-        Tuple of:
-            total_usdt    : total capital to deploy on this trade
-            leg_a_usdt    : AVAX leg size in USDT
-            leg_b_usdt    : ATOM leg size in USDT
-            signal_strength: "NORMAL" or "STRONG"
-        """
-
-        # ── Step 1: Base Kelly position ───────────────────────────────────────
-        # Start with the safe Kelly fraction of total capital
-        # This is the baseline position before any adjustments
-        kelly_usdt = self.capital * self.safe_kelly
-
-        # ── Step 2: Entry-depth-scaled size — REINSTATED, continuous this time ──
-        # claude code changed: exit-rule redesign, "sizing scaled continuously
-        # by entry_ic-implied edge" (model_governance_log.md, the one untried
-        # direction from the Fourth design attempt / P&L normalisation bug
-        # entries). Replaces the flat 1.00 multiplier with a continuous scale
-        # anchored at 1.0x at the entry threshold itself — a threshold-level
-        # entry (|z|=2.0) is sized IDENTICALLY to before this change, so this
-        # never makes any single entry smaller than the old flat design, only
-        # larger for entries beyond the threshold, proportional to how much
-        # further beyond it they are. Uses the same
-        # "BASE * |entry_z| / ENTRY_ZSCORE_THRESHOLD" scaling convention
-        # target_zscore/min_hold_hours below already use, not a new pattern.
-        # No separate cap on the multiplier itself — MAX_POSITION_FRACTION
-        # (Step 5 below) is the real, pre-existing safety bound on any single
-        # trade's capital exposure regardless of how large this multiplier
-        # gets, exactly as it already was before this change.
-        signal_multiplier = abs(zscore) / ENTRY_ZSCORE_THRESHOLD
-        signal_strength   = "STRONG" if abs(zscore) >= ENTRY_ZSCORE_STRONG else "NORMAL"
-
-        # ── Step 3: Beta uncertainty adjustment ───────────────────────────────
-        # When the Kalman filter is uncertain about β (high beta_uncertainty),
-        # the spread calculation is less reliable — reduce position size
-        # This is unique to the Kalman approach — OLS cannot do this
-        # because it has no concept of dynamic uncertainty
-        if beta_uncertainty > MAX_BETA_UNCERTAINTY:
-            # Uncertainty is too high — halve the position
-            uncertainty_multiplier = 0.50
-            logger.debug(
-                f"    Beta uncertainty {beta_uncertainty:.4f} > "
-                f"{MAX_BETA_UNCERTAINTY} — halving position"
-            )
-        elif beta_uncertainty > MAX_BETA_UNCERTAINTY * 0.5:
-            # Moderate uncertainty — reduce slightly
-            uncertainty_multiplier = 0.75
-        else:
-            # Low uncertainty — Kalman is confident, full position
-            uncertainty_multiplier = 1.00
-
-        # ── Step 4: Prediction error adjustment ──────────────────────────────
-        # When the Kalman filter's prediction error is unusually large,
-        # the filter is surprised by recent price action — possible regime shift
-        # We reduce position size when the filter is in an uncertain state
-        pred_error_abs = abs(prediction_error)
-        if pred_error_abs > PRED_ERROR_NORMAL * 3:
-            # Filter is very surprised — reduce to 60% of normal size
-            error_multiplier = 0.60
-        elif pred_error_abs > PRED_ERROR_NORMAL * 2:
-            # Filter is somewhat surprised — reduce to 80%
-            error_multiplier = 0.80
-        else:
-            # Normal prediction error — full size
-            error_multiplier = 1.00
-
-        # ── Step 5: Compute final position size ───────────────────────────────
-        # Combine all adjustments multiplicatively
-        adjusted_usdt = (
-            kelly_usdt *
-            signal_multiplier *
-            uncertainty_multiplier *
-            error_multiplier
-        )
-
-        # Apply hard cap: never exceed MAX_POSITION_FRACTION of total capital
-        # This prevents ruin from a single cointegration break event
-        max_usdt      = self.capital * self.max_fraction
-        total_usdt    = min(adjusted_usdt, max_usdt)
-
-        # Apply minimum position check: below this instance's own floor, skip the trade.
-        # claude code changed: was the bare module constant MIN_POSITION_USDT — now
-        # self.min_position_usdt (defaults to that same constant, see __init__).
-        if total_usdt < self.min_position_usdt:
-            return 0.0, 0.0, 0.0, signal_strength   # Signal: do not trade
-
-        # ── Step 6: Split into two legs using Kalman β ────────────────────────
-        # The hedge ratio β determines how to split capital between AVAX and ATOM
-        # For a dollar-neutral position:
-        #   Total capital = leg_A + leg_B
-        #   leg_B / leg_A = β_t (the current Kalman hedge ratio)
-        # Therefore:
-        #   leg_A = total / (1 + β_t)
-        #   leg_B = total × β_t / (1 + β_t)
-        # This makes the position dollar-neutral in log-price space
-        # Any market-wide crypto move affects both legs proportionally
-        legs = leg_notionals(total_usdt, beta)          # claude code changed: Stage 2D — the single canonical split T/(1+|β|) with the executable-domain check (was T/(1+β), undefined at β=-1 and negative-leg for β<0); identical to the old formula for every β > 0
-        if not legs.ok:                                 # claude code changed: β ≤ 0, β = 0 or non-finite β → SKIP (fail closed), never a sized trade
-            return 0.0, 0.0, 0.0, signal_strength       # claude code changed: same "do not trade" signal as the minimum-size check above
-        leg_a_usdt, leg_b_usdt = legs.value             # claude code changed: N_A, N_B from bot.quant_core.accounting
-
-        return total_usdt, leg_a_usdt, leg_b_usdt, signal_strength
+    def size(self, beta: float) -> Result:
+        """OK((T, N_A, N_B)) or SKIP with the reason."""
+        if self.total_usdt < self.min_position_usdt:
+            return bad(Status.SKIP, f"T=${self.total_usdt:.2f} below the minimum position ${self.min_position_usdt:.2f}")
+        legs = leg_notionals(self.total_usdt, beta)          # β ≤ 0 / non-finite → SKIP
+        if not legs.ok:
+            return legs
+        n_a, n_b = legs.value
+        if not (n_a > 0 and n_b > 0):
+            return bad(Status.SKIP, f"non-positive leg notional ({n_a}, {n_b})")
+        return ok((self.total_usdt, n_a, n_b))
 
 
 # claude code changed: new section — whole block below (module constant + function) added for the pair-agnostic refactor
@@ -1122,8 +921,7 @@ class EntryExitEngine:
         exit_partial_fraction: float = EXIT_PARTIAL_FRACTION,
         require_confirmation:  bool  = REQUIRE_LAG_CONFIRMATION,
         capital_usdt:          float = STRATEGY_CAPITAL_USDT,
-        kelly_safety:          float = KELLY_SAFETY_FRACTION,
-        min_position_usdt:     float = MIN_POSITION_USDT,   # claude code changed: new param — threads through to KalmanPositionSizer's own new param (see its __init__ comment); default preserves existing behavior exactly
+        min_position_usdt:     float = MIN_POSITION_USDT,   # claude code changed: new param — the instance's minimum position; Stage 2D Rev B: applies to the fixed-fraction T (FixedFractionSizer)
         output_dir:            str   = "research_data",
         pair_name:             Optional[str]   = None,   # claude code changed: new param
         symbol_a:              Optional[str]   = None,   # claude code changed: new param
@@ -1131,6 +929,8 @@ class EntryExitEngine:
         validated_half_life:   Optional[float] = None,   # claude code changed: new param
         validated_ic:          Optional[float] = None,   # claude code changed: new param
         validated_win_rate:    Optional[float] = None,   # claude code changed: new param
+        rule_set:              str  = "LEGACY",   # claude code changed: Stage 2D Rev B Steps 9–10 — "CANONICAL" = the frozen STAGE2D-REVB lifecycle (bot/quant_core/lifecycle.py, same rules as live); "LEGACY" = the pre-Stage-2D rules, kept unchanged for existing research callers until Steps 13–17 migrate them
+        protocol:              Optional[CanonicalProtocol] = None,   # claude code changed: Stage 2D Rev B — CANONICAL rule set only
         signal_source:         str  = "kalman",   # claude code changed: new param — "kalman" (adaptive, default, kept for backward-compat) or "ols" (static, validated — see SIGNAL_SOURCE_COLUMNS module comment)
         venue_id:              str  = "binance",   # claude code changed: new param — completes Phase 1C Step 3, see cost_model import comment above
         asset_class:           str  = ASSET_CLASS_CRYPTO,   # claude code changed: new param — same
@@ -1158,18 +958,15 @@ class EntryExitEngine:
             Pre-existing "known good" baselines for THIS pair. validated_ic
             is reporting-only (_build_strategy_summary()/
             _print_performance_report()). validated_half_life feeds only the
-            time-stop sanity check. validated_win_rate claude code changed:
-            IS now fed into real position sizing (KalmanPositionSizer's
-            Kelly fraction) — leaving it None will raise at construction
-            time once the sizer is built below, rather than silently
-            defaulting to AVAX/ATOM's own VALIDATED_WIN_RATE the way this
-            engine used to. There is no cross-pair source of truth for any
+            time-stop sanity check. validated_win_rate is reporting-only
+            since Stage 2D Rev B (fixed-fraction sizing; Kelly removed —
+            it previously fed KalmanPositionSizer). There is no cross-pair source of truth for any
             of these, so they default to None ("not yet validated") rather
             than silently reusing AVAX/ATOM's VALIDATED_IC / VALIDATED_WIN_RATE,
             which research_data/model_governance_log.md has since shown were
             never actually valid even for AVAX/ATOM itself.
         """
-        # claude code changed: the six "pair_name / symbol_a / ... validated_win_rate" paragraphs above are a new docstring addition (no "#" possible inside the string itself)
+        # claude code changed: the six "pair_name / symbol_a / ... validated_win_rate" paragraphs above are a new docstring addition (no "#" possible inside the string itself); Stage 2D Rev B — validated_win_rate paragraph updated (no longer sizes positions)
 
         # Store all strategy parameters
         self.entry_threshold   = entry_threshold       # |z| must exceed this to enter
@@ -1211,7 +1008,20 @@ class EntryExitEngine:
                 f"signal_source must be one of {list(SIGNAL_SOURCE_COLUMNS)}, got '{signal_source}'"
             )
         self.signal_source = signal_source
+        if rule_set not in ("LEGACY",) + CANONICAL_RULE_SETS:   # claude code changed: Stage 2D Rev B (D-4 adds CANONICAL_UNCERTIFIED)
+            raise ValueError(f"rule_set must be 'LEGACY', 'CANONICAL' or 'CANONICAL_UNCERTIFIED', got {rule_set!r}")
+        self.rule_set = rule_set   # claude code changed: Stage 2D Rev B
+        self.protocol = protocol or CANONICAL   # claude code changed: Stage 2D Rev B
+        self._lineage = None   # claude code changed: Stage 2D Rev B D-4 — set only by a validated CANONICAL input
+        if rule_set in CANONICAL_RULE_SETS:   # claude code changed: Stage 2D Rev B — the canonical clock is the 1h grid with the protocol's d
+            if resample_hours not in (None, 1):
+                raise ValueError("rule_set='CANONICAL' runs on the 1h grid; resample_hours is not allowed")
+            if int(execution_delay_candles) != self.protocol.execution_delay_candles:
+                raise ValueError("rule_set='CANONICAL' uses the protocol's execution delay d")
+            if signal_source != "kalman":
+                raise ValueError("rule_set='CANONICAL' is defined on the Kalman state (the static baseline needs the selection zone — BLOCKED)")
         self.cols           = SIGNAL_SOURCE_COLUMNS[signal_source]
+        self._alpha_col     = SIGNAL_SOURCE_ALPHA_COLUMN[signal_source]   # claude code changed: Stage 2D Rev B (D5) — optional α_e column
 
         # claude code changed: resolves fee_rate/slippage_rate through
         # bot.config.cost_model.get_cost_model() instead of the hardcoded
@@ -1248,21 +1058,10 @@ class EntryExitEngine:
         if not self.borrow_cost_modeled:   # claude code changed: new
             logger.warning("  Borrow interest NOT modelled (no borrow_rate_hourly_a/_b supplied) — short-leg financing is charged as 0; results are economically incomplete.")
 
-        # claude code changed: now threads THIS pair's validated_ic/
-        # validated_win_rate through to the sizer — was constructed with
-        # neither, so KalmanPositionSizer always fell back to its own
-        # AVAX/ATOM-specific defaults regardless of which pair this engine
-        # was actually running (self.validated_win_rate above was stored for
-        # reporting but never reached the sizer). If self.validated_win_rate
-        # is still None here (no caller supplied one), this now raises — see
-        # KalmanPositionSizer's own error message for how to fix a caller.
-        self.sizer = KalmanPositionSizer(
-            capital_usdt=capital_usdt,
-            kelly_safety=kelly_safety,
-            validated_ic=self.validated_ic,
-            validated_win_rate=self.validated_win_rate,
-            min_position_usdt=min_position_usdt,   # claude code changed: new — see this constructor's own param comment
-        )
+        # claude code changed: Stage 2D Rev B step 8 — fixed-fraction sizing
+        # (owner decision; Kelly removed). validated_ic / validated_win_rate
+        # are reporting metadata only and never reach the sizer.
+        self.sizer = FixedFractionSizer(capital_usdt=capital_usdt, min_position_usdt=min_position_usdt)
 
         # State tracking — these update as we scan through candles
         self.current_trade:    Optional[TradeRecord] = None    # Active trade (if any)
@@ -1350,13 +1149,17 @@ class EntryExitEngine:
         logger.info("=" * 70)
 
         # ── Step 1: Load Kalman output ────────────────────────────────────────
+        if self.rule_set == "CANONICAL":   # claude code changed: Stage 2D Rev B D-4 — fail closed before reading or writing anything
+            self._validate_canonical_input(kalman_csv)
         df = self._load_kalman_data(kalman_csv)
 
         # ── Step 2: Validate required columns ────────────────────────────────
         self._validate_columns(df)
 
         # ── Step 3: Scan every candle and apply rules ─────────────────────────
-        signal_log = self._scan_candles(df)
+        if self._lineage is not None and df.index[0] != self._lineage["seed_ts"]:   # claude code changed: Stage 2D Rev B D-4 — a canonical dataset starts at its seed candle
+            raise CanonicalProvenanceError(f"canonical dataset starts at {df.index[0]}, not at its seed candle {self._lineage['seed_ts']}")
+        signal_log = self._scan_candles_canonical(df) if self.rule_set in CANONICAL_RULE_SETS else self._scan_candles(df)   # claude code changed: Stage 2D Rev B Steps 9–10
 
         # ── Step 4: Build trade log from completed trades ─────────────────────
         trade_log = self._build_trade_log()
@@ -1437,9 +1240,12 @@ class EntryExitEngine:
         # is_training_window column) fall back to warmup-only exclusion
         # exactly as before, not a crash.
         exclude = pd.Series(False, index=df.index)
-        if "is_warmup" in df.columns:
+        # claude code changed: Stage 2D Rev B — CANONICAL keeps warmup rows: an
+        # open trade's exits/time stop must be evaluated through a mid-trade
+        # re-seed; entries are impossible there anyway (z is NaN in warmup).
+        if "is_warmup" in df.columns and self.rule_set == "LEGACY":
             exclude = exclude | df["is_warmup"]
-        if "is_training_window" in df.columns:
+        if "is_training_window" in df.columns and self.rule_set == "LEGACY":
             exclude = exclude | df["is_training_window"]
         if exclude.any():
             excluded_count = int(exclude.sum())
@@ -1475,6 +1281,7 @@ class EntryExitEngine:
             # just be a derived proxy for the same thing this already is).
             pair_config = load_pair_config(self.pair_name, require_passes_filters=False)
             df["ols_beta"] = pair_config["ols_beta"]
+            df["ols_alpha"] = pair_config["ols_alpha"]   # claude code changed: Stage 2D Rev B (D5) — the static fit's α_e
             # No adaptive-tracking-error/uncertainty concept for a static
             # fit — constant 0.0 gives every trade the full (uncapped)
             # Kelly position size in size_position(), the correct behavior
@@ -1492,7 +1299,7 @@ class EntryExitEngine:
         # reaches scipy.stats.spearmanr (its default nan_policy is
         # 'propagate', not 'omit'). Drop them here, at the source, so every
         # later step in the pipeline is working with clean data.
-        required_for_cleanliness = list(self.cols.values()) + [PRICE_COL_A, PRICE_COL_B]   # claude code changed: was a hardcoded kalman-only list; price columns added (audit C-01) — a candle with no real price for either leg cannot be traded or marked
+        required_for_cleanliness = ([PRICE_COL_A, PRICE_COL_B] if self.rule_set in CANONICAL_RULE_SETS else list(self.cols.values()) + [PRICE_COL_A, PRICE_COL_B])   # claude code changed: Stage 2D Rev B — CANONICAL drops only rows without a price (a NaN z is a no-entry candle, not a missing candle)   # claude code changed: was a hardcoded kalman-only list; price columns added (audit C-01) — a candle with no real price for either leg cannot be traded or marked
         present = [c for c in required_for_cleanliness if c in df.columns]
         before_rows = len(df)
         df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=present)
@@ -1601,6 +1408,8 @@ class EntryExitEngine:
         # by self.cols so signal_source="ols" validates its own (derived)
         # column set instead of the kalman one it never populates.
         required = list(self.cols.values()) + [PRICE_COL_A, PRICE_COL_B]   # claude code changed: price columns added — audit C-01, P&L is marked on real leg prices
+        if self.rule_set in CANONICAL_RULE_SETS:   # claude code changed: Stage 2D Rev B — α_e is required: the held spread cannot be formed without it
+            required = [self.cols["zscore"], self.cols["beta"], self._alpha_col, PRICE_COL_A, PRICE_COL_B]
 
         missing = [c for c in required if c not in df.columns]
 
@@ -1672,6 +1481,7 @@ class EntryExitEngine:
         self.pending_partial = None   # claude code changed: Stage 2D — partial-exit decision awaiting its fill candle
         self.pending_exit    = None   # claude code changed: Stage 2D — full-exit decision awaiting its fill candle
         self.n_entries_skipped_missing_fill = 0   # claude code changed: Stage 2D — entry fill candle absent → SKIP (fail closed), counted
+        self.n_entries_skipped_sizing = 0         # claude code changed: Stage 2D Rev B step 8 — sizer SKIPs, counted
         delay = self._fill_delay   # claude code changed: Stage 2D
 
         for i, (ts, row) in enumerate(df.iterrows()):
@@ -1684,6 +1494,7 @@ class EntryExitEngine:
             zscore_lag   = float(row[self.cols["zscore_lag1"]])        # Previous z-score
             signal       = float(row[self.cols["signal"]])             # Composite signal
             beta         = float(row[self.cols["beta"]])               # Hedge ratio (dynamic for kalman, static for ols)
+            alpha        = float(row[self._alpha_col]) if self._alpha_col in row.index else float("nan")   # claude code changed: Stage 2D Rev B (D5) — α_e at this cutoff (NaN if the input lacks it)
             spread       = float(row[self.cols["spread"]])             # Raw spread value
             pred_error   = float(row[self.cols["prediction_error"]])   # Filter prediction error (0.0 for ols)
             beta_uncert  = float(row[self.cols["beta_uncertainty"]])   # Filter uncertainty (0.0 for ols)
@@ -1781,17 +1592,17 @@ class EntryExitEngine:
                     # Negative z: AVAX cheap    → LONG_SPREAD  (long AVAX, short ATOM)
                     direction = "SHORT_SPREAD" if zscore > 0 else "LONG_SPREAD"
 
-                    # Size the position using Kelly criterion
-                    total, leg_a, leg_b, strength = self.sizer.size_position(
-                        zscore=zscore,
-                        beta=beta,
-                        beta_uncertainty=beta_uncert,
-                        prediction_error=pred_error,
-                    )
-
-                    # Skip if position size is below minimum
-                    if total <= 0 or total < self.sizer.min_position_usdt:   # claude code changed: Stage 2D — was the hard-coded module MIN_POSITION_USDT (100), which overrode the instance's own floor (e.g. the live pilot's $15); one authoritative floor now
+                    # claude code changed: Stage 2D Rev B step 8 — fixed-fraction
+                    # sizing (was Kelly × z-depth × uncertainty × prediction-error
+                    # multipliers). SKIP (β ≤ 0, non-finite β, T below the floor)
+                    # is counted, never a silently zero-sized trade.
+                    sized = self.sizer.size(beta)
+                    if not sized.ok:
+                        self.n_entries_skipped_sizing += 1
+                        logger.debug(f"    ENTRY SKIPPED at {ts}: {sized.reason}")
                         continue
+                    total, leg_a, leg_b = sized.value
+                    strength = "STRONG" if abs(zscore) >= ENTRY_ZSCORE_STRONG else "NORMAL"   # descriptive label only; no longer changes size
 
                     # claude code changed: new — per-trade stop level, replacing the fixed
                     # EXIT_ZSCORE_STOPLOSS every trade used to be checked against
@@ -1832,6 +1643,10 @@ class EntryExitEngine:
                         "total": total, "strength": strength, "stop_zscore": stop_zscore,
                         "target_zscore": target_zscore, "min_hold_hours": min_hold_hours,
                         "pred_error": pred_error, "beta_uncert": beta_uncert,
+                        "alpha": alpha,   # claude code changed: Stage 2D Rev B (D5)
+                        # claude code changed: Stage 2D Rev B (D5) — held spread at the decision
+                        # candle with the entry parameters: ln P_A − β_e ln P_B − α_e
+                        "held_spread": float(np.log(price_a) - beta * np.log(price_b) - alpha),
                     }
 
         logger.info(
@@ -1869,6 +1684,172 @@ class EntryExitEngine:
         return signal_log_df
 
 
+    def _scan_candles_canonical(self, df: pd.DataFrame) -> pd.DataFrame:   # claude code changed: Stage 2D Rev B Steps 9–10 — new
+        """The frozen STAGE2D-REVB lifecycle (STAGE2D_DECISION_LOCK.md D1/D2,
+        C1–C3), rules from bot/quant_core/lifecycle.py — the same functions
+        live calls. Rows are price-observed candles of the hourly grid; all
+        candle offsets are wall-clock.
+
+        Per row ts (a cutoff and a possible fill candle), in this order:
+          1. a pending ENTRY fills only on exactly t+d (absent → SKIP, counted);
+          2. a pending EXIT fills on the first row ≥ u+d (later than u+d →
+             exit_fill_candle_missing, not H-compliant); a fill candle is never
+             also a decision cutoff (C2 and its symmetric re-entry rule);
+          3. in a trade: exit decision at u ≥ E+1 — NORMALISATION (h sign) or
+             TIMESTOP (u − E ≥ H − d);
+          4. flat, nothing pending: entry decision — |z| ≥ threshold, then the
+             C1 sign check on h_t (mismatch → ENTRY_SIGN_MISMATCH, recorded,
+             no trade), then fixed-fraction sizing.
+        A trade still open at the last row is closed there as
+        DATA_END_CENSORED and marked data-incomplete."""
+        P = self.protocol
+        delay = self._fill_delay
+        H = P.require_max_holding()
+        n = len(df)
+        signal_values = np.full(n, np.nan)
+        position_status = np.full(n, "", dtype=object)
+        position_size = np.full(n, 0.0)
+        zscore_values = np.full(n, np.nan)
+        entry_signal = np.full(n, False)
+        exit_signal = np.full(n, False)
+        exit_reasons = np.full(n, "", dtype=object)
+        self.current_trade, self.trade_id_counter, self.completed_trades = None, 0, []
+        self.partial_exited = False
+        self.pending_entry = self.pending_partial = self.pending_exit = None
+        self.n_entries_skipped_missing_fill = 0
+        self.n_entries_skipped_sizing = 0
+        self.entry_sign_mismatches: List[lifecycle.EntrySignMismatch] = []
+
+        zc, bc, ac = self.cols["zscore"], self.cols["beta"], self._alpha_col
+        for i, (ts, row) in enumerate(df.iterrows()):
+            z, beta, alpha = float(row[zc]), float(row[bc]), float(row[ac])
+            pa, pb = float(row[PRICE_COL_A]), float(row[PRICE_COL_B])
+            zscore_values[i], signal_values[i] = z, -z
+
+            # 1. entry fill (exactly t+d)
+            if self.pending_entry is not None and ts >= self.pending_entry["fill_ts"]:
+                dec, self.pending_entry = self.pending_entry, None
+                if ts == dec["fill_ts"]:
+                    if self._open_trade_from_decision(dec, ts, pa, pb):
+                        self.current_trade.entry_held_spread = dec["held_spread"]
+                        position_status[i], position_size[i] = self.current_trade.direction, self.current_trade.position_usdt
+                        entry_signal[i] = True
+                        continue   # C2: the entry-fill close is not an exit-decision close
+                else:
+                    self.n_entries_skipped_missing_fill += 1
+
+            # 2. exit fill (first observed candle ≥ u+d)
+            if self.current_trade is not None and self.pending_exit is not None and ts >= self.pending_exit["fill_ts"]:
+                dec, self.pending_exit = self.pending_exit, None
+                trade = self.current_trade
+                trade.exit_decision_timestamp = dec["decision_ts"]
+                missing = list(pd.date_range(dec["fill_ts"], ts - lifecycle.HOUR, freq="h")) if ts > dec["fill_ts"] else []
+                self._execute_full_exit(ts, z, dec["held_spread"], dec["reason"], pa, pb)
+                trade.holding_candles = lifecycle.candles_between(trade.entry_timestamp, ts)
+                trade.exit_fill_candle_missing = bool(missing)
+                trade.missing_exit_fill_timestamps = ";".join(t.isoformat() for t in missing)
+                trade.h_compliant = (not missing) and trade.holding_candles <= H
+                trade.data_complete = not missing
+                exit_signal[i], exit_reasons[i] = True, dec["reason"]
+                position_status[i] = "FLAT"
+                continue   # the exit-fill close is not an entry-decision close (symmetric to C2)
+
+            # 3. exit decision
+            if self.current_trade is not None:
+                trade = self.current_trade
+                position_status[i], position_size[i] = trade.direction, trade.position_usdt
+                if self.pending_exit is None:
+                    h_u = lifecycle.held_spread(pa, pb, trade.entry_beta, trade.entry_alpha)
+                    k = lifecycle.candles_between(trade.entry_timestamp, ts)
+                    reason = lifecycle.exit_decision(trade.direction, h_u, k, P)
+                    if reason:
+                        self.pending_exit = {"decision_ts": ts, "fill_ts": ts + delay, "reason": reason, "held_spread": h_u}
+                continue
+
+            # 4. entry decision
+            position_status[i] = "FLAT"
+            if self.pending_entry is not None:
+                continue
+            direction = lifecycle.entry_direction(z, P)
+            if direction is None:
+                continue
+            h_t = lifecycle.held_spread(pa, pb, beta, alpha)
+            if not lifecycle.entry_sign_valid(direction, h_t):
+                self.entry_sign_mismatches.append(lifecycle.EntrySignMismatch(ts, direction, z, h_t, alpha, beta, pa, pb))
+                continue
+            sized = self.sizer.size(beta)
+            if not sized.ok:
+                self.n_entries_skipped_sizing += 1
+                continue
+            total, _, _ = sized.value
+            self.pending_entry = {
+                "decision_ts": ts, "fill_ts": ts + delay, "direction": direction, "zscore": z, "signal": -z,
+                "beta": beta, "alpha": alpha, "spread": float(row[self.cols["spread"]]) if self.cols["spread"] in row.index else math.nan,
+                "total": total, "strength": "STRONG" if abs(z) >= ENTRY_ZSCORE_STRONG else "NORMAL",
+                "stop_zscore": math.nan, "target_zscore": math.nan, "min_hold_hours": math.nan,   # no z stop / target / min hold in the canonical rule set
+                "pred_error": float(row[self.cols["prediction_error"]]) if self.cols["prediction_error"] in row.index else math.nan,
+                "beta_uncert": float(row[self.cols["beta_uncertainty"]]) if self.cols["beta_uncertainty"] in row.index else math.nan,
+                "held_spread": h_t,
+            }
+
+        if self.current_trade is not None:   # censored: the data ended before the trade did
+            trade = self.current_trade
+            last_ts = df.index[-1]
+            trade.exit_decision_timestamp = last_ts
+            self._execute_full_exit(last_ts, float(df[zc].iloc[-1]), math.nan, "DATA_END_CENSORED",
+                                    float(df[PRICE_COL_A].iloc[-1]), float(df[PRICE_COL_B].iloc[-1]))
+            trade.holding_candles = lifecycle.candles_between(trade.entry_timestamp, last_ts)
+            trade.h_compliant, trade.data_complete = False, False
+        self.pending_entry = self.pending_exit = None
+        logger.info(f"  Canonical scan: {len(self.completed_trades)} trades, "
+                    f"{len(self.entry_sign_mismatches)} ENTRY_SIGN_MISMATCH, "
+                    f"{self.n_entries_skipped_missing_fill} entry fills missing, "
+                    f"{sum(t.exit_fill_candle_missing for t in self.completed_trades)} exit fills late")
+        return pd.DataFrame({
+            "timestamp": df.index, "kalman_zscore": zscore_values, "signal": signal_values,
+            "position_status": position_status, "position_usdt": position_size,
+            "entry_signal": entry_signal, "exit_signal": exit_signal, "exit_reason": exit_reasons,
+        }).set_index("timestamp")
+
+    def _validate_canonical_input(self, kalman_csv) -> None:   # claude code changed: Stage 2D Rev B D-4 — new
+        """OK only for a KALMAN_STATE dataset written by
+        KalmanFilterEngine.write_canonical_dataset() under THIS methodology and
+        protocol: CANONICAL status, unchanged artifact bytes, a content data
+        version, a run id, and an embedded seed record that is itself valid
+        (causal, Design A, L), carries the same data version and the recorded
+        seed id, and names this pair. Anything else raises
+        CanonicalProvenanceError: legacy data is never relabelled canonical."""
+        prov = _prov.read_provenance(kalman_csv)
+        r = _prov.validate_canonical_provenance(prov, kind="KALMAN_STATE", methodology_version=METHODOLOGY_VERSION,
+                                                protocol_hash=self.protocol.config_hash(), artifact=kalman_csv)
+        if not r.ok:
+            raise CanonicalProvenanceError(r.reason)
+        extra = prov.extra or {}
+        try:
+            seed = KalmanSeed(**extra.get("seed", {}))
+        except TypeError as e:
+            raise CanonicalProvenanceError(f"canonical dataset has no valid seed lineage ({e})")
+        v = validate_seed(seed, pair_name=seed.pair_name, protocol=self.protocol)
+        if not v.ok:
+            raise CanonicalProvenanceError(f"seed lineage rejected: {v.reason}")
+        if extra.get("seed_id") != seed_id(seed):
+            raise CanonicalProvenanceError("seed lineage id does not match the embedded seed record")
+        if seed.data_version != prov.data_version:
+            raise CanonicalProvenanceError("seed data version differs from the dataset data version")
+        if self.pair_name is not None and seed.pair_name != self.pair_name:
+            raise CanonicalProvenanceError(f"dataset seed is for {seed.pair_name}, engine pair is {self.pair_name}")
+        self._lineage = {"seed_ts": seed.seed_ts, "seed_id": extra["seed_id"], "data_version": prov.data_version,
+                         "input_run_id": prov.run_id, "seed_design": seed.seed_design}
+
+    def _output_provenance_status(self) -> str:   # claude code changed: Stage 2D Rev B D-4
+        if self.rule_set == "CANONICAL" and self._lineage is not None:
+            return _prov.CANONICAL
+        return _prov.UNCERTIFIED if self.rule_set == "CANONICAL_UNCERTIFIED" else _prov.LEGACY
+
+    def entry_sign_mismatch_log(self) -> pd.DataFrame:   # claude code changed: Stage 2D Rev B C1 — the rejected entries, never silently discarded
+        rows = [m.as_dict() for m in getattr(self, "entry_sign_mismatches", [])]
+        return pd.DataFrame(rows, columns=[f for f in lifecycle.EntrySignMismatch.__dataclass_fields__])
+
     def _open_trade_from_decision(self, d: Dict, fill_ts: pd.Timestamp, price_a: float, price_b: float) -> bool:   # claude code changed: Stage 2D — new
         """Open the position decided at d["decision_ts"] at the fill candle's
         prices, with β frozen from the decision cutoff. Returns False (SKIP)
@@ -1887,11 +1868,15 @@ class EntryExitEngine:
             entry_signal              = d["signal"],
             entry_beta                = d["beta"],
             entry_spread              = d["spread"],
+            entry_alpha               = d.get("alpha", float("nan")),         # claude code changed: Stage 2D Rev B (D5)
+            entry_held_spread         = d.get("held_spread", float("nan")),   # claude code changed: Stage 2D Rev B (D5)
             direction                 = d["direction"],
             position_usdt             = d["total"],
             leg_a_usdt                = pair_position.notional_a,
             leg_b_usdt                = pair_position.notional_b,
-            kelly_fraction            = self.sizer.safe_kelly,
+            kelly_fraction            = float("nan"),               # claude code changed: Stage 2D Rev B step 8 — Kelly removed; field kept (NaN) so record schemas stay stable
+            allocation_fraction       = self.sizer.fraction,        # claude code changed: Stage 2D Rev B step 8 — f in T = f·C
+            executability             = "UNVERIFIED",               # claude code changed: Stage 2D Rev B step 8 — research has no exchange stepSize/minQty/minNotional rules
             signal_strength           = d["strength"],
             stop_zscore               = d["stop_zscore"],
             target_zscore             = d["target_zscore"],
@@ -2551,7 +2536,21 @@ class EntryExitEngine:
             "entry_ic_pvalue":     round(float(ic_p), 4) if not np.isnan(ic_p) else np.nan,
             "validated_ic":        self.validated_ic if self.validated_ic is not None else np.nan,             # claude code changed: was VALIDATED_IC
             "validated_win_rate":  self.validated_win_rate if self.validated_win_rate is not None else np.nan, # claude code changed: was VALIDATED_WIN_RATE
-            "kelly_safety":        KELLY_SAFETY_FRACTION,
+            "allocation_fraction": self.sizer.fraction,      # claude code changed: Stage 2D Rev B step 8 — was "kelly_safety"
+            "rule_set":            self.rule_set,            # claude code changed: Stage 2D Rev B — LEGACY results can never pass as CANONICAL
+            # claude code changed: Stage 2D Rev B D-4 — canonical labels ONLY for a validated canonical input
+            "provenance_status":   self._output_provenance_status(),
+            "methodology_version": METHODOLOGY_VERSION if self._output_provenance_status() == _prov.CANONICAL else self._output_provenance_status(),
+            "protocol_hash":       self.protocol.config_hash() if self._output_provenance_status() == _prov.CANONICAL else "",
+            "data_version":        self._lineage["data_version"] if self._lineage else "",
+            "seed_id":             self._lineage["seed_id"] if self._lineage else "",
+            "seed_design":         self._lineage["seed_design"] if self._lineage else "",
+            "input_run_id":        self._lineage["input_run_id"] if self._lineage else "",
+            "entry_sign_mismatches": len(getattr(self, "entry_sign_mismatches", [])),   # claude code changed: Stage 2D Rev B C1 — counted separately from no-signal candles
+            "trades_exit_fill_missing": int(sum(getattr(t, "exit_fill_candle_missing", False) for t in self.completed_trades)),   # claude code changed: Stage 2D Rev B C3
+            "trades_data_incomplete": int(sum(not getattr(t, "data_complete", True) for t in self.completed_trades)),   # claude code changed: Stage 2D Rev B C3 — see STAGE2D_DECISION_LOCK.md for the exclusion rule
+            "allocation_hard_max": self.sizer.hard_max,      # claude code changed: Stage 2D Rev B step 8
+            "entries_skipped_sizing": getattr(self, "n_entries_skipped_sizing", 0),   # claude code changed: Stage 2D Rev B step 8
             "entry_threshold":     self.entry_threshold,
             "exit_target":         self.exit_target,
             "exit_stoploss":       self.exit_stoploss,        # claude code changed: no longer used to trigger exits — see module constant comment
@@ -2620,12 +2619,14 @@ class EntryExitEngine:
             p = self.output_dir / f"{prefix}_trade_log.csv"          # claude code changed: was "AVAX_ATOM_trade_log.csv"
             trade_log.to_csv(p, index=False)
             logger.info(f"  Saved trade log    : {p}")
+            self._write_output_provenance(p, "TRADE_LOG")   # claude code changed: Stage 2D Rev B G-1
 
         # Strategy summary
         if not summary.empty:
             p = self.output_dir / f"{prefix}_strategy_summary.csv"   # claude code changed: was "AVAX_ATOM_strategy_summary.csv"
             summary.to_csv(p, index=False)
             logger.info(f"  Saved summary      : {p}")
+            self._write_output_provenance(p, "STRATEGY_SUMMARY")   # claude code changed: Stage 2D Rev B G-1
 
         # Equity curve
         if not equity_curve.empty:
@@ -2638,11 +2639,36 @@ class EntryExitEngine:
             p = self.output_dir / f"{prefix}_signal_log.csv"         # claude code changed: was "AVAX_ATOM_signal_log.csv"
             signal_log.reset_index().to_csv(p, index=False)
             logger.info(f"  Saved signal log   : {p}")
+        if self.rule_set in CANONICAL_RULE_SETS:   # claude code changed: Stage 2D Rev B C1 — written even when empty / when no trade exists, so rejections are never lost with an empty summary
+            p = self.output_dir / f"{prefix}_entry_sign_mismatches.csv"
+            self.entry_sign_mismatch_log().to_csv(p, index=False)
+            logger.info(f"  Saved ENTRY_SIGN_MISMATCH log ({len(self.entry_sign_mismatches)}): {p}")
 
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 8: PRINT PERFORMANCE REPORT
     # ─────────────────────────────────────────────────────────────────────────
+
+    def _write_output_provenance(self, path, kind: str) -> None:   # claude code changed: Stage 2D Rev B G-1 — new
+        """Sidecar for a simulation output. CANONICAL only with a validated
+        canonical input lineage; otherwise UNCERTIFIED or LEGACY."""
+        status = self._output_provenance_status()
+        if status != _prov.CANONICAL:
+            prov = _prov.legacy_provenance(path, kind=kind, producer="bot.research.entry_exit_engine")
+            if status == _prov.UNCERTIFIED:
+                prov = _prov.OutputProvenance(**{**prov.as_dict(), "status": _prov.UNCERTIFIED, "methodology_version": _prov.UNCERTIFIED})
+            _prov.write_provenance(path, prov)
+            return
+        code = _prov.code_state()
+        lin = self._lineage
+        _prov.write_provenance(path, _prov.OutputProvenance(
+            kind=kind, status=_prov.CANONICAL, methodology_version=METHODOLOGY_VERSION,
+            protocol_hash=self.protocol.config_hash(), data_version=lin["data_version"],
+            run_id=_prov.make_run_id(kind=kind, input=lin["input_run_id"], protocol=self.protocol.config_hash(),
+                                     commit=code.commit, dirty=code.dirty_digest),
+            producer="bot.research.entry_exit_engine", artifact_sha256=_prov.file_sha256(path),
+            code_commit=code.commit, code_dirty=code.dirty,
+            extra={"seed_id": lin["seed_id"], "input_run_id": lin["input_run_id"]}))
 
     def _print_performance_report(
         self,
@@ -2808,7 +2834,7 @@ def run_entry_exit_simulation(
     capital:                 float = STRATEGY_CAPITAL_USDT,
     require_passes_filters:  bool  = True,   # claude code changed: new param — see docstring
     resample_hours:          Optional[int] = None,   # claude code changed: new param — see CANDLE_RESAMPLE_HOURS module comment
-    validated_win_rate:      Optional[float] = None,   # claude code changed: new, required — see docstring and KalmanPositionSizer's own error
+    validated_win_rate:      Optional[float] = None,   # claude code changed: Stage 2D Rev B — reporting metadata only (Kelly sizing removed); the docstring below predates that
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Standalone entry point for the entry/exit simulation.

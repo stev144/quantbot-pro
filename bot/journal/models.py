@@ -311,6 +311,14 @@ class TradeRecord(models.Model):
     cycle_id = models.UUIDField(null=True, blank=True, db_index=True)
     dca_level = models.IntegerField(null=True, blank=True)
 
+    # claude code changed: Stage 2D Rev B D-1 — durable C5 provenance. True when
+    # this leg was CLOSED while the live engine's reconciliation flag was
+    # active (a live polling gap not yet reconciled). Exits stay allowed for
+    # risk management, but such a trade is never clean parity/research
+    # evidence. False = a clean exit (and every non-pairs row).
+    reconciliation_affected = models.BooleanField(default=False)
+    reconciliation_gaps = models.TextField(default="", blank=True)   # claude code changed: D-1 — ";"-joined ISO open times live did not receive
+
 
     # ---- Status ----
 
@@ -376,3 +384,34 @@ class TradeRecord(models.Model):
                 name="unique_open_trade_per_symbol",
             )
         ]
+
+
+class SignalRejection(models.Model):
+    """claude code changed: Stage 2D Rev B D-2 — durable record of a canonical
+    entry REJECTION (C1 ENTRY_SIGN_MISMATCH): the intended direction disagreed
+    with the held-spread sign at the decision candle, so no order, no trade and
+    no P&L exist for it. One row per rejected decision; survives restarts. Part
+    of the trade journal, next to TradeRecord — not a separate logging system."""
+    pair_name = models.CharField(max_length=60, db_index=True)
+    venue = models.CharField(max_length=20, default="binance")
+    decision_timestamp = models.DateTimeField(db_index=True)   # cutoff t (candle open time)
+    intended_direction = models.CharField(max_length=20)       # LONG_SPREAD | SHORT_SPREAD
+    zscore = models.FloatField()                                # the entry z that generated the signal
+    held_spread = models.FloatField()                           # h_t = ln P_A,t − β_e ln P_B,t − α_e
+    alpha_e = models.FloatField()
+    beta_e = models.FloatField()
+    price_a = models.FloatField()                               # decision-candle closes used for h_t
+    price_b = models.FloatField()
+    reason = models.CharField(max_length=40)                    # ENTRY_SIGN_MISMATCH
+    methodology_version = models.CharField(max_length=40)
+    protocol_hash = models.CharField(max_length=64)
+    data_version = models.CharField(max_length=64, default="", blank=True)   # the seed record's content data version, if the engine was seeded canonically
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-decision_timestamp"]
+        constraints = [models.UniqueConstraint(fields=["pair_name", "venue", "decision_timestamp", "reason"],
+                                               name="unique_signal_rejection_per_decision")]
+
+    def __str__(self):
+        return f"{self.pair_name} {self.decision_timestamp} {self.intended_direction} {self.reason}"

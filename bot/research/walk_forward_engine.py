@@ -113,7 +113,9 @@
 # IMPORTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-from __future__ import annotations              # Modern type hints in Python 3.8+
+from __future__ import annotations
+from bot.quant_core.provenance import write_legacy_provenance   # claude code changed: Stage 2D Rev B G-1 — LEGACY sidecars: this engine runs pre-Stage-2D (legacy) methodology
+              # Modern type hints in Python 3.8+
 
 import logging                                  # Structured logging — same format as every other module
 import re                                       # Used to pull a pair label out of a Kalman CSV filename
@@ -137,7 +139,7 @@ from scipy import stats                         # linregress for half-life (OU) 
 from bot.research.entry_exit_engine import (
     EntryExitEngine,                            # The Missing-Piece-4 simulator we reuse per fold
     STRATEGY_CAPITAL_USDT,                      # Default capital, kept consistent with Missing Piece 4
-    KELLY_SAFETY_FRACTION,                      # Default quarter-Kelly safety factor
+    # claude code changed: Stage 2D Rev B step 8 — KELLY_SAFETY_FRACTION import removed (Kelly sizing removed)
     EXIT_TIME_STOP_HOURS,                       # Fallback time stop if a fold's half-life can't be estimated
     VALIDATED_IC,                               # Fallback IC if a fold's TRAIN slice can't produce its own
     VALIDATED_WIN_RATE,                         # Fallback win rate if a fold's TRAIN slice can't produce its own
@@ -484,7 +486,7 @@ class WalkForwardEngine:
         min_train_trades:   int   = MIN_TRAIN_TRADES,
         min_test_candles:   int   = MIN_TEST_CANDLES,
         capital_usdt:        float = STRATEGY_CAPITAL_USDT,
-        kelly_safety:         float = KELLY_SAFETY_FRACTION,
+        # claude code changed: Stage 2D Rev B step 8 — kelly_safety parameter removed (fixed-fraction sizing)
         output_dir:           str   = WALK_FORWARD_OUTPUT_DIR,
         resample_hours:        Optional[int] = None,   # claude code changed: new — threaded into the full-history loader; folds are then sliced from already-resampled data
         data_dir:               str   = "data",   # claude code changed: new — raw OHLCV CSVs for the per-fold Kalman refit (fetch_all_symbols.py's output folder)
@@ -510,7 +512,7 @@ class WalkForwardEngine:
             max(1, min_test_candles // resample_hours) if resample_hours else min_test_candles
         )
         self.capital_usdt      = capital_usdt               # Capital used for every fold's simulation
-        self.kelly_safety      = kelly_safety                # Quarter-Kelly safety factor, passed straight through
+        # claude code changed: Stage 2D Rev B step 8 — self.kelly_safety removed
         self.output_dir        = Path(output_dir)             # Root directory for this engine's outputs
         self.output_dir.mkdir(parents=True, exist_ok=True)     # Ensure it exists before we try to write to it
         self.data_dir          = Path(data_dir)               # claude code changed: new — raw OHLCV source for per-fold Kalman refits
@@ -1034,7 +1036,7 @@ class WalkForwardEngine:
         return EntryExitEngine(
             capital_usdt          = capital_usdt,                            # This fold's capital baseline
             exit_time_stop_hours    = exit_time_stop_h,                        # This fold's re-calibrated time stop
-            kelly_safety              = self.kelly_safety,                       # Project-standard quarter-Kelly safety
+            # claude code changed: Stage 2D Rev B step 8 — kelly_safety no longer passed (fixed-fraction sizing)
             output_dir                  = output_dir,                             # Keep this run's files isolated
             pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,             # claude code changed: new
             signal_source=self.signal_source,                                       # claude code changed: new
@@ -1134,6 +1136,7 @@ class WalkForwardEngine:
         if not fold_df.empty:                                                     # Only write if we actually have folds
             p = pair_output_dir / f"{pair_name_safe}_walk_forward_folds.csv"      # Per-fold summary report
             fold_df.to_csv(p, index=False)                                        # Save it
+            write_legacy_provenance(p, kind="WALK_FORWARD_FOLDS", producer="bot.research.walk_forward_engine")   # claude code changed: Stage 2D Rev B G-1
             logger.info(f"  Saved fold report   : {p}")
 
         if not oos_trades_df.empty:                                               # Only write if OOS trades exist
@@ -1445,6 +1448,7 @@ def run_walk_forward_pipeline(
     leaderboard_path = Path(output_dir) / "walk_forward_leaderboard.csv"       # Where the leaderboard gets saved
     Path(output_dir).mkdir(parents=True, exist_ok=True)                       # Ensure the output directory exists
     leaderboard_df.to_csv(leaderboard_path, index=False)                       # Save the leaderboard to disk
+    write_legacy_provenance(leaderboard_path, kind="WALK_FORWARD_SUMMARY", producer="bot.research.walk_forward_engine")   # claude code changed: Stage 2D Rev B G-1
 
     logger.info("\n" + "=" * 70)
     logger.info("WALK-FORWARD PIPELINE — LEADERBOARD")

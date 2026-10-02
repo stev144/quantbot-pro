@@ -180,7 +180,8 @@ class PairsTradeLogger:
         return value_fees_in_quote(valuable, base, quote, fill.fill_price) or 0.0
 
     def log_leg_exit(self, pair_trade_id: uuid.UUID, leg: str, fill: MarginFillResult, exit_reason: str,
-                     interest_qty: Optional[float] = None, entry_fees=None) -> Optional[TradeRecord]:   # claude code changed: LIVE-01/LIVE-02 — new optional args; old call signature still valid
+                     interest_qty: Optional[float] = None, entry_fees=None,
+                     reconciliation_affected: bool = False, reconciliation_gaps: str = "") -> Optional[TradeRecord]:   # claude code changed: LIVE-01/LIVE-02 — new optional args; old call signature still valid. Stage 2D Rev B D-1 — reconciliation provenance
         try:
             record = (
                 TradeRecord.objects.filter(pair_trade_id=pair_trade_id, leg=leg, status="OPEN")
@@ -208,6 +209,8 @@ class PairsTradeLogger:
             record.exit_price = fill.fill_price
             record.fee_exit = pnl.fee_exit_quote if pnl.fee_exit_quote is not None else self._storable_fee(fill)
             record.exit_reason = exit_reason
+            record.reconciliation_affected = bool(reconciliation_affected)   # claude code changed: Stage 2D Rev B D-1 — durable, survives restart
+            record.reconciliation_gaps = reconciliation_gaps or ""           # claude code changed: Stage 2D Rev B D-1
             record.gross_pnl = round(pnl.gross_pnl, 4)
             if pnl.valued:
                 record.net_pnl = round(pnl.net_pnl, 4)
@@ -239,6 +242,26 @@ class PairsTradeLogger:
                 f"[PairsTradeLogger] FAILED to log leg {leg} exit for pair_trade_id="
                 f"{pair_trade_id}: {e}. P&L unrecorded — check database."
             )
+            return None
+
+    def log_signal_rejection(self, pair_name: str, mismatch, *, methodology_version: str, protocol_hash: str,
+                             data_version: str = "", venue: str = "binance"):   # claude code changed: Stage 2D Rev B D-2 — new
+        """Persist one C1 ENTRY_SIGN_MISMATCH (bot.quant_core.lifecycle.EntrySignMismatch)
+        to the journal. Idempotent per (pair, venue, decision candle, reason).
+        No order, trade or P&L exists for it."""
+        from bot.journal.models import SignalRejection
+        ts = mismatch.decision_timestamp
+        try:
+            row, _ = SignalRejection.objects.get_or_create(
+                pair_name=pair_name, venue=venue, decision_timestamp=ts, reason=mismatch.reason,
+                defaults=dict(intended_direction=mismatch.intended_direction, zscore=float(mismatch.zscore),
+                              held_spread=float(mismatch.held_spread), alpha_e=float(mismatch.alpha_e),
+                              beta_e=float(mismatch.beta_e), price_a=float(mismatch.price_a), price_b=float(mismatch.price_b),
+                              methodology_version=methodology_version, protocol_hash=protocol_hash,
+                              data_version=data_version or ""))
+            return row
+        except Exception as e:   # the decision is already a no-trade; a journal failure must be loud, not fatal
+            logger.critical(f"[PairsTradeLogger] FAILED to persist {mismatch.reason} for {pair_name} at {ts}: {e}")
             return None
 
     def get_open_legs(self, pair_trade_id: uuid.UUID) -> list:

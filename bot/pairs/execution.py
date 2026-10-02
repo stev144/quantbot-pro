@@ -43,7 +43,7 @@ from bot.engines.order_manager import (
     RateLimitException,
 )
 from bot.pairs.config import PairConfig
-from bot.pairs.margin_adapter import BinanceIsolatedMarginAdapter, CloseQuantityUnavailableException, cover_buy_quantity, remaining_debt_or_raise, sellable_quantity   # claude code changed: quantity helpers
+from bot.pairs.margin_adapter import BinanceIsolatedMarginAdapter, CloseQuantityUnavailableException, cover_buy_quantity, floor_to_step, remaining_debt_or_raise, sellable_quantity   # claude code changed: quantity helpers; Stage 2D Rev B step 8 — floor_to_step for entry executability
 from bot.pairs.signal_engine import SignalDecision
 from bot.pairs.trade_logger import PairsTradeLogger
 from bot.risk.drawdown_guard import DrawdownGuard
@@ -139,6 +139,17 @@ class PairsExecutionEngine:
         symbol_a, symbol_b = pair_config.binance_symbol_a, pair_config.binance_symbol_b
         pair_trade_id = uuid.uuid4()
 
+        # claude code changed: Stage 2D Rev B step 8 — executability BEFORE any
+        # transfer or order: both legs floored to stepSize and checked against
+        # minQty / minNotional at the current marks (real mode). Was qty =
+        # leg_usdt / price with no flooring or minimum check.
+        try:
+            qty_a, qty_b, executability = self._entry_quantities(trade, symbol_a, symbol_b)
+        except Exception as e:
+            logger.error(f"[PairsExecutionEngine] {pair_config.pair_name}: ENTRY REFUSED — not executable: {e}. No transfer, no order.")
+            return None
+        trade.executability = executability
+
         try:
             self.adapter.transfer_in(symbol_a, trade.leg_a_usdt)
             self.adapter.transfer_in(symbol_b, trade.leg_b_usdt)
@@ -147,21 +158,13 @@ class PairsExecutionEngine:
             return None
 
         try:
-            if trade.direction == "LONG_SPREAD":
+            if trade.direction == "LONG_SPREAD":   # claude code changed: Stage 2D Rev B step 8 — quantities come from _entry_quantities (floored + checked)
                 side_a, side_b = "BUY", "SELL"
-                price_a = self.adapter.get_ticker_price(symbol_a)
-                qty_a = trade.leg_a_usdt / price_a
                 fill_a = self.adapter.open_long(symbol_a, qty_a)
-                price_b = self.adapter.get_ticker_price(symbol_b)
-                qty_b = trade.leg_b_usdt / price_b
                 _borrow_b, fill_b = self.adapter.open_short(symbol_b, qty_b)
             else:  # SHORT_SPREAD
                 side_a, side_b = "SELL", "BUY"
-                price_a = self.adapter.get_ticker_price(symbol_a)
-                qty_a = trade.leg_a_usdt / price_a
                 _borrow_a, fill_a = self.adapter.open_short(symbol_a, qty_a)
-                price_b = self.adapter.get_ticker_price(symbol_b)
-                qty_b = trade.leg_b_usdt / price_b
                 fill_b = self.adapter.open_long(symbol_b, qty_b)
         except (OrderStillOpenException, OrderUnconfirmedException, RateLimitException) as e:
             logger.critical(
@@ -192,6 +195,31 @@ class PairsExecutionEngine:
         logger.info(f"[PairsExecutionEngine] Opened {pair_config.pair_name} {trade.direction} | pair_trade_id={pair_trade_id}")
         return pair_trade_id
 
+    def _entry_quantities(self, trade, symbol_a: str, symbol_b: str):   # claude code changed: Stage 2D Rev B step 8 — new
+        """(qty_a, qty_b, executability). Real mode: each leg floored to the
+        exchange stepSize and required to clear minQty and minNotional at the
+        current mark, else ValueError (the caller refuses the entry before any
+        transfer). Dry run: unfloored, marked UNVERIFIED — the simulator has no
+        exchange filters, so executability is not claimed."""
+        out = []
+        for symbol, leg_usdt in ((symbol_a, trade.leg_a_usdt), (symbol_b, trade.leg_b_usdt)):
+            if not (leg_usdt > 0):
+                raise ValueError(f"{symbol}: non-positive leg notional {leg_usdt}")
+            price = self.adapter.get_ticker_price(symbol)
+            raw = leg_usdt / price
+            if self.dry_run:
+                out.append(raw)
+                continue
+            rules = self.adapter.amount_rules(symbol)
+            qty = floor_to_step(raw, rules.step)
+            if qty <= 0 or (rules.min_qty is not None and qty < rules.min_qty):
+                raise ValueError(f"{symbol}: floored quantity {qty} below minQty {rules.min_qty} (raw {raw}, step {rules.step})")
+            min_notional = self.adapter.min_notional(symbol)
+            if qty * price < min_notional:
+                raise ValueError(f"{symbol}: notional {qty * price:.6f} below minNotional {min_notional}")
+            out.append(qty)
+        return out[0], out[1], ("UNVERIFIED (dry run)" if self.dry_run else "VERIFIED")
+
     def _attempt_partial_unwind(self, symbol_a: str, symbol_b: str) -> None:
         """Best-effort close of whichever leg(s) actually opened before
         the failure. Never raises — a failure here is logged, not
@@ -218,7 +246,8 @@ class PairsExecutionEngine:
 
     # ── Close ────────────────────────────────────────────────────────
 
-    def close_pair_trade(self, pair_config: PairConfig, exit_reason: str) -> bool:
+    def close_pair_trade(self, pair_config: PairConfig, exit_reason: str, *, reconciliation_affected: bool = False,
+                         reconciliation_gaps: str = "") -> bool:   # claude code changed: Stage 2D Rev B D-1 — reconciliation provenance passed through to both legs' journal rows
         position = self._open_positions.get(pair_config.pair_name)
         if position is None:
             logger.error(f"[PairsExecutionEngine] No tracked open position for {pair_config.pair_name} — cannot close.")
@@ -236,9 +265,11 @@ class PairsExecutionEngine:
             return False
 
         self.trade_logger.log_leg_exit(position.pair_trade_id, "A", fill_a, exit_reason,
-                                       interest_qty=interest_a, entry_fees=position.entry_fees_a)   # claude code changed: LIVE-01/LIVE-02
+                                       interest_qty=interest_a, entry_fees=position.entry_fees_a,   # claude code changed: LIVE-01/LIVE-02
+                                       reconciliation_affected=reconciliation_affected, reconciliation_gaps=reconciliation_gaps)   # claude code changed: Stage 2D Rev B D-1
         self.trade_logger.log_leg_exit(position.pair_trade_id, "B", fill_b, exit_reason,
-                                       interest_qty=interest_b, entry_fees=position.entry_fees_b)   # claude code changed: LIVE-01/LIVE-02
+                                       interest_qty=interest_b, entry_fees=position.entry_fees_b,   # claude code changed: LIVE-01/LIVE-02
+                                       reconciliation_affected=reconciliation_affected, reconciliation_gaps=reconciliation_gaps)   # claude code changed: Stage 2D Rev B D-1
 
         self._refund_collateral_best_effort(position.symbol_a, position.symbol_b)
         del self._open_positions[pair_config.pair_name]

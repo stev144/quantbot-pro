@@ -447,6 +447,17 @@ class BinanceIsolatedMarginAdapter:
         market = self.exchange.market(symbol)
         return AmountRules(step=market["precision"]["amount"], min_qty=(market.get("limits") or {}).get("amount", {}).get("min"))
 
+    def min_notional(self, symbol: str) -> Optional[float]:   # claude code changed: Stage 2D Rev B step 8 — exchange minNotional for the entry executability check
+        """MIN_NOTIONAL (quote) from ccxt market metadata. Dry run: None — the
+        simulator applies no exchange filters. Real mode: raises rather than
+        guessing when the metadata has no value."""
+        if self.dry_run:
+            return None
+        cost_min = ((self.exchange.market(symbol).get("limits") or {}).get("cost") or {}).get("min")
+        if cost_min is None:
+            raise ValueError(f"{symbol}: no minNotional (limits.cost.min) in market metadata — cannot verify executability")
+        return float(cost_min)
+
     def fee_buffer_rate(self, symbol: str) -> float:
         """Worst-case base-asset fee rate used to size a short-cover buy: the
         market taker rate from ccxt metadata (fees are 'feeSide': 'get'). Dry

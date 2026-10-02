@@ -121,6 +121,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations          # Modern type hints
+from bot.quant_core.provenance import write_legacy_provenance   # claude code changed: Stage 2D Rev B G-1 — LEGACY sidecars: this engine runs pre-Stage-2D (legacy) methodology
 
 import logging                              # Structured logging
 import warnings                             # Suppress statistical warnings
@@ -1603,6 +1604,7 @@ def run_cointegration_research(
     if not pairs_df.empty:
         pairs_path = Path(output_dir) / "cointegration_pairs.csv"
         pairs_df.to_csv(pairs_path, index=False)
+        write_legacy_provenance(pairs_path, kind="COINTEGRATION_SCAN", producer="bot.research.cointegration_engine")   # claude code changed: Stage 2D Rev B G-1
         logger.info(f"\n  Saved pair summary: {pairs_path}")
 
     # Save each valid pair's spread DataFrame

@@ -135,7 +135,9 @@ PAIR_NAMES = [
 MIN_POSITION_USDT_OVERRIDE = 15.0  # see module docstring above — NOT entry_exit_engine.py's MIN_POSITION_USDT. Re-verified clearable at $100/pair capital (see dry_run_test.py section 14) after the TOTAL_PILOT_CAPITAL_USDT fix above.
 DISABLE_TARGET_EXIT = True
 EXIT_TIME_STOP_HOURS = 4  # fixed, per the validated "Eighth design attempt" — NOT auto-derived from half-life
-KELLY_SAFETY_FRACTION = 0.25  # matches entry_exit_engine.py's own default; kept explicit here for visibility
+# claude code changed: Stage 2D Rev B step 8 — KELLY_SAFETY_FRACTION removed:
+# sizing is fixed-fraction (owner decision), T = f · C_strategy with
+# f = CanonicalProtocol.pair_allocation_fraction (0.05) ≤ its hard maximum.
 
 
 @dataclass(frozen=True)
@@ -148,7 +150,7 @@ class PairConfig:
     hedge_ratio: float       # OLS seed beta, from cointegration_pairs.csv — real for ALL 10 pairs, whether they pass filters or not (an OLS fit happens before filtering)
     intercept: float         # OLS seed alpha, from cointegration_pairs.csv
     validated_win_rate: Optional[float]  # claude code changed: now Optional — None for a pair that currently fails cointegration or has no trustworthy (non-stale) permutation verdict; see _load_validated_win_rate()
-    capital_usdt: float      # claude code changed: 0.0 for a monitoring-only pair (see is_entry_eligible) — capital is never allocated to a pair that structurally cannot trade
+    capital_usdt: float      # claude code changed: 0.0 for a monitoring-only pair (see is_entry_eligible) — capital is never allocated to a pair that structurally cannot trade. Stage 2D Rev B: this is the STRATEGY capital C the fixed-fraction sizer applies f to, not a per-pair bucket
     passes_filters: bool     # claude code changed: new — cointegration_pairs.csv's current static-validation status. Deliberately NOT a load-time gate here (config.py stays permissive so every configured pair can still run and be observed, e.g. AVA_PHA kept active for comparison after it started failing) — bot/pairs/health.py is where this becomes an actual NORMAL/DEGRADED/INVALIDATED decision.
     reject_reason: str       # "" if passes_filters is True — real text from cointegration_pairs.csv otherwise
     is_entry_eligible: bool  # claude code changed: new — True only if validated_win_rate is not None. Drives whether pairs_bot_runner.py constructs a full PairSignalEngine (can trade) or a PairMonitorEngine (tracking only, structurally cannot trade — see bot/pairs/monitor_engine.py)
@@ -190,9 +192,14 @@ def _passes_filters_now(pair_name: str) -> bool:
 
 
 ENTRY_ELIGIBLE_PAIR_NAMES = [p for p in PAIR_NAMES if _passes_filters_now(p)]
-PER_PAIR_CAPITAL_USDT = (
-    TOTAL_PILOT_CAPITAL_USDT / len(ENTRY_ELIGIBLE_PAIR_NAMES) if ENTRY_ELIGIBLE_PAIR_NAMES else 0.0
-)  # equal-weighted, matches the validated backtest convention — but only across entry-eligible pairs now
+# claude code changed: Stage 2D Rev B step 8 — PER_PAIR_CAPITAL_USDT (an equal
+# split of the pilot capital into per-pair Kelly buckets) removed. Under
+# fixed-fraction sizing every entry-eligible pair sizes off the SAME strategy
+# capital C = TOTAL_PILOT_CAPITAL_USDT: T = 0.05 · $500 = $25 per pair trade.
+# Sizing off a per-pair $250 would give T = $12.50, below the $15
+# MIN_POSITION_USDT_OVERRIDE floor, i.e. no pair could ever trade.
+# Gross exposure is bounded by n_eligible · f · C (2 pairs → $50).
+STRATEGY_CAPITAL_USDT = TOTAL_PILOT_CAPITAL_USDT
 
 
 def _load_validated_win_rate(pair_name: str) -> Optional[float]:
@@ -244,7 +251,7 @@ def _build_pair_config(pair_name: str) -> PairConfig:
         hedge_ratio=float(coint_row["hedge_ratio"]),
         intercept=float(coint_row["intercept"]),
         validated_win_rate=win_rate,
-        capital_usdt=PER_PAIR_CAPITAL_USDT if is_entry_eligible else 0.0,
+        capital_usdt=STRATEGY_CAPITAL_USDT if is_entry_eligible else 0.0,   # claude code changed: Stage 2D Rev B step 8 — strategy capital C (sizer applies f), was the per-pair split
         passes_filters=str(coint_row.get("passes_filters")) == "True",
         reject_reason=coint_row.get("reject_reason") or "",
         is_entry_eligible=is_entry_eligible,

@@ -36,9 +36,9 @@ from bot.research.kalman_filter_engine import (
     ZSCORE_WINSOR_LIMIT,
     ZSCORE_MIN_PERIODS,
     WARMUP_CANDLES,
+    ZSCORE_WINDOW,   # claude code changed: Stage 2D Rev B — was a re-declared literal 504 here; now the one protocol value
 )
-
-ZSCORE_WINDOW = 504  # 3 weeks of 1h candles — matches kalman_filter_engine.py exactly
+from bot.quant_core.kalman import StepResult, measurement_update   # claude code changed: Stage 2D Rev B — the one measurement update shared with research
 
 _Q = np.diag([PROCESS_NOISE_BETA, PROCESS_NOISE_ALPHA])
 _R = OBSERVATION_NOISE
@@ -53,17 +53,49 @@ class NativeStepResult:
     convention leaves un-shifted; everything else gets buffered one
     candle before being used for a live entry/exit decision."""
 
-    beta_pred:        float   # tradeable hedge ratio (pre-update, leakage-free)
-    alpha_pred:       float
-    spread:           float   # = prediction_error, by construction — see docstring below
+    beta_pred:        float   # PRIOR β(t|t−1) — diagnostics only since Stage 2D Rev B (decisions use beta_post, owner D1/D2)  # claude code changed
+    alpha_pred:       float   # PRIOR α(t|t−1)  # claude code changed: Stage 2D Rev B — diagnostics only
+    spread:           float   # = prediction_error (innovation), by construction — the z-score input
     prediction_error: float
-    beta_uncertainty: float
-    is_warmup:        bool    # first WARMUP_CANDLES (168) candles — spread untrusted, matches kalman_filter_engine.py's own is_warmup masking
-    zscore:           Optional[float]     # None until ZSCORE_MIN_PERIODS candles have accumulated
+    beta_uncertainty: float   # POSTERIOR P(t|t)[0,0] (variance)  # claude code changed: Stage 2D Rev B — was the prior P(t|t−1)[0,0] (Phase O D1)
+    is_warmup:        bool    # since the last (re)seed, or the state is invalid  # claude code changed: Stage 2D Rev B — was candles since engine start
+    zscore:           Optional[float]     # None until ZSCORE_MIN_PERIODS valid candles have accumulated in this segment
     pair_signal:      Optional[float]     # -zscore, None while zscore is None
-    zscore_lag1:      Optional[float]     # native zscore one candle before this one
+    zscore_lag1:      Optional[float]     # native zscore one GRID candle before this one (None if that candle had none)
+    beta_post:        float = math.nan    # claude code changed: Stage 2D Rev B — θ(t|t)[0], the decision β (D1/D2)
+    alpha_post:       float = math.nan    # claude code changed: Stage 2D Rev B — θ(t|t)[1], the decision α
+    beta_uncertainty_prior: float = math.nan   # claude code changed: Stage 2D Rev B — P(t|t−1)[0,0], diagnostics
+    alpha_uncertainty: float = math.nan   # claude code changed: Stage 2D Rev B — P(t|t)[1,1]
+    innovation_variance: float = math.nan # claude code changed: Stage 2D Rev B — S
+    gain_beta:        float = math.nan    # claude code changed: Stage 2D Rev B — K[0]
+    gain_alpha:       float = math.nan    # claude code changed: Stage 2D Rev B — K[1]
+    filtered_residual: float = math.nan   # claude code changed: Stage 2D Rev B — x − Hθ(t|t) = e·R/S
+    observed:         bool = True         # claude code changed: Stage 2D Rev B — False for a grid candle with no data
+    state_valid:      bool = True         # claude code changed: Stage 2D Rev B — False inside a gap > g_max
+    segment:          int = 0             # claude code changed: Stage 2D Rev B — increments at every re-seed
+    timestamp:        object = None       # claude code changed: Stage 2D Rev B — candle open time this result belongs to
 
 
+def native_from_step(st: StepResult, timestamp=None) -> NativeStepResult:   # claude code changed: Stage 2D Rev B — live view of one canonical step
+    return NativeStepResult(
+        beta_pred=float(st.theta_prior[0]), alpha_pred=float(st.theta_prior[1]),
+        spread=st.innovation, prediction_error=st.innovation,
+        beta_uncertainty=float(st.P_post[0, 0]),
+        is_warmup=bool(st.in_warmup or not st.state_valid),
+        zscore=None, pair_signal=None, zscore_lag1=None,
+        beta_post=float(st.theta_post[0]), alpha_post=float(st.theta_post[1]),
+        beta_uncertainty_prior=float(st.P_prior[0, 0]), alpha_uncertainty=float(st.P_post[1, 1]),
+        innovation_variance=st.innovation_variance,
+        gain_beta=float(st.gain[0]), gain_alpha=float(st.gain[1]),
+        filtered_residual=st.filtered_residual, observed=st.observed,
+        state_valid=st.state_valid, segment=st.segment, timestamp=timestamp,
+    )
+
+
+# claude code changed: Stage 2D Rev B — a gap-UNAWARE single update kept for
+# monitor_engine.py (beta-drift monitoring only, no trading). The trading path
+# (PairSignalEngine) drives bot/quant_core/kalman.CanonicalKalman instead,
+# which adds the D8 gap policy; both call the same measurement_update().
 def kalman_step(state: KalmanState, price_a: float, price_b: float, candle_index: int) -> tuple[KalmanState, NativeStepResult]:
     """One sequential Kalman update, math identical to
     KalmanFilterEngine._run_filter()'s loop body (F=identity, so
@@ -88,31 +120,22 @@ def kalman_step(state: KalmanState, price_a: float, price_b: float, candle_index
     """
     theta_pred = state.theta.copy()          # F = I
     P_pred = state.P + _Q
-
-    log_a = math.log(price_a)
-    log_b = math.log(price_b)
-    H = np.array([log_b, 1.0])
-
-    innovation = log_a - H @ theta_pred
-    S = H @ P_pred @ H + _R
-    K = P_pred @ H / S
-
-    theta_post = theta_pred + K * innovation
-    KH = np.outer(K, H)
-    P_post = (_I2 - KH) @ P_pred @ (_I2 - KH).T + np.outer(K, K) * _R
-
-    new_state = KalmanState(theta=theta_post, P=P_post)
-
+    u = measurement_update(theta_pred, P_pred, math.log(price_a), math.log(price_b), _R)   # claude code changed: Stage 2D Rev B — was a second hand-written copy of the update
+    new_state = KalmanState(theta=u.theta_post, P=u.P_post)
     result = NativeStepResult(
         beta_pred=float(theta_pred[0]),
         alpha_pred=float(theta_pred[1]),
-        spread=float(innovation),
-        prediction_error=float(innovation),
-        beta_uncertainty=float(P_pred[0, 0]),
+        spread=u.innovation,
+        prediction_error=u.innovation,
+        beta_uncertainty=float(u.P_post[0, 0]),   # claude code changed: Stage 2D Rev B — posterior (was P_pred[0, 0])
         is_warmup=candle_index < WARMUP_CANDLES,
-        zscore=None,       # filled in by PairSignalEngine, which owns the rolling window
+        zscore=None,       # filled in by the caller, which owns the rolling window
         pair_signal=None,
         zscore_lag1=None,
+        beta_post=float(u.theta_post[0]), alpha_post=float(u.theta_post[1]),   # claude code changed: Stage 2D Rev B
+        beta_uncertainty_prior=float(P_pred[0, 0]), alpha_uncertainty=float(u.P_post[1, 1]),   # claude code changed: Stage 2D Rev B
+        innovation_variance=u.innovation_variance, gain_beta=float(u.gain[0]), gain_alpha=float(u.gain[1]),   # claude code changed: Stage 2D Rev B
+        filtered_residual=u.filtered_residual,   # claude code changed: Stage 2D Rev B
     )
     return new_state, result
 

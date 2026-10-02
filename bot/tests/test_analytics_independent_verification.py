@@ -16,7 +16,6 @@ from django.test import SimpleTestCase
 import pandas as pd
 
 from bot.backtesting.backtester import Backtester, calculate_sharpe_ratio, calculate_sortino_ratio
-from bot.research.entry_exit_engine import KalmanPositionSizer
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -104,64 +103,11 @@ class SortinoRatioIndependentVerificationTest(SimpleTestCase):
         self.assertAlmostEqual(calculate_sortino_ratio(trades, years_elapsed=None), expected, places=4)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# KELLY — real formula confirmed from KalmanPositionSizer.__init__:
-#   loss_rate = 1 - win_rate
-#   win_loss_ratio = win_rate / loss_rate
-#   base_kelly = win_rate - loss_rate / win_loss_ratio
-#
-# claude code changed: real DISCREPANCY found while independently
-# re-deriving this — algebraically, win_rate - loss_rate/win_loss_ratio
-# (with win_loss_ratio = win_rate/loss_rate) simplifies to
-# (2*win_rate - 1) / win_rate, NOT "2*win_rate - 1" as the module's own
-# comment at entry_exit_engine.py:650 claims. Confirmed against the
-# CODE's real behavior (not the comment) using this project's own real
-# constants: VALIDATED_WIN_RATE=0.69 produces base_kelly=0.5507 (matches
-# every real log line seen this engagement, e.g. "Full Kelly: 0.5507"),
-# NOT 0.38 (=2*0.69-1, the comment's claimed value). The CODE is
-# internally consistent Kelly math for its own stated win_loss_ratio
-# assumption; the COMMENT's simplification is the actual error. Fixed
-# the comment only (see entry_exit_engine.py) — the executable formula
-# was never wrong, so there is no behavior change here.
-# ═══════════════════════════════════════════════════════════════════════
-
-class KellyFractionIndependentVerificationTest(SimpleTestCase):
-
-    def _hand_derive_base_kelly(self, win_rate: float) -> float:
-        """The CORRECT closed-form simplification of this project's own
-        formula: win_rate - (1-win_rate)/(win_rate/(1-win_rate))
-                = win_rate - (1-win_rate)^2 / win_rate
-                = (2*win_rate - 1) / win_rate      [algebra, not the code's own comment]
-        """
-        return (2 * win_rate - 1) / win_rate
-
-    def test_matches_hand_derivation_at_the_projects_own_validated_win_rate(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.69)
-        expected = self._hand_derive_base_kelly(0.69)
-        self.assertAlmostEqual(sizer.base_kelly, expected, places=6)
-        self.assertAlmostEqual(sizer.base_kelly, 0.550725, places=6)   # the real, previously-logged value
-        self.assertNotAlmostEqual(sizer.base_kelly, 0.38, places=2)   # the comment's WRONG claimed value
-
-    def test_matches_hand_derivation_at_a_second_independent_win_rate(self):
-        # claude code changed: a second win_rate, not just the project's
-        # own constant, to prove this is a real formula match and not a
-        # coincidence at one specific number.
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.80)
-        expected = self._hand_derive_base_kelly(0.80)   # (1.6-1)/0.8 = 0.75
-        self.assertAlmostEqual(sizer.base_kelly, expected, places=6)
-        self.assertAlmostEqual(sizer.base_kelly, 0.75, places=6)
-
-    def test_safe_kelly_is_exactly_base_kelly_times_safety_fraction(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.69)
-        self.assertAlmostEqual(sizer.safe_kelly, sizer.base_kelly * 0.25, places=10)
-
-    def test_win_rate_of_50_percent_produces_zero_kelly_not_a_divide_by_zero(self):
-        # claude code changed: edge case — (2*0.5-1)/0.5 = 0/0.5 = 0.0
-        # exactly (denominator win_rate=0.5 is fine; only win_rate=0 would
-        # divide by zero, and that's not a real win rate any strategy
-        # would be initialised with).
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.50)
-        self.assertAlmostEqual(sizer.base_kelly, 0.0, places=10)
+# claude code changed: Stage 2D Rev B step 8 — the KELLY independent-
+# verification section was removed together with KalmanPositionSizer (owner
+# decision: fixed-fraction sizing, no Kelly). There is no Kelly formula left in
+# any sizing path to verify; the fixed-fraction arithmetic is verified in
+# bot/tests/test_entry_exit_engine.py (FixedFractionSizerTest).
 
 
 # ═══════════════════════════════════════════════════════════════════════

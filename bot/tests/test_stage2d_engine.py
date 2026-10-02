@@ -13,7 +13,7 @@ from django.test import SimpleTestCase
 
 from bot.research.entry_exit_engine import (
     ENTRY_SIGNAL_MIN, MAX_BETA_UNCERTAINTY, PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT, PRED_ERROR_NORMAL,
-    EntryExitEngine, KalmanPositionSizer,
+    EntryExitEngine, FixedFractionSizer,   # claude code changed: Stage 2D Rev B step 8 — was KalmanPositionSizer
 )
 
 
@@ -109,23 +109,23 @@ class SizeFloorAndDomainTests(SimpleTestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_research_uses_the_instance_floor_not_a_hardcoded_100(self):
-        # capital 250 (pilot-like): Kelly-sized total is well below 100 but above 15
+        # claude code changed: Stage 2D Rev B step 8 — capital 400: fixed-fraction
+        # T = 0.05 × 400 = $20, below the module's $100 but above the instance's $15
         small = EntryExitEngine(output_dir=self.tmp, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,
-                                capital_usdt=250.0, min_position_usdt=15.0)
+                                capital_usdt=400.0, min_position_usdt=15.0)
         trades = small.run(kalman_csv=str(self.csv))[0]
         self.assertEqual(len(trades), 1)
-        self.assertLess(trades.iloc[0]["position_usdt"], 100.0)
+        self.assertAlmostEqual(trades.iloc[0]["position_usdt"], 20.0, places=2)
 
-    def test_sizer_skips_non_positive_or_nonfinite_beta(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, validated_win_rate=0.6)
+    def test_sizer_skips_non_positive_or_nonfinite_beta(self):   # claude code changed: Stage 2D Rev B step 8 — FixedFractionSizer
+        sizer = FixedFractionSizer(capital_usdt=10_000.0)
         for beta in (0.0, -0.5, -1.0, float("nan"), float("inf")):
-            total, a, b, _ = sizer.size_position(zscore=-2.5, beta=beta, beta_uncertainty=0.01, prediction_error=0.0)
-            self.assertEqual((total, a, b), (0.0, 0.0, 0.0), msg=repr(beta))
+            self.assertFalse(sizer.size(beta).ok, msg=repr(beta))
 
-    def test_sizer_split_unchanged_for_positive_beta(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, validated_win_rate=0.6)
-        total, a, b, _ = sizer.size_position(zscore=-2.5, beta=1.7, beta_uncertainty=0.01, prediction_error=0.0)
-        self.assertAlmostEqual(a, total / 2.7, places=9)       # identical to the old T/(1+β) for β > 0
+    def test_sizer_split_for_positive_beta(self):   # claude code changed: Stage 2D Rev B step 8 — FixedFractionSizer
+        total, a, b = FixedFractionSizer(capital_usdt=10_000.0).size(1.7).value
+        self.assertAlmostEqual(total, 500.0, places=9)
+        self.assertAlmostEqual(a, total / 2.7, places=9)
         self.assertAlmostEqual(b, total * 1.7 / 2.7, places=9)
 
 
