@@ -207,6 +207,17 @@ class Backtester:
         self.equity_curve = [round(initial_balance, 2)]   # Balance over time — for equity chart
         self.drawdown_curve = [0.0]                        # Drawdown % over time — for DD chart
 
+        # claude code changed: Phase 3 M-01 — a signal decided at candle i's CLOSE is
+        # filled at candle i+1's OPEN (was: filled at the signal candle's own close).
+        self.pending_entry = None              # (signal, regime_result) awaiting the next open
+        self.unfilled_signals_at_data_end = 0  # a decision at the last close cannot be filled
+        # claude code changed: Phase 3 M-02 — mark-to-market equity at every candle close
+        # (liquidation value: close with adverse slippage, entry+exit fees). Drawdown and the
+        # headline Sharpe/Sortino come from this path, not from closed-trade balances only.
+        self.mtm_points = []                   # [(timestamp, equity)]
+        self.mtm_peak = initial_balance
+        self.max_drawdown_mtm = 0.0
+
 
     # ============================================================
     # DATA PREPARATION
@@ -331,8 +342,16 @@ class Backtester:
     # ============================================================
     # TRADE ENTRY
     # ============================================================
-    def _open_trade_from_signal(self, signal: dict, regime_result, i: int):
-        """Creates an open Trade object and stores signal context."""
+    def _open_trade_from_signal(self, signal: dict, regime_result, i: int, fill_reference_price: float = None):
+        """Creates an open Trade object and stores signal context.
+
+        claude code changed: Phase 3 M-01 — fill_reference_price is the price the
+        market order actually meets: the OPEN of the candle after the decision.
+        Slippage is applied to it, not to the strategy's signal price (the
+        decision candle's close, which a decision taken AT that close can no
+        longer trade). Quantity is still sized from the decision-time price and
+        stop — what the order would have been placed with; the realised risk
+        uses the real fill."""
 
         sig = signal["signal"]               # "BUY" or "SELL"
         entry_p = float(signal["entry"])     # The intended entry price from the strategy
@@ -352,7 +371,9 @@ class Backtester:
         # Apply entry slippage — simulates paying slightly more/less than signal price
         # claude code changed: was apply_slippage(entry_p, direction, True) —
         # Step 14 threads through this run's venue-selected slippage_rate.
-        entry = apply_slippage(entry_p, direction, True, slippage_rate=self.slippage_rate)
+        if fill_reference_price is None:   # claude code changed: Phase 3 M-01 — never a silent same-print fill
+            raise ValueError("_open_trade_from_signal requires fill_reference_price (the next candle's open)")
+        entry = apply_slippage(fill_reference_price, direction, True, slippage_rate=self.slippage_rate)   # claude code changed: Phase 3 M-01 — was apply_slippage(entry_p, ...)
 
         # claude code changed: was an inline "risk = balance * risk_per_trade;
         # qty = risk / distance" formula with no flooring, no risk cap, and
@@ -427,8 +448,16 @@ class Backtester:
     # ============================================================
     # TRADE EXIT
     # ============================================================
-    def _process_exit(self, i: int, high: float, low: float):
-        """Checks SL/TP and closes the open trade if needed."""
+    def _process_exit(self, i: int, high: float, low: float, open_price: float = None):
+        """Checks SL/TP and closes the open trade if needed.
+
+        claude code changed: Phase 3 M-01 — gap-aware fills. A stop is a market
+        order once touched: if the candle OPENS beyond the stop it fills at the
+        open, not at the stop level (was: always at the level — optimistic on
+        every gap). A take-profit limit that the open has already passed fills
+        at the (better) open. Ordering inside a candle is unknown from OHLC: a
+        level the open itself crossed happened first; otherwise, if both levels
+        are inside the range, the stop is assumed first (unchanged, adverse)."""
 
         # No open trade — nothing to check
         if not self.open_trade:
@@ -456,11 +485,20 @@ class Backtester:
         # If neither SL nor TP was touched this candle — trade stays open
         if not (sl_hit or tp_hit):
             return False
-
-        # ── DETERMINE EXIT PRICE ──────────────────────────────
-        # SL takes priority when both are hit on the same candle — conservative / worst case
-        raw_exit = sl if sl_hit else tp                         # Raw price before slippage
-        exit_reason = "STOP LOSS" if sl_hit else "TAKE PROFIT"  # Label for the journal
+        # claude code changed: Phase 3 M-01 — gap-aware exit price and ordering
+        o = float(open_price) if open_price is not None else None
+        if o is not None and direction == "LONG":
+            sl_at_open, tp_at_open = o <= sl, o >= tp
+        elif o is not None:
+            sl_at_open, tp_at_open = o >= sl, o <= tp
+        else:
+            sl_at_open = tp_at_open = False
+        take_stop = sl_hit and not (tp_at_open and not sl_at_open)   # a TP the open already passed came first
+        if take_stop:
+            raw_exit = sl if o is None else (min(sl, o) if direction == "LONG" else max(sl, o))
+        else:
+            raw_exit = tp if o is None else (max(tp, o) if direction == "LONG" else min(tp, o))
+        exit_reason = "STOP LOSS" if take_stop else "TAKE PROFIT"  # Label for the journal
 
         # ── APPLY SLIPPAGE ─────────────────────────────────────
         # We receive slightly worse price on exit — market impact of our sell/buy order
@@ -628,6 +666,22 @@ class Backtester:
     # ============================================================
     # FORCE CLOSE
     # ============================================================
+    def _record_mtm(self, i: int):   # claude code changed: new — Phase 3 M-02
+        """Mark-to-market equity at candle i's close: balance + the open
+        trade's LIQUIDATION value (close with adverse exit slippage, net of
+        entry+exit fees — the same accounting a real close would book)."""
+        close = float(self.df["close"].iloc[i])
+        equity = self.balance
+        if self.open_trade:
+            d = self.open_trade.direction
+            liq = apply_slippage(close, d, is_entry=False, slippage_rate=self.slippage_rate)
+            qty, entry = self.open_trade.quantity, self.open_trade.entry_price
+            equity += calculate_pnl(d, entry, liq, qty) - calc_fees(entry, liq, qty, fee_rate=self.fee_rate)
+        self.mtm_points.append((self.df.index[i], equity))
+        self.mtm_peak = max(self.mtm_peak, equity)
+        if self.mtm_peak > 0:
+            self.max_drawdown_mtm = max(self.max_drawdown_mtm, (self.mtm_peak - equity) / self.mtm_peak * 100)
+
     def _force_close(self):
         """Closes any position still open at the end of data."""
 
@@ -775,6 +829,9 @@ class Backtester:
             "sharpe_ratio": 0,
             "sortino_ratio": 0,
             "max_drawdown": 0,
+            "ratio_basis": RATIO_BASIS,          # claude code changed: Phase 3
+            "drawdown_basis": DRAWDOWN_BASIS,    # claude code changed: Phase 3
+            "fill_model": FILL_MODEL,            # claude code changed: Phase 3
             "max_consecutive_losses": 0,
             "total_fees_paid": 0,
             "total_slippage_cost": 0,
@@ -835,7 +892,7 @@ class Backtester:
         # Profit factor = gross wins divided by gross losses — above 1.5 is the target
         profit_factor = round(gross_profit / gross_loss, 2) if gross_loss else 0
 
-        max_drawdown = round(self.max_drawdown, 2)             # Round drawdown to 2 decimal places
+        max_drawdown = round(self.max_drawdown_mtm, 2)   # claude code changed: Phase 3 M-02 — MTM (liquidation) drawdown at every close; was closed-trade balance only
 
         # claude code changed: new — real wall-clock span of the backtest,
         # used to annualise Sharpe/Sortino by the strategy's ACTUAL observed
@@ -845,8 +902,15 @@ class Backtester:
         # if it wasn't.
         years_elapsed = (self.df.index[-1] - self.df.index[0]).days / 365.25
 
-        sharpe = calculate_sharpe_ratio(self.closed_trades, years_elapsed=years_elapsed)    # Risk-adjusted return metric
-        sortino = calculate_sortino_ratio(self.closed_trades, years_elapsed=years_elapsed)  # Downside-only risk metric
+        # claude code changed: Phase 3 H-11 — headline Sharpe/Sortino are TIME-SERIES ratios of
+        # daily mark-to-market equity returns (excess over a daily-compounded risk-free rate,
+        # 365 periods/year — crypto trades every day), with the textbook downside deviation.
+        # The per-trade R ratios are kept under explicit names (r_*_trade_based).
+        daily_returns = daily_mtm_returns(pd.Series([e for _, e in self.mtm_points], index=[ts for ts, _ in self.mtm_points]))
+        sharpe = sharpe_from_returns(daily_returns)
+        sortino = sortino_from_returns(daily_returns)
+        r_sharpe_trade = calculate_sharpe_ratio(self.closed_trades, years_elapsed=years_elapsed)
+        r_sortino_trade = calculate_sortino_ratio(self.closed_trades, years_elapsed=years_elapsed)
 
         # Get analytics engine summaries and rejection data
         summary = self.analytics.summary()
@@ -934,6 +998,16 @@ class Backtester:
             "avg_r_multiple": avg_r,           # Alias for expectancy_r — used by scorer
             "sharpe_ratio": sharpe,            # Return per unit of total risk
             "sortino_ratio": sortino,          # Return per unit of downside risk only
+            # claude code changed: Phase 3 — explicit bases for every risk metric (M-01/M-02/H-11)
+            "ratio_basis": RATIO_BASIS,
+            "drawdown_basis": DRAWDOWN_BASIS,
+            "fill_model": FILL_MODEL,
+            "max_drawdown_closed_trade_basis": round(self.max_drawdown, 2),   # the former (closed-trade-only) measure, for comparison
+            "r_sharpe_trade_based": r_sharpe_trade,
+            "r_sortino_trade_based": r_sortino_trade,
+            "n_daily_returns": int(len(daily_returns)),
+            "daily_return_lag1_autocorr": _lag1_autocorr(daily_returns),
+            "unfilled_signals_at_data_end": self.unfilled_signals_at_data_end,
 
             # ── Risk metrics ──
             "max_drawdown": max_drawdown,                      # Worst peak-to-trough percentage
@@ -1025,11 +1099,20 @@ class Backtester:
             candle = self.df.iloc[i]
             high = float(candle["high"])   # Candle high — used to check TP for longs
             low = float(candle["low"])     # Candle low — used to check SL for longs
+            open_px = float(candle["open"])   # claude code changed: Phase 3 M-01 — next-open fills and gap-aware exits
+
+            # claude code changed: Phase 3 M-01 — execute the entry decided at the PREVIOUS
+            # candle's close at THIS candle's open (was: filled at the decision close).
+            if self.pending_entry is not None and not self.open_trade:
+                sig, reg = self.pending_entry
+                self.pending_entry = None
+                self.open_trade = self._open_trade_from_signal(sig, reg, i, fill_reference_price=open_px)
 
             # ── EXIT LOGIC — always checked before entry ──────────
             if self.open_trade:
-                closed = self._process_exit(i, high, low)   # Returns True if trade was closed
+                closed = self._process_exit(i, high, low, open_px)   # Returns True if trade was closed
                 if closed:
+                    self._record_mtm(i)   # claude code changed: Phase 3 M-02
                     continue   # Move to next candle — do not look for entries on close candle
 
             # ── ENTRY LOGIC — only when no trade is currently open ──
@@ -1067,12 +1150,16 @@ class Backtester:
                 # Count this as a valid signal seen
                 self.signals_seen += 1
 
-                # Step 3: Open the trade
-                self.open_trade = self._open_trade_from_signal(signal, regime_result, i)
+                # Step 3: claude code changed: Phase 3 M-01 — the decision is taken at this
+                # candle's CLOSE; the order fills at the NEXT candle's open (see loop top).
+                self.pending_entry = (signal, regime_result)
 
-                # Guard — if trade creation failed skip to next candle
-                if self.open_trade is None:
-                    continue
+            self._record_mtm(i)   # claude code changed: Phase 3 M-02 — every candle close
+
+        # claude code changed: Phase 3 M-01 — a decision at the last close has no next open
+        if self.pending_entry is not None:
+            self.unfilled_signals_at_data_end += 1
+            self.pending_entry = None
 
         # ── FORCE CLOSE — end of data ─────────────────────────────
         # If the data ended with a trade still open, close it at the last price
@@ -1157,92 +1244,121 @@ def analyze_trade_groups(trades: list) -> dict:
 def calculate_sharpe_ratio(
     trades: list,
     years_elapsed: float = None,     # Wall-clock span of the backtest, in years — see docstring
-    risk_free_rate: float = 0.05,    # Annual risk-free rate — US Treasury approximation
 ) -> float:
     """
-    Risk-adjusted return per unit of R-multiple dispersion. Above 1.0 is good.
+    Per-trade R-multiple Sharpe: mean(R) / std(R, ddof=1), optionally
+    × sqrt(trades per year). Above 1.0 is good.
 
-    years_elapsed: wall-clock span the trades were taken over (e.g. the
-    full backtest DataFrame's first-to-last timestamp, in years). If None
-    or non-positive, the ratio is reported UNANNUALISED (raw per-trade
-    risk-adjusted return) rather than silently applying a wrong assumption
-    about trading frequency.
+    claude code changed: Phase 3 H-11 — the risk-free adjustment was REMOVED.
+    It subtracted an annual risk-free *return* (a fraction of capital) from an
+    R-multiple (a multiple of the trade's dollar risk) — two different units.
+    The risk-free rate belongs in the time-series ratio (sharpe_from_returns on
+    mark-to-market equity), which is what Backtester now reports as its
+    headline. This trade-based ratio treats trades as i.i.d. draws and
+    annualises by trade frequency: an approximation that ignores time in the
+    market — report it under its own name (r_sharpe_trade_based), never as
+    the portfolio Sharpe.
     """
 
     if len(trades) < 2:
         return 0.0   # Cannot calculate a ratio from fewer than 2 trades
 
-    # r_multiple is already risk-normalised (profit / dollar risk taken),
-    # so it's comparable across trades regardless of position size —
-    # unlike raw dollar profit, which isn't a "return" in any comparable unit
     r_values = [t.get("r_multiple", 0) or 0 for t in trades]
-    avg_r = np.mean(r_values)                  # Average R across all trades
-    std_r = np.std(r_values, ddof=1)           # Standard deviation — ddof=1 for sample std
+    avg_r = np.mean(r_values)
+    std_r = np.std(r_values, ddof=1)
 
     if std_r == 0:
         return 0.0   # All trades had identical R — no variance to measure
 
-    if years_elapsed and years_elapsed > 0:
-        trades_per_year = len(trades) / years_elapsed
-        rf_per_trade = risk_free_rate / trades_per_year   # risk-free hurdle, per trade, at this trading frequency
-        annualisation = np.sqrt(trades_per_year)
-    else:
-        # No timeframe given — report unannualised rather than guess
-        rf_per_trade = 0.0
-        annualisation = 1.0
-
-    return round(float(
-        (avg_r - rf_per_trade) / std_r * annualisation
-    ), 4)
+    annualisation = np.sqrt(len(trades) / years_elapsed) if (years_elapsed and years_elapsed > 0) else 1.0
+    return round(float(avg_r / std_r * annualisation), 4)
 
 
 # ============================================================
 # SORTINO RATIO
-# claude code changed: same fixes as calculate_sharpe_ratio above — see
-# its docstring/comments for the full rationale. Downside deviation is
-# now computed on r_multiple, not raw dollar profit.
+# claude code changed: Phase 3 H-11 — textbook downside deviation.
 # ============================================================
 def calculate_sortino_ratio(
     trades: list,
     years_elapsed: float = None,     # Wall-clock span of the backtest, in years — see calculate_sharpe_ratio
-    risk_free_rate: float = 0.05,    # Annual risk-free rate
-) -> float:
-    """Return per unit of downside risk only. More relevant than Sharpe for trading."""
+):
+    """Per-trade R Sortino: mean(R) / DD, DD = sqrt( mean over ALL trades of
+    min(R, 0)² ) (target 0), optionally × sqrt(trades per year).
+
+    claude code changed: Phase 3 H-11 — was the sample standard deviation of
+    the LOSING trades around their own mean (not a downside deviation; the
+    audit's example gave 5.0 where the textbook gives 0.70) minus a
+    unit-mismatched risk-free term, and returned a 999.0 sentinel with no
+    losses. With no downside the ratio is undefined → None (never a number
+    that looks like a result)."""
 
     if len(trades) < 2:
         return 0.0   # Cannot calculate from fewer than 2 trades
 
-    r_values = [t.get("r_multiple", 0) or 0 for t in trades]   # All trade R-multiples
-    avg_r = np.mean(r_values)                                  # Average R
-    downside = [r for r in r_values if r < 0]                 # Only negative R — ignores wins
+    r_values = np.asarray([t.get("r_multiple", 0) or 0 for t in trades], dtype=float)
+    dd = float(np.sqrt(np.mean(np.minimum(r_values, 0.0) ** 2)))
+    if dd == 0:
+        return None
+    annualisation = np.sqrt(len(trades) / years_elapsed) if (years_elapsed and years_elapsed > 0) else 1.0
+    return round(float(np.mean(r_values) / dd * annualisation), 4)
 
-    if not downside:
-        return 999.0   # No losing trades at all — perfect downside protection
 
-    if len(downside) < 2:
-        # claude code changed: new guard — np.std(ddof=1) on a single value
-        # divides by zero and silently returns NaN (no exception), which
-        # would have propagated into the dashboard as a NaN Sortino with
-        # no indication anything was wrong. Two losses minimum needed for
-        # a sample standard deviation to mean anything.
-        return 0.0
+# ============================================================
+# TIME-SERIES RISK RATIOS ON MARK-TO-MARKET EQUITY
+# claude code changed: new — Phase 3 H-11 / M-02.
+# ============================================================
+RATIO_BASIS = "DAILY_MTM_EQUITY_RETURNS_365_RF5PCT"
+DRAWDOWN_BASIS = "MTM_LIQUIDATION_AT_EVERY_CLOSE"
+FILL_MODEL = "DECIDE_AT_CLOSE_FILL_NEXT_OPEN_GAP_AWARE_EXITS"
+PERIODS_PER_YEAR = 365          # crypto trades every calendar day
+DEFAULT_RISK_FREE_ANNUAL = 0.05  # cash alternative (T-bill approximation); idle capital earns nothing in the backtest
 
-    down_std = np.std(downside, ddof=1)   # Standard deviation of losses only
 
-    if down_std == 0:
-        return 0.0   # All losses were identical — cannot calculate
+def daily_mtm_returns(mtm: pd.Series) -> pd.Series:
+    """Simple daily returns of mark-to-market equity (last equity of each
+    UTC calendar day). Empty when fewer than two days exist."""
+    if mtm is None or len(mtm) == 0:
+        return pd.Series(dtype=float)
+    daily = mtm.sort_index().resample("1D").last().dropna()
+    return daily.pct_change().dropna()
 
-    if years_elapsed and years_elapsed > 0:
-        trades_per_year = len(trades) / years_elapsed
-        rf_per_trade = risk_free_rate / trades_per_year
-        annualisation = np.sqrt(trades_per_year)
-    else:
-        rf_per_trade = 0.0
-        annualisation = 1.0
 
-    return round(float(
-        (avg_r - rf_per_trade) / down_std * annualisation
-    ), 4)
+def sharpe_from_returns(returns: pd.Series, rf_annual: float = DEFAULT_RISK_FREE_ANNUAL,
+                        periods_per_year: int = PERIODS_PER_YEAR):
+    """Annualised Sharpe of periodic returns in excess of the per-period
+    risk-free rate (1+rf)^(1/P) − 1. None when undefined (< 2 periods or zero
+    dispersion). Serial correlation is NOT corrected — see
+    daily_return_lag1_autocorr in the results."""
+    r = pd.Series(returns, dtype=float).dropna()
+    if len(r) < 2:
+        return None
+    ex = r - ((1.0 + rf_annual) ** (1.0 / periods_per_year) - 1.0)
+    sd = float(ex.std(ddof=1))
+    if sd == 0:
+        return None
+    return round(float(ex.mean() / sd * np.sqrt(periods_per_year)), 4)
+
+
+def sortino_from_returns(returns: pd.Series, rf_annual: float = DEFAULT_RISK_FREE_ANNUAL,
+                         periods_per_year: int = PERIODS_PER_YEAR):
+    """Annualised Sortino: mean excess return / downside deviation, DD =
+    sqrt( mean over ALL periods of min(excess, 0)² ) (target = risk-free).
+    None when undefined (< 2 periods or no downside)."""
+    r = pd.Series(returns, dtype=float).dropna()
+    if len(r) < 2:
+        return None
+    ex = r - ((1.0 + rf_annual) ** (1.0 / periods_per_year) - 1.0)
+    dd = float(np.sqrt(np.mean(np.minimum(ex.to_numpy(), 0.0) ** 2)))
+    if dd == 0:
+        return None
+    return round(float(ex.mean() / dd * np.sqrt(periods_per_year)), 4)
+
+
+def _lag1_autocorr(returns: pd.Series):
+    r = pd.Series(returns, dtype=float).dropna()
+    if len(r) < 3 or float(r.std()) == 0:
+        return None
+    return round(float(r.autocorr(lag=1)), 4)
 
 
 # ============================================================

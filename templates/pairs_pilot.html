@@ -19,6 +19,12 @@
 
 <div class="term-body">
 
+    {# claude code changed: Post-audit Phase 1 journal-mode separation — every number on this page comes from ONE execution mode #}
+    <div class="chart-caption mono" style="margin-bottom:12px">
+        Showing <strong>{{ execution_mode }}</strong> trades only{% if execution_mode == "DRY_RUN" %} — simulated fills, not account P&amp;L{% endif %}.
+        {% for mode, n in other_mode_counts.items %}{{ n }} {{ mode }} leg row(s) not shown. {% endfor %}
+    </div>
+
     {% if not health_snapshot_available %}
     <div class="unavailable-inline" style="margin-bottom:16px">
         Live pair health unavailable: {{ health_snapshot_reason }} — the metrics below still reflect real TradeRecord history, but no NORMAL/DEGRADED/INVALIDATED status can be shown until the bot writes a fresh heartbeat.

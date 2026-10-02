@@ -360,6 +360,21 @@ def _compute_price_correlation(window=500, directory=None):
 # ============================================================
 # SECTION 5: EXECUTION
 # ============================================================
+def pnl_by_execution_mode(records):   # claude code changed: new — Post-audit Phase 1 journal-mode separation
+    """({execution_mode: realised net P&L}, n_unvalued) over closed journal
+    rows. Modes are never summed together — LIVE is account P&L, DRY_RUN is
+    simulated, UNKNOWN cannot be attributed. A row whose net P&L is None
+    (unvalued third-asset fee) is counted in n_unvalued, never added as 0."""
+    by_mode, unvalued = {}, 0
+    for t in records:
+        if t.net_pnl is None:
+            unvalued += 1
+            continue
+        mode = getattr(t, "execution_mode", "") or "UNKNOWN"
+        by_mode[mode] = by_mode.get(mode, 0.0) + float(t.net_pnl)
+    return {m: round(v, 2) for m, v in sorted(by_mode.items())}, unvalued
+
+
 def get_execution_state():
     """
     Real TradeRecord query — architecture audit confirmed TradeRecord
@@ -378,7 +393,7 @@ def get_execution_state():
     that's a real architectural decision (sync exchange call latency in a
     page load), not a one-line addition.
     """
-    from bot.journal.models import TradeRecord
+    from bot.journal.models import MODE_LIVE, TradeRecord   # claude code changed: Post-audit Phase 1 — MODE_LIVE
 
     try:
         open_positions = list(
@@ -389,12 +404,19 @@ def get_execution_state():
         )
         total_closed = TradeRecord.objects.exclude(status="OPEN").count()
 
+        # claude code changed: Post-audit Phase 1 journal-mode separation — the
+        # headline realised P&L / fees / slippage are LIVE rows only (was: every
+        # row, so dry-run simulated P&L was shown as "Realized P&L"); every mode
+        # is still reported, separately, in realized_pnl_by_mode. A row with
+        # unvalued net P&L is counted, never added as 0.
+        closed_all = TradeRecord.objects.exclude(status="OPEN")
+        realized_pnl_by_mode, unvalued_pnl_count = pnl_by_execution_mode(closed_all)
         realized_pnl = 0.0
         total_fees = 0.0
         total_slippage_events = 0
         slippage_sum = 0.0
-        for t in TradeRecord.objects.exclude(status="OPEN"):
-            realized_pnl += t.net_pnl or 0.0
+        for t in closed_all.filter(execution_mode=MODE_LIVE):
+            realized_pnl += t.net_pnl or 0.0   # None rows are excluded from the headline below via unvalued_pnl_count
             total_fees += (t.fee_entry or 0.0) + (t.fee_exit or 0.0)
             if t.slippage_in:
                 slippage_sum += abs(t.slippage_in)
@@ -412,6 +434,9 @@ def get_execution_state():
             "recent_closed": closed_trades,
             "total_closed": total_closed,
             "realized_pnl": round(realized_pnl, 2),
+            "realized_pnl_scope": "LIVE trades only",            # claude code changed: Post-audit Phase 1 journal-mode separation
+            "realized_pnl_by_mode": realized_pnl_by_mode,        # claude code changed: e.g. {"DRY_RUN": -0.12} — simulated, never account P&L
+            "unvalued_pnl_count": unvalued_pnl_count,            # claude code changed: rows whose net P&L could not be valued (third-asset fee)
             "total_fees": round(total_fees, 2),
             "avg_slippage_pct": round(avg_slippage_pct, 4) if avg_slippage_pct is not None else None,
             "unrealized_pnl": {"available": False, "reason": "Requires a live price fetch per open symbol inside the request — not implemented"},

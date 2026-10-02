@@ -374,8 +374,9 @@ figure.
                     <div class="metric-value stat-number" data-target="{{ execution.total_closed }}" data-decimals="0">0</div>
                 </div>
                 <div class="metric-tile">
-                    <div class="metric-label">Realized P&amp;L</div>
+                    <div class="metric-label">Realized P&amp;L (LIVE){# claude code changed: Post-audit Phase 1 journal-mode separation — headline is LIVE rows only #}</div>
                     <div class="metric-value stat-number {% if execution.realized_pnl > 0 %}pos{% elif execution.realized_pnl < 0 %}neg{% endif %}" data-target="{{ execution.realized_pnl }}" data-decimals="2">0</div>
+                    {% if execution.realized_pnl_by_mode %}<div class="chart-caption mono">{% for mode, v in execution.realized_pnl_by_mode.items %}{% if mode != "LIVE" %}{{ mode }} {{ v|floatformat:2 }} ({% if mode == "DRY_RUN" %}simulated{% else %}unattributed{% endif %}) {% endif %}{% endfor %}{% if execution.unvalued_pnl_count %}· {{ execution.unvalued_pnl_count }} unvalued{% endif %}</div>{% endif %}
                 </div>
             </div>
             {% else %}

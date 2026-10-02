@@ -70,9 +70,31 @@ class EntryQuantityTests(SimpleTestCase):
         eng = _engine(ad)
         eng.is_pair_tradeable = lambda name: True
         eng._open_positions = {}
+        # claude code changed: Post-audit Phase 1 regression fix — open_pair_trade now runs the
+        # pre-entry drawdown guard first (covered by test_pairs_live_safety). This test is about
+        # the EXECUTABILITY refusal, so the guard is passed explicitly and the log is asserted —
+        # otherwise a guard block (this SimpleTestCase has no DB) would make the test pass for
+        # the wrong reason. capital_usdt added: the real PairConfig always carries it.
+        eng.drawdown_entry_check = lambda capital: (True, "guard passed for this executability test")
+        cfg = SimpleNamespace(pair_name="A_USDT/B_USDT", binance_symbol_a="A/USDT", binance_symbol_b="B/USDT",
+                              capital_usdt=500.0)
+        decision = SimpleNamespace(action="ENTER", trade=SimpleNamespace(**vars(TRADE), executability="UNVERIFIED"))
+        with self.assertLogs("bot.pairs.execution", level="ERROR") as logs:
+            self.assertIsNone(eng.open_pair_trade(cfg, decision))
+        self.assertIn("not executable", logs.output[0])
+        self.assertIn("minQty", logs.output[0])
+        self.assertEqual(ad.transfers, [])
+
+    def test_open_pair_trade_without_capital_fails_closed_not_raises(self):   # claude code changed: new — Phase 1 regression fix
+        ad = _Adapter({"A/USDT": 0.7, "B/USDT": 3.0}, {}, {})
+        eng = _engine(ad)
+        eng.is_pair_tradeable = lambda name: True
+        eng._open_positions = {}
         cfg = SimpleNamespace(pair_name="A_USDT/B_USDT", binance_symbol_a="A/USDT", binance_symbol_b="B/USDT")
         decision = SimpleNamespace(action="ENTER", trade=SimpleNamespace(**vars(TRADE), executability="UNVERIFIED"))
-        self.assertIsNone(eng.open_pair_trade(cfg, decision))
+        with self.assertLogs("bot.pairs.execution", level="CRITICAL") as logs:
+            self.assertIsNone(eng.open_pair_trade(cfg, decision))
+        self.assertIn("not positive", logs.output[0])
         self.assertEqual(ad.transfers, [])
 
     def test_dry_run_is_not_claimed_executable(self):

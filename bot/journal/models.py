@@ -152,6 +152,16 @@ class Trade:
 #   python manage.py migrate
 # ============================================================
 
+# claude code changed: Post-audit Phase 1 journal-mode separation — the only
+# values TradeRecord/ExecutionIncident.execution_mode may hold.
+MODE_LIVE, MODE_DRY_RUN, MODE_RESEARCH, MODE_UNKNOWN = "LIVE", "DRY_RUN", "RESEARCH", "UNKNOWN"
+EXECUTION_MODES = (MODE_LIVE, MODE_DRY_RUN, MODE_RESEARCH, MODE_UNKNOWN)
+
+
+def execution_mode_for(dry_run: bool) -> str:   # claude code changed: new — writers derive the mode from their engine's flag, never from data
+    return MODE_DRY_RUN if dry_run else MODE_LIVE
+
+
 class TradeRecord(models.Model):
     """
     Permanent database record of a live bot trade.
@@ -318,6 +328,34 @@ class TradeRecord(models.Model):
     # evidence. False = a clean exit (and every non-pairs row).
     reconciliation_affected = models.BooleanField(default=False)
     reconciliation_gaps = models.TextField(default="", blank=True)   # claude code changed: D-1 — ";"-joined ISO open times live did not receive
+    # claude code changed: Post-audit Phase 1 A4 — explicit cost/fill labels.
+    # fill_model: how the entry (and, after "|exit:", the exit) price was
+    # obtained — "EXCHANGE" for a real fill, "DRY_RUN_TOUCH+SLIPPAGE" or
+    # "DRY_RUN_LAST_FALLBACK+SLIPPAGE" for a simulated one (full fill assumed).
+    # borrow_cost_status: KNOWN (exchange-reported interest), UNAVAILABLE
+    # (dry run: interest not modelled — never presented as a real zero), or
+    # NOT_APPLICABLE (long leg). "" on rows written before this field existed.
+    fill_model = models.CharField(max_length=80, default="", blank=True)
+    borrow_cost_status = models.CharField(max_length=20, default="", blank=True)
+    # claude code changed: Post-audit Phase 1 — journal-mode separation. Every row
+    # says HOW it was produced, so simulated P&L can never be read as account P&L
+    # (or feed the live drawdown guard): LIVE (a real exchange order), DRY_RUN
+    # (in-process fill simulation against live prices), RESEARCH (offline
+    # backtest/research output), UNKNOWN (cannot be established — consumers that
+    # need a definite mode fail closed on it). Set explicitly by the writer from
+    # its engine's dry_run flag, never inferred at read time. Migration 0014
+    # backfills existing rows from their order id (dryrun-/DRYRUN- → DRY_RUN,
+    # anything else → UNKNOWN; a row is never ASSUMED live).
+    execution_mode = models.CharField(max_length=10, default="UNKNOWN", db_index=True)
+    # Provenance of the decision that produced the row (same values SignalRejection
+    # records); "" when the writer had none (e.g. the main single-symbol bot).
+    methodology_version = models.CharField(max_length=40, default="", blank=True)
+    protocol_hash = models.CharField(max_length=64, default="", blank=True)
+    data_version = models.CharField(max_length=64, default="", blank=True)
+    # When the exit was journaled. updated_at is auto_now (moves on ANY later
+    # save), so it cannot order the realised-P&L path; null on rows closed
+    # before this field existed (readers fall back to updated_at, labelled).
+    closed_at = models.DateTimeField(null=True, blank=True)
 
 
     # ---- Status ----
@@ -415,3 +453,33 @@ class SignalRejection(models.Model):
 
     def __str__(self):
         return f"{self.pair_name} {self.decision_timestamp} {self.intended_direction} {self.reason}"
+
+
+
+class ExecutionIncident(models.Model):
+    """claude code changed: Post-audit Phase 1 A1/A3 — durable record of a
+    pairs execution failure (a leg failed mid-open, a close failed, or a close
+    was blocked by exchange rules). requires_manual_review=True keeps the pair
+    disabled across restarts (pairs_bot_runner.reconcile_pairs) until a human
+    resolves the incident; the system never retries such a pair by itself."""
+    KIND_CHOICES = ("OPEN_LEG_FAILURE", "CLOSE_LEG_FAILURE", "CLOSE_BLOCKED_EXCHANGE_RULES")
+    STATE_CHOICES = ("NO_EXPOSURE", "UNWOUND_CONFIRMED", "MANUAL_REVIEW_REQUIRED")
+    pair_name = models.CharField(max_length=60, db_index=True)
+    pair_trade_id = models.UUIDField(null=True, blank=True, db_index=True)
+    kind = models.CharField(max_length=40)
+    state = models.CharField(max_length=40)
+    requires_manual_review = models.BooleanField(default=True)
+    legs_filled = models.TextField(default="", blank=True)        # e.g. "A:BUY 10.0 @ 1.0"
+    legs_open_after = models.TextField(default="", blank=True)    # legs the system believes are still open
+    error = models.TextField(default="", blank=True)
+    resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(default="", blank=True)
+    execution_mode = models.CharField(max_length=10, default="UNKNOWN", db_index=True)   # claude code changed: Post-audit Phase 1 journal-mode separation — LIVE / DRY_RUN / UNKNOWN, same vocabulary as TradeRecord
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.pair_name} {self.kind} {self.state} resolved={self.resolved}"

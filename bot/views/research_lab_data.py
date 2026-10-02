@@ -31,6 +31,8 @@ import glob
 from datetime import datetime, timezone
 
 import pandas as pd
+
+from bot.research.evidence_registry import classify_artifact, classify_log_section   # claude code changed: Post-CRRP Task 4
 from django.conf import settings
 
 DATA_DIR = os.path.join(settings.BASE_DIR, "data")
@@ -345,7 +347,8 @@ def get_strategy_comparison():
             if "oos_win_rate" in df.columns:
                 df["oos_win_rate"] = (df["oos_win_rate"] * 100).round(4)
             df["verdict"] = df.apply(classify_walk_forward, axis=1)
-            leaderboard = {"available": True, "rows": df.to_dict("records")}
+            leaderboard = {"available": True, "rows": df.to_dict("records"),
+                           "evidence": classify_artifact("walk_forward/walk_forward_leaderboard.csv")}   # claude code changed: Post-CRRP Task 4
         except Exception as e:
             leaderboard = {"available": False, "reason": str(e)[:80]}
 
@@ -369,7 +372,8 @@ def get_strategy_comparison():
         except Exception:
             continue
 
-    return {"leaderboard": leaderboard, "strategy_summaries": summaries}
+    return {"leaderboard": leaderboard, "strategy_summaries": summaries,
+            "summaries_evidence": classify_artifact("PAIR_strategy_summary.csv")}   # claude code changed: Post-CRRP Task 4 — every *_strategy_summary.csv shares one class
 
 
 def classify_walk_forward(row):
@@ -472,6 +476,7 @@ def get_robustness_testing():
         "rows": rows,
         "n_pairs_tested": len(rows),
         "n_shuffles_per_pair": 100,  # fixed by permutation_test_engine.py's design — real, documented constant, not measured per-run
+        "evidence": classify_artifact("permutation_test/PAIR/permutation_verdict.csv"),   # claude code changed: Post-CRRP Task 4
     }
 
 
@@ -549,6 +554,7 @@ def get_research_conclusions(verdict_filter=None):
             "verdict_text": verdict_text.strip(),
             "verdict_tag": verdict_tag,
             "excerpt": excerpt,
+            "evidence": classify_log_section(title),   # claude code changed: Post-CRRP Task 4 — evidence status of this log section (bot/research/evidence_registry.py)
         })
 
     if verdict_filter:

@@ -14,7 +14,7 @@
 # anything as one trade's P&L).
 # ============================================================
 
-from bot.journal.models import TradeRecord
+from bot.journal.models import MODE_DRY_RUN, MODE_LIVE, TradeRecord   # claude code changed: Post-audit Phase 1 journal-mode separation
 from bot.pairs.config import PAIR_NAMES
 from bot.pairs.health import read_health_snapshot
 
@@ -33,10 +33,20 @@ def get_pairs_pilot_state():
     # re-reading the file once per pair in the loop.
     health_snapshot = read_health_snapshot()
 
+    # claude code changed: Post-audit Phase 1 journal-mode separation — the page
+    # shows ONE execution mode, never a blend: LIVE when any live pilot row
+    # exists, otherwise DRY_RUN. Rows of other modes are counted and reported
+    # (other_mode_counts), never folded into the curves.
+    pilot_rows = TradeRecord.objects.filter(strategy__startswith="PairsTrading_")
+    display_mode = MODE_LIVE if pilot_rows.filter(execution_mode=MODE_LIVE).exists() else MODE_DRY_RUN
+    other_mode_counts = {}
+    for m in pilot_rows.exclude(execution_mode=display_mode).values_list("execution_mode", flat=True):
+        other_mode_counts[m] = other_mode_counts.get(m, 0) + 1
+
     pairs_data = []
     for pair_name in PAIR_NAMES:
         strategy_tag = f"PairsTrading_{pair_name}"
-        records = list(TradeRecord.objects.filter(strategy=strategy_tag).order_by("id"))
+        records = list(TradeRecord.objects.filter(strategy=strategy_tag, execution_mode=display_mode).order_by("id"))   # claude code changed: one mode only
 
         groups = {}
         for r in records:
@@ -44,10 +54,14 @@ def get_pairs_pilot_state():
 
         closed_trades = []
         open_pair_trade_ids = []
+        unvalued_trades = 0   # claude code changed: Post-audit Phase 1
         for pair_trade_id, legs in groups.items():
             if len(legs) == 2 and all(l.status != "OPEN" for l in legs):
-                net_pnl = sum((l.net_pnl or 0.0) for l in legs)
-                closed_at = max(l.updated_at for l in legs)
+                if any(l.net_pnl is None for l in legs):   # claude code changed: Post-audit Phase 1 — unvalued P&L is excluded and counted, never treated as 0
+                    unvalued_trades += 1
+                    continue
+                net_pnl = sum(l.net_pnl for l in legs)
+                closed_at = max((l.closed_at or l.updated_at) for l in legs)   # claude code changed: Post-audit Phase 1 — durable exit time, updated_at only for pre-0014 rows
                 closed_trades.append({"pair_trade_id": pair_trade_id, "net_pnl": net_pnl, "closed_at": closed_at})
             else:
                 open_pair_trade_ids.append(pair_trade_id)
@@ -100,10 +114,13 @@ def get_pairs_pilot_state():
             "max_drawdown": max(drawdown_curve) if drawdown_curve else 0.0,
             "equity_curve": equity_curve,
             "drawdown_curve": drawdown_curve,
+            "unvalued_trades": unvalued_trades,   # claude code changed: Post-audit Phase 1 — closed pair trades left out of the curves (unvalued P&L)
             "health": health,  # claude code changed: new — dict with state/seed_beta/current_beta/beta_drift_ratio/beta_sign_reversed/summary/reason_codes, or None if no live snapshot is available yet (bot not running / stale)
         })
     return {
         "pairs": pairs_data,
+        "execution_mode": display_mode,              # claude code changed: Post-audit Phase 1 — the single mode every number on the page comes from
+        "other_mode_counts": other_mode_counts,      # claude code changed: Post-audit Phase 1 — rows of other modes, not shown in the curves
         "health_snapshot_available": health_snapshot["available"],
         "health_snapshot_reason": health_snapshot.get("reason"),  # claude code changed: surfaced so the template can explain WHY health is missing (item 20: never silently show nothing)
     }

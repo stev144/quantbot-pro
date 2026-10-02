@@ -339,6 +339,12 @@ def reconcile_pairs(pair_configs: list[PairConfig], exec_engine: PairsExecutionE
     and requires a human to manually reconcile the real isolated-margin
     account state and clear those records before it trades again."""
     logger = logging.getLogger(__name__)
+    # claude code changed: Post-audit Phase 1 A1 — an unresolved
+    # MANUAL_REVIEW_REQUIRED execution incident (failed mid-open unwind, failed
+    # or exchange-blocked close) keeps its pair disabled across restarts.
+    for name in exec_engine.trade_logger.unresolved_manual_review_pairs():
+        exec_engine.disable_pair(name, "unresolved MANUAL_REVIEW_REQUIRED execution incident in the journal "
+                                       "(bot.journal.models.ExecutionIncident) — resolve it before this pair trades again.")
     for cfg in pair_configs:
         strategy_tag = f"PairsTrading_{cfg.pair_name}"
         open_legs = TradeRecord.objects.filter(strategy=strategy_tag, status="OPEN")
@@ -465,9 +471,31 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
         return "error"
 
 
+def pending_migrations() -> list:   # claude code changed: Post-audit Phase 1 A5 — new
+    """Unapplied Django migrations ([] when the schema is current)."""
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+    executor = MigrationExecutor(connection)
+    return [f"{m.app_label}.{m.name}" for m, _ in executor.migration_plan(executor.loader.graph.leaf_nodes())]
+
+
 def run_bot():
     setup_logging()
     logger = logging.getLogger(__name__)
+
+    # claude code changed: Post-audit Phase 1 A5 — refuse to start on an
+    # out-of-date schema. The journal now writes reconciliation, borrow-status,
+    # fill-model, rejection and incident fields (migrations 0012/0013); a missing
+    # column would make every journal write fail (logged CRITICAL, but the
+    # position record would be lost). Migrations are NEVER applied automatically.
+    try:
+        missing = pending_migrations()
+    except Exception as e:
+        logger.critical(f"[PairsBotRunner] Cannot verify the database schema ({e}) — refusing to start.")
+        return
+    if missing:
+        logger.critical(f"[PairsBotRunner] Unapplied migrations {missing} — run `python manage.py migrate` first. Refusing to start.")
+        return
 
     logger.info("=" * 60)
     logger.info("[PairsBotRunner] Steph Quant Technologies — Pairs Pilot starting up")
@@ -509,6 +537,11 @@ def run_bot():
         return
 
     exec_engine = PairsExecutionEngine(exchange, dry_run=DRY_RUN)
+    # claude code changed: Post-audit Phase 1 provenance — every journal row records
+    # the methodology and protocol it was traded under (same values SignalRejection
+    # records). data_version is per-session (each pair's seed) and is not set here.
+    exec_engine.trade_logger.provenance = {"methodology_version": METHODOLOGY_VERSION,
+                                           "protocol_hash": PROTOCOL.config_hash()}
 
     reconcile_pairs(pair_configs, exec_engine)
 
@@ -560,11 +593,14 @@ def run_bot():
             now = time.time()
             if now - last_heartbeat_time >= HEARTBEAT_INTERVAL_SECONDS:
                 try:
-                    equity = exec_engine.compute_mark_to_market_equity(pair_configs)
-                    tripped = exec_engine.drawdown_guard.update(equity)
+                    # claude code changed: Post-audit Phase 1 A2 — the SAME strategy-level
+                    # equity and guard check that open_pair_trade enforces (was the
+                    # isolated-account sum, which reads ≈ 0 once collateral is refunded).
+                    capital = max((c.capital_usdt for c in pair_configs if c.is_entry_eligible), default=0.0)
+                    allowed, why = exec_engine.drawdown_entry_check(capital)
                     logger.info(
                         f"[PairsBotRunner] HEARTBEAT | loop={loop_count} | "
-                        f"mark_to_market_equity=${equity:.2f} | drawdown_guard_tripped={tripped}"
+                        f"entries_allowed_by_drawdown_guard={allowed} | {why}"
                     )
                     health_results = {}
                     for session in sessions:

@@ -55,15 +55,19 @@ def feature_comparison(request):
 
 def feature_correlation(request):
     symbol = request.GET.get("symbol", "BTC_USDT").upper()
-    matrix = fid.get_feature_correlation_matrix(symbol)
+    basis = request.GET.get("basis", "stationary")   # claude code changed: feature-correlation upgrade — stationary (default) | raw
+    method = request.GET.get("method", "pearson")    # claude code changed: feature-correlation upgrade — pearson (default) | spearman
+    matrix = fid.get_feature_correlation_matrix(symbol, basis=basis, method=method)   # claude code changed: basis/method
     if matrix.get("available"):
         matrix = dict(matrix)
         matrix["rows"] = [
             {"label": label, "values": row}
-            for label, row in zip(matrix["features"], matrix["matrix"])
+            for label, row in zip(matrix["labels"], matrix["matrix"])   # claude code changed: display labels show the transform applied
         ]
 
     context = {
+        "basis": matrix.get("basis", basis),     # claude code changed: feature-correlation upgrade
+        "method": matrix.get("method", method),  # claude code changed: feature-correlation upgrade
         "symbol": symbol,
         "matrix": matrix,
         "symbols": fid.discover_observation_symbols(),

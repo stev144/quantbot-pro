@@ -109,7 +109,8 @@
             </ul>
             {% endif %}
 
-            <div class="chart-caption mono" style="margin-bottom:8px">Verdict</div>
+            {% include "partials/_evidence_banner.html" with ev=evidence %}{# claude code changed: Post-CRRP Task 4 #}
+            <div class="chart-caption mono" style="margin-bottom:8px">Verdict (as recorded){% if not evidence.is_current_evidence %} — not current evidence{% endif %}</div>
             <h2 class="term-section-title" style="margin-bottom:10px">{{ experiment.verdict }}</h2>
             {% if experiment.robustness_results.verdict_explanation %}
             <ul class="mono" style="margin-bottom:18px">

@@ -1,0 +1,2 @@
+{# claude code changed: new partial — Post-CRRP Task 4. Compact evidence badge (ev=<status dict>); the reason is the tooltip. #}
+{% if ev %}<span class="badge {{ ev.css }}" title="{{ ev.reason }}">{{ ev.label }}</span>{% endif %}

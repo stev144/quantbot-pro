@@ -26,7 +26,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from bot.journal.models import TradeRecord
+from django.utils import timezone   # claude code changed: Post-audit Phase 1 — closed_at
+
+from bot.journal.models import MODE_UNKNOWN, TradeRecord   # claude code changed: Post-audit Phase 1 — journal-mode separation
 from bot.pairs.margin_adapter import MarginFillResult, split_symbol, value_fees_in_quote   # claude code changed: LIVE-02 helpers
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,15 @@ def allocate_short_close(principal_qty: float, interest_qty: float, closed_princ
 
 
 class PairsTradeLogger:
+    # claude code changed: Post-audit Phase 1 journal-mode separation — set by the
+    # owning PairsExecutionEngine from its dry_run flag (LIVE / DRY_RUN); a logger
+    # nobody configured writes UNKNOWN, which the drawdown guard refuses to use.
+    # provenance: methodology_version / protocol_hash / data_version, set by the
+    # runner at startup (same values SignalRejection records); {} when unknown.
+    def __init__(self, execution_mode: str = MODE_UNKNOWN, provenance: Optional[dict] = None):
+        self.execution_mode = execution_mode
+        self.provenance = dict(provenance or {})
+
     def log_leg_entry(
         self,
         pair_trade_id: uuid.UUID,
@@ -151,6 +162,11 @@ class PairsTradeLogger:
                 pair_trade_id=pair_trade_id,
                 leg=leg,
                 status="OPEN",
+                fill_model=getattr(fill, "price_source", "EXCHANGE"),   # claude code changed: Post-audit Phase 1 A4
+                execution_mode=self.execution_mode,   # claude code changed: Post-audit Phase 1 journal-mode separation
+                methodology_version=self.provenance.get("methodology_version", ""),   # claude code changed: Post-audit Phase 1 provenance
+                protocol_hash=self.provenance.get("protocol_hash", ""),               # claude code changed: Post-audit Phase 1 provenance
+                data_version=self.provenance.get("data_version", ""),                 # claude code changed: Post-audit Phase 1 provenance
             )
             logger.info(
                 f"[PairsTradeLogger] Leg {leg} entry logged | DB ID: {record.id} | "
@@ -181,7 +197,8 @@ class PairsTradeLogger:
 
     def log_leg_exit(self, pair_trade_id: uuid.UUID, leg: str, fill: MarginFillResult, exit_reason: str,
                      interest_qty: Optional[float] = None, entry_fees=None,
-                     reconciliation_affected: bool = False, reconciliation_gaps: str = "") -> Optional[TradeRecord]:   # claude code changed: LIVE-01/LIVE-02 — new optional args; old call signature still valid. Stage 2D Rev B D-1 — reconciliation provenance
+                     reconciliation_affected: bool = False, reconciliation_gaps: str = "",
+                     borrow_cost_status: str = "") -> Optional[TradeRecord]:   # claude code changed: Post-audit Phase 1 A4 — borrow_cost_status   # claude code changed: LIVE-01/LIVE-02 — new optional args; old call signature still valid. Stage 2D Rev B D-1 — reconciliation provenance
         try:
             record = (
                 TradeRecord.objects.filter(pair_trade_id=pair_trade_id, leg=leg, status="OPEN")
@@ -209,8 +226,11 @@ class PairsTradeLogger:
             record.exit_price = fill.fill_price
             record.fee_exit = pnl.fee_exit_quote if pnl.fee_exit_quote is not None else self._storable_fee(fill)
             record.exit_reason = exit_reason
+            record.closed_at = timezone.now()   # claude code changed: Post-audit Phase 1 — durable exit time (updated_at moves on any later save)
             record.reconciliation_affected = bool(reconciliation_affected)   # claude code changed: Stage 2D Rev B D-1 — durable, survives restart
             record.reconciliation_gaps = reconciliation_gaps or ""           # claude code changed: Stage 2D Rev B D-1
+            record.borrow_cost_status = borrow_cost_status or ("NOT_APPLICABLE" if record.side == "BUY" else "")   # claude code changed: Post-audit Phase 1 A4
+            record.fill_model = f"{record.fill_model}|exit:{getattr(fill, 'price_source', 'EXCHANGE')}"[:80]   # claude code changed: Post-audit Phase 1 A4
             record.gross_pnl = round(pnl.gross_pnl, 4)
             if pnl.valued:
                 record.net_pnl = round(pnl.net_pnl, 4)
@@ -263,6 +283,28 @@ class PairsTradeLogger:
         except Exception as e:   # the decision is already a no-trade; a journal failure must be loud, not fatal
             logger.critical(f"[PairsTradeLogger] FAILED to persist {mismatch.reason} for {pair_name} at {ts}: {e}")
             return None
+
+    def log_incident(self, pair_name: str, *, kind: str, state: str, pair_trade_id=None,
+                     legs_filled: str = "", legs_open_after: str = "", error: str = ""):   # claude code changed: Post-audit Phase 1 A1/A3 — new
+        """Persist one execution incident. MANUAL_REVIEW_REQUIRED incidents keep
+        the pair disabled across restarts until resolved by a human."""
+        from bot.journal.models import ExecutionIncident
+        try:
+            return ExecutionIncident.objects.create(
+                pair_name=pair_name, pair_trade_id=pair_trade_id, kind=kind, state=state,
+                requires_manual_review=(state == "MANUAL_REVIEW_REQUIRED"),
+                resolved=(state == "NO_EXPOSURE"), legs_filled=legs_filled, legs_open_after=legs_open_after,
+                error=str(error)[:2000], execution_mode=self.execution_mode)   # claude code changed: Post-audit Phase 1 journal-mode separation
+        except Exception as e:
+            logger.critical(f"[PairsTradeLogger] FAILED to persist {kind}/{state} incident for {pair_name}: {e}. "
+                            f"MANUAL INTERVENTION REQUIRED.")
+            return None
+
+    @staticmethod
+    def unresolved_manual_review_pairs() -> set:   # claude code changed: Post-audit Phase 1 A1 — read at startup by reconcile_pairs
+        from bot.journal.models import ExecutionIncident
+        return set(ExecutionIncident.objects.filter(requires_manual_review=True, resolved=False)
+                   .values_list("pair_name", flat=True))
 
     def get_open_legs(self, pair_trade_id: uuid.UUID) -> list:
         return list(TradeRecord.objects.filter(pair_trade_id=pair_trade_id, status="OPEN").order_by("leg"))

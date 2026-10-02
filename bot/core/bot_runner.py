@@ -250,6 +250,26 @@ class VenueSession:
 
 
 # ============================================================
+# CLOSED-CANDLE FILTER
+# claude code changed: new — Phase 3 H-07. fetch_ohlcv() without `since`
+# returns the CURRENTLY FORMING candle as its last row; its high/low/close
+# keep changing until it closes, so a signal computed on it can appear and
+# vanish within the hour (repainting) — information no backtest decision ever
+# had. Only candles whose close time (open + timeframe) is at or before `now`
+# are kept. The clock is the local one (ccxt's exchange.milliseconds()); with
+# a clock running AHEAD of the exchange a forming candle could pass — the host
+# must be NTP-synced (documented assumption). A clock running BEHIND only
+# delays a decision by one loop (safe direction).
+# ============================================================
+def drop_forming_candles(candles: list, timeframe_ms: int, now_ms: int) -> list:
+    """Return only the candles that have CLOSED by now_ms: open_time +
+    timeframe_ms <= now_ms. Order preserved; nothing invented."""
+    if timeframe_ms <= 0:
+        raise ValueError(f"timeframe_ms must be positive, got {timeframe_ms}")
+    return [c for c in (candles or []) if c[0] + timeframe_ms <= now_ms]
+
+
+# ============================================================
 # OHLCV TO DATAFRAME CONVERTER
 # Converts raw ccxt candle list into pandas DataFrame
 # ============================================================
@@ -573,6 +593,16 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
             logger.warning(
                 f"[BotRunner:{session.venue_id}] Empty candle response — skipping this venue this loop"
             )
+            return "error"
+
+        # claude code changed: Phase 3 H-07 — decide on CLOSED candles only (see drop_forming_candles)
+        n_fetched = len(candles)
+        candles = drop_forming_candles(candles, session.exchange.parse_timeframe(TIMEFRAME) * 1000,
+                                       session.exchange.milliseconds())
+        if len(candles) < n_fetched:
+            logger.info(f"[BotRunner:{session.venue_id}] Dropped {n_fetched - len(candles)} forming candle(s) — deciding on closed candles only")
+        if not candles:
+            logger.warning(f"[BotRunner:{session.venue_id}] No closed candles in the response — skipping this venue this loop")
             return "error"
 
         # ── BUILD DATAFRAME ───────────────────────────────

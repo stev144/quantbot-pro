@@ -16,16 +16,18 @@
         </div>
         <div class="term-section-body">
             {% if experiments %}
+            <div class="chart-caption" style="margin-bottom:10px; border-left:3px solid var(--warning); padding-left:8px">Experiments run before CRRP-2026-10-02 recorded no methodology version, protocol hash or code commit; their verdicts are preserved as recorded but are <strong>not current evidence</strong> (hover the Evidence badge for why).</div>{# claude code changed: Post-CRRP Task 4 #}
             <div class="term-table-wrap">
                 <table class="term-table">
-                    <thead><tr><th>Hypothesis</th><th>Asset</th><th>Status</th><th>Verdict</th><th>Created</th><th></th></tr></thead>
+                    <thead><tr><th>Hypothesis</th><th>Asset</th><th>Status</th><th>Evidence</th><th>Verdict (as recorded)</th><th>Created</th><th></th></tr></thead>{# claude code changed: Post-CRRP Task 4 — Evidence column #}
                     <tbody>
                         {% for e in experiments %}
                         <tr>
                             <td>{{ e.hypothesis_text|truncatechars:60 }}</td>
                             <td class="text-dim">{{ e.research_plan.spec.asset|default:"—" }}</td>
                             <td><span class="badge">{{ e.status }}</span></td>
-                            <td>{{ e.verdict|default:"—" }}</td>
+                            <td>{% include "partials/_evidence_badge.html" with ev=e.evidence %}</td>
+                            <td class="{% if not e.evidence.is_current_evidence %}text-dim{% endif %}">{{ e.verdict|default:"—" }}</td>
                             <td class="text-dim">{{ e.created_at|date:"Y-m-d H:i" }}</td>
                             <td><a href="{% url 'research_lab_results' experiment_id=e.id %}">View</a></td>
                         </tr>

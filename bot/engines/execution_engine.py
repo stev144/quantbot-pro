@@ -42,6 +42,7 @@ from bot.risk.position_sizer      import PositionSizer
 from bot.risk.drawdown_guard      import DrawdownGuard
 from bot.journal.trade_logger     import TradeLogger
 from bot.journal.models           import TradeRecord    # claude code changed: new import — DB-backed duplicate-position guard
+from bot.journal.models           import execution_mode_for   # claude code changed: Post-audit Phase 1 journal-mode separation
 from bot.engines.trade_narrative  import TradeNarrativeGenerator, TradeNarrative   # claude code changed: new import — Phase 4 (DB persistence of trade provenance)
 from bot.engines.binance_adapter  import BinanceAdapter   # claude code changed: new import — Kraken Multi-Venue Execution, Step 10
 from bot.engines.order_intent     import OrderIntent, StopLossIntent   # claude code changed: new import — Step 10
@@ -124,7 +125,7 @@ class ExecutionEngine:
 
         # TradeLogger — writes entries and exits to TradeRecord database table
         # Read by dashboard and analytics views
-        self.trade_logger = TradeLogger()
+        self.trade_logger = TradeLogger(execution_mode=execution_mode_for(dry_run))   # claude code changed: Post-audit Phase 1 — rows carry LIVE / DRY_RUN
 
         # claude code changed: new — Phase 4 (DB persistence of trade
         # provenance). Mirrors Backtester's own self.narrator pattern

@@ -2,8 +2,8 @@
 builder = "NIXPACKS"
 
 [deploy]
-# Runs migrations against Railway's Postgres plugin (via DATABASE_URL) and
-# collects static files fresh on every deploy, before gunicorn starts
+# Verifies (does NOT apply) migrations against Railway's Postgres plugin (via
+# DATABASE_URL) and collects static files fresh on every deploy, before gunicorn starts   # claude code changed: see startCommand note
 # accepting traffic. Kept as one startCommand rather than a Procfile
 # "release:" line — Railway's Procfile support doesn't reliably run
 # Heroku-style release phases.
@@ -16,6 +16,14 @@ builder = "NIXPACKS"
 # not a real application bug. 120s covers a legitimately slow first
 # backtest; subsequent requests within the hour hit the warm cache and
 # return fast regardless of this setting.
-startCommand = "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi --timeout 120 --log-file -"
+# claude code changed: Post-audit Phase 1 (owner decision 2026-10-02) — production
+# migrations are a MANUAL operator step. Was `migrate --noinput`, which changed
+# the production schema on every deploy with no separate decision. Now
+# `migrate --check` only VERIFIES: it exits non-zero when any migration is
+# unapplied, so the deploy refuses to start on an outdated schema (same rule the
+# pairs runner enforces) instead of silently migrating. To migrate production,
+# the operator runs `python manage.py migrate` against Railway's DATABASE_URL
+# (e.g. `railway run python manage.py migrate`), then redeploys.
+startCommand = "python manage.py migrate --check && python manage.py collectstatic --noinput && gunicorn config.wsgi --timeout 120 --log-file -"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

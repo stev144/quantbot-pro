@@ -396,7 +396,11 @@ def get_forex_execution_state():
             TradeRecord.objects.filter(symbol__in=forex_symbols, status="OPEN").order_by("-created_at")[:50]
         )
         closed = TradeRecord.objects.filter(symbol__in=forex_symbols).exclude(status="OPEN")
-        realized_pnl = sum((t.net_pnl or 0.0) for t in closed)
+        # claude code changed: Post-audit Phase 1 journal-mode separation — headline is LIVE
+        # rows only (was every row); other modes reported separately, never summed in.
+        from bot.views.terminal_data import pnl_by_execution_mode
+        realized_pnl_by_mode, unvalued_pnl_count = pnl_by_execution_mode(closed)
+        realized_pnl = realized_pnl_by_mode.get("LIVE", 0.0)
 
         return {
             "available": True,
@@ -404,6 +408,9 @@ def get_forex_execution_state():
             "open_count": len(open_positions),
             "total_closed": closed.count(),
             "realized_pnl": round(realized_pnl, 2),
+            "realized_pnl_scope": "LIVE trades only",       # claude code changed: Post-audit Phase 1
+            "realized_pnl_by_mode": realized_pnl_by_mode,   # claude code changed: Post-audit Phase 1
+            "unvalued_pnl_count": unvalued_pnl_count,       # claude code changed: Post-audit Phase 1
             "mode": "NONE — no Forex execution adapter exists",
         }
     except Exception as e:

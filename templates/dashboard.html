@@ -351,8 +351,9 @@ state, not an error the page failed to handle.
                     <div class="unavailable-inline mono">N/A</div>
                 </div>
                 <div class="metric-tile">
-                    <div class="metric-label">Realized P&amp;L</div>
+                    <div class="metric-label">Realized P&amp;L (LIVE){# claude code changed: Post-audit Phase 1 journal-mode separation — headline is LIVE rows only #}</div>
                     <div class="metric-value stat-number {% if execution_state.realized_pnl > 0 %}pos{% elif execution_state.realized_pnl < 0 %}neg{% endif %}" data-target="{{ execution_state.realized_pnl|default_if_none:0 }}" data-decimals="2">0</div>
+                    {% if execution_state.realized_pnl_by_mode %}<div class="chart-caption mono">{% for mode, v in execution_state.realized_pnl_by_mode.items %}{% if mode != "LIVE" %}{{ mode }} {{ v|floatformat:2 }} ({% if mode == "DRY_RUN" %}simulated{% else %}unattributed{% endif %}) {% endif %}{% endfor %}{% if execution_state.unvalued_pnl_count %}· {{ execution_state.unvalued_pnl_count }} unvalued{% endif %}</div>{% endif %}
                 </div>
                 <div class="metric-tile">
                     <div class="metric-label">Unrealized P&amp;L</div>

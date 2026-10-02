@@ -2180,3 +2180,32 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 **Why this matters beyond contagion itself:** this is now the fourth independent feature family (alongside crypto cross-sectional, the representative-sample core feature set, and PCA residual stat-arb) to land in exactly this same place — statistically real, economically too weak. That consistency across unrelated hypothesis shapes is itself evidence worth weighing: it looks less like each individual hypothesis failing for its own reason, and more like this project's crypto cost structure (~0.15% real taker fee) sets a floor that most single-feature signals in this universe don't clear, regardless of the feature's construction. See [[project_crypto_cross_sectional_no_survivors]] for the parallel finding on cross-sectional ranking.
 
 **How to apply:** don't re-run `contagion_engine.py` expecting a different answer without new evidence (a materially different feature construction, a lower-cost venue, or a longer/different sample). The raw per-symbol files remain on disk for anyone who wants to re-slice them differently.
+
+---
+
+## CANONICAL RESEARCH RESET POINT — CRRP-2026-10-02 (supersession notice)
+
+**Date:** 2026-10-02
+**Verdict:** GOVERNANCE — no new research result. Every entry above this one is preserved unchanged for provenance and is **not automatically current evidence**.
+
+`CRRP-2026-10-02` is the canonical research reset point. Every entry above was produced before it, under methods that the 2026-09-29 forensic audit and the 2026-10-02 reassessment found materially weak:
+- pairs P&L measured as the Kalman innovation (C-01);
+- mechanical spread-label IC (C-02);
+- pairs permutation nulls that cannot fail (C-03);
+- anti-conservative Dickey-Fuller residual p-values (H-03);
+- permutation p-floors against BH families (H-12);
+- IID p-values on overlapping labels (M-04);
+- walk-forward overlap (M-03);
+- full-sample PCA look-ahead;
+- same-print DCA fills and full-history volatility scaling;
+- no untouched historical holdout.
+
+**Classification of this log's conclusions:** see `PRE_PHASE3_RESEARCH_GOVERNANCE_REPORT_2026-10-02.md`. The machine-readable form is `bot/research/governance/evidence_registry_CRRP-2026-10-02.json` (version-controlled). In short:
+- **INVALIDATED:** every pairs design-attempt result, including the "eighth design / strongest result", the 7-pair portfolio, the leg-overlap and slippage checks, and "edge survives FIDA's real cost".
+- **LEGACY / DESCRIPTIVE:**
+  - the REJECTED pair verdicts (confirmed in direction by corrected fixed-quantity P&L);
+  - the forex cointegration 0/378 screens (FX calendar BLOCKED; not negative evidence);
+  - the contagion RESEARCH_NEGATIVE ("edge not established", **not** "no edge": the validator's p-floor makes the negative statistically uninformative);
+  - this entry's "fourth feature family" pattern statement (economic description only).
+
+**Current state:** no strategy in this repository has canonical evidence of a tradeable edge. Historical OOS is `PSEUDO_HOLDOUT — NOT CLAIM-ELIGIBLE`. New evidence requires full provenance under the reset-point standard (methodology version, protocol hash, code commit, data fingerprint, run ID, pre-registered family, role).

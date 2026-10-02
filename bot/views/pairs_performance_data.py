@@ -25,6 +25,7 @@ import os
 import pandas as pd
 
 from bot.views.research_lab_data import RESEARCH_DATA_DIR
+from bot.research.evidence_registry import classify_artifact   # claude code changed: Post-CRRP Task 4
 
 PERMUTATION_DIR = os.path.join(RESEARCH_DATA_DIR, "permutation_test")
 WALK_FORWARD_LEADERBOARD = os.path.join(RESEARCH_DATA_DIR, "walk_forward", "walk_forward_leaderboard.csv")
@@ -169,4 +170,11 @@ def get_pair_performance(prefix: str) -> dict:
         "permutation": _read_permutation_verdict(long_name),
         "walk_forward": _read_walk_forward_row(long_name),
         "cointegration": _read_cointegration_status(prefix),  # claude code changed: new — see _read_cointegration_status()
+        # claude code changed: Post-CRRP Task 4 — evidence status of every dataset on this page
+        "evidence": {
+            "equity": classify_artifact(f"{prefix}_equity_curve.csv"),
+            "permutation": classify_artifact(f"permutation_test/{long_name}/permutation_verdict.csv"),
+            "walk_forward": classify_artifact("walk_forward/walk_forward_leaderboard.csv"),
+            "cointegration": classify_artifact("cointegration_pairs.csv"),
+        },
     }
