@@ -1898,7 +1898,7 @@ class KalmanFilterEngine:
 
         # ── 1. Main Kalman feature output ─────────────────────────────────────
         main_path = out_path / f"{pair_slug}_kalman.csv"
-        results.reset_index().to_csv(main_path, index=False)
+        results.rename_axis("timestamp").reset_index().to_csv(main_path, index=False)   # claude code changed: 2026-10-03 — name the timestamp column explicitly (as write_canonical_dataset does); an unnamed index was written as "index", which EntryExitEngine cannot join to real leg prices
         if getattr(self, "seed_record", None) is not None:   # claude code changed: Stage 2D Rev B step 6 (D9)
             logger.info(f"  Saved Kalman seed  : {write_seed(self.seed_record, out_path)}")
         logger.info(f"\n  Saved main output  : {main_path}")

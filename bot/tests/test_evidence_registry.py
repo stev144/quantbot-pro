@@ -42,6 +42,10 @@ class RegistryRulesTests(SimpleTestCase):
             "contagion_validation/contagion_validated_features_pooled.csv": er.LEGACY_DESCRIPTIVE,
             "frozen_candidate_registry_2026-09-20.json": er.LEGACY_DESCRIPTIVE,
             "scan_150_2026-09-30/universe_selection_150.json": er.UNVERIFIED,
+            # claude code changed: 2026-10-03 — the post-CRRP retest outputs are descriptive and must win over the
+            # generic *_trade_log.csv / *_equity_curve.csv INVALIDATED patterns (first match wins)
+            "crrp_retest_2026-10-02/DODO_USDT_FIDA_USDT/real/DODO_USDT_FIDA_USDT_trade_log.csv": er.LEGACY_DESCRIPTIVE,
+            "crrp_retest_2026-10-02/retest_results.json": er.LEGACY_DESCRIPTIVE,
         }
         for path, cls in expect.items():
             with self.subTest(path=path):
