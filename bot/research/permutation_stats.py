@@ -104,6 +104,13 @@ def compute_permutation_verdict(
         p_value = float((np.sum(shuffled_values >= real_value) + 1) / (len(shuffled_values) + 1))
         verdict[f"{metric}_percentile"] = percentile
         verdict[f"{metric}_p_value"] = p_value
+        # claude code changed: F-07 — make the test's resolution visible. With B replicas the
+        # smallest attainable p is 1/(B+1); a p at that floor means "the real value beat every
+        # replica", not a precise p. The test stays exact for ONE pre-declared hypothesis, but a
+        # floor-level p cannot survive a family correction over m tests unless 1/(B+1) ≤ α·k/m.
+        verdict[f"{metric}_n_permutations"] = int(len(shuffled_values))
+        verdict[f"{metric}_p_floor"] = 1.0 / (len(shuffled_values) + 1)
+        verdict[f"{metric}_p_at_floor"] = bool(np.isclose(p_value, 1.0 / (len(shuffled_values) + 1)))
 
     return verdict
 

@@ -156,6 +156,7 @@ from typing import Dict, List, Optional, Tuple  # Type annotations
 import numpy as np                              # Numerical operations — core of Kalman math
 import pandas as pd                             # DataFrame operations
 from scipy import stats                         # Spearman IC, OLS initialisation
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
 from statsmodels.regression.linear_model import OLS    # OLS for hedge ratio seed
 from statsmodels.tools import add_constant             # Adds intercept column to OLS
 
@@ -1899,6 +1900,23 @@ class KalmanFilterEngine:
         # ── 1. Main Kalman feature output ─────────────────────────────────────
         main_path = out_path / f"{pair_slug}_kalman.csv"
         results.rename_axis("timestamp").reset_index().to_csv(main_path, index=False)   # claude code changed: 2026-10-03 — name the timestamp column explicitly (as write_canonical_dataset does); an unnamed index was written as "index", which EntryExitEngine cannot join to real leg prices
+        # claude code changed: 2026-10-03 F-03 — this (legacy) writer's state was seeded by an
+        # OLS over the first N candles and applied from candle 0 (look-ahead). Record that in a
+        # LEGACY provenance sidecar so no consumer can mistake it for a causal seed. Best-effort:
+        # a provenance failure never breaks the legacy run it describes.
+        try:
+            import dataclasses as _dc
+            _lp = _prov.legacy_provenance(main_path, kind="KALMAN_STATE", producer="kalman_filter_engine.run")
+            _prov.write_provenance(main_path, _dc.replace(_lp, extra={
+                "seed_method": "LEGACY_OLS_FIRST_N",
+                "seed_window_candles": int(self.pair_config.get("training_window_candles") or 0),
+                "seed_beta": float(self.pair_config.get("ols_beta", float("nan"))),
+                "seed_alpha": float(self.pair_config.get("ols_alpha", float("nan"))),
+                "seed_lookahead": True,
+                "finding": "F-03 (FULL_RESEARCH_PIPELINE_FIVE_GATE_AUDIT_2026-10-03.md)",
+            }))
+        except OSError:
+            pass
         if getattr(self, "seed_record", None) is not None:   # claude code changed: Stage 2D Rev B step 6 (D9)
             logger.info(f"  Saved Kalman seed  : {write_seed(self.seed_record, out_path)}")
         logger.info(f"\n  Saved main output  : {main_path}")
@@ -2079,6 +2097,7 @@ class KalmanParameterAnalyzer:
                             "qa":        qa,
                             "ic":        round(float(ic), 6),
                             "pvalue":    round(float(pv), 6),
+                            "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                             "n_obs":     int(valid.sum()),
                             "beta_std":  round(
                                 float(output.loc[~output["is_warmup"],

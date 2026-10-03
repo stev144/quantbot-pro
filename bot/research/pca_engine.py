@@ -128,6 +128,15 @@ class PCAConfig:
     ic_alpha: float = 0.05
     ic_forward_return_col: str = "forward_return_4h"  # which horizon IC validation (STEP 5) is scored against
 
+    # claude code changed: F-01 (2026-10-03 five-gate audit) — causal fit. The
+    # residual at candle t is computed with mean/std/correlation/loadings fitted
+    # ONLY on returns strictly before the refit point that covers t (expanding
+    # window). Both values reuse frozen project conventions, not tuned numbers:
+    # 1000 = the canonical Kalman init window L (REVB-3), 168 = the project-wide
+    # z-score minimum (weekly cadence). Baseline convention; sensitivity untested.
+    min_fit_candles: int = 1000
+    refit_every: int = 168
+
 
 PCA_CONFIG = PCAConfig()
 
@@ -331,6 +340,52 @@ def compute_residuals(
     raw_residuals = standardized_residuals * std   # back to real log-return units
     residual_df = pd.DataFrame(raw_residuals, index=returns.index, columns=returns.columns)
     return residual_df
+
+
+def compute_residuals_causal(returns: pd.DataFrame, config: PCAConfig) -> Tuple[pd.DataFrame, pd.DataFrame]:   # claude code changed: F-01 — new
+    """Causal (walk-forward) residuals: at each refit point r (every
+    config.refit_every rows, starting at config.min_fit_candles), fit
+    mean/std/correlation/loadings on returns.iloc[:r] (rows strictly BEFORE
+    r) and apply that fit to rows r … r+refit_every−1. Rows before the first
+    fit are NaN. A change to any return at row ≥ t therefore cannot change
+    any residual at a row < t (tested: test_pca_causal).
+
+    The residual uses the projection L·Lᵀ, which is invariant to eigenvector
+    sign flips and to rotations inside the retained subspace, so refits do
+    not flip residual signs. The number of retained components may change
+    between refits (each refit runs choose_n_components on its own window);
+    the refit log records it.
+
+    Returns (residual_df, refit_log) — refit_log has one row per refit:
+    fit_end (last row used, exclusive boundary = applied_from), applied_from,
+    applied_to, n_fit_rows, n_retained."""
+    if config.refit_every < 1 or config.min_fit_candles < 2:
+        raise ValueError("refit_every must be >= 1 and min_fit_candles >= 2")
+    n_rows = len(returns)
+    if n_rows <= config.min_fit_candles:
+        raise ValueError(f"need more than min_fit_candles={config.min_fit_candles} return rows for a causal fit; got {n_rows}")
+    values = returns.values
+    out = np.full(values.shape, np.nan)
+    log_rows = []
+    for r in range(config.min_fit_candles, n_rows, config.refit_every):
+        fit = values[:r]                                   # strictly before r
+        mean = fit.mean(axis=0)
+        std = fit.std(axis=0, ddof=1)
+        if np.any(~np.isfinite(std)) or np.any(std <= 0):
+            raise ValueError(f"zero/undefined return std in the fit window ending before row {r}")
+        corr = np.corrcoef((fit - mean) / std, rowvar=False)
+        eigenvalues, eigenvectors = np.linalg.eigh(corr)
+        order = np.argsort(eigenvalues)[::-1]
+        eigenvalues, eigenvectors = eigenvalues[order], eigenvectors[:, order]
+        k = config.n_components or choose_n_components(eigenvalues, config.variance_threshold)
+        loadings = eigenvectors[:, :k]
+        end = min(r + config.refit_every, n_rows)
+        std_block = (values[r:end] - mean) / std
+        out[r:end] = (std_block - std_block @ loadings @ loadings.T) * std
+        log_rows.append({"applied_from": returns.index[r], "applied_to": returns.index[end - 1],
+                         "fit_end": returns.index[r - 1], "n_fit_rows": r, "n_retained": int(k)})
+    return (pd.DataFrame(out, index=returns.index, columns=returns.columns),
+            pd.DataFrame(log_rows))
 
 
 def compute_residual_zscores(residual_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame:
@@ -633,10 +688,17 @@ def run_pca_engine(
     price_df = align_universe(prices)
     returns = compute_log_returns(price_df)
 
+    # claude code changed: F-01 — the full-history fit below is kept ONLY for the
+    # descriptive scree/loadings files; residuals (and so signals and IC) now come
+    # from the causal walk-forward fit. The old path used the future (audit PCA1).
     eigenvalues, eigenvectors, loadings, n_retained, ret_mean, ret_std = run_pca(returns, config)
 
-    residual_df = compute_residuals(returns, loadings, ret_mean, ret_std, config)
+    residual_df, refit_log = compute_residuals_causal(returns, config)
+    residual_df = residual_df.dropna(how="all")              # rows before the first causal fit have no residual
     residual_df = residual_df.iloc[config.warmup_candles:]  # remove warmup — spec's explicit requirement
+    logger.info(f"  Causal PCA: {len(refit_log)} refits (every {config.refit_every} candles, expanding window, "
+                f"first fit on {config.min_fit_candles} candles); retained k range "
+                f"{int(refit_log['n_retained'].min())}–{int(refit_log['n_retained'].max())}")
 
     zscore_df = compute_residual_zscores(residual_df, config)
     signal_df = generate_signals(zscore_df, config)

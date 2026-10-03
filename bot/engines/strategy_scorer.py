@@ -147,6 +147,12 @@ class StrategyScorer:
         )
         self.loss_streak = self._resolve_loss_streak()
 
+        # claude code changed: 2026-10-03, remediation F-14 — Phase 3 made Sharpe/Sortino None when
+        # UNDEFINED (too few periods, zero dispersion, no downside). Coercing None to 0.0 scored an
+        # undefined ratio as a measured "Poor" one. Undefined now stays None: it earns no points (no
+        # evidence, no credit) and is labelled undefined, never a number.
+        self.sharpe_defined = self.results.get("sharpe_ratio") is not None
+        self.sortino_defined = self.results.get("sortino_ratio") is not None
         self.sharpe = self._as_float(self.results.get("sharpe_ratio", 0.0), 0.0)
 
         # Cap Sortino — values like 272 or 999 are meaningless artefacts
@@ -1122,7 +1128,9 @@ class StrategyScorer:
         notes = []
 
         # ── Sharpe ratio ──────────────────────────────────────
-        if self.sharpe >= self.SHARPE_EXCELLENT:
+        if not getattr(self, "sharpe_defined", True):   # claude code changed: F-14
+            notes.append("Sharpe undefined (too few periods / zero dispersion) — not scored")
+        elif self.sharpe >= self.SHARPE_EXCELLENT:
             score += 8
             notes.append(f"Excellent Sharpe {self.sharpe}")
         elif self.sharpe >= self.SHARPE_GOOD:
@@ -1135,7 +1143,9 @@ class StrategyScorer:
             notes.append(f"Poor Sharpe {self.sharpe} ❌")
 
         # ── Sortino ratio — capped at 10 ─────────────────────
-        if self.sortino >= self.SORTINO_EXCELLENT:
+        if not getattr(self, "sortino_defined", True):   # claude code changed: F-14
+            notes.append("Sortino undefined (no downside periods) — not scored")
+        elif self.sortino >= self.SORTINO_EXCELLENT:
             score += 7
             notes.append(f"Excellent Sortino {self.sortino}")
         elif self.sortino >= self.SORTINO_GOOD:

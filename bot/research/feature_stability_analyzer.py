@@ -62,6 +62,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy import stats
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
 
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, get_instrument, periods_per_year  # claude code changed: new — see SYMBOLS comment below; get_instrument/periods_per_year added for the ANNUALISATION_FACTOR fix, see _compute_metrics
 
@@ -536,6 +537,7 @@ class FeatureStabilityAnalyzer:
                 # IC metrics
                 "ic":           round(float(ic), 6) if not np.isnan(ic) else np.nan,
                 "ic_pvalue":    round(float(pvalue), 6),
+                "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                 "ic_significant": pvalue < self.alpha,
                 "ic_grade":     ic_grade,
                 # Sharpe metrics

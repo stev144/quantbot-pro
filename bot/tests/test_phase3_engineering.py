@@ -196,3 +196,30 @@ class RatioTests(SimpleTestCase):
         self.assertEqual(res["drawdown_basis"], btm.DRAWDOWN_BASIS)
         self.assertIn("r_sharpe_trade_based", res)
         self.assertIn("daily_return_lag1_autocorr", res)
+
+
+# ── 2026-10-03 remediation: M-06 / F-14 (claude code changed: new section) ────
+class UndefinedRatioTests(SimpleTestCase):
+    def test_trades_without_r_are_excluded_not_zero(self):
+        trades = [{"r_multiple": None}, {"r_multiple": None}]                 # e.g. DCA cycles (no stop → no R)
+        self.assertIsNone(btm.calculate_sharpe_ratio(trades, years_elapsed=1.0))
+        self.assertIsNone(btm.calculate_sortino_ratio(trades, years_elapsed=1.0))
+        mixed = [{"r_multiple": 1.0}, {"r_multiple": None}, {"r_multiple": -1.0}, {"r_multiple": 2.0}]
+        # only the three R-bearing trades count: mean 0.6667, sd 1.5275 → 0.4364 (unannualised)
+        self.assertAlmostEqual(btm.calculate_sharpe_ratio(mixed), 0.4364, places=4)
+
+    def test_dca_cycles_report_return_on_deployed_not_r(self):
+        from bot.research.dca_engine import DCAConfig, simulate_dca_cycles
+        idx = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
+        df = pd.DataFrame({"open": [100.0] * 6, "high": [100.0] * 6, "low": [100.0] * 6, "close": [100.0] * 6}, index=idx)
+        t = simulate_dca_cycles(df, DCAConfig(levels=(), fee_rate=0.0, slippage_rate=0.0))[0]
+        self.assertIsNone(t["r_multiple"])
+        self.assertIn("return_on_max_deployed", t)
+
+    def test_scorer_labels_undefined_ratios_instead_of_scoring_them_as_poor(self):
+        from bot.engines.strategy_scorer import StrategyScorer
+        s = StrategyScorer.__new__(StrategyScorer)
+        s.sharpe, s.sortino, s.sharpe_defined, s.sortino_defined = 0.0, 0.0, True, False
+        out = s._score_edge_quality()
+        self.assertTrue(any("Sortino undefined" in n for n in out["notes"]))
+        self.assertFalse(any("Poor Sortino" in n for n in out["notes"]))

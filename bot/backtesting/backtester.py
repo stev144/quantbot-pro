@@ -1260,17 +1260,21 @@ def calculate_sharpe_ratio(
     the portfolio Sharpe.
     """
 
-    if len(trades) < 2:
+    # claude code changed: 2026-10-03, remediation M-06 — trades WITHOUT an R-multiple (r_multiple
+    # missing/None, e.g. DCA cycles, which have no stop) are excluded, not counted as R = 0. None when
+    # no trade carries an R at all (the ratio is undefined, not zero).
+    r_values = [t["r_multiple"] for t in trades if t.get("r_multiple") is not None]
+    if trades and not r_values:
+        return None
+    if len(r_values) < 2:
         return 0.0   # Cannot calculate a ratio from fewer than 2 trades
-
-    r_values = [t.get("r_multiple", 0) or 0 for t in trades]
     avg_r = np.mean(r_values)
     std_r = np.std(r_values, ddof=1)
 
     if std_r == 0:
         return 0.0   # All trades had identical R — no variance to measure
 
-    annualisation = np.sqrt(len(trades) / years_elapsed) if (years_elapsed and years_elapsed > 0) else 1.0
+    annualisation = np.sqrt(len(r_values) / years_elapsed) if (years_elapsed and years_elapsed > 0) else 1.0   # claude code changed: M-06 — R-bearing trades only
     return round(float(avg_r / std_r * annualisation), 4)
 
 
@@ -1292,14 +1296,16 @@ def calculate_sortino_ratio(
     losses. With no downside the ratio is undefined → None (never a number
     that looks like a result)."""
 
-    if len(trades) < 2:
+    r_list = [t["r_multiple"] for t in trades if t.get("r_multiple") is not None]   # claude code changed: M-06 — exclude trades without an R
+    if trades and not r_list:
+        return None
+    if len(r_list) < 2:
         return 0.0   # Cannot calculate from fewer than 2 trades
-
-    r_values = np.asarray([t.get("r_multiple", 0) or 0 for t in trades], dtype=float)
+    r_values = np.asarray(r_list, dtype=float)
     dd = float(np.sqrt(np.mean(np.minimum(r_values, 0.0) ** 2)))
     if dd == 0:
         return None
-    annualisation = np.sqrt(len(trades) / years_elapsed) if (years_elapsed and years_elapsed > 0) else 1.0
+    annualisation = np.sqrt(len(r_list) / years_elapsed) if (years_elapsed and years_elapsed > 0) else 1.0
     return round(float(np.mean(r_values) / dd * annualisation), 4)
 
 

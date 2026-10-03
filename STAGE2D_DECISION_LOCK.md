@@ -11,7 +11,7 @@
 | **C3** missing exit candle | **LOCKED** (recording); exclusion **documented** | The exit fills at the first observed candle after u + d. The trade carries `exit_fill_candle_missing`, `missing_exit_fill_timestamps`, `holding_candles`, `h_compliant = False` and `data_complete = False`. A trade still open when the data ends is closed as `DATA_END_CENSORED` with `data_complete = False`. See §C3 below. |
 | **C4** 2026-09-20 registry | **LOCKED** | A separate legacy experiment. See §C4 below. |
 | **C5** live missed candles | **LOCKED** (minimum fail-closed) | A live polling gap means live cannot tell an exchange gap from a missed poll. The engine sets `requires_reconciliation`, records the gap timestamps and blocks **new entries**. It steps the gap as prediction-only grid candles and never invents a price. **Exits stay allowed**: they use only the frozen α_e and β_e, the observed prices and wall-clock H, so they don't depend on the possibly-stale filter state, and closing reduces risk. Backfill/reconciliation itself is deferred. A restart replays from the seed using exchange history, which is authoritative. `confirm_gap_reconciled()` exists for that future reconciler and nothing calls it. |
-| **C6** Kalman seed | **Mechanism LOCKED; L BLOCKED** | See §C6 below. |
+| **C6** Kalman seed | **Mechanism LOCKED; L = 1000 LOCKED (REVB-3)** | See §C6 below. *Supersession S-1 (2026-10-03): this row read "L BLOCKED" until L = 1000 was locked under STAGE2D-REVB-3. See the Supersession record at the end of this file.* |
 | FX | **BLOCKED** | Unchanged. The crypto pipeline proceeds. No FX result may be read as negative evidence. The heuristic `likely_weekend` labels are not a calendar. |
 
 ### C3 — Could incomplete trades contaminate later stages?
@@ -61,6 +61,8 @@ The prohibited design is: fit β/α on selection candles, then assign the result
   - the prohibited design is demonstrably detected.
 - The seed candle must be observed on both legs. Otherwise there is no canonical seed and the run fails closed.
 - **Data roles stay distinct:** initialisation data (the init window), then the selection warmup (seed to seed + 336), then selection, validation, walk-forward and holdout. No later-zone candle can flow into a seed, because the seed record stores the window and live re-derives θ₀ from the exchange's own init-window candles. A mismatch is refused as a data-version mismatch.
+
+> **Superseded (S-1, 2026-10-03).** The paragraph below is the original text, kept unchanged for the record. L is no longer blocked: it was locked at **L = 1000** (Design A, init window before the seed) under methodology `STAGE2D-REVB-3`. Sources: `bot/quant_core/protocol.py` (`init_window_candles = 1000`), `STAGE2D_CANONICAL_PROTOCOL.md` §C6, `STAGE2D_D1_D5_G1_IMPLEMENTATION_REPORT.md` §10.
 
 **BLOCKED — L, the init-window length.** It is a new quantity that no frozen value determines. The 168-candle filter warmup and the 168-value z minimum are frozen, but they govern what happens *after* the seed, not how many candles θ₀ is fitted on. Any value chosen now would be an arbitrary choice that affects every θ₀. `CanonicalProtocol.init_window_candles = None` makes every canonical seeding path raise `ProtocolValueMissing`, so live keeps refusing entries.
 
@@ -442,3 +444,15 @@ With 1, 2 and 4 confirmed:
 - Steps **9–11** (held-spread exit, time stop, skipped-candle backfill) can be implemented on development data (pseudo-holdout labels only).
 - Steps **13–17** (purge/embargo with real boundaries, OOS/WF, statistics, multiple testing, permutation) additionally need item 3.
 - No step may touch candles at or after F until the holdout is formally opened.
+
+---
+
+## Supersession record
+
+Entries are appended only; superseded text above stays in place, marked.
+
+| ID | Date | Superseded text | Current value | Authority | Found by |
+|---|---|---|---|---|---|
+| S-1 | 2026-10-03 | C6 "L BLOCKED"; §C6 "BLOCKED — L, the init-window length"; "`init_window_candles = None`" | **L = 1000**, Design A (`A_PRE_SELECTION`), methodology `STAGE2D-REVB-3` | `bot/quant_core/protocol.py`; `STAGE2D_CANONICAL_PROTOCOL.md` §C6; `STAGE2D_D1_D5_G1_IMPLEMENTATION_REPORT.md` §10 | Five-gate audit F-15 |
+
+**Still BLOCKED (unchanged by S-1):** the zone decision (S / V / WF / F calendar boundaries) and the forward-holdout start. C6's remaining clause, the seed candle = the selection-zone start, depends on zone S and is therefore still open.

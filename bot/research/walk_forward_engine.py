@@ -717,9 +717,17 @@ class WalkForwardEngine:
         train_end = data_start + pd.DateOffset(years=self.min_train_years)  # First anchor train window's end
 
         while train_end < data_end:                                    # Keep building folds while data remains
-            test_start = train_end                                     # Test begins exactly where train ends
+            # claude code changed: 2026-10-03, remediation M-03 — was `test_start = train_end`. Both
+            # slices use .loc (inclusive), so the train_end candle sat in TRAIN (including the fold's OLS
+            # seed fit) AND in TEST. Exclusive boundary: TEST begins at the first candle strictly after
+            # train_end. (Train-side trades are force-closed at train_end, so no further purge is needed
+            # for this engine; its Kalman state is causal across the fold.)
+            later = df_full.index[df_full.index > train_end]
+            if len(later) == 0:
+                break
+            test_start = later[0]                                      # Test begins one candle AFTER train ends
             test_end   = min(                                          # Test window is fixed-length, but clipped
-                test_start + pd.DateOffset(years=self.test_window_years),
+                train_end + pd.DateOffset(years=self.test_window_years),   # claude code changed: M-03 — anchored on train_end (window = (train_end, train_end + Y]) so the exclusive start does not drift later folds' calendar boundaries
                 data_end,
             )
 

@@ -196,11 +196,12 @@ class ConditionalEvidenceCompletenessTest(TestCase):
         self.assertGreater(result["n_condition_episodes"], 0)
         self.assertLessEqual(result["n_condition_episodes"], result["n_condition_true"])  # claude code changed: an episode is >=1 candle, so episode count can never exceed candle count
 
-        # claude code changed: gap #5 — for a single condition (m=1 family),
-        # FDR-adjusted p is EXACTLY the raw block-permutation p (Benjamini-
-        # Hochberg identity at m=1), not skipped.
-        self.assertEqual(result["fdr_adjusted_p_value"], result["block_permutation_p_value"])
-        self.assertEqual(result["passes_fdr"], result["block_permutation_p_value"] < 0.05)
+        # claude code changed: 2026-10-03, remediation F-11 — a single experiment has no
+        # registered family, so no FDR adjustment is claimed: the raw p is reported as raw.
+        self.assertIsNone(result["fdr_adjusted_p_value"])
+        self.assertIsNone(result["passes_fdr"])
+        self.assertEqual(result["family_correction"], "NOT_APPLIED_NO_REGISTERED_FAMILY")
+        self.assertIsNotNone(result["block_permutation_p_value"])
 
     def test_episode_count_less_than_or_equal_to_raw_candle_count_for_a_clustered_condition(self):
         """claude code changed: a condition that tends to persist for

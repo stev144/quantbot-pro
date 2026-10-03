@@ -426,7 +426,12 @@ def _close_cycle(cycle: _OpenCycle, timestamp, price: float, config: DCAConfig, 
         "quantity": round(quantity, 8),
         "profit": round(net_pnl, 6),
         "gross_profit": round(gross_pnl, 6),
-        "r_multiple": round(r_multiple, 6),
+        # claude code changed: 2026-10-03, remediation M-06 — a DCA cycle has no stop-loss, so an
+        # R-multiple (P&L / stop risk) is UNDEFINED. The quantity formerly stored here is the return
+        # on maximum deployed capital; it is now reported under that name and r_multiple is None, so
+        # R-based ratios (backtester / oos_validator) never treat it as R.
+        "r_multiple": None,
+        "return_on_max_deployed": round(r_multiple, 6),
         # claude code changed: real bug fix — was len(cycle.fills) (a FILL
         # count, mislabeled as "holding_candles"; cycle_n_fills below
         # already reports that correctly under its real name). This now
@@ -516,7 +521,7 @@ def _finalize_trade(trade: Dict, cycle: _OpenCycle, config: DCAConfig, *, censor
     if status == FINANCING_KNOWN and cycle.financing_accrued:
         trade["profit"] = round(trade["profit"] - cycle.financing_accrued, 6)
         dep = trade["cycle_max_capital_deployed"]
-        trade["r_multiple"] = round(trade["profit"] / dep, 6) if dep else 0.0
+        trade["return_on_max_deployed"] = round(trade["profit"] / dep, 6) if dep else 0.0   # claude code changed: M-06 — was trade["r_multiple"]
     trade.update({
         "fill_model": config.fill_model,
         "censored": censored,                                   # True = data ended with the cycle open; P&L is a LIQUIDATION MARK, not a realised exit

@@ -60,6 +60,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy import stats
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
 
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — Forex Integration Stage 1, see SYMBOLS comment below
 
@@ -313,6 +314,7 @@ class FeatureDecayAnalyzer:
                     "n_obs":   int(valid.sum()),
                     "ic":      round(float(ic), 6) if not np.isnan(ic) else np.nan,
                     "pvalue":  round(float(pvalue), 6),
+                    "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                     "sharpe":  round(float(sharpe), 4),
                     "grade":   grade,
                     "significant": pvalue < self.alpha,
@@ -381,6 +383,7 @@ class FeatureDecayAnalyzer:
                     "n_obs":   int(valid.sum()),
                     "ic":      round(float(ic), 6) if not np.isnan(ic) else np.nan,
                     "pvalue":  round(float(pvalue), 6),
+                    "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                     "significant": pvalue < self.alpha,
                     "ic_grade": self._grade_ic_only(ic),
                 })

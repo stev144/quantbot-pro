@@ -104,6 +104,7 @@ from typing import Dict, List, Optional, Tuple   # Type hints
 import numpy as np                          # Numerical operations
 import pandas as pd                         # DataFrame operations
 from scipy import stats                     # Spearman IC calculation
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
 from statsmodels.stats.multitest import multipletests   # claude code changed: new — Phase 1D, Objective 10. Family-wide FDR correction across DivergenceICReporter.report()'s (symbol x feature) results, the same discipline cointegration_engine.py's _apply_fdr_correction() and feature_validator.py's apply_family_wide_correction() already use.
 
 # claude code changed: new — real drift bug found by audit. ALTCOIN_SYMBOLS
@@ -1241,6 +1242,7 @@ class DivergenceICReporter:
                     "feature": feature,
                     "ic":      round(float(ic), 6),
                     "pvalue":  round(float(pvalue), 6),
+                    "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                     "n":       int(n),
                     "significant": pvalue < 0.05,
                 })

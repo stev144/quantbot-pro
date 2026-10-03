@@ -62,9 +62,12 @@ def _canonical_dataset(tmp, n=1500, protocol=P):
     return Path(tmp) / "canonical" / "X_USDT_Y_USDT_kalman.csv", eng
 
 
-def _eee(out, protocol=P, rule_set="CANONICAL"):
+def _eee(out, protocol=P, rule_set="CANONICAL", **costs):   # claude code changed: F-12 — optional borrow rates (canonical status needs complete costs)
     return EntryExitEngine(output_dir=str(out), validated_win_rate=0.6, rule_set=rule_set, protocol=protocol,
-                           capital_usdt=10_000.0, pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT")
+                           capital_usdt=10_000.0, pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", **costs)
+
+
+BORROW = {"borrow_rate_hourly_a": 0.00001, "borrow_rate_hourly_b": 0.00001}   # claude code changed: F-12 — a modelled (non-zero) borrow cost
 
 
 # ── D-5 ─────────────────────────────────────────────────────────────────────
@@ -120,9 +123,11 @@ class CanonicalDatasetSeparationTests(SimpleTestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_canonical_dataset_is_accepted_and_labelled_with_lineage(self):
+        # claude code changed: F-12 — borrow is now modelled here: since 2026-10-03 a CANONICAL label also
+        # requires complete costs (the no-borrow case is pinned by the test below). Assertions unchanged.
         csv, eng = _canonical_dataset(self.tmp)
         out = self.tmp / "o"
-        _, summary, _ = _quiet(_eee(out).run, kalman_csv=str(csv))
+        _, summary, _ = _quiet(_eee(out, **BORROW).run, kalman_csv=str(csv))
         row = summary.iloc[0]
         self.assertEqual((row["provenance_status"], row["methodology_version"]), (prov.CANONICAL, METHODOLOGY_VERSION))
         self.assertEqual(row["protocol_hash"], P.config_hash())
@@ -132,6 +137,20 @@ class CanonicalDatasetSeparationTests(SimpleTestCase):
         sp = prov.read_provenance(out / "X_Y_strategy_summary.csv")
         self.assertTrue(prov.validate_canonical_provenance(sp, kind="STRATEGY_SUMMARY", methodology_version=METHODOLOGY_VERSION,
                                                            protocol_hash=P.config_hash(), artifact=out / "X_Y_strategy_summary.csv").ok)
+
+    def test_canonical_dataset_without_modelled_borrow_is_not_canonical(self):   # claude code changed: F-12 — new
+        csv, eng = _canonical_dataset(self.tmp)
+        out = self.tmp / "o"
+        _, summary, _ = _quiet(_eee(out).run, kalman_csv=str(csv))
+        row = summary.iloc[0]
+        self.assertEqual(row["provenance_status"], prov.UNCERTIFIED)
+        self.assertFalse(bool(row["cost_complete"]))
+        self.assertEqual(row["methodology_version"], METHODOLOGY_VERSION)     # lineage facts kept
+        self.assertEqual(row["seed_id"], seed_id(eng.seed_record))
+        sp = prov.read_provenance(out / "X_Y_strategy_summary.csv")
+        self.assertEqual(sp.status, prov.UNCERTIFIED)                         # summary row and sidecar agree
+        self.assertFalse(prov.validate_canonical_provenance(sp, kind="STRATEGY_SUMMARY", methodology_version=METHODOLOGY_VERSION,
+                                                            protocol_hash=P.config_hash(), artifact=out / "X_Y_strategy_summary.csv").ok)
 
     def test_the_audit_adversarial_case_is_rejected(self):
         """D-4 demonstration from the pre-Step-12 audit: a LEGACY look-ahead-seeded

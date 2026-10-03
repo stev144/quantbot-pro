@@ -11,9 +11,8 @@
 #     "CANONICAL_UNCERTIFIED" (same rules as live: decision at a close,
 #     fill d=1 candle later, H=24, entry-sign check), declared fee/slippage,
 #     Engle–Granger/MacKinnon cointegration (H-03 fix).
-#   * NOT canonical evidence: the Kalman seed is the LEGACY one (OLS on the
-#     first 10,000 common candles) because the canonical init window L and
-#     the selection zones are owner-BLOCKED; short-leg borrow cost is not
+#   * NOT canonical evidence (even under amendment 2): pair SELECTION was the
+#     legacy full-history scan (zone S BLOCKED); short-leg borrow cost is not
 #     modelled (UNAVAILABLE); every candle is exposed history (PSEUDO_HOLDOUT
 #     — NOT CLAIM-ELIGIBLE); these pairs were SELECTED on this same data, so
 #     any positive figure carries selection bias; no permutation p-value is
@@ -48,6 +47,16 @@
 # circularly and rebuilds a continuous path from B's first close: B keeps
 # exactly its own return dynamics, the alignment with A is destroyed, and there
 # is no level jump. The reading rule is unchanged.
+#
+# PROTOCOL AMENDMENT 2 (2026-10-03, remediation F-03 — before any further run):
+# the legacy seed (OLS over the first 10,000 candles, applied from candle 0) is
+# look-ahead. The pipeline now uses KalmanFilterEngine.run_canonical(): θ₀ =
+# OLS on the first L = 1000 grid candles ONLY (protocol), the filter starts
+# after them, and the output is a validated CANONICAL Kalman dataset (seed
+# record + provenance sidecar) consumed with rule_set="CANONICAL". The scored
+# sample is every trade (the init window carries no state). Controls run the
+# identical canonical path on the return-rolled leg. Nothing was run under
+# this amendment yet; a rerun needs owner approval.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 from __future__ import annotations
@@ -67,7 +76,6 @@ PAIRS: List[str] = [
     "DOT_USDT/LINK_USDT", "FET_USDT/BCH_USDT", "FET_USDT/DASH_USDT", "MINA_USDT/ONG_USDT",
     "ONT_USDT/RIF_USDT", "SOL_USDT/MASK_USDT",
 ]
-SEED_WINDOW = 10_000                  # the legacy OLS seed window (cointegration_engine.TRAINING_WINDOW)
 SHIFT_FRACTIONS = (0.25, 0.50, 0.75)
 MIN_TRADES_PER_YEAR = 20
 BEST_YEAR_SHARE_MAX = 0.75
@@ -81,29 +89,24 @@ def _common_closes(a: str, b: str, data_dir: str = DATA_DIR) -> pd.DataFrame:
     return df.dropna()
 
 
-def _seed(closes: pd.DataFrame):
-    from bot.quant_core.cointegration import ols_hedge
-    w = closes.iloc[:SEED_WINDOW]
-    return ols_hedge(np.log(w["a"].to_numpy()), np.log(w["b"].to_numpy()))   # (alpha, beta) of log A on [1, log B]
-
-
 def _eg(la: pd.Series, lb: pd.Series, min_obs: int = 500):
     from bot.quant_core.cointegration import engle_granger
     r = engle_granger(la, lb, min_obs=min_obs, maxlag=None, autolag="aic")
     return round(r.value.pvalue, 6) if r.ok else None
 
 
-def _run_pipeline(a: str, b: str, closes: pd.DataFrame, data_dir: str, out: Path) -> pd.DataFrame:
+def _run_pipeline(a: str, b: str, closes: pd.DataFrame, out: Path) -> pd.DataFrame:
+    """Canonical Kalman (causal init, L = 1000) -> validated canonical dataset ->
+    canonical lifecycle with fixed-quantity P&L. Amendment 2 (F-03)."""
     from bot.research.kalman_filter_engine import KalmanFilterEngine
-    from bot.research.entry_exit_engine import EntryExitEngine, _parse_pair_from_kalman_filename
-    alpha, beta = _seed(closes)
+    from bot.research.entry_exit_engine import EntryExitEngine
     out.mkdir(parents=True, exist_ok=True)
-    KalmanFilterEngine(pair_name=f"{a}/{b}", symbol_a=a, symbol_b=b, ols_beta=beta, ols_alpha=alpha).run(
-        data_dir=data_dir, output_dir=str(out))
-    kc = str(out / f"{a}_{b}_kalman.csv")
-    pair, sa, sb = _parse_pair_from_kalman_filename(kc)
-    EntryExitEngine(pair_name=pair, symbol_a=sa, symbol_b=sb, output_dir=str(out), rule_set="CANONICAL_UNCERTIFIED",
-                    price_data_dir=data_dir).run(kalman_csv=kc)
+    # ols_beta/ols_alpha are NOT used by run_canonical — θ₀ comes only from causal_init (same convention as test_canonical_seed)
+    eng = KalmanFilterEngine(pair_name=f"{a}/{b}", symbol_a=a, symbol_b=b, ols_beta=1.0, ols_alpha=0.0)
+    eng.run_canonical(closes["a"], closes["b"], output_dir=str(out))
+    kc = out / "canonical" / f"{a}_{b}_kalman.csv"
+    EntryExitEngine(pair_name=f"{a}/{b}", symbol_a=a, symbol_b=b, output_dir=str(out),   # must equal the seed record's pair name (canonical provenance gate)
+                    rule_set="CANONICAL").run(kalman_csv=str(kc))
     tl = pd.read_csv(next(out.glob("*_trade_log.csv")))
     tl["entry_decision_timestamp"] = pd.to_datetime(tl["entry_decision_timestamp"], utc=True)
     return tl
@@ -136,30 +139,26 @@ def _reading(real: Dict, controls: List[Dict]) -> str:
 
 
 def retest_pair(pair: str) -> Dict:
+    from bot.quant_core.protocol import CANONICAL
     a, b = pair.split("/")
     closes = _common_closes(a, b)
-    seed_end = closes.index[SEED_WINDOW - 1]
+    seed_end = closes.index[CANONICAL.require_init_window() - 1]   # end of the causal init window (no trades inside it)
     base = OUT_DIR / f"{a}_{b}"
-    real = _score(_run_pipeline(a, b, closes, DATA_DIR, base / "real"), seed_end)
+    real = _score(_run_pipeline(a, b, closes, base / "real"), seed_end)
     la, lb = np.log(closes["a"]), np.log(closes["b"])
     post = closes.index > seed_end
-    eg = {"seed_window": _eg(la[~post], lb[~post]), "scored_period": _eg(la[post], lb[post]),
+    eg = {"init_window": _eg(la[~post], lb[~post]), "scored_period": _eg(la[post], lb[post]),
           "by_year": {int(y): _eg(la[closes.index.year == y], lb[closes.index.year == y]) for y in sorted(set(closes.index.year))}}
     controls = []
+    r_b = np.diff(np.log(closes["b"].to_numpy()))
     for f in SHIFT_FRACTIONS:
         k = int(len(closes) * f)
-        ddir = base / f"ctrl_shift{int(f * 100)}" / "data"
-        ddir.mkdir(parents=True, exist_ok=True)
         shifted = closes.copy()
-        r_b = np.diff(np.log(closes["b"].to_numpy()))
-        shifted["b"] = float(closes["b"].iloc[0]) * np.exp(np.concatenate([[0.0], np.cumsum(np.roll(r_b, -k))]))   # amendment: roll B's log RETURNS (continuous path, no level splice)
-        for sym, col in ((a, "a"), (b, "b")):
-            pd.DataFrame({"timestamp": shifted.index, "close": shifted[col].to_numpy()}).to_csv(ddir / f"{sym}_1h.csv", index=False)
-        c = _score(_run_pipeline(a, b, shifted, str(ddir), ddir.parent), seed_end)
+        shifted["b"] = float(closes["b"].iloc[0]) * np.exp(np.concatenate([[0.0], np.cumsum(np.roll(r_b, -k))]))   # amendment 1: roll B's log returns
+        c = _score(_run_pipeline(a, b, shifted, base / f"ctrl_shift{int(f * 100)}"), seed_end)
         c["shift_candles"] = k
         controls.append(c)
-        shutil.rmtree(ddir, ignore_errors=True)                  # synthetic prices are not kept as data
-    return {"pair": pair, "n_common_candles": int(len(closes)), "seed_window_end": str(seed_end),
+    return {"pair": pair, "n_common_candles": int(len(closes)), "init_window_end": str(seed_end),
             "engle_granger_pvalue": eg, "real": real, "controls": controls, "reading": _reading(real, controls)}
 
 
@@ -176,11 +175,11 @@ def run_all(pairs: List[str] = PAIRS) -> Dict:
     out = {
         "artifact": "pairs_crrp_retest", "generated_at": datetime.now(timezone.utc).isoformat(),
         "reset_point": "CRRP-2026-10-02", "evidence_class": "LEGACY_DESCRIPTIVE",
-        "code_commit": commit, "code_dirty": dirty, "rule_set": "CANONICAL_UNCERTIFIED",
-        "seed": f"legacy OLS on the first {SEED_WINDOW} common candles (canonical init window L BLOCKED)",
+        "code_commit": commit, "code_dirty": dirty, "rule_set": "CANONICAL",
+        "seed": "canonical causal_init: OLS on the first L=1000 grid candles only (amendment 2, F-03)",
         "costs": "declared fee + slippage (binance cost model); short-leg borrow NOT modelled (UNAVAILABLE)",
         "data_role": "PSEUDO_HOLDOUT — NOT CLAIM-ELIGIBLE; pairs were selected on this same data",
-        "protocol": {"scored": "entry decision after the seed window", "controls": list(SHIFT_FRACTIONS),
+        "protocol": {"scored": "every trade (canonical output starts after the causal init window)", "controls": list(SHIFT_FRACTIONS),
                      "min_trades_per_year": MIN_TRADES_PER_YEAR, "best_year_share_max": BEST_YEAR_SHARE_MAX},
         "results": results,
     }

@@ -1151,6 +1151,7 @@ class EntryExitEngine:
         # ── Step 1: Load Kalman output ────────────────────────────────────────
         if self.rule_set == "CANONICAL":   # claude code changed: Stage 2D Rev B D-4 — fail closed before reading or writing anything
             self._validate_canonical_input(kalman_csv)
+        self._kalman_seed_lineage = self._input_seed_lineage(kalman_csv)   # claude code changed: 2026-10-03 F-03 — recorded in every summary
         df = self._load_kalman_data(kalman_csv)
 
         # ── Step 2: Validate required columns ────────────────────────────────
@@ -1811,6 +1812,24 @@ class EntryExitEngine:
             "entry_signal": entry_signal, "exit_signal": exit_signal, "exit_reason": exit_reasons,
         }).set_index("timestamp")
 
+    @staticmethod
+    def _input_seed_lineage(kalman_csv) -> str:   # claude code changed: new — 2026-10-03 F-03
+        """How the input Kalman state was initialised, from its provenance
+        sidecar: CANONICAL_CAUSAL_SEED (validated canonical dataset),
+        LEGACY_OLS_FIRST_N_LOOKAHEAD (the legacy run() seed — an OLS fitted on
+        the first N candles and applied from candle 0: look-ahead), or
+        UNKNOWN_SEED_LEGACY (no sidecar — legacy of unknown methodology, never
+        canonical by default)."""
+        try:
+            prov = _prov.read_provenance(kalman_csv)
+        except Exception:
+            return "UNKNOWN_SEED_LEGACY"
+        if prov.status == _prov.CANONICAL and (prov.extra or {}).get("seed"):
+            return "CANONICAL_CAUSAL_SEED"
+        if (prov.extra or {}).get("seed_method") == "LEGACY_OLS_FIRST_N":
+            return "LEGACY_OLS_FIRST_N_LOOKAHEAD"
+        return "UNKNOWN_SEED_LEGACY"
+
     def _validate_canonical_input(self, kalman_csv) -> None:   # claude code changed: Stage 2D Rev B D-4 — new
         """OK only for a KALMAN_STATE dataset written by
         KalmanFilterEngine.write_canonical_dataset() under THIS methodology and
@@ -1841,9 +1860,14 @@ class EntryExitEngine:
         self._lineage = {"seed_ts": seed.seed_ts, "seed_id": extra["seed_id"], "data_version": prov.data_version,
                          "input_run_id": prov.run_id, "seed_design": seed.seed_design}
 
+    def _canonical_lineage(self) -> bool:   # claude code changed: F-12 — validated canonical input lineage (independent of cost completeness)
+        return self.rule_set == "CANONICAL" and self._lineage is not None
+
     def _output_provenance_status(self) -> str:   # claude code changed: Stage 2D Rev B D-4
         if self.rule_set == "CANONICAL" and self._lineage is not None:
-            return _prov.CANONICAL
+            # claude code changed: F-12 — single source of truth for the output status (summary row and
+            # sidecar both read it): incomplete economics (borrow not modelled) are never CANONICAL.
+            return _prov.CANONICAL if self.borrow_cost_modeled else _prov.UNCERTIFIED
         return _prov.UNCERTIFIED if self.rule_set == "CANONICAL_UNCERTIFIED" else _prov.LEGACY
 
     def entry_sign_mismatch_log(self) -> pd.DataFrame:   # claude code changed: Stage 2D Rev B C1 — the rejected entries, never silently discarded
@@ -2532,6 +2556,11 @@ class EntryExitEngine:
             "exit_timestop_count": exit_component_counts.get("TIMESTOP", 0),
             "exit_partial_count":  exit_component_counts.get("PARTIAL",  0),
             "borrow_cost_modeled": self.borrow_cost_modeled,   # claude code changed: new — Phase 1: False means short-leg financing was charged as 0 (economically incomplete)
+            # claude code changed: 2026-10-03, remediation F-12 — the borrow state in the canonical
+            # vocabulary: BORROW_KNOWN (a rate was supplied and charged) or ASSUMED_ZERO_BORROW (no
+            # rate — short financing charged as 0; never presented as a real zero cost). Historical
+            # borrow availability is never invented.
+            "borrow_status": "BORROW_KNOWN" if self.borrow_cost_modeled else "ASSUMED_ZERO_BORROW",
             "entry_ic":            round(float(ic_val), 4) if not np.isnan(ic_val) else np.nan,
             "entry_ic_pvalue":     round(float(ic_p), 4) if not np.isnan(ic_p) else np.nan,
             "validated_ic":        self.validated_ic if self.validated_ic is not None else np.nan,             # claude code changed: was VALIDATED_IC
@@ -2540,8 +2569,10 @@ class EntryExitEngine:
             "rule_set":            self.rule_set,            # claude code changed: Stage 2D Rev B — LEGACY results can never pass as CANONICAL
             # claude code changed: Stage 2D Rev B D-4 — canonical labels ONLY for a validated canonical input
             "provenance_status":   self._output_provenance_status(),
-            "methodology_version": METHODOLOGY_VERSION if self._output_provenance_status() == _prov.CANONICAL else self._output_provenance_status(),
-            "protocol_hash":       self.protocol.config_hash() if self._output_provenance_status() == _prov.CANONICAL else "",
+            "kalman_seed_lineage": getattr(self, "_kalman_seed_lineage", "UNKNOWN"),   # claude code changed: 2026-10-03 F-03 — CANONICAL_CAUSAL_SEED / LEGACY_OLS_FIRST_N_LOOKAHEAD / UNKNOWN_SEED_LEGACY
+            "methodology_version": METHODOLOGY_VERSION if self._canonical_lineage() else self._output_provenance_status(),   # claude code changed: F-12 — true for a validated canonical lineage even when the status is cost-downgraded
+            "protocol_hash":       self.protocol.config_hash() if self._canonical_lineage() else "",   # claude code changed: F-12
+            "cost_complete":       bool(self.borrow_cost_modeled),   # claude code changed: F-12 — False ⇒ never CANONICAL
             "data_version":        self._lineage["data_version"] if self._lineage else "",
             "seed_id":             self._lineage["seed_id"] if self._lineage else "",
             "seed_design":         self._lineage["seed_design"] if self._lineage else "",
@@ -2653,7 +2684,7 @@ class EntryExitEngine:
         """Sidecar for a simulation output. CANONICAL only with a validated
         canonical input lineage; otherwise UNCERTIFIED or LEGACY."""
         status = self._output_provenance_status()
-        if status != _prov.CANONICAL:
+        if not self._canonical_lineage():   # claude code changed: F-12 — branch on lineage, not status: a cost-downgraded canonical run keeps its lineage below
             prov = _prov.legacy_provenance(path, kind=kind, producer="bot.research.entry_exit_engine")
             if status == _prov.UNCERTIFIED:
                 prov = _prov.OutputProvenance(**{**prov.as_dict(), "status": _prov.UNCERTIFIED, "methodology_version": _prov.UNCERTIFIED})
@@ -2661,14 +2692,25 @@ class EntryExitEngine:
             return
         code = _prov.code_state()
         lin = self._lineage
+        # claude code changed: F-12 — fail closed on incomplete economics. A canonical
+        # lineage with short-leg borrow NOT modelled (charged as 0) is not canonical
+        # evidence: the output keeps its full lineage (run id, seed, data version) but is
+        # stamped UNCERTIFIED with cost_complete=False, so no consumer can read it as
+        # CANONICAL (validate_canonical_provenance requires status CANONICAL).
+        cost_complete = bool(self.borrow_cost_modeled)
+        extra = {"seed_id": lin["seed_id"], "input_run_id": lin["input_run_id"], "cost_complete": cost_complete}
+        if not cost_complete:
+            extra["downgrade_reason"] = ("F-12: short-leg borrow not modelled (ASSUMED_ZERO_BORROW); "
+                                         "canonical evidence requires complete costs")
         _prov.write_provenance(path, _prov.OutputProvenance(
-            kind=kind, status=_prov.CANONICAL, methodology_version=METHODOLOGY_VERSION,
+            kind=kind, status=status,   # claude code changed: F-12 — CANONICAL only when cost_complete (see _output_provenance_status)
+            methodology_version=METHODOLOGY_VERSION,
             protocol_hash=self.protocol.config_hash(), data_version=lin["data_version"],
             run_id=_prov.make_run_id(kind=kind, input=lin["input_run_id"], protocol=self.protocol.config_hash(),
                                      commit=code.commit, dirty=code.dirty_digest),
             producer="bot.research.entry_exit_engine", artifact_sha256=_prov.file_sha256(path),
             code_commit=code.commit, code_dirty=code.dirty,
-            extra={"seed_id": lin["seed_id"], "input_run_id": lin["input_run_id"]}))
+            extra=extra))   # claude code changed: F-12 — carries cost_complete / downgrade_reason
 
     def _print_performance_report(
         self,

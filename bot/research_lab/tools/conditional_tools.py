@@ -219,8 +219,16 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
     # one family, real family-wide correction would replace this — out of
     # scope for this MVP, where every conditional experiment is its own
     # hypothesis family of size 1.
-    fdr_adjusted_p_value = block_p
-    passes_fdr = block_p < 0.05
+    # claude code changed: 2026-10-03, remediation F-11 — the line above was
+    # `fdr_adjusted_p_value = block_p`. BH over m=1 is arithmetically the
+    # identity, but labelling the result "FDR-adjusted" asserted a
+    # multiplicity control that does not exist: the real family is every
+    # condition / threshold / asset / horizon researchers try, and no family is
+    # registered. The raw p stays in block_permutation_p_value; the adjusted
+    # value is NOT APPLIED and says why.
+    fdr_adjusted_p_value = None
+    passes_fdr = None
+    family_correction = "NOT_APPLIED_NO_REGISTERED_FAMILY"
 
     n_episodes_true = _count_episodes(condition_mask)
     episode_ratio = (n_true / n_episodes_true) if n_episodes_true > 0 else float("nan")
@@ -240,7 +248,8 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
         "mannwhitney_p_value": float(mannwhitney_p),
         "block_permutation_p_value": block_p,
         "fdr_adjusted_p_value": fdr_adjusted_p_value,  # claude code changed: new — gap #5
-        "passes_fdr": passes_fdr,  # claude code changed: new — gap #5
+        "passes_fdr": passes_fdr,  # claude code changed: new — gap #5; 2026-10-03 F-11: None = not evaluated (no registered family)
+        "family_correction": family_correction,  # claude code changed: 2026-10-03 F-11
         "sample_size": n_true + n_false,
         "n_condition_episodes": n_episodes_true,  # claude code changed: new — gap #6, contiguous-run count, not raw candle count
         "episode_ratio": episode_ratio,  # claude code changed: new — gap #6, candles-per-episode; large values flag overlapping/clustered events

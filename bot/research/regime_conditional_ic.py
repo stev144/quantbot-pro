@@ -49,6 +49,7 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 from scipy import stats
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
 from statsmodels.stats.multitest import multipletests
 
 from bot.research.regime_labels import MIN_REGIME_OBS
@@ -118,6 +119,7 @@ class RegimeICCell:
             "n_obs": self.n_obs, "sufficient_sample": self.sufficient_sample,
             "ic": round(self.ic, 6) if self.ic is not None else None,
             "ic_pvalue": self.ic_pvalue, "ic_pvalue_fdr": self.ic_pvalue_fdr, "passes_fdr": self.passes_fdr,
+            "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic Spearman p assumes independence
             "block_ic_mean": round(self.block_ic_mean, 6) if self.block_ic_mean is not None else None,
             "block_ic_median": round(self.block_ic_median, 6) if self.block_ic_median is not None else None,
             "block_ic_std": round(self.block_ic_std, 6) if self.block_ic_std is not None else None,
@@ -289,6 +291,7 @@ def test_regime_interaction(
         "status": "OK",
         "f_statistic": f_stat, "p_value": p_value,
         "interaction_significant": bool(p_value < 0.05),
+        "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — OLS ANOVA F-test assumes iid, homoskedastic errors; invalid under overlapping labels
         "n_obs": len(clean), "n_regimes_tested": int(clean["_regime"].nunique()),
         "regimes_tested": sorted(clean["_regime"].unique().tolist()),
     }

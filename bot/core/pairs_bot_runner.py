@@ -38,6 +38,7 @@
 #      deliberate second signal, not just one flag flip.
 # ============================================================
 
+import math   # claude code changed: F-17 — math.isfinite in _health_baseline_beta
 import sys
 import time
 import logging
@@ -45,7 +46,7 @@ import logging.handlers
 import io
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple   # claude code changed: F-17 — Tuple for _health_baseline_beta
 
 import pandas as pd
 import ccxt
@@ -273,6 +274,21 @@ def bootstrap_session(session: PairSession, exchange) -> None:
     )
 
 
+def _health_baseline_beta(session: PairSession) -> Tuple[float, str]:   # claude code changed: F-17 — new
+    """The β that pair-health drift/sign checks compare the live β against.
+    A validated canonical seed (θ₀ from the causal L-candle init window) is the
+    baseline whenever one is loaded; otherwise the legacy OLS hedge_ratio from
+    cointegration_pairs.csv is used and labelled as such (it is fitted on data
+    the filter later passes — F-03/F-17 — so it is never called canonical).
+    Entries are refused without a validated seed anyway (seed_ok gate)."""
+    # Never raises: this runs inside the entry path between the engine's decision and the
+    # executor, so an exception here would leave engine and executor state divergent.
+    beta0 = getattr(session.seed, "beta0", None) if session.seed_ok and session.seed is not None else None
+    if isinstance(beta0, (int, float)) and not isinstance(beta0, bool) and math.isfinite(beta0):
+        return float(beta0), "CANONICAL_SEED"
+    return float(session.pair_config.hedge_ratio), "LEGACY_OLS_HEDGE_RATIO"
+
+
 def _bootstrap_from_canonical_seed(session: PairSession, exchange) -> None:   # claude code changed: Stage 2D Rev B step 6 (D9) — new
     """Replay EVERY closed candle from the research seed candle through the
     state-only path, so the live filter state equals research's (same seed
@@ -423,8 +439,9 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
                 protocol_hash=PROTOCOL.config_hash(), data_version=getattr(session.seed, "data_version", "") or "")
 
         if decision.action == "ENTER":
+            baseline_beta, _baseline_src = _health_baseline_beta(session)   # claude code changed: F-17 — canonical seed β, not the legacy OLS
             health = evaluate_pair_health(
-                cfg.pair_name, cfg.hedge_ratio, session.engine.current_beta,
+                cfg.pair_name, baseline_beta, session.engine.current_beta,   # claude code changed: F-17
                 cfg.passes_filters, cfg.reject_reason,
             )
             refusal = _entry_refusal_reason(health)
@@ -605,8 +622,9 @@ def run_bot():
                     health_results = {}
                     for session in sessions:
                         cfg = session.pair_config
+                        baseline_beta, baseline_src = _health_baseline_beta(session)   # claude code changed: F-17
                         health = evaluate_pair_health(
-                            cfg.pair_name, cfg.hedge_ratio, session.engine.current_beta,
+                            cfg.pair_name, baseline_beta, session.engine.current_beta,   # claude code changed: F-17
                             cfg.passes_filters, cfg.reject_reason,
                         )
                         health_results[cfg.pair_name] = health
@@ -617,7 +635,8 @@ def run_bot():
                             f"open={is_open} | "
                             f"tradeable={exec_engine.is_pair_tradeable(cfg.pair_name)} | "
                             f"health={health.state.value} | "
-                            f"seed_beta={health.seed_beta:.4f} | current_beta={health.current_beta:.4f} | "
+                            f"seed_beta={health.seed_beta:.4f} ({baseline_src}) | "   # claude code changed: F-17 — baseline source
+                            f"current_beta={health.current_beta:.4f} | "
                             f"drift={health.beta_drift_ratio:.0%} | sign_reversed={health.beta_sign_reversed}"
                             f"{' | ' + ', '.join(health.reason_codes) if health.reason_codes else ''}"
                         )

@@ -63,7 +63,7 @@
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Mann-Whitney p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
                 <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
-                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{% if experiment.statistical_results.fdr_adjusted_p_value is not None %}<span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value }}" data-decimals="4">0</span>{% else %}not applied{% endif %}</span></div>{# claude code changed: 2026-10-03 F-11 — was default_if_none:0, which displayed an unapplied correction as p = 0 #}
                 <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_fdr }}</span></div>
             </div>
             {% if experiment.statistical_results.episode_ratio > 3 %}
@@ -94,7 +94,7 @@
             </div>
             {% if experiment.validation_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.validation_results.fdr_adjusted_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{% if experiment.validation_results.fdr_adjusted_p_value is not None %}<span class="stat-number" data-target="{{ experiment.validation_results.fdr_adjusted_p_value }}" data-decimals="4">0</span>{% else %}not applied{% endif %}</span></div>{# claude code changed: 2026-10-03 F-11 — was default_if_none:0, which displayed an unapplied correction as p = 0 #}
                 <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.validation_results.passes_fdr }}</span></div>
             </div>
             {% endif %}

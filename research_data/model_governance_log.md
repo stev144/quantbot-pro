@@ -2209,3 +2209,13 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - this entry's "fourth feature family" pattern statement (economic description only).
 
 **Current state:** no strategy in this repository has canonical evidence of a tradeable edge. Historical OOS is `PSEUDO_HOLDOUT — NOT CLAIM-ELIGIBLE`. New evidence requires full provenance under the reset-point standard (methodology version, protocol hash, code commit, data fingerprint, run ID, pre-registered family, role).
+
+
+---
+
+## DATASET VERSION v2 — completed-candle correction (F-09)
+
+**Date:** 2026-10-03
+**Verdict:** GOVERNANCE — data correction; no research result.
+
+145 hourly price files (142 PARTIAL, 3 UNVERIFIABLE) ended with a candle written before it closed (audit F-09). Rule: a candle is complete only if it was fetched after its close (t_fetch >= open + interval); for stored files the write time bounds the fetch time, and a last row closing within 60 s of the write is treated as unverifiable. Each affected file's original (v1) is preserved byte-identical in `data/_archive/v1_CRRP-2026-10-02/`. The live file is the original minus its final row (every other row byte-identical). Lineage: `bot/research/governance/data_manifest_CRRP-2026-10-02.json` (v1) and `..._v2.json` (v2: per-file v1/v2 SHA-256, rule, dropped row). Future fetches drop the forming candle at the source (`data_fetcher._build_ohlcv_dataframe`). Artifacts built on the v1 final row keep their existing classes; none is upgraded.

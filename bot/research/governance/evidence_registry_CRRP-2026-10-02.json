@@ -258,6 +258,12 @@
    "class": "UNVERIFIED",
    "ref": "Task 5",
    "reason": "Methodological calibration on synthetic data. Becomes CANONICAL only when re-run at the committed reset point (code commit pending). Never evidence about any market."
+  },
+  {
+   "pattern": "_governance/inference_calibration_2026-10-03.json",
+   "class": "UNVERIFIED",
+   "ref": "F-02 remediation",
+   "reason": "Synthetic size/power calibration of candidate dependence-aware tests. Methodological only (no market claim); becomes CANONICAL when re-run at a committed code version."
   }
  ],
  "governance_log_sections": [

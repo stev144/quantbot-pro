@@ -74,7 +74,7 @@
                 <li>Observed direction: {{ experiment.statistical_results.observed_direction|default:"not evaluated" }}</li>
                 <li>Mann-Whitney U p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</span></li>
                 <li>Block-permutation p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</span></li>
-                <li>FDR-adjusted p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.fdr_adjusted_p_value|default:"not evaluated" }}</span> (exact for a single-condition family, m=1)</li>
+                <li>FDR-adjusted p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.fdr_adjusted_p_value|default:"not evaluated" }}</span> (no family correction applied — no registered hypothesis family){# claude code changed: 2026-10-03 F-11 #}</li>
                 <li>Passes FDR: {{ experiment.statistical_results.passes_fdr|default:"not evaluated" }}</li>
             </ul>
             {% else %}

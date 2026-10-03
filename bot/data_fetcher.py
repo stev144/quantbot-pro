@@ -340,11 +340,26 @@ def get_price(symbol: str) -> float:
 # Core OHLCV DataFrame builder
 # ---------------------------------------------------------------------------
 
-def _build_ohlcv_dataframe(raw_data: List[List[Any]]) -> pd.DataFrame:
-    """Convert raw Binance klines into a clean OHLCV DataFrame."""  # Transform candles.
+def _build_ohlcv_dataframe(raw_data: List[List[Any]], as_of_ms: Optional[int] = None) -> pd.DataFrame:
+    """Convert raw Binance klines into a clean OHLCV DataFrame.
+
+    claude code changed: 2026-10-03, F-09 — canonical COMPLETED-CANDLE rule.
+    Binance reports close_time = open_time + interval − 1 ms. A candle is
+    complete only when close_time < t_fetch (as_of_ms, default: now). The
+    currently forming candle (close_time >= t_fetch) is DROPPED here — it is
+    never stored, cached or returned as if it were final. Every fetch path
+    (sync/async/by-date, BinanceKlinesProvider, fetch_all_symbols) builds
+    through this function, so all of them inherit the rule."""
     if not raw_data:  # Stop if no candles.
         LOGGER.warning("EMPTY DATA in _build_ohlcv_dataframe")
         return pd.DataFrame()  # Return empty DataFrame.
+    as_of_ms = int(time.time() * 1000) if as_of_ms is None else int(as_of_ms)   # claude code changed: F-09
+    n_raw = len(raw_data)                                                       # claude code changed: F-09
+    raw_data = [r for r in raw_data if int(r[6]) < as_of_ms]                    # claude code changed: F-09 — r[6] = close_time (ms)
+    if len(raw_data) < n_raw:                                                   # claude code changed: F-09
+        LOGGER.info(f"_build_ohlcv_dataframe: dropped {n_raw - len(raw_data)} forming candle(s) (close_time >= fetch time)")
+    if not raw_data:                                                            # claude code changed: F-09
+        return pd.DataFrame()
     df = pd.DataFrame(  # Build the table.
         raw_data,  # Use raw response rows.
         columns=[  # Binance kline schema.

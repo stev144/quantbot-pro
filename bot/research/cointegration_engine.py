@@ -331,8 +331,9 @@ class PairResult:
         # (see module docstring): a pair being stationary within the fixed
         # TRAINING_WINDOW never meant the relationship actually persisted.
         # Empirically, 76 of 84 pairs that passed the training-window-only
-        # ADF test (90.5%) failed a second ADF test on the untouched
-        # out-of-sample holdout using the SAME frozen hedge ratio/intercept
+        # ADF test (90.5%) failed a second ADF test on the post-training
+        # window (a PSEUDO-holdout — already exposed to earlier research, NOT an
+        # untouched holdout; claude code changed: F-19 wording) using the SAME frozen hedge ratio/intercept
         # — a genuine, permanent structural break in most cases (spread
         # means shifting by 6+ training-period standard deviations), not
         # noise. oos_adf_pvalue is the raw result; oos_adf_pvalue_fdr/
@@ -752,7 +753,7 @@ class CointegrationEngine:
     # OUT-OF-SAMPLE PERSISTENCE CORRECTION ACROSS ALL CANDIDATE PAIRS
     # claude code changed: new — see _test_pair()'s "OUT-OF-SAMPLE PERSISTENCE
     # CHECK" comment for the full finding (76/84 previously-valid pairs, 90.5%,
-    # failed a second ADF test on untouched holdout data using the same frozen
+    # failed a second ADF test on post-training pseudo-holdout data (already exposed — not untouched; claude code changed: F-19) using the same frozen
     # hedge ratio). Same "provisional then corrected" pattern as
     # _apply_fdr_correction() immediately above, applied to oos_adf_pvalue
     # instead of adf_pvalue: mutates self.pair_results in place, only ever
@@ -1055,7 +1056,7 @@ class CointegrationEngine:
         # chance or a temporary regime, then break down permanently right
         # after. Applies the SAME frozen hedge_ratio/intercept (no
         # re-fitting — this is a pure persistence check, not a second
-        # estimation) to the untouched holdout candles and re-runs ADF.
+        # estimation) to the post-training pseudo-holdout candles (exposed to prior research, so not an untouched holdout — claude code changed: F-19) and re-runs ADF.
         # Empirically this rejected 76 of 84 pairs (90.5%) that had passed
         # the training-window-only test — most by a permanent, multi-sigma
         # mean shift, not noise. oos_adf_pvalue is recorded here at its raw

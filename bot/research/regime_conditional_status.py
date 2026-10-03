@@ -145,6 +145,12 @@ def compute_regime_conditional_status(
         f"regime {regime_of_interest!r}: IC={regime_cell.ic:+.4f}, FDR-adjusted p={regime_cell.ic_pvalue_fdr:.4f}, passes_fdr={regime_cell.passes_fdr}"
     )
     status = "STATISTICALLY_DETECTABLE"
+    # claude code changed: F-02 — say plainly what the p-values behind this status assume.
+    explanation.append(
+        "inference basis: analytic IID p-values (Spearman IC and the OLS interaction F-test) — not valid under "
+        "overlapping forward labels or serial dependence (F-02); this status is provisional until a "
+        "dependence-aware method (owner decision D-2) is applied"
+    )
 
     # claude code changed: the anti-cherry-picking gate — no promotion
     # past STATISTICALLY_DETECTABLE without a significant DIRECT

@@ -39,6 +39,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 from scipy import stats
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,7 @@ class DerivativesICReporter:
                 results.append({
                     "symbol": symbol, "feature": feature,
                     "ic": round(float(ic), 6), "pvalue": round(float(pvalue), 6),
+                    "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                     "n": int(n), "significant": pvalue < 0.05,
                 })
 

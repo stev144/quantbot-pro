@@ -183,8 +183,8 @@ class FeatureCalculator:
             result_df['ema_12'] = self._calculate_ema(result_df['close'], EMA_FAST)
             result_df['ema_26'] = self._calculate_ema(result_df['close'], EMA_SLOW)
             result_df['adx'] = self._calculate_adx(result_df, ADX_PERIOD)
-            result_df['atr_indicator'] = self._calculate_atr(result_df)
-            
+            result_df['atr_indicator'] = self._calculate_atr(result_df)   # claude code changed: F-21 — DUPLICATE of 'atr' (line ~170): same _calculate_atr() call, identical values. Kept only so existing column contracts (research_lab spec, feature views) do not break. It is NOT an independent feature: count it once in any hypothesis family (the feature-correlation matrix already drops it as an exact duplicate).
+
             # Bollinger Bands
             bb_upper, bb_middle, bb_lower = self._calculate_bollinger_bands(result_df, BB_PERIOD, BB_STD)
             result_df['bb_upper'] = bb_upper
