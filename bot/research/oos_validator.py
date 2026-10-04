@@ -315,9 +315,10 @@ class FoldEvalResult:
     # and every existing Type A test is byte-for-byte unaffected.
     metrics: Dict = field(default_factory=dict)
     trades: List[Dict] = field(default_factory=list)
+    censored_trades: List[Dict] = field(default_factory=list)   # claude code changed: 2026-10-04 DCA F1 — positions still open at the fold end (trade["censored"] is True): liquidation MARKS, not exits
 
     def to_dict(self) -> Dict:
-        return {
+        d = {
             **self.fold.to_dict(),
             "n_train_obs": self.n_train_obs, "n_test_obs": self.n_test_obs,
             "ic": self.ic, "ic_pvalue": self.ic_pvalue, "mean_label": self.mean_label,
@@ -325,6 +326,9 @@ class FoldEvalResult:
             "metrics": self.metrics, "n_trades": len(self.trades),
             "eval_skipped": self.skipped, "eval_skip_reason": self.skip_reason,
         }
+        if self.censored_trades:   # claude code changed: 2026-10-04 DCA F1 — key present only when a strategy flags censored trades (every other output unchanged)
+            d["n_censored_trades"] = len(self.censored_trades)
+        return d
 
 
 @dataclass
@@ -709,11 +713,16 @@ def _compute_trade_metrics(trades_chronological: List[Dict], initial_balance: fl
     bt.total_slippage = 0.0   # claude code changed: not reconstructable post-hoc — see docstring above; excluded from the reported dict below, not silently reported as a real zero
 
     built = bt._build_results()
+    # claude code changed: 2026-10-04 DCA F3 — trades without an R-multiple (r_multiple None, e.g. DCA cycles: no
+    # stop, no risk unit) have no R; Backtester._build_results() reports 0 when no trade has one. A list of trades
+    # none of which has R reports None (undefined), never 0. Lists where trades carry R are unchanged.
+    avg_r = (None if trades_chronological and not any(t.get("r_multiple") is not None for t in trades_chronological)
+             else built["avg_r_multiple"])
 
     return {
         "n_trades": built["total_trades"], "wins": built["wins"], "losses": built["losses"],
         "win_rate_pct": built["win_rate"], "expectancy": built["expectancy"],
-        "profit_factor": built["profit_factor"], "avg_r_multiple": built["avg_r_multiple"],
+        "profit_factor": built["profit_factor"], "avg_r_multiple": avg_r,   # claude code changed: 2026-10-04 DCA F3
         "sharpe_ratio": calculate_sharpe_ratio(trades_chronological, years_elapsed=years_elapsed),
         "sortino_ratio": calculate_sortino_ratio(trades_chronological, years_elapsed=years_elapsed),
         "max_drawdown_pct": built["max_drawdown"],
@@ -724,6 +733,20 @@ def _compute_trade_metrics(trades_chronological: List[Dict], initial_balance: fl
         "total_slippage_cost": None,   # claude code changed: known, documented limitation — see docstring
         "final_balance": round(bookkeeping["final_balance"], 2),
     }
+
+
+CENSORED_TRADE_POLICY = ("trades flagged censored=True (still open at the fold/data end) are liquidation MARKS, not "
+                         "exits: excluded from trade statistics (n_trades, win rate, expectancy, profit factor, R, "
+                         "Sharpe/Sortino, net/gross return, fees); INCLUDED in max_drawdown_pct and final_balance "
+                         "(mark-to-market) and reported as n_censored_trades / censored_mark_pnl")   # claude code changed: 2026-10-04 DCA F1
+
+
+def _censored_aggregate(evaluated: List[FoldEvalResult]) -> Dict:   # claude code changed: 2026-10-04 DCA F1 — new
+    cens = [t for f in evaluated for t in f.censored_trades]
+    if not cens:
+        return {}
+    return {"n_censored_trades": len(cens), "total_censored_mark_pnl": round(sum(t.get("profit", 0.0) or 0.0 for t in cens), 2),
+            "censored_policy": CENSORED_TRADE_POLICY}
 
 
 def _aggregate_strategy_outcome(folds: List[FoldEvalResult]) -> Dict:
@@ -776,8 +799,9 @@ def _aggregate_strategy_outcome(folds: List[FoldEvalResult]) -> Dict:
         max((f.fold.test_end - f.fold.test_start).days / 365.25, 1e-6) for f in evaluated
     ) if evaluated else None
 
+    censored_extra = _censored_aggregate(evaluated)   # claude code changed: 2026-10-04 DCA F1 — {} unless a fold had censored trades
     if not pooled_trades:
-        return {
+        return {**censored_extra,
             "n_folds_evaluated": len(evaluated), "n_folds_with_trades": 0, "n_trades": 0,
             "win_rate_pct": None, "profit_factor": None, "expectancy": None, "avg_r_multiple": None,
             "sharpe_ratio": None, "sortino_ratio": None,
@@ -794,15 +818,16 @@ def _aggregate_strategy_outcome(folds: List[FoldEvalResult]) -> Dict:
     gross_profit = sum(p for p in profits if p > 0)
     gross_loss = abs(sum(p for p in profits if p < 0))
     r_values = [t.get("r_multiple", 0.0) or 0.0 for t in pooled_trades]
+    has_r = any(t.get("r_multiple") is not None for t in pooled_trades)   # claude code changed: 2026-10-04 DCA F3 — no trade with R → avg R undefined (None), not 0
 
-    return {
+    return {**censored_extra,
         "n_folds_evaluated": len(evaluated),
         "n_folds_with_trades": sum(1 for f in evaluated if len(f.trades) > 0),
         "n_trades": total, "wins": wins, "losses": losses,
         "win_rate_pct": round((wins / total) * 100, 2),
         "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss else None,
         "expectancy": round(sum(profits) / total, 4),
-        "avg_r_multiple": round(sum(r_values) / total, 4),
+        "avg_r_multiple": round(sum(r_values) / total, 4) if has_r else None,   # claude code changed: 2026-10-04 DCA F3
         "sharpe_ratio": calculate_sharpe_ratio(pooled_trades, years_elapsed=total_test_years),
         "sortino_ratio": calculate_sortino_ratio(pooled_trades, years_elapsed=total_test_years),
         "worst_fold_max_drawdown_pct": max(fold_dds) if fold_dds else None,
@@ -916,12 +941,24 @@ def evaluate_strategy_oos(
         ]
         evaluated_trades.sort(key=lambda t: pd.Timestamp(t["entry_time"]))   # claude code changed: chronological order required by _replay_fold_bookkeeping()'s sequential balance/drawdown replay
 
-        metrics = _compute_trade_metrics(evaluated_trades, fold_initial_balance, fold.test_start, fold.test_end)
+        # claude code changed: 2026-10-04 DCA F1 — a trade flagged censored=True was still open when the fold's data
+        # ended; its P&L is a liquidation MARK, not an exit. It is kept out of the trade statistics but kept IN the
+        # mark-to-market drawdown / final balance (trapped capital and open losses stay visible). Strategies that never
+        # set the flag are unaffected (same code path, same outputs).
+        censored = [t for t in evaluated_trades if t.get("censored") is True]
+        completed = [t for t in evaluated_trades if t.get("censored") is not True] if censored else evaluated_trades
+        metrics = _compute_trade_metrics(completed, fold_initial_balance, fold.test_start, fold.test_end)
+        if censored:
+            mtm = _replay_fold_bookkeeping(evaluated_trades, fold_initial_balance)   # chronological, marks included
+            metrics = {**metrics, "max_drawdown_pct": mtm["max_drawdown"], "final_balance": round(mtm["final_balance"], 2),
+                       "n_censored_trades": len(censored),
+                       "censored_mark_pnl": round(sum(t.get("profit", 0.0) or 0.0 for t in censored), 2),
+                       "censored_policy": CENSORED_TRADE_POLICY}
 
         fold_results.append(FoldEvalResult(
             fold=fold, n_train_obs=len(train_slice), n_test_obs=len(df.iloc[fold.test_start_pos:fold.test_end_pos]),
             ic=None, ic_pvalue=None, mean_label=None,
-            fitted_params=fitted_params, metrics=metrics, trades=evaluated_trades,
+            fitted_params=fitted_params, metrics=metrics, trades=completed, censored_trades=censored,
         ))
 
     n_evaluated = sum(1 for f in fold_results if not f.skipped)

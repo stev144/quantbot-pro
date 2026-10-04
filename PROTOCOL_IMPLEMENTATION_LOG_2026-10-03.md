@@ -871,3 +871,49 @@ Most of the time was overhead, not maths.
 - **F-08 (power):** BLOCKED under D-5 (needs the owner's definitions of matched exposure and planted-effect amplitude).
 - **Provenance (run IDs):** open.
 - DCA stays descriptive only.
+
+
+---
+
+## DCA five-gate remediation, Step 2 (2026-10-04). Status: IMPLEMENTED AND VERIFIED (D-5 power still BLOCKED, owner)
+
+**Basis:**
+- An external review of `dca_engine.py` (written against the reverted file).
+- A Step-1 re-audit of the restored version (`757578d`) by behavioural probes: 11 items confirmed already fixed (next-open clock with no same-candle re-entry, cost/quantity weighted average, LONG/SHORT P&L, per-fill fees, `r_multiple=None`, censoring in the DCA summaries, configured-level exhaustion, calibration-window volatility scaling, B = 999 without an edge claim, financing status).
+- That left 7 open defects, fixed here. No feature was added.
+
+| ID | Defect (verified by probe) | Fix | Gate |
+|---|---|---|---|
+| F1 | `evaluate_strategy_oos` counted DCA's censored fold-end cycles (liquidation marks) as completed trades; on a synthetic walk-forward, 5 of 15 "trades" | Trades flagged `censored=True` are excluded from trade statistics (count, win rate, expectancy, profit factor, R, Sharpe/Sortino, returns, fees) but kept in mark-to-market `max_drawdown_pct` / `final_balance`, and reported as `n_censored_trades` / `censored_mark_pnl` (fold and aggregate) under `CENSORED_TRADE_POLICY`. Only the explicit flag triggers it. | G3, G4 |
+| F2 | The feature experiments averaged censored marks into "eventual cycle profit" (probe: −32.67 vs 1.0) and data-end time into "hours to resolution" | Outcome columns use resolved cycles only; `n_censored_cycles_touched` is reported; events carry `cycle_censored`; an events frame without censoring information is **refused** (fail closed) | G3 |
+| F3 | The evaluator's `avg_r_multiple` reported 0 for trades without R | None when no trade has R (fold and pooled); unchanged when trades carry R | G3 |
+| F4 | DCA simulation accepted sealed forward-holdout candles | `ZONES.assert_no_sealed_data` on every DCA simulation (both clocks) | G5 |
+| F5 | DCA research outputs had no evidence status | `DCA_EVIDENCE_LABEL`: development evidence, PSEUDO_HOLDOUT, not claim-eligible (CRRP; D-5 gate closed; a claim needs a D-3 family). A zone-S/V DCA confirmatory protocol is **not** invented (it belongs to D-5, owner). | G5 |
+| F6 | No provenance | `dca_run_provenance()` reuses `bot.quant_core.provenance`: method version `QBP-DCA-PHASE2-2`, config hash, content data version, zones hash, code state, deterministic run id; attached to the permutation test and suite | G5 |
+| F7 | FX DCA ran on the 24/7 crypto clock with weekends as gaps, spread-only cost and no swap | `build_config_with_real_costs` / `compute_volatility_scale_factor` require a complete market profile (FX gives `FX_CALENDAR_UNAVAILABLE`); the simulator refuses session-traded data (`assert_continuous_market`) | G4, G5 |
+
+### Evidence
+
+- **Other strategies unchanged:** the evaluator output (random `run_id` excluded) for the scripted strategy with and without R, and for the real-BTC Backtester adapter, is **identical** between committed `41ed7dd` and this change (the reference worktree was re-run, not the earlier non-deterministic fingerprint).
+- **DCA changed as intended:** on the synthetic walk-forward, losses went 4 → 0 and expectancy −0.18 → +0.30 once the fold-end marks left the trade statistics. Every "loss" had been an open cycle. Those losses now appear in mark-to-market drawdown and `censored_mark_pnl`. **Completed-cycle statistics must never be read without the censored figures** (the high-win-rate trap).
+- **Tests:** 9 new in `test_dca_phase2`. Two existing fixtures gained `cycle_exit_reason` (justified: the function must now know which cycles are censored, and those fixture cycles are resolved).
+  - DCA suites: 95 tests pass.
+  - Evaluator suites (`test_strategy_oos_evaluator`, `test_oos_validator`) pass.
+- **Full suite:** 1,820 tests, 85 failures = the known baseline set, 0 new.
+- **Mutations, 8 of 8 caught** (files restored byte-identical): censored flag ignored; mark dropped from drawdown; undefined R as 0; censored outcomes kept; no seal; no session guard; FX profile not required; config left out of the run id.
+
+### Five gates (DCA engine after Step 2)
+
+| Gate | Result |
+|---|---|
+| G1 | **PASS** |
+| G2 | **PASS** (accounting known answers) |
+| G3 | **PARTIAL**: inference hygiene fixed; **D-5 power (F-08) BLOCKED**: needs the owner's definitions of matched exposure and planted-effect amplitude |
+| G4 | **PASS** for crypto LONG. SHORT stays cost-incomplete (financing unavailable; whether recorded perp funding applies is an owner decision). FX BLOCKED. |
+| G5 | **PASS**: seal, evidence label, provenance, FX gate |
+
+DCA remains **descriptive only**; no DCA claim is possible until D-5 calibrates.
+
+### Observation (not changed; owner)
+
+The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, including a real BTC Backtester run with −$15,034 net. This looks like a pre-existing drawdown bug in the shared evaluator, outside this scope. Investigated with owner approval: root cause found (see the next entry).

@@ -609,6 +609,13 @@ def simulate_dca_path(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> 
     realised_pnl, unrealised_pnl (liquidation value), mtm_equity_pnl,
     capital_deployed, ladder_depth, in_cycle.
     """
+    # claude code changed: 2026-10-04 DCA F4/F7 — every DCA simulation (both clocks) refuses sealed forward-holdout
+    # candles (D-8) and refuses session-traded data under the 24/7 crypto clock (decision-lock Decision 5: FX is
+    # FX_CALENDAR_UNAVAILABLE until its market profile is complete; weekend closures are not crypto gaps).
+    from bot.quant_core.market_profile import assert_continuous_market
+    from bot.quant_core.research_zones import ZONES
+    ZONES.assert_no_sealed_data(df.index, purpose="DCA simulation")
+    assert_continuous_market(df.index, purpose="DCA simulation")
     if config.fill_model == FILL_MODEL_LEGACY_CLOSE:
         if "close" not in df.columns:
             raise ValueError("simulate_dca_cycles() requires a 'close' column")
@@ -933,6 +940,32 @@ NULL_MODEL_SEMANTICS = {
 }
 
 
+DCA_METHODOLOGY_VERSION = "QBP-DCA-PHASE2-2"   # claude code changed: 2026-10-04 DCA F6 — the method version recorded in provenance
+DCA_EVIDENCE_LABEL = ("DEVELOPMENT EVIDENCE — PSEUDO_HOLDOUT, NOT CLAIM-ELIGIBLE (all pre-F history is exposed, CRRP / "
+                      "decision lock §3.3; the D-5 calibration gate is closed; any claim needs a D-3 registered family)")
+
+
+def dca_run_provenance(df: pd.DataFrame, config: DCAConfig, *, kind: str, extra: Optional[Dict] = None) -> Dict:   # claude code changed: 2026-10-04 DCA F5/F6 — new
+    """Provenance for a DCA research output: method version, config hash, content data version of exactly the rows
+    used, the zones hash, the code state and a deterministic run id, plus the D-8 evidence label. Reuses
+    bot.quant_core.provenance (no second provenance scheme)."""
+    from dataclasses import asdict
+    from bot.quant_core import provenance as _prov
+    from bot.quant_core.research_zones import ZONES
+    cfg = asdict(config)
+    cfg["levels"] = [[lvl["drop_pct"], lvl["multiplier"]] for lvl in cfg["levels"]]
+    chash = _prov.config_hash(cfg)
+    cols = [c for c in ("open", "high", "low", "close") if c in df.columns]
+    dv = _prov.data_version({"DCA_INPUT": df[cols]}, timeframe="1h", columns=cols, start=df.index[0], end=df.index[-1])
+    code = _prov.code_state()
+    run_id = _prov.make_run_id(kind=kind, methodology=DCA_METHODOLOGY_VERSION, config=chash, data=dv.data_version,
+                               zones=ZONES.zones_hash(), extra=_prov.config_hash(extra or {}),
+                               commit=code.commit, dirty=code.dirty_digest)
+    return {"kind": kind, "methodology_version": DCA_METHODOLOGY_VERSION, "config_hash": chash,
+            "data_version": dv.data_version, "zones_hash": ZONES.zones_hash(), "code_commit": code.commit,
+            "code_dirty": code.dirty, "run_id": run_id, "evidence_label": DCA_EVIDENCE_LABEL}
+
+
 def _block_shuffle_returns(returns: "np.ndarray", block_size: int, rng: "np.random.Generator") -> "np.ndarray":
     """Chops log-returns into contiguous blocks and reassembles them in a
     randomly shuffled order — same principle as this project's other two
@@ -1057,6 +1090,8 @@ def run_dca_permutation_test(
         "p_value_mtm_to_max_exposure_ratio": round(p_ratio, 6),
         "alpha": alpha,
         "raw_assessment": assessment,
+        "provenance": dca_run_provenance(df, config, kind="DCA_PERMUTATION_TEST",
+                                         extra={"null_model": null_model, "block_size": block_size, "n_permutations": n_permutations, "seed": seed}),   # claude code changed: 2026-10-04 DCA F5/F6
     }
 
 
@@ -1105,6 +1140,9 @@ def run_dca_null_suite(
         "results": rows,
         "reading_by_block_size": readings,
         "robust_across_block_sizes": len(set(readings.values())) == 1 if readings else False,
+        "provenance": dca_run_provenance(df, config, kind="DCA_PERMUTATION_SUITE",
+                                         extra={"block_sizes": list(block_sizes), "null_models": list(null_models),
+                                                "n_permutations": n_permutations, "seed": seed}),   # claude code changed: 2026-10-04 DCA F5/F6
         "note": "raw evidence only — correct across symbols/configs before any claim; never 'significant' on this alone",
     }
 
@@ -1207,6 +1245,7 @@ def research_feature_at_dca_events(
                 feature_col_name: feature_value,
                 "cycle_final_profit": trade["profit"],
                 "cycle_exit_reason": trade["cycle_exit_reason"],
+                "cycle_censored": _is_censored(trade),   # claude code changed: 2026-10-04 DCA F2 — a censored cycle has no eventual outcome
                 "cycle_final_level_reached": trade["cycle_max_level_reached"],
                 "levels_remaining_at_fill": len(config.levels) - fill["level"],
                 "hours_from_fill_to_resolution": hours_to_resolution,
@@ -1264,19 +1303,33 @@ def summarize_feature_experiment(
     # copies of its own outcome, silently overweighting it relative to a
     # 1-level cycle. Grouped on cycle_entry_time, the real unique-per-
     # cycle identifier (see research_feature_at_dca_events()).
+    # claude code changed: 2026-10-04 DCA F2 — a CENSORED cycle (still open at the data end) has no eventual outcome:
+    # its profit is a liquidation mark and its "hours to resolution" is only the time to the data end. Outcome
+    # columns use RESOLVED cycles only; censored cycles are counted separately (never silently dropped).
+    if "cycle_censored" in events_df.columns:
+        censored_flag = events_df["cycle_censored"].astype(bool)
+    elif "cycle_exit_reason" in events_df.columns:
+        censored_flag = events_df["cycle_exit_reason"] == "DATA_END_STILL_OPEN"
+    else:   # fail closed: never assume every cycle resolved
+        raise ValueError("events carry neither cycle_censored nor cycle_exit_reason — censored cycles cannot be "
+                         "separated from outcomes (research_feature_at_dca_events() provides both)")
+    events_df["_censored"] = censored_flag.to_numpy()
     summary_rows = []
     for bucket_name, group in events_df.groupby(bucket_col_name):
         cycles_touched = group.drop_duplicates(subset=["cycle_entry_time"])
+        resolved = cycles_touched[~cycles_touched["_censored"]]
+        resolved_rows = group[~group["_censored"]]
         summary_rows.append({
             bucket_col_name: bucket_name,
             "n_dca_events": len(group),
             "n_distinct_cycles_touched": len(cycles_touched),
+            "n_censored_cycles_touched": int(cycles_touched["_censored"].sum()),   # claude code changed: 2026-10-04 DCA F2
             "eventual_ladder_full_exhaustion_rate_pct": round(
-                (cycles_touched["cycle_final_level_reached"] == n_levels).mean() * 100, 2   # claude code changed: B7 — configured, was the bucket's observed .max()
-            ) if len(cycles_touched) else None,
+                (resolved["cycle_final_level_reached"] == n_levels).mean() * 100, 2   # claude code changed: B7 — configured, was the bucket's observed .max(); F2 — resolved cycles only
+            ) if len(resolved) else None,
             "configured_max_level": n_levels,   # claude code changed: B7 — the denominator, auditable
-            "mean_eventual_cycle_profit": round(cycles_touched["cycle_final_profit"].mean(), 4) if len(cycles_touched) else None,
-            "mean_hours_to_resolution": round(group["hours_from_fill_to_resolution"].mean(), 1),
+            "mean_eventual_cycle_profit": round(resolved["cycle_final_profit"].mean(), 4) if len(resolved) else None,   # claude code changed: F2 — resolved only
+            "mean_hours_to_resolution": round(resolved_rows["hours_from_fill_to_resolution"].mean(), 1) if len(resolved_rows) else None,   # claude code changed: F2 — resolved only
         })
     return pd.DataFrame(summary_rows)
 
@@ -1468,6 +1521,7 @@ def compute_volatility_scale_factor(reference_symbol: str, target_symbol: str,
         raise ValueError("compute_volatility_scale_factor requires calibration_end (exclusive): a full-history volatility "
                          "ratio leaks future information into every earlier decision — use a pre-specified calibration "
                          "window, or make_fx_scaled_oos_fns() for per-fold fitting")
+    _require_market_profile(target_symbol, "DCA volatility scaling")   # claude code changed: 2026-10-04 DCA F7
     ref_df = load_close_series_for_oos(reference_symbol)
     target_df = load_close_series_for_oos(target_symbol)
     return _vol_ratio_on_window(ref_df["close"], target_df["close"], calibration_start, calibration_end)
@@ -1546,6 +1600,14 @@ def make_fx_scaled_oos_fns(reference_close: pd.Series, base_config: DCAConfig = 
     return fit_fn, run_strategy_fn
 
 
+def _require_market_profile(symbol: Optional[str], purpose: str, asset_class: Optional[str] = None) -> None:   # claude code changed: 2026-10-04 DCA F7 — new
+    """FX (and any asset class without a complete market profile) may not be run through DCA: the engine's clock,
+    gap accounting and financing are 24/7-crypto rules. Raises OwnerDecisionMissing (FX_CALENDAR_UNAVAILABLE)."""
+    from bot.quant_core.market_profile import asset_class_for_symbol, profile_for_asset_class
+    cls = asset_class or (asset_class_for_symbol(symbol) if symbol else "CRYPTO")
+    profile_for_asset_class(cls).require_canonical(f"{purpose} ({symbol or cls})")
+
+
 def build_config_with_real_costs(
     base_config: DCAConfig,
     asset_class: str,
@@ -1585,6 +1647,7 @@ def build_config_with_real_costs(
     every FX result carries this caveat, not discovered later.
     """
     from bot.config.cost_model import get_cost_model
+    _require_market_profile(symbol, "DCA cost model", asset_class=asset_class)   # claude code changed: 2026-10-04 DCA F7 — FX: FX_CALENDAR_UNAVAILABLE (spread-only cost, no swap, 24/7 clock)
 
     costs = get_cost_model(asset_class, venue_id=venue_id, symbol=symbol).get_costs()
     # claude code changed: Post-audit Phase 2 B6 — FX swap/rollover applies to

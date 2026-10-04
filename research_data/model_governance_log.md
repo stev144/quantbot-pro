@@ -2297,3 +2297,11 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - D-4 statistic 16.6 s -> 4.9 s per evaluation, bit-identical (10-dataset reference harness vs 105e256). Lean in-memory canonical run (EntryExitEngine.run_canonical_frame) shares one simulation core with run(). Defect fixed: canonical Kalman CSV now read with float_precision='round_trip' (default parser changed ~65 % of floats by ~1e-16; diagnostic log columns move <=5e-13, no trade or P&L changed). No calibration run.
 - INCIDENT: dca_engine.py was overwritten at 13:31 with the 458ac14 version (losing post-audit B1-B8 fixes); commit 105e256 captured it. Restored from 757578d (verified identical). An external review written against the reverted file is superseded where 757578d already fixed the item. Process change: per-file diff review before every commit.
 - Full suite: 1,811 tests, 0 new failures vs the known baseline.
+
+---
+
+## 2026-10-04 — DCA FIVE-GATE REMEDIATION STEP 2
+
+- Fixed F1 (censored cycles out of OOS trade statistics, kept in mark-to-market drawdown/final balance; flag-based, other strategies byte-identical), F2 (censored cycles out of feature-experiment outcomes; fail closed without censoring info), F3 (undefined R reported as None), F4 (sealed holdout refused), F5 (evidence label), F6 (provenance: config hash, data version, zones hash, code state, run id), F7 (FX DCA gives FX_CALENDAR_UNAVAILABLE).
+- Finding: in a synthetic DCA walk-forward every 'loss' was a censored fold-end cycle; completed-cycle statistics must be read with the censored marks.
+- DCA remains descriptive only: D-5 power (F-08) BLOCKED pending owner definitions. Full suite 1,820 tests, 0 new failures. Mutations 8/8.

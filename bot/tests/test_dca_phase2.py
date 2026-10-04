@@ -273,7 +273,8 @@ class ExhaustionDenominatorTests(SimpleTestCase):
             for f in range(1, lvl + 1):
                 rows.append({"cycle_entry_time": k, "fill_level": f, "levels_remaining_at_fill": n_levels - f,
                              "x": -2.0, "cycle_final_level_reached": lvl, "cycle_final_profit": 1.0,
-                             "hours_from_fill_to_resolution": 1.0})
+                             "hours_from_fill_to_resolution": 1.0,
+                             "cycle_exit_reason": "PROFIT_TARGET_TRAILING"})   # claude code changed: 2026-10-04 F2 — the function now needs to know which cycles are censored; these fixture cycles are resolved
         return pd.DataFrame(rows)
 
     def test_bucket_max_below_configured_is_not_exhaustion(self):
@@ -319,3 +320,136 @@ class GapTests(SimpleTestCase):
         cfg = DCAConfig(initial_usdt=6.0, levels=(), profit_activation_pct=0.5, **Z)
         _, eq = simulate_dca_path(self._gapped(), cfg)
         self.assertEqual(len(eq), 6)                                  # one row per OBSERVED candle — nothing filled in
+
+
+# ══ 2026-10-04 DCA Step 2 (five-gate remediation of the external review's open items F1–F7) ═══════════════════
+# claude code changed: new tests. F1 censored trades out of OOS trade statistics (marks kept in drawdown);
+# F2 censored cycles out of feature-experiment outcomes; F3 undefined R stays undefined; F4 sealed holdout refused;
+# F5/F6 evidence label + provenance on research outputs; F7 FX refused (FX_CALENDAR_UNAVAILABLE).
+def _scripted(trades_by_slice):
+    def fn(df_slice, fitted):
+        return trades_by_slice(df_slice)
+    return fn
+
+
+class OOSCensoredPolicyTests(SimpleTestCase):
+    def _cfg(self):
+        from bot.research.oos_validator import WalkForwardConfig
+        return WalkForwardConfig(mode="expanding", min_train_periods=100, test_periods=50, horizon=1, min_test_periods=10)
+
+    def _df(self, n=300):
+        return pd.DataFrame({"close": np.linspace(100, 101, n)}, index=pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC"))
+
+    def test_censored_trades_leave_trade_statistics_but_stay_in_drawdown(self):
+        from bot.research.oos_validator import evaluate_strategy_oos
+        def trades(s):   # per test slice: one completed +1 winner, then one CENSORED -500 liquidation mark
+            i = len(s) - 10
+            return [{"entry_time": s.index[i], "exit_time": s.index[i + 1], "profit": 1.0, "gross_profit": 1.0, "r_multiple": None},
+                    {"entry_time": s.index[i + 2], "exit_time": s.index[-1], "profit": -500.0, "gross_profit": -500.0,
+                     "r_multiple": None, "censored": True}]
+        res = evaluate_strategy_oos(self._df(), _scripted(trades), self._cfg())
+        f = [x for x in res.folds if not x.skipped][0]
+        self.assertEqual([t["profit"] for t in f.trades], [1.0])                 # the mark is not a trade
+        self.assertEqual(len(f.censored_trades), 1)
+        m = f.metrics
+        self.assertEqual((m["n_trades"], m["win_rate_pct"], m["net_return"]), (1, 100.0, 1.0))
+        self.assertGreater(m["max_drawdown_pct"], 4.9)                           # -500 on 10,001: the open loss stays visible
+        self.assertEqual(m["final_balance"], 10_000 + 1.0 - 500.0)
+        self.assertEqual((m["n_censored_trades"], m["censored_mark_pnl"]), (1, -500.0))
+        self.assertIsNone(m["avg_r_multiple"])                                   # F3 per fold
+        agg = res.aggregate
+        self.assertEqual(agg["n_censored_trades"], sum(len(x.censored_trades) for x in res.folds if not x.skipped))
+        self.assertIsNone(agg["avg_r_multiple"])                                 # F3 pooled
+        self.assertEqual(f.to_dict()["n_censored_trades"], 1)
+
+    def test_strategies_without_the_flag_are_unchanged(self):
+        from bot.research.oos_validator import evaluate_strategy_oos
+        def trades(s):
+            i = len(s) - 10
+            return [{"entry_time": s.index[i], "exit_time": s.index[i + 1], "profit": 2.0, "gross_profit": 2.0, "r_multiple": 0.5},
+                    {"entry_time": s.index[i + 2], "exit_time": s.index[-1], "profit": -1.0, "gross_profit": -1.0, "r_multiple": -0.25}]
+        res = evaluate_strategy_oos(self._df(), _scripted(trades), self._cfg())
+        f = [x for x in res.folds if not x.skipped][0]
+        self.assertEqual(len(f.trades), 2)
+        self.assertNotIn("n_censored_trades", f.metrics)
+        self.assertNotIn("n_censored_trades", f.to_dict())
+        self.assertNotIn("n_censored_trades", res.aggregate)
+        self.assertEqual(f.metrics["avg_r_multiple"], 0.125)
+        self.assertEqual(res.aggregate["avg_r_multiple"], 0.125)
+
+    def test_real_dca_walk_forward_scores_no_censored_cycle_as_a_trade(self):
+        from bot.research.oos_validator import WalkForwardConfig, evaluate_strategy_oos
+        n = 1500
+        idx = pd.date_range("2023-01-01", periods=n, freq="h", tz="UTC")
+        c = 100 * np.exp(np.cumsum(0.006 * np.random.default_rng(3).standard_normal(n)))
+        o = np.r_[c[0], c[:-1]]
+        df = pd.DataFrame({"open": o, "high": np.maximum(o, c) * 1.001, "low": np.minimum(o, c) * 0.999, "close": c}, index=idx)
+        res = evaluate_strategy_oos(df, de.make_run_strategy_fn(de.BASELINE_CONFIG),
+                                    WalkForwardConfig(mode="expanding", min_train_periods=500, test_periods=300, horizon=1, min_test_periods=50))
+        ev = [f for f in res.folds if not f.skipped]
+        self.assertFalse(any(t.get("censored") for f in ev for t in f.trades))
+        self.assertGreater(sum(len(f.censored_trades) for f in ev), 0)
+
+
+class FeatureExperimentCensoringTests(SimpleTestCase):
+    def test_censored_cycles_are_not_outcomes(self):
+        ev = pd.DataFrame({"fill_level": [1, 2, 3], "levels_remaining_at_fill": [5, 4, 3], "cycle_entry_time": [1, 2, 3],
+                           "cycle_final_level_reached": [3, 3, 6], "cycle_final_profit": [1.0, 1.0, -100.0],
+                           "hours_from_fill_to_resolution": [5.0, 4.0, 900.0], "z": [-3.0, -3.0, -3.0],
+                           "cycle_exit_reason": ["PROFIT_TARGET_TRAILING", "PROFIT_TARGET_TRAILING", "DATA_END_STILL_OPEN"],
+                           "cycle_censored": [False, False, True]})
+        row = de.summarize_feature_experiment(ev, "z", lambda v: "b").iloc[0]
+        self.assertEqual(row["mean_eventual_cycle_profit"], 1.0)
+        self.assertEqual(row["mean_hours_to_resolution"], 4.5)
+        self.assertEqual(row["eventual_ladder_full_exhaustion_rate_pct"], 0.0)
+        self.assertEqual((row["n_distinct_cycles_touched"], row["n_censored_cycles_touched"]), (3, 1))
+
+
+    def test_events_without_censoring_information_are_refused(self):   # claude code changed: 2026-10-04 F2 — fail closed
+        ev = pd.DataFrame({"fill_level": [1], "levels_remaining_at_fill": [5], "cycle_entry_time": [1],
+                           "cycle_final_level_reached": [1], "cycle_final_profit": [1.0],
+                           "hours_from_fill_to_resolution": [1.0], "z": [-3.0]})
+        with self.assertRaisesRegex(ValueError, "censored cycles cannot be separated"):
+            de.summarize_feature_experiment(ev, "z", lambda v: "b")
+
+
+class HoldoutAndMarketGuardTests(SimpleTestCase):
+    def test_sealed_holdout_candles_are_refused(self):
+        from bot.quant_core.research_zones import ZONES, HoldoutSealedError
+        idx = pd.date_range(ZONES.F - pd.Timedelta(hours=5), periods=10, freq="h")
+        with self.assertRaises(HoldoutSealedError):
+            simulate_dca_path(_ohlc(_flat(100.0, 10), index=idx), replace(de.BASELINE_CONFIG, **Z))
+
+    def test_session_traded_data_is_refused(self):
+        from bot.quant_core.market_profile import AssetClassMismatch
+        full = pd.date_range("2024-01-01", "2024-03-31 23:00", freq="h", tz="UTC")
+        idx = full[full.dayofweek < 5]                                          # weekends absent, as in FX files
+        with self.assertRaisesRegex(AssetClassMismatch, "UTC Saturdays"):
+            simulate_dca_path(_ohlc(_flat(1.1, len(idx)), index=idx), replace(de.BASELINE_CONFIG, **Z))
+
+    def test_fx_entry_points_report_fx_calendar_unavailable(self):
+        from bot.quant_core.market_profile import OwnerDecisionMissing
+        with self.assertRaisesRegex(OwnerDecisionMissing, "FX_CALENDAR_UNAVAILABLE"):
+            de.build_config_with_real_costs(de.BASELINE_CONFIG, "FOREX", symbol="EUR/USD")
+        with self.assertRaisesRegex(OwnerDecisionMissing, "FX_CALENDAR_UNAVAILABLE"):
+            de.compute_volatility_scale_factor("BTC/USDT", "EUR/USD", calibration_end="2024-01-01")
+        self.assertIsNotNone(de.build_config_with_real_costs(de.BASELINE_CONFIG, "CRYPTO"))   # crypto unchanged
+
+
+class DCAProvenanceTests(SimpleTestCase):
+    def test_permutation_output_carries_provenance_and_the_evidence_label(self):
+        n = 400
+        idx = pd.date_range("2023-01-01", periods=n, freq="h", tz="UTC")
+        c = 100 * np.exp(np.cumsum(0.01 * np.random.default_rng(5).standard_normal(n)))
+        df = _ohlc([(a, max(a, b), min(a, b), b) for a, b in zip(np.r_[c[0], c[:-1]], c)], index=idx)
+        cfg = replace(de.BASELINE_CONFIG, **Z)
+        r1 = de.run_dca_permutation_test(df, cfg, n_permutations=9, block_size=24, seed=1)
+        r2 = de.run_dca_permutation_test(df, cfg, n_permutations=9, block_size=24, seed=1)
+        p = r1["provenance"]
+        for k in ("run_id", "config_hash", "data_version", "zones_hash", "methodology_version", "code_commit"):
+            self.assertIn(k, p)
+        self.assertIn("NOT CLAIM-ELIGIBLE", p["evidence_label"])
+        self.assertEqual(p["run_id"], r2["provenance"]["run_id"])               # deterministic
+        r3 = de.run_dca_permutation_test(df, replace(cfg, trailing_pct=0.01), n_permutations=9, block_size=24, seed=1)
+        self.assertNotEqual(p["config_hash"], r3["provenance"]["config_hash"])  # the config is part of the identity
+        self.assertNotEqual(p["run_id"], r3["provenance"]["run_id"])
