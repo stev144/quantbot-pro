@@ -631,6 +631,11 @@ def evaluate_feature_oos(
 #   results — they exist only to prime state, never to be evaluated.
 # ═══════════════════════════════════════════════════════════════════════
 
+DRAWDOWN_BASIS_CLOSED = ("CLOSED_TRADE_BALANCE — peak-to-trough of the balance after each closed trade; intra-trade "
+                         "mark-to-market dips are not observable from a trade list")   # claude code changed: 2026-10-04
+DRAWDOWN_BASIS_CLOSED_PLUS_MARKS = DRAWDOWN_BASIS_CLOSED.replace("CLOSED_TRADE_BALANCE", "CLOSED_TRADE_BALANCE_PLUS_CENSORED_MARKS", 1)
+
+
 def _replay_fold_bookkeeping(trades_chronological: List[Dict], initial_balance: float) -> Dict:
     """
     claude code changed: new. A small, mechanical REPLAY of Backtester's
@@ -725,7 +730,13 @@ def _compute_trade_metrics(trades_chronological: List[Dict], initial_balance: fl
         "profit_factor": built["profit_factor"], "avg_r_multiple": avg_r,   # claude code changed: 2026-10-04 DCA F3
         "sharpe_ratio": calculate_sharpe_ratio(trades_chronological, years_elapsed=years_elapsed),
         "sortino_ratio": calculate_sortino_ratio(trades_chronological, years_elapsed=years_elapsed),
-        "max_drawdown_pct": built["max_drawdown"],
+        # claude code changed: 2026-10-04 — drawdown defect fix. Was built["max_drawdown"], which since Phase 3 M-02
+        # (ef5636b) is Backtester.max_drawdown_mtm — an attribute this throwaway instance never sets, so every fold
+        # reported 0.0 % (real BTC folds: 10–27 % closed-trade drawdown). A trade list carries no price path, so the
+        # drawdown observable here is the CLOSED-TRADE BALANCE path (_replay_fold_bookkeeping); intra-trade
+        # mark-to-market dips are not observable and the basis says so.
+        "max_drawdown_pct": bookkeeping["max_drawdown"],
+        "max_drawdown_basis": DRAWDOWN_BASIS_CLOSED,
         "max_consecutive_losses": built["max_consecutive_losses"],
         "gross_return": round(sum(t.get("gross_profit", t.get("profit", 0.0)) for t in trades_chronological), 2),
         "net_return": round(sum(t.get("profit", 0.0) for t in trades_chronological), 2),
@@ -951,6 +962,7 @@ def evaluate_strategy_oos(
         if censored:
             mtm = _replay_fold_bookkeeping(evaluated_trades, fold_initial_balance)   # chronological, marks included
             metrics = {**metrics, "max_drawdown_pct": mtm["max_drawdown"], "final_balance": round(mtm["final_balance"], 2),
+                       "max_drawdown_basis": DRAWDOWN_BASIS_CLOSED_PLUS_MARKS,   # claude code changed: 2026-10-04
                        "n_censored_trades": len(censored),
                        "censored_mark_pnl": round(sum(t.get("profit", 0.0) or 0.0 for t in censored), 2),
                        "censored_policy": CENSORED_TRADE_POLICY}

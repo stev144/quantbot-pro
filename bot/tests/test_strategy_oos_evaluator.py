@@ -552,3 +552,30 @@ class RecordOosTrialTypeBIntegrationTest(TestCase):
         with self.assertRaises(Exception):
             experiment.verdict = "FAIL"
             experiment.save()   # append-only enforcement must hold for Type B experiments too
+
+
+# claude code changed: 2026-10-04 — drawdown defect: since Phase 3 M-02 every fold reported max_drawdown_pct = 0.0
+# (the evaluator never set Backtester.max_drawdown_mtm). Known-answer tests on the closed-trade balance path.
+class FoldDrawdownKnownAnswerTest(TestCase):
+    def _run(self, profits):
+        idx = _synthetic_ohlcv_index(300)
+        df = pd.DataFrame({"close": np.ones(300)}, index=idx)
+        cfg = WalkForwardConfig(mode="expanding", min_train_periods=100, test_periods=100, horizon=1, min_test_periods=10)
+
+        def fn(s, fitted):
+            return [{"entry_time": s.index[-20 + 2 * k], "exit_time": s.index[-19 + 2 * k], "profit": p, "gross_profit": p,
+                     "r_multiple": p / 100.0} for k, p in enumerate(profits)]
+        return evaluate_strategy_oos(df, fn, cfg)
+
+    def test_fold_drawdown_is_the_closed_trade_peak_to_trough(self):
+        res = self._run([100.0, -300.0, 50.0])                           # 10,000 → 10,100 → 9,800 → 9,850
+        folds = [f for f in res.folds if not f.skipped]
+        self.assertTrue(folds)
+        for f in folds:
+            self.assertEqual(f.metrics["max_drawdown_pct"], round(300 / 10_100 * 100, 4))   # 2.9703 %, not 0.0
+            self.assertIn("CLOSED_TRADE_BALANCE", f.metrics["max_drawdown_basis"])
+        self.assertEqual(res.aggregate["worst_fold_max_drawdown_pct"], round(300 / 10_100 * 100, 4))
+
+    def test_no_losses_means_zero_drawdown(self):
+        res = self._run([10.0, 20.0, 5.0])
+        self.assertEqual(res.aggregate["worst_fold_max_drawdown_pct"], 0.0)

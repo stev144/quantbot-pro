@@ -917,3 +917,39 @@ DCA remains **descriptive only**; no DCA claim is possible until D-5 calibrates.
 ### Observation (not changed; owner)
 
 The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, including a real BTC Backtester run with −$15,034 net. This looks like a pre-existing drawdown bug in the shared evaluator, outside this scope. Investigated with owner approval: root cause found (see the next entry).
+
+
+---
+
+## Defect: OOS evaluator fold drawdown always 0.0 % (2026-10-04). Status: FIXED
+
+**Found:** while verifying DCA Step 2, the evaluator reported `worst_fold_max_drawdown_pct = 0.0` for every non-DCA run, including a real BTC Backtester run with −$15,034 net. The owner approved an investigation.
+
+**Root cause:**
+- Phase 3 fix M-02 (`ef5636b`, 2026-10-02) changed `Backtester._build_results()` to report `max_drawdown_mtm`.
+- `oos_validator._compute_trade_metrics()` builds a throwaway Backtester and injects only the old `max_drawdown` attribute. So `max_drawdown_mtm` stayed at its 0.0 default.
+- **Every fold's `max_drawdown_pct` read 0.0 %.**
+- **Real BTC proof:** 8 folds reported 0.0 % against closed-trade drawdowns of 10.3–26.7 % (fold 6: −$2,670, 26.7 %). Risk was hidden (G4).
+
+**Fix:**
+- `max_drawdown_pct` = the closed-trade balance peak-to-trough (`_replay_fold_bookkeeping`, the evaluator's own replay).
+- The new field `max_drawdown_basis` states what it is: intra-trade mark-to-market dips are **not observable from a trade list**. For a fold with censored trades it is `..._PLUS_CENSORED_MARKS` (DCA Step 2).
+
+**Affected artifacts:** none stored. No saved output of the strategy-to-outcome evaluator exists after `ef5636b`.
+- The September cross-sectional checkpoints predate the defect and use the Type C evaluator; their drawdowns are non-zero and real.
+- The pairs-engine summaries compute their own drawdown.
+- The defect affected only results computed on demand.
+
+**Evidence:**
+- **Field-by-field diff against committed `7e9645c`** (random `run_id` excluded): for the scripted strategy with and without R, the real-BTC Backtester and DCA, **only the drawdown fields changed**. Real BTC worst fold went 0.0 % → 26.70 %; DCA was already correct through its censored mark-to-market path, so only the basis label was added.
+- **Tests (`test_strategy_oos_evaluator`, 2 new):** +100 / −300 / +50 on 10,000 gives exactly 2.9703 % (fold and aggregate); all-winning gives 0.
+- **Mutation:** reading the never-set field again is caught.
+- **Full suite:** 1,822 tests, 85 failures = the known baseline set, 0 new.
+
+| Gate | Result |
+|---|---|
+| G1 | PASS |
+| G2 | PASS (known answer) |
+| G3 | PASS |
+| G4 | **PASS**: drawdown no longer hidden; basis labelled honestly |
+| G5 | PASS: no stored artifact affected; cause traced to a commit |

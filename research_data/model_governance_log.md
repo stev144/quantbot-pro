@@ -2305,3 +2305,11 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - Fixed F1 (censored cycles out of OOS trade statistics, kept in mark-to-market drawdown/final balance; flag-based, other strategies byte-identical), F2 (censored cycles out of feature-experiment outcomes; fail closed without censoring info), F3 (undefined R reported as None), F4 (sealed holdout refused), F5 (evidence label), F6 (provenance: config hash, data version, zones hash, code state, run id), F7 (FX DCA gives FX_CALENDAR_UNAVAILABLE).
 - Finding: in a synthetic DCA walk-forward every 'loss' was a censored fold-end cycle; completed-cycle statistics must be read with the censored marks.
 - DCA remains descriptive only: D-5 power (F-08) BLOCKED pending owner definitions. Full suite 1,820 tests, 0 new failures. Mutations 8/8.
+
+---
+
+## 2026-10-04 — OOS EVALUATOR DRAWDOWN DEFECT FIXED
+
+- Since ef5636b (Phase 3 M-02) the strategy-to-outcome evaluator reported max_drawdown_pct = 0.0 for every fold (it injected Backtester.max_drawdown but _build_results() reads the never-set max_drawdown_mtm). Real BTC folds: 0.0 % reported vs 10.3-26.7 % closed-trade drawdown.
+- Fixed: closed-trade balance peak-to-trough, with max_drawdown_basis stating intra-trade MTM is not observable from a trade list. Field-by-field diff vs 7e9645c: only drawdown fields changed.
+- No stored artifact affected (no strategy-to-outcome output saved after ef5636b). Full suite 1,822 tests, 0 new failures.
