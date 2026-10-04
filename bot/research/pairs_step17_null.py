@@ -113,21 +113,23 @@ def step17_null_test(price_a: pd.Series, price_b: pd.Series, statistic: Callable
 
 def canonical_net_mean_return_per_trade(price_a: pd.Series, price_b: pd.Series, *, pair_name: str = "X_USDT/Y_USDT",
                                         symbol_a: str = "X_USDT", symbol_b: str = "Y_USDT", **entry_exit_kwargs) -> float:
-    """The D-3 primary endpoint from the full canonical pipeline (run_canonical → EntryExitEngine CANONICAL),
-    in a temporary directory. Returns NaN when no trade occurs (a replicate with no trades is not scored)."""
+    """The D-3 primary endpoint from the full canonical pipeline (run_canonical -> EntryExitEngine CANONICAL).
+    Returns NaN when no trade occurs (a replicate with no trades is not scored).
+    claude code changed: 2026-10-04 D-4 speed-up — was a temporary-directory file round trip (Kalman CSV +
+    provenance -> EntryExitEngine.run -> equity curve, summary, report files -> trade-log CSV re-read). Now the same
+    canonical code runs in memory via EntryExitEngine.run_canonical_frame() (shared preparation and simulation
+    core; seed lineage validated in-process). Equal to the file path bit-for-bit (equivalence harness)."""
     import logging
     from bot.research.entry_exit_engine import EntryExitEngine
     from bot.research.kalman_filter_engine import KalmanFilterEngine
     prev = logging.root.manager.disable
     logging.disable(logging.WARNING)
     try:
-        with tempfile.TemporaryDirectory() as d:
-            KalmanFilterEngine(pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b, ols_beta=1.0, ols_alpha=0.0) \
-                .run_canonical(price_a, price_b, output_dir=d)
-            kc = Path(d) / "canonical" / f"{symbol_a}_{symbol_b}_kalman.csv"
-            EntryExitEngine(pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b, output_dir=d,
-                            rule_set="CANONICAL", **entry_exit_kwargs).run(kalman_csv=str(kc))
-            tl = pd.read_csv(next(Path(d).glob("*_trade_log.csv")))
+        with tempfile.TemporaryDirectory() as d:   # output_dir is a required constructor argument; nothing is written to it
+            keng = KalmanFilterEngine(pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b, ols_beta=1.0, ols_alpha=0.0)
+            res = keng.run_canonical(price_a, price_b)
+            tl = EntryExitEngine(pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b, output_dir=d,
+                                 rule_set="CANONICAL", **entry_exit_kwargs).run_canonical_frame(res, keng.seed_record)
     finally:
         logging.disable(prev)
     # claude code changed: 2026-10-04 — the statistic is the D-3 primary endpoint ON ZONE V: decisions inside

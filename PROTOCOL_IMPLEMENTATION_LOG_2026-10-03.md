@@ -767,3 +767,107 @@ None was a code defect.
 ### Blockers preventing FX from becoming canonical-capable
 
 OD-FX-1 to OD-FX-8 (every `FOREX_PROFILE` field is `None`), plus the OD-FX-9 history shortfall. Until all are resolved, every canonical consumer returns or raises `FX_CALENDAR_UNAVAILABLE`.
+
+
+---
+
+## D-4 pipeline speed-up (2026-10-04). Status: IMPLEMENTED AND VERIFIED (3.4× faster; calibration still gated)
+
+**Why:** one evaluation of the D-4 statistic (full canonical pipeline on a protocol-length pair, 43,792 candles) took 16.6 s on a quiet machine. The size calibration needs R ≥ 500 pairs × (B + 1) evaluations.
+
+**Profile (before):**
+- **Trade simulation's candle loop, 7.0 s:** 4.2 s of it was `iterrows` building a pandas row per candle.
+- **Mark-to-market equity curve, 3.0 s:** not used by the statistic.
+- **Kalman filter, 2.8 s.**
+- **CSV write and read, hashing and provenance, about 3.5 s.**
+
+Most of the time was overhead, not maths.
+
+### Changes (no new libraries; the Kalman maths untouched)
+
+1. **`_scan_candles_canonical`** reads the needed floats from column arrays instead of `iterrows`. Every rule is unchanged.
+2. **One simulation core:**
+   - `run()`'s steps 2–4 are extracted unchanged into `_simulate()`;
+   - the loader's post-read steps into `_prepare_kalman_frame()`;
+   - **`EntryExitEngine.run_canonical_frame(results, seed_record)`** is the lean CANONICAL run. It uses the same preparation, lifecycle, costs and funding, in memory: no files, no equity curve, no summary or report.
+   - Lineage is validated in-process: the seed must validate under this protocol and name this pair, and the frame must start at the seed candle.
+3. **`canonical_net_mean_return_per_trade`** (the D-4 statistic) uses the lean path.
+4. **Defect fixed (G2, live/research parity): the canonical Kalman CSV was not read back exactly.**
+   - The writer stores full precision, but pandas' default fast float parser is not correctly rounded. About 65% of the Kalman-frame floats came back changed: about 10⁻¹⁶ relative, up to thousands of ulps on near-zero values.
+   - So the research trade simulation ran on numbers slightly different from what the filter produced and what live (which never round-trips) uses.
+   - `_load_kalman_data` now reads with `float_precision="round_trip"`: 0% changed.
+
+### Evidence
+
+- **Reference:** the committed code (105e256) in a separate worktree, compared on 10 protocol-length datasets: 5 random walks, 2 cointegrated pairs (φ = 0.97 and 0.9), 2 with short gaps plus a gap long enough to force a re-seed, and 1 with a 3-day funding hole.
+  - **Step 1 (array scan):** trade log, signal log, summary, equity curve, every net P&L and the statistic are identical on all 10.
+  - **Step 2 (exact reader + lean statistic):** trade count, every recorded net P&L, summary, equity and the **statistic are identical on all 10**.
+    - The saved trade-log and signal-log *files* differ only in diagnostic columns (entry β/α/spread/quantities/prices; signal-log z) by 2×10⁻¹⁶ to 5×10⁻¹³ relative. These are the filter's true values now that the CSV parse noise is gone.
+    - No trade decision changed.
+  - **Crypto fingerprints:** only `trade_log` bytes changed, for the same reason. The summary, pipeline result, research-lab outputs, labels and funding are identical.
+- **Speed (quiet machine):** **16.6 s → 4.9 s per evaluation**, statistic −0.009080215116279072 before and after.
+  - Remaining: Kalman 2.8 s (shared live/research `CanonicalKalman`, deliberately untouched); data-version hash 1.0 s (provenance); scan 0.9 s.
+- **Tests (in `test_d4_step17_null`, 5 new; no new test file):**
+  - the lean trade log equals the file pipeline exactly, and the lean statistic equals the file statistic exactly;
+  - lean lineage refusals (wrong rule set, wrong pair, foreign methodology seed, frame not at its seed);
+  - the canonical CSV round-trips bit-exactly;
+  - funding gaps and the borrow flag match the file run.
+- **Mutations, 5 of 5 caught** (files restored byte-identical):
+  - seed validation skipped;
+  - inexact parser;
+  - lineage dropped;
+  - the scan reads the wrong column (caught by 8 lifecycle and live/research parity tests; the equivalence test can't see a bug shared by both paths);
+  - funding-gap rule skipped (initially **not caught**; the funding-gap parity test was added, and it is now caught).
+
+### Calibration compute estimate (revised; this PC, 8 logical cores, an assumed ~5–6× effective parallel speed-up)
+
+| Setting | Evaluations | Before | Now |
+|---|---|---|---|
+| size, B = 99, R = 500 | 50,000 | ~1.5–2 days | **~11–14 h** |
+| size, B = 999, R = 500 | 500,000 | ~15–20 days | **~4.5–6 days** |
+| power calibration | — | +0.5–1 day | +~4–8 h |
+
+### Five gates
+
+| Gate | Result |
+|---|---|
+| G1 | **PASS**: equivalence harness, new tests, mutations 5/5; full suite (after the DCA restore) 1,811 tests, 85 failures = the known baseline set, 0 new |
+| G2 | **PASS**: statistic and P&L bit-identical; CSV parse defect fixed (exact round trip proven) |
+| G3 | **PASS**: the null and its statistic are unchanged; the calibration gate is still closed |
+| G4 | **PASS**: same lifecycle, costs and funding (funding-gap behaviour proven equal) |
+| G5 | **PASS**: in-process lineage validation; the lean path writes no artifact; the reference comparison is recorded |
+
+### Not done (owner choice)
+
+- **Further ~3–4×** would need: (a) a faster `CanonicalKalman` step (shared with live, so it needs a bit-identity proof against the current code over many runs, or it isn't acceptable for parity); (b) a faster data-version hash (provenance code, same hash required); (c) a parallel calibration runner.
+- **No calibration was run.**
+
+
+---
+
+## Incident: silent revert of `dca_engine.py` captured by commit 105e256 (2026-10-04). Status: RESTORED
+
+**What happened:**
+- At 13:31:35 on 2026-10-04, outside this session's edits and not intended by the owner, `bot/research/dca_engine.py` was overwritten with the older 1,144-line version, byte-identical to commit `458ac14` (Stage 2D baseline).
+- That removed the post-audit Phase 2 fixes (B1–B8: next-open fill model, censored data-end cycles, `return_on_max_deployed` in place of `r_multiple`, B = 999 single-null permutation reported as raw evidence only, configured-level exhaustion metric, calibration-window volatility scaling, financing status), plus `_mtm_statistics`, which D-5 reuses.
+- The morning full suite (finished 13:04) had passed against the correct 1,639-line version (`757578d`).
+- Commit `105e256` ("commit everything", 14:54) captured the revert (`dca_engine.py`: −613 / +118 lines). The commit summary was not checked file by file. This was a verification failure.
+
+**How it was found:**
+- The next full suite: `test_dca_phase2` could not import; `test_phase3_engineering` failed on `return_on_max_deployed`.
+- One test part (about 540 tests) did not run, because `test_dca_engine` could not load.
+- An external review written against the reverted file reported defects that `757578d` had already fixed.
+
+**Fix:**
+- `git checkout 757578d -- bot/research/dca_engine.py`, verified identical to `757578d` (1,639 lines). The reverted copy is kept as a scratch backup.
+- No intended edit to `dca_engine.py` was made after `757578d`: D-5 only reads `_mtm_statistics`.
+- **DCA tests:** `test_dca_engine`, `test_dca_phase2`, `test_d5_dca_significance`, `test_phase3_engineering` (86 tests) all pass. Full suite: 1,811 tests, 85 failures = the known network/data-freshness baseline set, 0 new.
+- Only this file was affected: it is the only unexpected file modified in the 13:05–14:50 window, and the other files with net deletions in `105e256` are intended D-11 / D-2 edits.
+
+**Process change:** before every commit, inspect the per-file numstat. Flag files the work did not touch, and any file whose content equals an older commit's version. Run the full suite after the last edit.
+
+**Status of the DCA engine (`757578d`) against the five gates:** unchanged from the remediation report.
+- **Accounting:** fixed.
+- **F-08 (power):** BLOCKED under D-5 (needs the owner's definitions of matched exposure and planted-effect amplitude).
+- **Provenance (run IDs):** open.
+- DCA stays descriptive only.

@@ -2289,3 +2289,11 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - FOREX: decision-lock Decision 5 principle implemented as a mechanism (scheduled closures excluded from the grid; missing trading hours follow an owner g_max). Decision 5 remains BLOCKED: every FOREX_PROFILE rule is an owner decision (OD-FX-1 to OD-FX-9). Every canonical consumer returns or raises FX_CALENDAR_UNAVAILABLE; FX is never negative evidence.
 - Cross-asset leaks refused: perpetual funding, crypto costs and the D-6 universe cannot reach FX; mixed-class pairs are refused; session-traded data under a crypto name is refused.
 - Tests: test_asset_agnostic_market (16), mutations 9/9; full suite 1,807 tests with 0 new failures. No live change; no historical result reclassified; no FX result produced.
+
+---
+
+## 2026-10-04 — D-4 PIPELINE SPEED-UP AND DCA_ENGINE RESTORE
+
+- D-4 statistic 16.6 s -> 4.9 s per evaluation, bit-identical (10-dataset reference harness vs 105e256). Lean in-memory canonical run (EntryExitEngine.run_canonical_frame) shares one simulation core with run(). Defect fixed: canonical Kalman CSV now read with float_precision='round_trip' (default parser changed ~65 % of floats by ~1e-16; diagnostic log columns move <=5e-13, no trade or P&L changed). No calibration run.
+- INCIDENT: dca_engine.py was overwritten at 13:31 with the 458ac14 version (losing post-audit B1-B8 fixes); commit 105e256 captured it. Restored from 757578d (verified identical). An external review written against the reverted file is superseded where 757578d already fixed the item. Process change: per-file diff review before every commit.
+- Full suite: 1,811 tests, 0 new failures vs the known baseline.

@@ -101,3 +101,112 @@ class CanonicalPipelineSmokeTest(SimpleTestCase):
         r = nl.step17_null_test(a, b, nl.canonical_net_mean_return_per_trade, seed=1, n_perm=2, canonical=False)
         self.assertIn(r["status"], ("OK", "UNTESTABLE"))
         self.assertIsNotNone(r.get("null_version"))
+
+
+# claude code changed: 2026-10-04 D-4 speed-up — the lean in-memory statistic must equal the canonical FILE pipeline
+# exactly (same trades, same per-trade P&L, same statistic), refuse bad lineage, and the canonical Kalman CSV must
+# now round-trip bit-exactly (pandas' default float parser did not: ~65 % of floats came back changed).
+def _file_pipeline(a, b, fund, d):
+    from bot.research.entry_exit_engine import EntryExitEngine
+    from bot.research.kalman_filter_engine import KalmanFilterEngine
+    KalmanFilterEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", ols_beta=1.0,
+                       ols_alpha=0.0).run_canonical(a, b, output_dir=d)
+    tl, _, _ = EntryExitEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", output_dir=d,
+                               rule_set="CANONICAL", funding_rates_a=fund, funding_rates_b=fund) \
+        .run(kalman_csv=str(Path(d) / "canonical" / "X_USDT_Y_USDT_kalman.csv"))
+    return tl
+
+
+class LeanStatisticEquivalenceTests(SimpleTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        idx = pd.date_range(ZONES.init_window()[0], pd.Timestamp("2024-06-30 23:00", tz="UTC"), freq="h")
+        from bot.tests.synthetic_data import cointegrated_pair
+        cls.a, cls.b = cointegrated_pair(idx, 3)                                    # reaches into zone V
+        cls.fund = pd.Series(0.0001, index=pd.date_range("2021-09-01", "2024-12-31", freq="8h", tz="UTC"))
+        cls.d = tempfile.mkdtemp()
+        cls.file_tl = _file_pipeline(cls.a, cls.b, cls.fund, cls.d)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.d, ignore_errors=True)
+        super().tearDownClass()
+
+    def test_lean_trade_log_and_statistic_equal_the_file_pipeline_exactly(self):
+        from bot.research.entry_exit_engine import EntryExitEngine
+        from bot.research.kalman_filter_engine import KalmanFilterEngine
+        keng = KalmanFilterEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", ols_beta=1.0, ols_alpha=0.0)
+        res = keng.run_canonical(self.a, self.b)
+        lean = EntryExitEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", output_dir=self.d,
+                               rule_set="CANONICAL", funding_rates_a=self.fund, funding_rates_b=self.fund) \
+            .run_canonical_frame(res, keng.seed_record)
+        self.assertGreater(len(lean), 50)
+        lineage_cols = [c for c in lean.columns if "run_id" in c]                 # the file run carries the input run id
+        pd.testing.assert_frame_equal(lean.drop(columns=lineage_cols).reset_index(drop=True),
+                                      self.file_tl.drop(columns=lineage_cols).reset_index(drop=True), check_exact=True)
+        v = nl.zone_v_label_complete(self.file_tl)
+        self.assertGreater(len(v), 0)
+        expected = float(v["net_pnl_pct"].astype(float).mean())
+        got = nl.canonical_net_mean_return_per_trade(self.a, self.b, funding_rates_a=self.fund, funding_rates_b=self.fund)
+        self.assertEqual(got, expected)                                            # exact, not approximate
+
+    def test_lean_path_refuses_bad_lineage(self):
+        from dataclasses import replace
+        from bot.research.entry_exit_engine import CanonicalProvenanceError, EntryExitEngine
+        from bot.research.kalman_filter_engine import KalmanFilterEngine
+        keng = KalmanFilterEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", ols_beta=1.0, ols_alpha=0.0)
+        res = keng.run_canonical(self.a, self.b)
+        mk = lambda **kw: EntryExitEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT",
+                                          output_dir=self.d, funding_rates_a=self.fund, funding_rates_b=self.fund, **kw)
+        with self.assertRaisesRegex(ValueError, "CANONICAL rule set only"):
+            mk(rule_set="CANONICAL_UNCERTIFIED").run_canonical_frame(res, keng.seed_record)
+        with self.assertRaisesRegex(CanonicalProvenanceError, "engine pair"):
+            mk(rule_set="CANONICAL").run_canonical_frame(res, replace(keng.seed_record, pair_name="A_USDT/B_USDT"))
+        with self.assertRaises(CanonicalProvenanceError):                         # a seed from another methodology
+            mk(rule_set="CANONICAL").run_canonical_frame(res, replace(keng.seed_record, methodology_version="STAGE2D-REVB-3"))
+        with self.assertRaisesRegex(CanonicalProvenanceError, "seed candle"):     # frame does not start at its seed
+            mk(rule_set="CANONICAL").run_canonical_frame(res.iloc[5:], keng.seed_record)
+
+    def test_canonical_kalman_csv_round_trips_bit_exactly(self):
+        from bot.research.entry_exit_engine import EntryExitEngine
+        from bot.research.kalman_filter_engine import KalmanFilterEngine
+        keng = KalmanFilterEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", ols_beta=1.0, ols_alpha=0.0)
+        res = keng.run_canonical(self.a, self.b, output_dir=self.d)
+        ee = EntryExitEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", output_dir=self.d,
+                             rule_set="CANONICAL", funding_rates_a=self.fund, funding_rates_b=self.fund)
+        back = ee._load_kalman_data(str(Path(self.d) / "canonical" / "X_USDT_Y_USDT_kalman.csv"))
+        cols = ["kalman_zscore", "kalman_beta_pred", "kalman_alpha_pred", "close_a", "close_b"]
+        for c in cols:
+            x, y = res.loc[back.index, c].to_numpy(float), back[c].to_numpy(float)
+            same = (x == y) | (np.isnan(x) & np.isnan(y))
+            self.assertTrue(same.all(), f"{c}: {int((~same).sum())} values changed by the CSV round trip")
+
+
+class LeanFundingGapParityTests(SimpleTestCase):
+    """claude code changed: 2026-10-04 — the lean path must flag missing funding exactly as run() does (closes the
+    S5 mutation gap: the statistic alone cannot see the borrow flag)."""
+
+    def test_funding_gaps_and_borrow_flag_match_the_file_run(self):
+        from bot.research.entry_exit_engine import EntryExitEngine
+        from bot.research.kalman_filter_engine import KalmanFilterEngine
+        from bot.tests.synthetic_data import cointegrated_pair
+        idx = pd.date_range(ZONES.init_window()[0], pd.Timestamp("2022-09-30 23:00", tz="UTC"), freq="h")
+        a, b = cointegrated_pair(idx, 3)
+        fund = pd.Series(0.0001, index=pd.date_range("2021-09-01", "2022-03-31", freq="8h", tz="UTC"))   # ends early
+        d = tempfile.mkdtemp()
+        try:
+            keng = KalmanFilterEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", ols_beta=1.0, ols_alpha=0.0)
+            res = keng.run_canonical(a, b, output_dir=d)
+            mk = lambda: EntryExitEngine(pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", output_dir=d,
+                                         rule_set="CANONICAL", funding_rates_a=fund, funding_rates_b=fund)
+            file_eng, lean_eng = mk(), mk()
+            file_eng.run(kalman_csv=str(Path(d) / "canonical" / "X_USDT_Y_USDT_kalman.csv"))
+            lean_eng.run_canonical_frame(res, keng.seed_record)
+            self.assertGreater(len(file_eng.funding_gaps), 0)
+            self.assertEqual(lean_eng.funding_gaps, file_eng.funding_gaps)
+            self.assertFalse(file_eng.borrow_cost_modeled)
+            self.assertEqual(lean_eng.borrow_cost_modeled, file_eng.borrow_cost_modeled)
+            self.assertEqual(lean_eng._borrow_status(), "BORROW_UNAVAILABLE")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

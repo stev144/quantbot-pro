@@ -1188,19 +1188,9 @@ class EntryExitEngine:
             self._validate_canonical_input(kalman_csv)
         self._kalman_seed_lineage = self._input_seed_lineage(kalman_csv)   # claude code changed: 2026-10-03 F-03 — recorded in every summary
         df = self._load_kalman_data(kalman_csv)
-        self._px = ({"a": df[PRICE_COL_A], "b": df[PRICE_COL_B]}
-                    if PRICE_COL_A in df.columns and PRICE_COL_B in df.columns else None)   # claude code changed: funding notional marks
 
-        # ── Step 2: Validate required columns ────────────────────────────────
-        self._validate_columns(df)
-
-        # ── Step 3: Scan every candle and apply rules ─────────────────────────
-        if self._lineage is not None and df.index[0] != self._lineage["seed_ts"]:   # claude code changed: Stage 2D Rev B D-4 — a canonical dataset starts at its seed candle
-            raise CanonicalProvenanceError(f"canonical dataset starts at {df.index[0]}, not at its seed candle {self._lineage['seed_ts']}")
-        signal_log = self._scan_candles_canonical(df) if self.rule_set in CANONICAL_RULE_SETS else self._scan_candles(df)   # claude code changed: Stage 2D Rev B Steps 9–10
-
-        # ── Step 4: Build trade log from completed trades ─────────────────────
-        trade_log = self._build_trade_log()
+        # ── Steps 2–4: validate columns, scan every candle, build the trade log ─
+        trade_log, signal_log = self._simulate(df)   # claude code changed: 2026-10-04 — shared with run_canonical_frame() (one simulation core)
 
         # ── Step 5: Calculate equity curve ────────────────────────────────────
         equity_curve = self._build_equity_curve(trade_log, df)
@@ -1222,6 +1212,39 @@ class EntryExitEngine:
 
         return trade_log, summary, equity_curve
 
+
+    def _simulate(self, df: pd.DataFrame):   # claude code changed: 2026-10-04 — run()'s steps 2–4, extracted unchanged so run() and run_canonical_frame() share ONE simulation core
+        self._px = ({"a": df[PRICE_COL_A], "b": df[PRICE_COL_B]}
+                    if PRICE_COL_A in df.columns and PRICE_COL_B in df.columns else None)   # claude code changed: funding notional marks
+        self._validate_columns(df)
+        if self._lineage is not None and df.index[0] != self._lineage["seed_ts"]:   # claude code changed: Stage 2D Rev B D-4 — a canonical dataset starts at its seed candle
+            raise CanonicalProvenanceError(f"canonical dataset starts at {df.index[0]}, not at its seed candle {self._lineage['seed_ts']}")
+        signal_log = self._scan_candles_canonical(df) if self.rule_set in CANONICAL_RULE_SETS else self._scan_candles(df)   # claude code changed: Stage 2D Rev B Steps 9–10
+        return self._build_trade_log(), signal_log
+
+    def run_canonical_frame(self, kalman_results: pd.DataFrame, seed_record) -> pd.DataFrame:   # claude code changed: 2026-10-04 D-4 speed-up — new
+        """Lean CANONICAL run for statistics that need only the trade log (the D-4 Step-17 null re-scores every
+        replicate). Same preparation, lifecycle, costs and funding as run() — via the shared _prepare_kalman_frame()
+        and _simulate() — but in memory: no CSV round trip, no equity curve, summary, report or files.
+        Lineage is validated in-process instead of from a sidecar: `kalman_results` must be the frame
+        KalmanFilterEngine.run_canonical() returned and `seed_record` its seed record, which must validate under
+        THIS protocol and name this pair; the frame must start at the seed candle. Nothing it returns is an artifact."""
+        if self.rule_set != "CANONICAL":
+            raise ValueError("run_canonical_frame() is the CANONICAL rule set only")
+        v = validate_seed(seed_record, pair_name=seed_record.pair_name, protocol=self.protocol)
+        if not v.ok:
+            raise CanonicalProvenanceError(f"seed lineage rejected: {v.reason}")
+        if self.pair_name is not None and seed_record.pair_name != self.pair_name:
+            raise CanonicalProvenanceError(f"seed is for {seed_record.pair_name}, engine pair is {self.pair_name}")
+        self._lineage = {"seed_ts": seed_record.seed_ts, "seed_id": seed_id(seed_record),
+                         "data_version": seed_record.data_version, "input_run_id": None,
+                         "seed_design": seed_record.seed_design}
+        self._kalman_seed_lineage = "CANONICAL_CAUSAL_SEED"
+        df = self._prepare_kalman_frame(kalman_results.rename_axis("timestamp").reset_index(), source="in-memory run_canonical frame")
+        trade_log, _ = self._simulate(df)
+        if self.financing_mode == "PERP_FUNDING" and self.funding_gaps:   # same rule as run()
+            self.borrow_cost_modeled = False
+        return trade_log
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 1: LOAD KALMAN DATA
@@ -1247,7 +1270,15 @@ class EntryExitEngine:
                 f"    python -m bot.research.kalman_filter_engine"
             )
 
-        df = pd.read_csv(path)
+        # claude code changed: 2026-10-04 — float_precision="round_trip": the dataset is written at full precision,
+        # but pandas' default fast parser is not correctly rounded (measured: ~65 % of Kalman-frame floats came back
+        # changed, by up to thousands of ulps on near-zero values). The simulation must see exactly the numbers the
+        # filter produced (and live, which never round-trips through a CSV, sees).
+        df = pd.read_csv(path, float_precision="round_trip")
+        return self._prepare_kalman_frame(df, source=kalman_csv)
+
+    def _prepare_kalman_frame(self, df: pd.DataFrame, source="") -> pd.DataFrame:   # claude code changed: 2026-10-04 — the loader's post-read steps, extracted unchanged (shared with run_canonical_frame)
+        kalman_csv = source
 
         # Parse timestamp and set as DatetimeIndex
         # The Kalman engine saves timestamp as a plain column
@@ -1764,9 +1795,18 @@ class EntryExitEngine:
         self.entry_sign_mismatches: List[lifecycle.EntrySignMismatch] = []
 
         zc, bc, ac = self.cols["zscore"], self.cols["beta"], self._alpha_col
-        for i, (ts, row) in enumerate(df.iterrows()):
-            z, beta, alpha = float(row[zc]), float(row[bc]), float(row[ac])
-            pa, pb = float(row[PRICE_COL_A]), float(row[PRICE_COL_B])
+        # claude code changed: 2026-10-04 D-4 speed-up — was `for i, (ts, row) in enumerate(df.iterrows())`, which
+        # built a pandas Series per candle (≈ 60 % of this scan's time) only to read a few floats from it. The same
+        # float64 values are now read from the column arrays; every rule below is unchanged (outputs bit-identical,
+        # fingerprinted before/after).
+        def _col(name):
+            return df[name].to_numpy(dtype=float) if name in df.columns else None
+        z_arr, b_arr, a_arr = _col(zc), _col(bc), _col(ac)
+        pa_arr, pb_arr = _col(PRICE_COL_A), _col(PRICE_COL_B)
+        sp_arr, pe_arr, bu_arr = _col(self.cols["spread"]), _col(self.cols["prediction_error"]), _col(self.cols["beta_uncertainty"])
+        for i, ts in enumerate(df.index):
+            z, beta, alpha = float(z_arr[i]), float(b_arr[i]), float(a_arr[i])
+            pa, pb = float(pa_arr[i]), float(pb_arr[i])
             zscore_values[i], signal_values[i] = z, -z
 
             # 1. entry fill (exactly t+d)
@@ -1827,11 +1867,11 @@ class EntryExitEngine:
             total, _, _ = sized.value
             self.pending_entry = {
                 "decision_ts": ts, "fill_ts": ts + delay, "direction": direction, "zscore": z, "signal": -z,
-                "beta": beta, "alpha": alpha, "spread": float(row[self.cols["spread"]]) if self.cols["spread"] in row.index else math.nan,
+                "beta": beta, "alpha": alpha, "spread": float(sp_arr[i]) if sp_arr is not None else math.nan,   # claude code changed: column array (was row lookup)
                 "total": total, "strength": "STRONG" if abs(z) >= ENTRY_ZSCORE_STRONG else "NORMAL",
                 "stop_zscore": math.nan, "target_zscore": math.nan, "min_hold_hours": math.nan,   # no z stop / target / min hold in the canonical rule set
-                "pred_error": float(row[self.cols["prediction_error"]]) if self.cols["prediction_error"] in row.index else math.nan,
-                "beta_uncert": float(row[self.cols["beta_uncertainty"]]) if self.cols["beta_uncertainty"] in row.index else math.nan,
+                "pred_error": float(pe_arr[i]) if pe_arr is not None else math.nan,     # claude code changed: column array (was row lookup)
+                "beta_uncert": float(bu_arr[i]) if bu_arr is not None else math.nan,    # claude code changed: column array (was row lookup)
                 "held_spread": h_t,
             }
 
