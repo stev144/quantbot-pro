@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import numpy as np
+from bot.quant_core.inference import CONFIRMATORY_B, d10_block_length   # claude code changed: D-3/D-10
 from scipy import stats as scipy_stats
 
 from bot.instruments import candles_per_calendar_day  # claude code changed: new — Phase 1B hardening (Rule 3)
@@ -37,7 +38,7 @@ from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
 
 MIN_CONDITION_SAMPLE = 30  # claude code changed: below this, a "difference in means" isn't a trustworthy result — same floor philosophy as feature_validator.py's own MIN_OBS-style guards
-BLOCK_PERMUTATION_N = 100  # claude code changed: matches permutation_test_engine.py's own DEFAULT_N_PERMUTATIONS — smallest achievable p-value is 1/(N+1)
+BLOCK_PERMUTATION_N = CONFIRMATORY_B  # claude code changed: owner decision D-3 — B = 999 (was 100). Previous note: claude code changed: matches permutation_test_engine.py's own DEFAULT_N_PERMUTATIONS — smallest achievable p-value is 1/(N+1)
 BLOCK_SIZE_CANDLES = 24  # claude code changed: one day of 1h candles — short enough to preserve statistical power, long enough to respect short-range autocorrelation, same reasoning as this codebase's other block-permutation tools
 
 # claude code changed: new — Statistical Integrity Hardening. Above this
@@ -204,7 +205,7 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
     # applied regardless of the data's actual timeframe. round() to the
     # nearest whole candle; a fractional day-in-candles isn't meaningful
     # as a block boundary.
-    block_size = round(candles_per_calendar_day(timeframe))
+    block_size = d10_block_length(horizon)   # claude code changed: owner decision D-10 — block = max(4·h, 24) candles (was one calendar day of candles)
     block_p = _block_permutation_pvalue(condition_mask, forward_returns, observed_diff, seed=random_seed, block_size_candles=block_size)
 
     # claude code changed: new — Statistical Integrity Hardening (gap #5).

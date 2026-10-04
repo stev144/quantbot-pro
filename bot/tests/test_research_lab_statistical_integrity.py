@@ -127,7 +127,7 @@ class ConditionalSampleSizeGateTest(SimpleTestCase):
             "block_permutation_p_value": 0.005,
         }
         result = compute_verdict_conditional(evidence, hypothesized_direction="positive")
-        self.assertIn(result.verdict, ("SUPPORTED", "PARTIALLY_SUPPORTED"))
+        self.assertEqual(result.verdict, "OBSERVATION")   # claude code changed: owner decision D-7 — a single research-lab test is capped at OBSERVATION on the verdict ladder (no registered D-3 family / costs / holdout); was SUPPORTED-family
 
     def test_insufficient_events_flag_returns_insufficient_data_directly(self):
         result = compute_verdict_conditional(None, hypothesized_direction="positive", insufficient_events=True)

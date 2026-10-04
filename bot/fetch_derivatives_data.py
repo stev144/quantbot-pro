@@ -20,6 +20,7 @@
 # Output: data/{SYMBOL}_funding.csv, data/{SYMBOL}_oi.csv
 
 from pathlib import Path
+from bot.quant_core.research_zones import seal_before_write   # claude code changed: D-8
 from datetime import datetime, timezone
 
 from bot.fetch_all_symbols import SYMBOLS
@@ -77,6 +78,7 @@ def download_all_derivatives_data() -> dict:
             funding_df = fetch_funding_rate_history(symbol, since_ms=since_ms)
             if not funding_df.empty:
                 funding_path = OUTPUT_DIR / symbol_to_funding_filename(symbol)
+                funding_df = seal_before_write(funding_df, funding_path)   # claude code changed: D-8 — sealed forward holdout
                 funding_df.to_csv(funding_path, index=False)
                 entry["funding_rows"] = len(funding_df)
                 entry["funding_file"] = str(funding_path)
@@ -91,6 +93,7 @@ def download_all_derivatives_data() -> dict:
             oi_df = fetch_open_interest_history(symbol, days=MAX_OPEN_INTEREST_HISTORY_DAYS)
             if not oi_df.empty:
                 oi_path = OUTPUT_DIR / symbol_to_oi_filename(symbol)
+                oi_df = seal_before_write(oi_df, oi_path)   # claude code changed: D-8 — sealed forward holdout
                 oi_df.to_csv(oi_path, index=False)
                 entry["oi_rows"] = len(oi_df)
                 entry["oi_file"] = str(oi_path)

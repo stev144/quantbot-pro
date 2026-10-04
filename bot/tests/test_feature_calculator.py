@@ -67,14 +67,18 @@ class AtrHandComputedTest(SimpleTestCase):
 class ForwardReturnTest(SimpleTestCase):
 
     def test_forward_return_matches_hand_computed_ratio(self):
-        df = pd.DataFrame({"close": [100.0, 110.0, 121.0]})  # claude code changed: +10% each step, exact ratios
+        # claude code changed: owner decision D-1 — the label is now open(t+1+N)/open(t+1) − 1 (fill at the
+        # next bar's open). Closes deliberately differ from opens so a close-based label would fail.
+        df = pd.DataFrame({"open": [100.0, 110.0, 121.0, 133.1], "close": [105.0, 999.0, 1.0, 50.0]})
         calc = FeatureCalculator(min_data_required=1)  # claude code changed: direct private-method test
 
         fwd = calc._calculate_forward_return(df, periods=1)
 
-        self.assertAlmostEqual(fwd.iloc[0], 0.10)  # claude code changed: 110/100 - 1
-        self.assertAlmostEqual(fwd.iloc[1], 0.10)  # claude code changed: 121/110 - 1
-        self.assertTrue(np.isnan(fwd.iloc[2]))  # claude code changed: no future close available
+        self.assertAlmostEqual(fwd.iloc[0], 121.0 / 110.0 - 1)  # open[2]/open[1] − 1
+        self.assertAlmostEqual(fwd.iloc[1], 133.1 / 121.0 - 1)  # open[3]/open[2] − 1
+        self.assertTrue(np.isnan(fwd.iloc[2]))                   # open[4] does not exist
+        with self.assertRaises(ValueError):                      # no silent fallback to close
+            calc._calculate_forward_return(df.drop(columns="open"), periods=1)
 
     def test_forward_return_is_the_only_feature_using_future_data(self):
         """

@@ -67,7 +67,10 @@ def _eee(out, protocol=P, rule_set="CANONICAL", **costs):   # claude code change
                            capital_usdt=10_000.0, pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT", **costs)
 
 
-BORROW = {"borrow_rate_hourly_a": 0.00001, "borrow_rate_hourly_b": 0.00001}   # claude code changed: F-12 — a modelled (non-zero) borrow cost
+# claude code changed: owner decision (borrow row) — canonical financing = RECORDED perpetual funding; a constant
+# borrow rate is now an assumption (BORROW_RATE_ASSUMED) and can no longer make an output CANONICAL.
+_FUNDING = pd.Series(0.0001, index=pd.date_range("2021-09-01", "2023-12-31", freq="8h", tz="UTC"))
+BORROW = {"funding_rates_a": _FUNDING, "funding_rates_b": _FUNDING}
 
 
 # ── D-5 ─────────────────────────────────────────────────────────────────────
@@ -198,7 +201,7 @@ class CanonicalDatasetSeparationTests(SimpleTestCase):
             ("wrong seed design", {"seed.seed_design": "B_SELECTION_WARMUP"}, "seed design"),
             ("wrong seed lineage", {"seed.beta0": 9.9}, "lineage id"),
             ("non-causal seed", {"seed.init_window_end": "2030-01-01T00:00:00+00:00"}, "non-causal"),
-            ("wrong L", {"seed.init_window_start": "2023-01-01T00:00:00+00:00"}, "init window length"),
+            ("wrong L", {"seed.init_window_start": "2021-10-16T00:00:00+00:00"}, "init window length"),   # claude code changed: D-8 — the seed is now at the S start (2021-11-07); a 504-candle window (≠ L) that still ends before it. The old 2023 date now lies AFTER the window end and tripped the earlier causality check instead
         )
         for name, change, msg in cases:
             with self.subTest(name):
@@ -236,7 +239,8 @@ class CanonicalDatasetSeparationTests(SimpleTestCase):
 
     def test_canonical_protocol_locks_l_1000_and_design_a(self):
         self.assertEqual((CANONICAL.init_window_candles, CANONICAL.seed_design), (1000, "A_PRE_SELECTION"))
-        self.assertEqual(METHODOLOGY_VERSION, "STAGE2D-REVB-3")
+        self.assertEqual(METHODOLOGY_VERSION, "STAGE2D-REVB-4")   # claude code changed: D-8 — deliberate bump (seed bound to the selection-zone start)
+        self.assertEqual(CANONICAL.selection_start_utc, "2021-11-07T00:00:00+00:00")   # claude code changed: D-8 — the signed S start
         ca, cb = dataset_a(n=2600)
         eng = _kfe()
         _quiet(eng.run_canonical, ca, cb, protocol=CANONICAL)          # the real baseline, L = 1000

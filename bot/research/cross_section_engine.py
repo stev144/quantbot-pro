@@ -86,6 +86,7 @@ from typing import Dict, List, Optional     # Type hints for function signatures
 
 import numpy as np                          # Numerical operations
 import pandas as pd                         # DataFrame operations
+from bot.quant_core.timing import research_forward_return   # claude code changed: D-1
 
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX, resolve_ohlcv_path  # claude code changed: new — universe expansion mission, see cointegration_engine.py's identical change for the full rationale. ASSET_CLASS_FOREX/resolve_ohlcv_path added for run_forex_cross_section_research() below (Forex Research Dashboard mission)
 
@@ -256,7 +257,7 @@ class CrossSectionEngine:
         cs_features = self._calculate_reversal_signal(cs_features)
 
         # Step 8: What actually happened next — the Y variable for IC testing
-        cs_features = self._calculate_forward_returns(cs_features, returns_matrix)
+        cs_features = self._calculate_forward_returns(cs_features, returns_matrix, data)   # claude code changed: D-1 — labels need each symbol's open prices
 
         # Step 9: Put each symbol's features back into its own DataFrame
         data = self._merge_features_back(data, cs_features)
@@ -770,6 +771,7 @@ class CrossSectionEngine:
         self,
         cs_features: pd.DataFrame,
         returns_matrix: pd.DataFrame,
+        data: Optional[Dict[str, pd.DataFrame]] = None,   # claude code changed: D-1 — per-symbol OHLCV (open prices)
     ) -> pd.DataFrame:
         """
         Calculate what actually happened 1 hour later.
@@ -804,9 +806,14 @@ class CrossSectionEngine:
 
             # shift(-1): pull the next row's value into the current row
             # At t=10:00, forward_return_1h = return that happened at 11:00
-            cs_features[f"{symbol}__forward_return_1h"] = (
-                returns_matrix[symbol].shift(-1)
-            )
+            # claude code changed: owner decision D-1 — was returns_matrix[symbol].shift(-1), i.e. the
+            # WINSORISED close-to-close return of bar t+1 taken from the signal close (zero latency, F-04).
+            # Now the canonical label from the symbol's own RAW open prices: open(t+2)/open(t+1) − 1 (fill
+            # at the next bar's open, hold one bar). Raw, not winsorised: it is what a trade would earn.
+            if data is None or symbol not in data:
+                raise ValueError(f"D-1 label for {symbol} needs its OHLCV frame (open prices) — none passed")
+            label = research_forward_return(data[symbol], 1)
+            cs_features[f"{symbol}__forward_return_1h"] = label.reindex(cs_features.index)
 
         logger.info("  forward_return_1h added for each symbol")
 

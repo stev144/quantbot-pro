@@ -1,8 +1,9 @@
 # Stage 2D Rev B — Canonical Research Protocol
 
-**Methodology version:** `STAGE2D-REVB-3`.
+**Methodology version:** `STAGE2D-REVB-4`.
 - REVB-2 (2026-10-02): lifecycle C1/C2, H = 24, causal seed C6.
 - REVB-3: L = 1000, Design A, provenance requirements (D-1…D-5, G-1).
+- REVB-4 (2026-10-03): owner decision D-8 — seed candle bound to the selection-zone start (2021-11-07 00:00 UTC); research zones and the sealed forward holdout (F = 2026-10-04) in `bot/quant_core/research_zones.py` (`QBP-ZONES-1`).
 
 See `STAGE2D_DECISION_LOCK.md` and `STAGE2D_D1_D5_G1_IMPLEMENTATION_REPORT.md`. The machine-readable values live in `bot/quant_core/protocol.py`.
 

@@ -18,18 +18,18 @@ class SupportedVerdictTest(SimpleTestCase):
 
     def test_strong_ic_significant_passes_fdr_is_supported(self):
         result = compute_verdict(_stat(ic=0.08, block_p=0.001), {"passes_fdr": True})
-        self.assertEqual(result.verdict, "SUPPORTED")
+        self.assertEqual(result.verdict, "OBSERVATION")   # claude code changed: owner decision D-7 — a single research-lab test is capped at OBSERVATION on the verdict ladder (no registered D-3 family / costs / holdout); was SUPPORTED-family
 
     def test_matching_hypothesized_direction_still_supported(self):
         result = compute_verdict(_stat(ic=0.08, block_p=0.001), {"passes_fdr": True}, hypothesized_direction="positive")
-        self.assertEqual(result.verdict, "SUPPORTED")
+        self.assertEqual(result.verdict, "OBSERVATION")   # claude code changed: owner decision D-7 — a single research-lab test is capped at OBSERVATION on the verdict ladder (no registered D-3 family / costs / holdout); was SUPPORTED-family
 
 
 class PartiallySupportedVerdictTest(SimpleTestCase):
 
     def test_moderate_ic_significant_passes_fdr_is_partially_supported(self):
         result = compute_verdict(_stat(ic=0.035, block_p=0.01), {"passes_fdr": True})
-        self.assertEqual(result.verdict, "PARTIALLY_SUPPORTED")
+        self.assertEqual(result.verdict, "OBSERVATION")   # claude code changed: owner decision D-7 — a single research-lab test is capped at OBSERVATION on the verdict ladder (no registered D-3 family / costs / holdout); was SUPPORTED-family
 
 
 class InconclusiveVerdictTest(SimpleTestCase):

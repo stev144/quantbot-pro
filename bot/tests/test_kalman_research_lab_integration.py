@@ -23,13 +23,13 @@ from bot.instruments import ASSET_CLASS_CRYPTO, Instrument
 from bot.research.kalman_filter_engine import KalmanFilterEngine
 
 
-def _synthetic_pair(n=600, true_beta=1.3, true_alpha=0.2, seed=7, freq="1h"):
+def _synthetic_pair(n=600, true_beta=1.3, true_alpha=0.2, seed=7, freq="1h", start="2021-01-01"):   # claude code changed: start (canonical fixtures must span zone S)
     """A log-price pair with a KNOWN linear relationship — real cointegration
     by construction, not fetched data. Returns (price_a, price_b) as raw
     (non-log) close-price Series, matching what load_ohlcv()/_load_prices()
     would hand the engine."""
     rng = np.random.default_rng(seed)
-    idx = pd.date_range("2021-01-01", periods=n, freq=freq)
+    idx = pd.date_range(start, periods=n, freq=freq)
     log_b = pd.Series(np.cumsum(rng.normal(0, 0.01, n)) + 4.0, index=idx)
     log_a = true_alpha + true_beta * log_b + rng.normal(0, 0.001, n)
     return np.exp(log_a), np.exp(log_b)   # claude code changed: back to raw price space — run_on_prices()/_load_prices() both take raw close prices, not logs
@@ -134,7 +134,13 @@ class RunKalmanPairsTestToolTest(SimpleTestCase):
 
     def test_cointegrated_synthetic_pair_returns_observation_evidence_and_verdict(self):
         from bot.research_lab.tools.research_tools import run_kalman_pairs_test
-        price_a, price_b = _synthetic_pair(n=700, true_beta=1.3, true_alpha=0.2)  # claude code changed: >= default warmup(168)+500 minimum
+        # claude code changed: 2026-10-04 (step 3) — the tool now runs run_canonical (seed at the S start, data to the
+        # end of zone S), so a canonical fixture must span the init window and zone S; a 700-candle fixture is now
+        # (correctly) refused as INSUFFICIENT_DATA.
+        from bot.quant_core.research_zones import ZONES
+        start = ZONES.init_window()[0]
+        n = int((ZONES.S1 - start) / pd.Timedelta(hours=1)) + 1
+        price_a, price_b = _synthetic_pair(n=n, true_beta=1.3, true_alpha=0.2, start=start)
 
         with patch(
             "bot.research_lab.tools.research_tools.load_ohlcv",
@@ -145,7 +151,7 @@ class RunKalmanPairsTestToolTest(SimpleTestCase):
         self.assertIn("observation", result)
         self.assertIn("statistical_evidence", result)
         self.assertIn("verdict", result)
-        self.assertIn(result["verdict"], ("SUPPORTED", "REJECTED", "INCONCLUSIVE"))  # claude code changed: deterministic function of the evidence, never free text
+        self.assertIn(result["verdict"], ("OBSERVATION", "REJECTED", "INCONCLUSIVE"))  # claude code changed: D-7 ladder cap replaces SUPPORTED; deterministic function of the evidence
         self.assertIsNotNone(result["observation"])
         self.assertIn("dynamic_hedge_ratio", result["observation"])
         self.assertIn("config", result)

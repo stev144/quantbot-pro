@@ -145,7 +145,7 @@ PCA_CONFIG = PCAConfig()
 # STEP 1: PCA DECOMPOSITION
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-def load_close_prices(universe: List[str]) -> Dict[str, pd.Series]:
+def load_close_prices(universe: List[str], column: str = "close") -> Dict[str, pd.Series]:   # claude code changed: D-1 — column
     """Loads each symbol's close-price series from data/*.csv via
     bot.instruments.resolve_ohlcv_path() — the project's real, existing
     canonical path resolver (used by cointegration_engine.py/cross_
@@ -169,7 +169,7 @@ def load_close_prices(universe: List[str]) -> Dict[str, pd.Series]:
             )
         df = pd.read_csv(path, parse_dates=["timestamp"])
         df = df.set_index("timestamp").sort_index()
-        prices[symbol] = df["close"]
+        prices[symbol] = df[column]   # claude code changed: D-1 — column parameter (close for the factor model, open for labels)
         logger.info(f"  Loaded {symbol}: {len(df):,} candles ({df.index.min()} -> {df.index.max()})")
     return prices
 
@@ -359,14 +359,27 @@ def compute_residuals_causal(returns: pd.DataFrame, config: PCAConfig) -> Tuple[
     Returns (residual_df, refit_log) — refit_log has one row per refit:
     fit_end (last row used, exclusive boundary = applied_from), applied_from,
     applied_to, n_fit_rows, n_retained."""
+    values = returns.values
+    out = np.full(values.shape, np.nan)
+    log_rows = []
+    for r, end, mean, std, loadings, k in _causal_fits(returns, config):   # claude code changed: D-1 — shared fit loop (behaviour unchanged)
+        std_block = (values[r:end] - mean) / std
+        out[r:end] = (std_block - std_block @ loadings @ loadings.T) * std
+        log_rows.append({"applied_from": returns.index[r], "applied_to": returns.index[end - 1],
+                         "fit_end": returns.index[r - 1], "n_fit_rows": r, "n_retained": int(k)})
+    return (pd.DataFrame(out, index=returns.index, columns=returns.columns),
+            pd.DataFrame(log_rows))
+
+
+def _causal_fits(returns: pd.DataFrame, config: PCAConfig):   # claude code changed: D-1 — extracted from compute_residuals_causal
+    """Yields (r, end, mean, std, loadings, k) for each refit point r: the fit uses returns rows strictly
+    before r and is in force for rows r … end−1. The single causal factor model of this engine."""
     if config.refit_every < 1 or config.min_fit_candles < 2:
         raise ValueError("refit_every must be >= 1 and min_fit_candles >= 2")
     n_rows = len(returns)
     if n_rows <= config.min_fit_candles:
         raise ValueError(f"need more than min_fit_candles={config.min_fit_candles} return rows for a causal fit; got {n_rows}")
     values = returns.values
-    out = np.full(values.shape, np.nan)
-    log_rows = []
     for r in range(config.min_fit_candles, n_rows, config.refit_every):
         fit = values[:r]                                   # strictly before r
         mean = fit.mean(axis=0)
@@ -378,14 +391,47 @@ def compute_residuals_causal(returns: pd.DataFrame, config: PCAConfig) -> Tuple[
         order = np.argsort(eigenvalues)[::-1]
         eigenvalues, eigenvectors = eigenvalues[order], eigenvectors[:, order]
         k = config.n_components or choose_n_components(eigenvalues, config.variance_threshold)
-        loadings = eigenvectors[:, :k]
-        end = min(r + config.refit_every, n_rows)
-        std_block = (values[r:end] - mean) / std
-        out[r:end] = (std_block - std_block @ loadings @ loadings.T) * std
-        log_rows.append({"applied_from": returns.index[r], "applied_to": returns.index[end - 1],
-                         "fit_end": returns.index[r - 1], "n_fit_rows": r, "n_retained": int(k)})
-    return (pd.DataFrame(out, index=returns.index, columns=returns.columns),
-            pd.DataFrame(log_rows))
+        yield r, min(r + config.refit_every, n_rows), mean, std, eigenvectors[:, :k], k
+
+
+def compute_open_labels_causal(close_returns: pd.DataFrame, open_returns: pd.DataFrame,
+                               config: PCAConfig) -> pd.DataFrame:   # claude code changed: owner decision D-1 (PCA, option 1) — new
+    """Executable factor-residual labels under the D-1 contract (signal at bar t's close, fill at bar t+1's
+    open, exit at bar t+1+h's open).
+
+    The factor model is the engine's single causal fit on CLOSE returns (_causal_fits). For a signal at row
+    t the fit in force at t — fitted strictly before its refit point r ≤ t — is FROZEN for the whole holding
+    period (the factor-neutral position is defined at the decision). Its mean/std/loadings are applied to
+    OPEN-to-OPEN log returns, open_ret[j] = ln(open_j / open_{j−1}):
+
+        label_h[t] = Σ_{j = t+2}^{t+1+h} residual_open[j]  =  factor-residual of ln(open_{t+1+h} / open_{t+1})
+
+    so the label spans exactly open(t+1) → open(t+1+h). No row ≥ r enters the fit; close_t never enters the
+    label. NaN where the exit open does not exist or no fit covers t. Columns: f"{label_name}_{symbol}"."""
+    if not close_returns.index.equals(open_returns.index) or list(close_returns.columns) != list(open_returns.columns):
+        raise ValueError("close_returns and open_returns must share one index and column order")
+    n, m = close_returns.shape
+    ov = open_returns.values
+    out = {name: np.full((n, m), np.nan) for name in config.forward_horizons}
+    hmax = max(config.forward_horizons.values())
+    for r, end, mean, std, loadings, _ in _causal_fits(close_returns, config):
+        lo, hi = r + 2, min(end + 1 + hmax, n)            # open-return rows any label of this block can use
+        if lo >= hi:
+            continue
+        z = (ov[lo:hi] - mean) / std
+        res = (z - z @ loadings @ loadings.T) * std        # residual open returns under the FROZEN fit
+        csum = np.vstack([np.zeros((1, m)), np.nancumsum(res, axis=0)])   # csum[i] = Σ res[0:i]
+        valid = np.vstack([np.zeros((1, m)), np.cumsum(np.isfinite(res), axis=0)])
+        for name, h in config.forward_horizons.items():
+            for t in range(r, end):
+                a, b = t + 2 - lo, t + 2 + h - lo          # rows j = t+2 … t+1+h in res coordinates
+                if t + 1 + h >= n:
+                    break
+                cnt = valid[b] - valid[a]
+                out[name][t] = np.where(cnt == h, csum[b] - csum[a], np.nan)
+    return pd.concat({name: pd.DataFrame(v, index=close_returns.index, columns=close_returns.columns)
+                      for name, v in out.items()}, axis=1).pipe(
+        lambda df: df.set_axis([f"{a}_{b}" for a, b in df.columns], axis=1))
 
 
 def compute_residual_zscores(residual_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame:
@@ -447,6 +493,8 @@ def generate_signals(zscore_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 def add_forward_returns(residual_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame:
+    # claude code changed: D-1 — LEGACY, no longer called by run_pca_engine (same-close, zero-latency label,
+    # F-04). Kept so historical outputs stay reproducible; canonical labels: compute_open_labels_causal.
     """Adds forward_return_{1h,4h,24h}_{SYMBOL} columns computed on each
     symbol's IDIOSYNCRATIC (residual) return series — NOT the raw price
     return. This is the deliberate, spec-required label: the hypothesis
@@ -687,6 +735,10 @@ def run_pca_engine(
     prices = load_close_prices(universe)
     price_df = align_universe(prices)
     returns = compute_log_returns(price_df)
+    # claude code changed: owner decision D-1 (PCA option 1) — open prices on the SAME aligned grid, for the
+    # executable label only (open(t+1) → open(t+1+h)); the factor model stays fitted on close returns.
+    open_df = align_universe(load_close_prices(universe, column="open")).reindex(price_df.index)
+    open_returns = np.log(open_df).diff().reindex(returns.index)
 
     # claude code changed: F-01 — the full-history fit below is kept ONLY for the
     # descriptive scree/loadings files; residuals (and so signals and IC) now come
@@ -702,7 +754,9 @@ def run_pca_engine(
 
     zscore_df = compute_residual_zscores(residual_df, config)
     signal_df = generate_signals(zscore_df, config)
-    label_df = add_forward_returns(residual_df, config)
+    # claude code changed: owner decision D-1 — was add_forward_returns(residual_df) (close residuals summed
+    # from the signal close: zero latency, F-04). Now the frozen-decision-fit residual of open-to-open returns.
+    label_df = compute_open_labels_causal(returns, open_returns, config).reindex(residual_df.index)
 
     ic_results = validate_ic_per_symbol(signal_df, label_df, list(returns.columns), config)
 

@@ -956,10 +956,10 @@ class StrategyScorer:
         verdict = self._get_verdict(final_total)
 
         # Override verdict if health is bad
-        if strategy_health == "HIGH RISK":
-            verdict = "HIGH RISK — Review before live deployment"
+        if strategy_health == "HIGH RISK":   # claude code changed: D-11 — descriptive, no deployment advice
+            verdict = "HIGH RISK (descriptive) — " + verdict
         elif strategy_health == "WEAK":
-            verdict = "WEAK — Significant improvements required"
+            verdict = "WEAK (descriptive) — " + verdict
 
         # Build actionable suggestions based on weak dimensions
         suggestions = self._get_suggestions(final_total, raw_total)
@@ -1226,13 +1226,14 @@ class StrategyScorer:
         return "F"
 
     def _get_verdict(self, score: float) -> str:
-        """Converts adjusted score to a plain-English verdict."""
+        """Converts adjusted score to a DESCRIPTIVE label.
 
-        if score >= 85: return "INSTITUTIONAL GRADE — Ready for real capital deployment"
-        if score >= 70: return "STRONG STRATEGY — Consider small live deployment"
-        if score >= 55: return "PROMISING — Needs improvement before live trading"
-        if score >= 40: return "ALMOST THERE — Monitor once deployed live required"
-        return "POOR — Do not trade with real capital"
+        claude code changed: owner decision D-11 (signed 2026-10-03) — the scorer no longer has a pass/fail or
+        deployment role (its thresholds were built for an old metric basis and re-deriving them from invalidated
+        evidence would be circular). Gating comes solely from the D-7 verdict ladder. Was: "INSTITUTIONAL GRADE —
+        Ready for real capital deployment" / "STRONG STRATEGY — Consider small live deployment" / ... / "POOR — Do
+        not trade with real capital"."""
+        return f"DESCRIPTIVE SCORE {score:.0f}/100 — not a deployment decision (D-11; eligibility = D-7 verdict ladder)"
 
     # ============================================================
     # SUGGESTIONS ENGINE — enhanced with structure and walk-forward

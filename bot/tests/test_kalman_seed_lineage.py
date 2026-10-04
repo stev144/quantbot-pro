@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from bot.tests.synthetic_data import cointegrated_log_pair   # claude code changed: 2026-10-04 — shared generator (bot/tests/synthetic_data.py), identical draws
+from bot.quant_core.research_zones import ZONES   # claude code changed: D-8
 from django.test import SimpleTestCase
 
 from bot.quant_core.protocol import CANONICAL
@@ -19,15 +21,10 @@ from bot.research.kalman_filter_engine import KalmanFilterEngine
 
 
 def _pair(n=3200, seed=0, shock_from=None):
-    rng = np.random.default_rng(seed)
-    lb = np.cumsum(0.01 * rng.standard_normal(n)) + 3.0
-    x = np.zeros(n)
-    for t in range(1, n):
-        x[t] = 0.97 * x[t - 1] + 0.004 * rng.standard_normal()
-    la = 1.3 * lb + 0.1 + x
+    la, lb = cointegrated_log_pair(n, np.random.default_rng(seed))   # claude code changed: 2026-10-04 — shared generator (bot/tests/synthetic_data.py), identical draws
     if shock_from is not None:
         la[shock_from:] += 0.5
-    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    idx = pd.date_range(ZONES.init_window()[0], periods=n, freq="h", tz="UTC")   # claude code changed: D-8 — candle L = S start
     return pd.Series(np.exp(la), index=idx), pd.Series(np.exp(lb), index=idx)
 
 
@@ -132,7 +129,9 @@ class CostCompletenessGateTest(SimpleTestCase):   # claude code changed: F-12 �
     def test_modelled_borrow_keeps_canonical_status(self):
         d = Path(tempfile.mkdtemp())
         try:
-            prov = self._run(d, borrow_rate_hourly_a=0.00001, borrow_rate_hourly_b=0.00001)
+            # claude code changed: owner decision (borrow row) — canonical financing = recorded perpetual funding
+            f = pd.Series(0.0001, index=pd.date_range("2021-09-01", "2022-06-30", freq="8h", tz="UTC"))
+            prov = self._run(d, funding_rates_a=f, funding_rates_b=f)
             self.assertEqual(prov["status"], "CANONICAL")
             self.assertTrue(prov["extra"]["cost_complete"])
         finally:

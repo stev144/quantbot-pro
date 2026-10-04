@@ -93,7 +93,7 @@ def run_regime_conditional_test(
     working = enriched.drop(columns=conflicting).join(regime_df[list(REGIME_DIMENSIONS)])
 
     ic_report = compute_regime_conditional_ic(
-        working, feature_col=feature_name, forward_return_col=forward_col, regime_dimensions=list(REGIME_DIMENSIONS),
+        working, feature_col=feature_name, forward_return_col=forward_col, regime_dimensions=list(REGIME_DIMENSIONS), horizon_candles=horizon,   # claude code changed: D-2 — explicit horizon (block length)
     )
 
     # Find which dimension actually contains regime_of_interest, matching
@@ -108,7 +108,7 @@ def run_regime_conditional_test(
     interaction_result = None
     if interaction_dimension is not None:
         interaction_result = test_regime_interaction(
-            working, feature_col=feature_name, forward_return_col=forward_col, regime_col=interaction_dimension,
+            working, feature_col=feature_name, forward_return_col=forward_col, regime_col=interaction_dimension, horizon_candles=horizon,   # claude code changed: D-2 — explicit horizon (block length)
         )
 
     status = compute_regime_conditional_status(

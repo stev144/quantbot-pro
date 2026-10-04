@@ -50,6 +50,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.inference import (CONFIRMATORY_B, CONFIRMATORY_BASIS, INFERENCE_METHOD_VERSION,
+                                      block_permutation_p, confirmatory_ic_test, d10_block_length)   # claude code changed: D-2/D-10
+import re, zlib   # claude code changed: D-2 — horizon parsing, stable per-cell seeds
 from statsmodels.stats.multitest import multipletests
 
 from bot.research.regime_labels import MIN_REGIME_OBS
@@ -103,6 +106,7 @@ class RegimeICCell:
     sufficient_sample: bool
     ic: Optional[float]
     ic_pvalue: Optional[float]
+    ic_pvalue_block: Optional[float] = None   # claude code changed: D-2 — the DECISION p (block permutation, block = max(4h, 24), B = 999)
     ic_pvalue_fdr: Optional[float] = None
     passes_fdr: Optional[bool] = None
     block_ic_mean: Optional[float] = None
@@ -119,7 +123,8 @@ class RegimeICCell:
             "n_obs": self.n_obs, "sufficient_sample": self.sufficient_sample,
             "ic": round(self.ic, 6) if self.ic is not None else None,
             "ic_pvalue": self.ic_pvalue, "ic_pvalue_fdr": self.ic_pvalue_fdr, "passes_fdr": self.passes_fdr,
-            "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic Spearman p assumes independence
+            "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic Spearman p assumes independence (descriptive)
+            "ic_pvalue_block": self.ic_pvalue_block, "decision_pvalue_basis": CONFIRMATORY_BASIS,   # claude code changed: D-2
             "block_ic_mean": round(self.block_ic_mean, 6) if self.block_ic_mean is not None else None,
             "block_ic_median": round(self.block_ic_median, 6) if self.block_ic_median is not None else None,
             "block_ic_std": round(self.block_ic_std, 6) if self.block_ic_std is not None else None,
@@ -129,10 +134,26 @@ class RegimeICCell:
         }
 
 
-def _build_cell(dimension: str, regime: str, sub_df: pd.DataFrame, feature_col: str, forward_return_col: str, min_obs: int, n_blocks: int) -> RegimeICCell:
+def _horizon_from_col(forward_return_col: str) -> int:   # claude code changed: D-2 — delegates to the shared parser
+    from bot.quant_core.inference import horizon_from_label
+    return horizon_from_label(forward_return_col)
+
+
+def _cell_seed(seed: int, dimension: str, regime) -> int:   # claude code changed: D-2 — reproducible, recorded
+    return (int(seed) * 1_000_003 + zlib.crc32(f"{dimension}|{regime}".encode())) % (2 ** 32)
+
+
+def _build_cell(dimension: str, regime: str, sub_df: pd.DataFrame, feature_col: str, forward_return_col: str, min_obs: int, n_blocks: int,
+                horizon: int = 1, n_perm: int = CONFIRMATORY_B, seed: int = 0) -> RegimeICCell:   # claude code changed: D-2 — horizon/n_perm/seed
     n_obs = len(sub_df)
     sufficient = n_obs >= min_obs
     ic, pvalue = _spearman_ic(sub_df[feature_col].to_numpy(), sub_df[forward_return_col].to_numpy()) if sufficient else (None, None)
+    p_block = None
+    if sufficient:   # claude code changed: D-2 — confirmatory block permutation on the chronologically ordered cell
+        ordered = sub_df.sort_index()
+        res = confirmatory_ic_test(ordered[feature_col].to_numpy(), ordered[forward_return_col].to_numpy(), horizon,
+                                   seed=_cell_seed(seed, dimension, regime), n_perm=n_perm)
+        p_block = res["p_value"]
 
     block_ics = _block_ic_series(sub_df.sort_index(), feature_col, forward_return_col, n_blocks) if sufficient else np.array([])
     block_mean = float(np.mean(block_ics)) if len(block_ics) else None
@@ -147,7 +168,7 @@ def _build_cell(dimension: str, regime: str, sub_df: pd.DataFrame, feature_col: 
 
     return RegimeICCell(
         dimension=dimension, regime=regime, n_obs=n_obs, sufficient_sample=sufficient,
-        ic=ic, ic_pvalue=pvalue,
+        ic=ic, ic_pvalue=pvalue, ic_pvalue_block=p_block,   # claude code changed: D-2
         block_ic_mean=block_mean, block_ic_median=block_median, block_ic_std=block_std,
         positive_ic_fraction=positive_frac, n_blocks=len(block_ics),
         ic_ci_low=ci_low, ic_ci_high=ci_high,
@@ -189,6 +210,9 @@ def compute_regime_conditional_ic(
     min_obs: int = MIN_REGIME_OBS,
     alpha: float = DEFAULT_ALPHA,
     n_blocks: int = DEFAULT_N_BLOCKS,
+    horizon_candles: Optional[int] = None,   # claude code changed: D-2 — label horizon (parsed from forward_return_col if None; fails closed)
+    n_perm: int = CONFIRMATORY_B,            # claude code changed: D-3 — B = 999
+    seed: int = 0,                           # claude code changed: D-2 — recorded for reproducibility
 ) -> RegimeConditionalICReport:
     """
     Parameters
@@ -209,28 +233,31 @@ def compute_regime_conditional_ic(
             raise ValueError(f"compute_regime_conditional_ic requires column {col!r}")
 
     working = df[[feature_col, forward_return_col, *regime_dimensions]].copy()
-    cells: List[RegimeICCell] = [_build_cell("OVERALL", "ALL", working, feature_col, forward_return_col, min_obs, n_blocks)]
+    horizon = int(horizon_candles) if horizon_candles is not None else _horizon_from_col(forward_return_col)   # claude code changed: D-2
+    kw = dict(horizon=horizon, n_perm=n_perm, seed=seed)
+    cells: List[RegimeICCell] = [_build_cell("OVERALL", "ALL", working, feature_col, forward_return_col, min_obs, n_blocks, **kw)]
 
     for dimension in regime_dimensions:
         valid = working.dropna(subset=[dimension])
         for regime in sorted(valid[dimension].unique()):
             sub_df = valid[valid[dimension] == regime]
-            cells.append(_build_cell(dimension, regime, sub_df, feature_col, forward_return_col, min_obs, n_blocks))
+            cells.append(_build_cell(dimension, regime, sub_df, feature_col, forward_return_col, min_obs, n_blocks, **kw))
 
     # claude code changed: FDR applied ONCE across every cell in this
     # family that produced a real p-value (sufficient sample) — a cell
     # skipped for insufficient sample is never silently treated as
     # "not significant," it's excluded from the family entirely, exactly
     # like every other engine in this codebase treats an untestable cell.
-    testable = [c for c in cells if c.ic_pvalue is not None]
+    # claude code changed: D-2 — the family correction runs on the BLOCK-PERMUTATION p (decision), never the IID p.
+    testable = [c for c in cells if c.ic_pvalue_block is not None]
     if testable:
-        raw_pvalues = [c.ic_pvalue for c in testable]
+        raw_pvalues = [c.ic_pvalue_block for c in testable]
         reject, adjusted, _, _ = multipletests(raw_pvalues, alpha=alpha, method="fdr_bh")
         for cell, adj_p, passed in zip(testable, adjusted, reject):
             cell.ic_pvalue_fdr = float(adj_p)
             cell.passes_fdr = bool(passed)
 
-    n_significant_raw = sum(1 for c in testable if c.ic_pvalue < alpha)
+    n_significant_raw = sum(1 for c in testable if c.ic_pvalue_block < alpha)   # claude code changed: D-2
     n_surviving_fdr = sum(1 for c in testable if c.passes_fdr)
 
     return RegimeConditionalICReport(
@@ -238,7 +265,9 @@ def compute_regime_conditional_ic(
         fdr_family_definition=(
             f"one family = every regime cell (across dimensions {list(regime_dimensions)}, "
             f"plus the OVERALL row) tested for feature={feature_col!r}, horizon={forward_return_col!r} — "
-            f"{len(testable)} cells with sufficient sample corrected together via Benjamini-Hochberg FDR"
+            f"{len(testable)} cells with sufficient sample corrected together via Benjamini-Hochberg FDR on "
+            f"block-permutation p-values (D-2: block = {d10_block_length(horizon)}, B = {n_perm}, seed = {seed}, "
+            f"{INFERENCE_METHOD_VERSION})"
         ),
         cells=cells, n_tested=len(testable), n_significant_raw=n_significant_raw, n_surviving_fdr=n_surviving_fdr,
         alpha=alpha,
@@ -247,21 +276,23 @@ def compute_regime_conditional_ic(
 
 def test_regime_interaction(
     df: pd.DataFrame, feature_col: str, forward_return_col: str, regime_col: str, min_obs_per_group: int = 30,
+    horizon_candles: Optional[int] = None,   # claude code changed: D-2 — label horizon (parsed if None; fails closed)
+    n_perm: int = CONFIRMATORY_B,            # claude code changed: D-3 — B = 999
+    seed: int = 0,                           # claude code changed: D-2 — recorded
 ) -> Dict:
     """
-    Phase 10 — does the feature-return relationship ACTUALLY differ by
-    regime, tested directly (a nested-model F-test), not inferred from
-    "one regime was significant and another wasn't." Fits:
+    Phase 10 — does the feature-return relationship ACTUALLY differ by regime, tested directly as a
+    nested-model comparison:
         restricted: forward_return ~ feature + C(regime)
         full:       forward_return ~ feature * C(regime)
-    and compares them via statsmodels' anova_lm — a standard, well-
-    established technique (not homemade math) for testing whether an
-    interaction term's joint contribution is significant.
-    """
-    import statsmodels.formula.api as smf
-    from statsmodels.stats.anova import anova_lm
 
-    clean = df[[feature_col, forward_return_col, regime_col]].dropna()
+    claude code changed: owner decision D-2 — the DECISION p is now a Freedman–Lane block permutation test
+    (the standard permutation test of a partial effect): residuals of the RESTRICTED model are permuted in
+    contiguous chronological blocks of max(4h, 24) candles (D-10) and added back to its fitted values; the
+    F statistic is recomputed for each of B replicates; p = (k+1)/(B+1). The classical ANOVA F-test p
+    (iid, homoskedastic errors — invalid under overlapping labels, F-02) is kept ONLY as a descriptive field.
+    """
+    clean = df[[feature_col, forward_return_col, regime_col]].dropna().sort_index()
     clean = clean.rename(columns={feature_col: "_feature", forward_return_col: "_fwd_ret", regime_col: "_regime"})
 
     group_counts = clean["_regime"].value_counts()
@@ -275,12 +306,42 @@ def test_regime_interaction(
             "f_statistic": None, "p_value": None, "interaction_significant": None, "n_obs": len(clean),
         }
 
+    # Outside the try: an unknown horizon is a caller error and must raise (fail closed), not read as MODEL_FAILED.
+    horizon = int(horizon_candles) if horizon_candles is not None else _horizon_from_col(forward_return_col)
+    block = d10_block_length(horizon)
     try:
-        restricted = smf.ols("_fwd_ret ~ _feature + C(_regime)", data=clean).fit()
-        full = smf.ols("_fwd_ret ~ _feature * C(_regime)", data=clean).fit()
-        anova_result = anova_lm(restricted, full)
-        f_stat = float(anova_result["F"].iloc[-1])
-        p_value = float(anova_result["Pr(>F)"].iloc[-1])
+        y = clean["_fwd_ret"].to_numpy(float)
+        x = clean["_feature"].to_numpy(float)
+        dummies = pd.get_dummies(clean["_regime"], drop_first=True, dtype=float).to_numpy()
+        Xr = np.column_stack([np.ones(len(y)), x, dummies])
+        Xf = np.column_stack([Xr, dummies * x[:, None]])
+        if len(y) < 2 * block:
+            return {"status": "INSUFFICIENT_SAMPLE", "reason": f"need >= 2 blocks of {block}; n = {len(y)}",
+                    "f_statistic": None, "p_value": None, "interaction_significant": None, "n_obs": len(clean)}
+        Qr, _ = np.linalg.qr(Xr)
+        Qf, _ = np.linalg.qr(Xf)
+        df1, df2 = Xf.shape[1] - Xr.shape[1], len(y) - Xf.shape[1]
+        if df1 < 1 or df2 < 1:
+            raise ValueError(f"degenerate design: df1={df1}, df2={df2}")
+
+        def f_stat(v):
+            rss_r = float(np.sum((v - Qr @ (Qr.T @ v)) ** 2))
+            rss_f = float(np.sum((v - Qf @ (Qf.T @ v)) ** 2))
+            return ((rss_r - rss_f) / df1) / (rss_f / df2)
+
+        f_obs = f_stat(y)
+        fitted_r = Qr @ (Qr.T @ y)
+        resid_r = y - fitted_r
+        nb = int(np.ceil(len(y) / block))
+        blocks = [resid_r[i * block:(i + 1) * block] for i in range(nb)]
+        rng = np.random.default_rng(seed)
+        k = 0
+        for _ in range(n_perm):
+            e = np.concatenate([blocks[i] for i in rng.permutation(nb)])[:len(y)]
+            k += f_stat(fitted_r + e) >= f_obs
+        p_value = (k + 1) / (n_perm + 1)
+        from scipy.stats import f as f_dist
+        p_iid = float(f_dist.sf(f_obs, df1, df2))
     except Exception as e:
         return {
             "status": "MODEL_FAILED", "reason": f"{type(e).__name__}: {e}",
@@ -289,9 +350,11 @@ def test_regime_interaction(
 
     return {
         "status": "OK",
-        "f_statistic": f_stat, "p_value": p_value,
+        "f_statistic": float(f_obs), "p_value": float(p_value),
         "interaction_significant": bool(p_value < 0.05),
-        "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — OLS ANOVA F-test assumes iid, homoskedastic errors; invalid under overlapping labels
+        "pvalue_basis": "FREEDMAN_LANE_BLOCK_PERMUTATION_D2",   # claude code changed: D-2 — the decision p
+        "block": block, "n_perm": int(n_perm), "seed": int(seed), "method_version": INFERENCE_METHOD_VERSION,
+        "p_value_iid_anova": p_iid, "iid_basis": IID_PVALUE_BASIS,   # descriptive only (F-02)
         "n_obs": len(clean), "n_regimes_tested": int(clean["_regime"].nunique()),
         "regimes_tested": sorted(clean["_regime"].unique().tolist()),
     }

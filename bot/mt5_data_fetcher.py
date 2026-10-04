@@ -57,6 +57,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import pandas as pd
+from bot.quant_core.research_zones import seal_before_write   # claude code changed: D-8
 
 # claude code changed: new — reuse, not reimplementation. Same universe,
 # same filename convention, same gap-detection logic as the Yahoo fetcher
@@ -356,6 +357,7 @@ def download_all_mt5_symbols() -> dict:
                 other_gaps = [g for g in gaps if not g["likely_weekend"]]
 
                 filepath = OUTPUT_DIR / symbol_to_filename(symbol)
+                df = seal_before_write(df, filepath)   # claude code changed: D-8 — sealed forward holdout
                 df.to_csv(filepath, index=False)
 
                 # claude code changed: Data-Layer Audit Step 1 — records that

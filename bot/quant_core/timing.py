@@ -52,6 +52,26 @@ class TimingContract:
         return f"fwd_ret_{self.execution_price}_d{self.execution_delay_bars}"
 
 
+# claude code changed: 2026-10-03 owner decision D-1 (DECISION_SHEET_D1-D11_2026-10-03.md, signed) — the
+# canonical execution timing for EVERY research label (feature, cross-sectional, contagion, derivatives, PCA):
+# signal at bar t's close, fill at bar t+1's OPEN (d = 1). d = 2 is a sensitivity check only, never used for
+# selection; d = 0 exists only as an explicitly labelled diagnostic (allow_same_close_diagnostic).
+RESEARCH_LABEL_CONTRACT = TimingContract(execution_delay_bars=1, execution_price="open")
+SENSITIVITY_CONTRACT_D2 = TimingContract(execution_delay_bars=2, execution_price="open")
+LABEL_TIMING_BASIS = "D1_SIGNAL_CLOSE_t__FILL_OPEN_t+1"
+
+
+def research_forward_return(df: pd.DataFrame, horizon: int,
+                            contract: TimingContract = RESEARCH_LABEL_CONTRACT) -> pd.Series:
+    """The research label under the D-1 contract: P_open(t+1+h) / P_open(t+1) − 1. Fails closed when the
+    frame has no `open` column — there is deliberately no fallback to close (that would silently revert to
+    the zero-latency label F-04 / D-1 forbids)."""
+    if contract.execution_price not in df.columns:
+        raise ValueError(f"research label needs a '{contract.execution_price}' column (D-1: fill at the next "
+                         f"bar's open) — no fallback to close")
+    return forward_label(df, horizon, contract)
+
+
 def forward_label(df: pd.DataFrame, horizon: int, contract: TimingContract) -> pd.Series:
     """Forward return earned by a position decided at bar t's close, filled at
     bar t+d's execution price and exited h bars after the fill:

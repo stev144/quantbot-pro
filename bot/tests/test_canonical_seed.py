@@ -27,6 +27,11 @@ from bot.research.parity_forensics import _cfg
 
 HARNESS_L = 168                                   # test-only (short synthetic series), NOT the protocol value — the canonical L is 1000 (owner baseline)
 P = CANONICAL.with_overrides(init_window_candles=HARNESS_L)
+# claude code changed: D-8 — the seed is bound to the selection-zone start. dataset_a() starts at the canonical
+# init-window start, so the S start is position 1000 (the canonical L); the harness init window is the
+# HARNESS_L candles before it. Tests target these positions instead of assuming 'seed = candle L'.
+SEED_POS = CANONICAL.require_init_window()
+INIT0 = SEED_POS - HARNESS_L
 HOUR_MS = 3_600_000
 
 
@@ -65,18 +70,20 @@ class CausalInitLeakageTests(SimpleTestCase):
 
     def test_theta0_equals_independent_lstsq_on_the_init_window_only(self):
         _, seed = _canonical(self.ca, self.cb)
-        la, lb = np.log(self.ca.to_numpy()[:HARNESS_L]), np.log(self.cb.to_numpy()[:HARNESS_L])
+        la, lb = np.log(self.ca.to_numpy()[INIT0:SEED_POS]), np.log(self.cb.to_numpy()[INIT0:SEED_POS])   # claude code changed: D-8
         X = np.column_stack([lb, np.ones_like(lb)])
         expected, *_ = np.linalg.lstsq(X, la, rcond=None)      # independent derivation
         np.testing.assert_allclose([seed.beta0, seed.alpha0], expected, rtol=1e-10, atol=1e-12)
-        self.assertEqual(pd.Timestamp(seed.seed_timestamp), self.ca.index[HARNESS_L])
-        self.assertEqual(pd.Timestamp(seed.init_window_end), self.ca.index[HARNESS_L - 1])
+        self.assertEqual(pd.Timestamp(seed.seed_timestamp), self.ca.index[SEED_POS])   # claude code changed: D-8
+        self.assertEqual(pd.Timestamp(seed.seed_timestamp), CANONICAL.require_selection_start())
+        self.assertEqual(pd.Timestamp(seed.init_window_start), self.ca.index[INIT0])
+        self.assertEqual(pd.Timestamp(seed.init_window_end), self.ca.index[SEED_POS - 1])
 
     def test_future_candles_cannot_change_the_seed(self):
         _, s1 = _canonical(self.ca, self.cb)
         ca2, cb2 = self.ca.copy(), self.cb.copy()
-        ca2.iloc[HARNESS_L:] *= np.linspace(1.0, 3.0, len(ca2) - HARNESS_L)   # violent change from the seed candle on
-        cb2.iloc[HARNESS_L:] *= 0.5
+        ca2.iloc[SEED_POS:] *= np.linspace(1.0, 3.0, len(ca2) - SEED_POS)   # violent change from the seed candle on   # claude code changed: D-8
+        cb2.iloc[SEED_POS:] *= 0.5
         b2, s2 = _canonical(ca2, cb2)
         self.assertEqual((s1.beta0, s1.alpha0), (s2.beta0, s2.alpha0))         # bit-identical
         np.testing.assert_array_equal(b2["kalman_beta_pred"].iloc[0], s1.beta0)   # the first prior is θ₀ itself
@@ -84,9 +91,24 @@ class CausalInitLeakageTests(SimpleTestCase):
     def test_positive_control_init_window_candles_do_change_the_seed(self):
         _, s1 = _canonical(self.ca, self.cb)
         ca2 = self.ca.copy()
-        ca2.iloc[10] *= 1.05
+        ca2.iloc[INIT0 + 10] *= 1.05                         # inside the init window   # claude code changed: D-8
         _, s2 = _canonical(ca2, self.cb)
         self.assertNotEqual(s1.beta0, s2.beta0)
+
+    def test_candles_before_the_init_window_cannot_change_the_seed(self):   # claude code changed: D-8 — new
+        _, s1 = _canonical(self.ca, self.cb)
+        ca2 = self.ca.copy()
+        ca2.iloc[:INIT0] *= 1.7                                  # pre-init data is ignored by the zone-bound seed
+        _, s2 = _canonical(ca2, self.cb)
+        self.assertEqual((s1.beta0, s1.alpha0), (s2.beta0, s2.alpha0))
+
+    def test_seed_refused_when_history_does_not_cover_the_init_window(self):   # claude code changed: D-8 — new (e.g. FIDA)
+        with self.assertRaisesRegex(ValueError, "too little history"):
+            causal_init(np.log(self.ca.iloc[INIT0 + 1:]), np.log(self.cb.iloc[INIT0 + 1:]), P)   # unit-level: the D-8 rule itself
+
+    def test_seed_refused_when_the_selection_start_is_not_in_the_data(self):   # claude code changed: D-8 — new
+        with self.assertRaisesRegex(ValueError, "not in the data"):
+            causal_init(np.log(self.ca.iloc[SEED_POS + 1:]), np.log(self.cb.iloc[SEED_POS + 1:]), P)
 
     def test_the_prohibited_design_is_detected_by_this_test(self):
         """Adversarial: the forbidden seed — OLS over the whole span assigned to
@@ -95,7 +117,7 @@ class CausalInitLeakageTests(SimpleTestCase):
         def prohibited(ca, cb):
             return ols_theta(np.log(ca.to_numpy()), np.log(cb.to_numpy()))
         ca2 = self.ca.copy()
-        ca2.iloc[HARNESS_L:] *= 1.5
+        ca2.iloc[SEED_POS:] *= 1.5   # claude code changed: D-8
         self.assertFalse(np.array_equal(prohibited(self.ca, self.cb), prohibited(ca2, self.cb)))
 
     def test_output_starts_at_the_seed_candle(self):
@@ -110,9 +132,21 @@ class CausalInitLeakageTests(SimpleTestCase):
 
     def test_unobserved_seed_candle_is_refused(self):
         ca2 = self.ca.copy()
-        ca2.iloc[HARNESS_L] = np.nan
+        ca2.iloc[SEED_POS] = np.nan   # claude code changed: D-8 — the seed candle
         with self.assertRaisesRegex(ValueError, "not observed"):
             causal_init(np.log(ca2), np.log(self.cb), P)
+
+    def test_seed_record_off_the_selection_start_is_rejected(self):   # claude code changed: D-8 — new
+        from dataclasses import replace as dc_replace
+        _, seed = _canonical(self.ca, self.cb)
+        self.assertTrue(validate_seed(seed, pair_name=seed.pair_name, protocol=P).ok)
+        h = pd.Timedelta(hours=1)
+        moved = dc_replace(seed, seed_timestamp=(seed.seed_ts + h).isoformat(),
+                           init_window_start=(pd.Timestamp(seed.init_window_start) + h).isoformat(),
+                           init_window_end=(pd.Timestamp(seed.init_window_end) + h).isoformat())   # still causal, still L long
+        r = validate_seed(moved, pair_name=seed.pair_name, protocol=P)
+        self.assertFalse(r.ok)
+        self.assertIn("selection-zone start", r.reason)
 
     def test_deterministic_seed(self):
         (b1, s1), (b2, s2) = _canonical(self.ca, self.cb), _canonical(self.ca, self.cb)
@@ -175,13 +209,13 @@ class CanonicalSeedReplayTests(SimpleTestCase):
 
     def test_exchange_data_not_reproducing_theta0_is_refused(self):
         ca2 = self.ca.copy()
-        ca2.iloc[20] *= 1.001                      # one init-window close differs from the research data
+        ca2.iloc[INIT0 + 20] *= 1.001              # one init-window close differs from the research data   # claude code changed: D-8
         sess, _ = self._run(self.seed, closes={"X/USDT": ca2, "Y/USDT": self.cb})
         self.assertFalse(sess.seed_ok)
         self.assertIn("data-version mismatch", sess.seed_refusal)
 
     def test_history_not_reaching_the_init_window_refuses_entries(self):
-        closes = {"X/USDT": self.ca.iloc[5:], "Y/USDT": self.cb.iloc[5:]}
+        closes = {"X/USDT": self.ca.iloc[INIT0 + 5:], "Y/USDT": self.cb.iloc[INIT0 + 5:]}   # claude code changed: D-8 — history starts inside the init window
         sess, _ = self._run(self.seed, closes=closes)
         self.assertFalse(sess.seed_ok)
 

@@ -42,6 +42,7 @@
 import logging
 import numpy as np
 import pandas as pd
+from bot.quant_core.timing import research_forward_return   # claude code changed: D-1
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -610,16 +611,10 @@ class FeatureCalculator:
         
         forward_return = (price_N_periods_later / current_price) - 1
         """
-        try:
-            close = df['close']
-            future_close = close.shift(-periods)
-            
-            forward_return = (future_close / close) - 1
-            
-            return forward_return
-        except Exception as e:
-            logger.debug(f"Error calculating forward return: {e}")
-            return pd.Series(np.nan, index=df.index)
+        # claude code changed: owner decision D-1 — was close(t+N)/close(t) − 1 (fill at the signal print,
+        # zero latency, F-04). Now the canonical research label: fill at the NEXT bar's open,
+        # open(t+1+N)/open(t+1) − 1. No try/except: a missing 'open' must raise, never become silent NaNs.
+        return research_forward_return(df, periods).rename(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════

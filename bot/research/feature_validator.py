@@ -32,6 +32,7 @@ import numpy as np                              # Numerical operations
 from typing import Dict, List, Tuple, Optional  # Type hints
 from pathlib import Path                       # Path handling
 from scipy import stats                        # Statistical tests (t-test, Mann-Whitney)
+from bot.quant_core.inference import CONFIRMATORY_B, d10_block_length   # claude code changed: D-2/D-3/D-10
 from statsmodels.stats.multitest import multipletests  # Multiple testing correction
 from bot.quant_core.targets import assert_label_admissible   # claude code changed: Stage 2D — retired (non-tradeable) labels are refused as evidence
 from dataclasses import dataclass, asdict      # Type-safe data structures
@@ -163,7 +164,7 @@ MIN_SHARPE_CONTRIBUTION = 0.5                 # Feature should contribute at lea
 # fix. N_PERMUTATIONS matches permutation_test_engine.py's
 # DEFAULT_N_PERMUTATIONS (100) — same convention already established
 # elsewhere in this research pipeline, not picked independently.
-BLOCK_PERMUTATION_N: int = 100
+BLOCK_PERMUTATION_N: int = CONFIRMATORY_B   # claude code changed: owner decision D-3 — B = 999 per confirmatory test (was 100: p floor 0.0099, unresolvable against family corrections, F-07)
 DEFAULT_HORIZON_CANDLES_FALLBACK: int = 4     # Used only if forward_return_col's name doesn't parse to a number
 
 
@@ -830,7 +831,7 @@ class FeatureValidator:
             q1_mask=q1_mask,
             q4_mask=q4_mask,
             real_spread=spread,
-            block_size=horizon_candles,
+            block_size=d10_block_length(horizon_candles),   # claude code changed: owner decision D-10 — block = max(4·h, 24) (was h)
         )
 
         # ── STEP 4: Economic significance check (CRITICAL!) ────────────────────

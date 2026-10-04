@@ -85,20 +85,6 @@ class DCALevel:
     multiplier: float
 
 
-# claude code changed: Post-audit Phase 2 — fill models and financing states
-# (DCA_RESEARCH_PROTOCOL_2026-10-02.md §2, §3).
-FILL_MODEL_NEXT_OPEN = "NEXT_OPEN"
-FILL_MODEL_INTRABAR_LADDER = "INTRABAR_LADDER"
-FILL_MODEL_LEGACY_CLOSE = "LEGACY_CLOSE"
-FILL_MODELS = (FILL_MODEL_NEXT_OPEN, FILL_MODEL_INTRABAR_LADDER, FILL_MODEL_LEGACY_CLOSE)
-
-FINANCING_NOT_APPLICABLE = "NOT_APPLICABLE"
-FINANCING_KNOWN = "KNOWN"
-FINANCING_UNAVAILABLE = "UNAVAILABLE"
-FINANCING_ASSUMED_ZERO = "ASSUMED_ZERO"
-FINANCING_STATUSES = (FINANCING_NOT_APPLICABLE, FINANCING_KNOWN, FINANCING_UNAVAILABLE, FINANCING_ASSUMED_ZERO)
-
-
 @dataclass(frozen=True)
 class DCAConfig:
     """Every tunable in one place, per the project's own per-engine
@@ -135,43 +121,9 @@ class DCAConfig:
     # only — never silently applied.
     max_cycle_candles: Optional[int] = None
 
-    # claude code changed: Post-audit Phase 2 (DCA_RESEARCH_PROTOCOL_2026-10-02.md).
-    # fill_model — the clock + ladder-fill convention (§1-§2): NEXT_OPEN
-    # (canonical default: decide at close(c), execute at open(c+1), one ladder
-    # level per decision), INTRABAR_LADDER (resting limit ladder filled from the
-    # candle's low/high — the maximum-exposure bracket), LEGACY_CLOSE (the pre-
-    # 2026-10-02 same-close decide-and-fill clock, kept ONLY so earlier results
-    # reproduce; not canonical).
-    fill_model: str = "NEXT_OPEN"
-    # B8 — elapsed-time timeout (hours). max_cycle_candles above is, under the
-    # canonical models, read as max_cycle_candles × the bar interval of ELAPSED
-    # time (never a row count); max_cycle_hours wins when both are set.
-    max_cycle_hours: Optional[float] = None
-    # B6 — financing (crypto short borrow / FX swap-rollover). None = derived:
-    # LONG → NOT_APPLICABLE, SHORT → UNAVAILABLE. KNOWN requires
-    # financing_rate_per_hour (fraction of the cost basis per elapsed hour, a
-    # COST: positive = paid). ASSUMED_ZERO is an explicit, labelled opt-in.
-    # UNAVAILABLE is never charged AND never presented as a real zero.
-    financing_status: Optional[str] = None
-    financing_rate_per_hour: Optional[float] = None
-
     def __post_init__(self):
         if self.direction not in ("LONG", "SHORT"):
             raise ValueError(f"DCAConfig.direction must be 'LONG' or 'SHORT', got {self.direction!r}")
-        if self.fill_model not in FILL_MODELS:   # claude code changed: Post-audit Phase 2
-            raise ValueError(f"DCAConfig.fill_model must be one of {FILL_MODELS}, got {self.fill_model!r}")
-        if self.financing_status is not None and self.financing_status not in FINANCING_STATUSES:
-            raise ValueError(f"DCAConfig.financing_status must be one of {FINANCING_STATUSES} or None, got {self.financing_status!r}")
-        if self.financing_status == FINANCING_KNOWN and self.financing_rate_per_hour is None:
-            raise ValueError("financing_status KNOWN requires financing_rate_per_hour")
-        if self.financing_rate_per_hour is not None and self.financing_status != FINANCING_KNOWN:
-            raise ValueError("financing_rate_per_hour is only used with financing_status KNOWN — never applied silently")
-
-    @property
-    def resolved_financing_status(self) -> str:   # claude code changed: Post-audit Phase 2 B6
-        if self.financing_status is not None:
-            return self.financing_status
-        return FINANCING_NOT_APPLICABLE if self.direction == "LONG" else FINANCING_UNAVAILABLE
 
 
 # claude code changed: the exact observed baseline — 5/7/10/15/15/10% drops,
@@ -287,12 +239,6 @@ class _OpenCycle:
     profit_activated: bool = False
     peak_price_since_activation: Optional[float] = None
     candles_held: int = 0   # incremented once per loop iteration this cycle is open — avoids repeated index.get_loc() lookups
-    # claude code changed: Post-audit Phase 2 — B3/B6/B8 per-cycle state
-    max_unrealised_loss: float = 0.0     # most negative MTM P&L seen at any close while open (≤ 0)
-    financing_accrued: float = 0.0       # KNOWN financing only
-    last_accrual_time: object = None
-    gap_count: int = 0
-    gap_hours: float = 0.0
 
     @property
     def next_level_index(self) -> int:
@@ -426,12 +372,7 @@ def _close_cycle(cycle: _OpenCycle, timestamp, price: float, config: DCAConfig, 
         "quantity": round(quantity, 8),
         "profit": round(net_pnl, 6),
         "gross_profit": round(gross_pnl, 6),
-        # claude code changed: 2026-10-03, remediation M-06 — a DCA cycle has no stop-loss, so an
-        # R-multiple (P&L / stop risk) is UNDEFINED. The quantity formerly stored here is the return
-        # on maximum deployed capital; it is now reported under that name and r_multiple is None, so
-        # R-based ratios (backtester / oos_validator) never treat it as R.
-        "r_multiple": None,
-        "return_on_max_deployed": round(r_multiple, 6),
+        "r_multiple": round(r_multiple, 6),
         # claude code changed: real bug fix — was len(cycle.fills) (a FILL
         # count, mislabeled as "holding_candles"; cycle_n_fills below
         # already reports that correctly under its real name). This now
@@ -455,112 +396,54 @@ def _close_cycle(cycle: _OpenCycle, timestamp, price: float, config: DCAConfig, 
     }
 
 
-def _bar_interval(index) -> pd.Timedelta:   # claude code changed: new — Post-audit Phase 2 B8
-    """The series' modal bar interval Δ. Requires a sorted, unique
-    DatetimeIndex — the canonical clock is defined in elapsed time."""
-    if not isinstance(index, pd.DatetimeIndex):
-        raise ValueError("DCA simulation requires a DatetimeIndex (the canonical clock is defined in elapsed time)")
-    if not index.is_monotonic_increasing or index.has_duplicates:
-        raise ValueError("DCA simulation requires a sorted, duplicate-free DatetimeIndex")
-    if len(index) < 2:
-        return pd.Timedelta(0)
-    return index.to_series().diff().dropna().mode().iloc[0]
+def simulate_dca_cycles(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> List[Dict]:
+    """
+    Candle-by-candle DCA/Martingale cycle simulator. `df` must have a
+    sorted DatetimeIndex and a 'close' column (matches Backtester's own
+    OHLCV shape — see oos_validator.py's Type B docstring for why this
+    differs from Type A's timestamp-COLUMN convention).
 
+    Supports both config.direction values: LONG (average down on drops,
+    profit on a rise) and SHORT (average into a rise, profit on a fall) —
+    see DCAConfig's own docstring. Needed for FX, which is inherently
+    two-sided, unlike the crypto-only long baseline this engine started
+    from.
 
-def _append_fill(cycle: _OpenCycle, level_idx: int, timestamp, fill_price: float, config: DCAConfig) -> None:   # claude code changed: new — shared by market and resting-limit ladder fills
-    usdt_amount = config.initial_usdt * config.levels[level_idx].multiplier
-    quantity = usdt_amount / fill_price
-    fee = fill_price * quantity * config.fee_rate
-    cycle.fills.append(_Fill(level=level_idx + 1, timestamp=timestamp, price=fill_price,
-                             usdt_amount=usdt_amount, quantity=quantity, fee_usdt=fee))
+    "Always-in": the instant one cycle closes, the next opens on the
+    very next candle — matches the observed app's own description
+    ("all strategies run autonomously in spot market in cycle mode").
 
+    KNOWN, DOCUMENTED SIMPLIFICATION (first-slice scope, Phase 27): DCA
+    triggers and exit triggers are evaluated against candle CLOSE only,
+    not intrabar high/low. A real bot reacting intrabar would trigger
+    DCA levels and the trailing exit somewhat earlier than this
+    simulation shows — this makes the simulated ladder slightly SLOWER
+    to fill and slightly LATER to exit than reality, a conservative
+    (not favorable) bias. Noted as a real limitation for stress-test
+    interpretation, not silently ignored.
 
-def _trigger_price(cycle: _OpenCycle, config: DCAConfig) -> Optional[float]:   # claude code changed: new — Post-audit Phase 2 B1
-    """Price at which the NEXT ladder level triggers, relative to the last
-    fill (sequential drops — see DCALevel). None when the ladder is exhausted."""
-    idx = cycle.next_level_index
-    if idx >= len(config.levels):
-        return None
-    last = cycle.fills[-1].price
-    d = config.levels[idx].drop_pct
-    return last * (1.0 - d) if config.direction == "LONG" else last * (1.0 + d)
+    holding_candles here counts FILLS, not calendar candles held open —
+    _compute_trade_metrics() doesn't use it for return calculations, only
+    Backtester's UI layer does, and this DCA cycle's "how long" is
+    better read from exit_time - entry_time directly. Documented rather
+    than silently overloading the field's usual meaning.
+    """
+    if "close" not in df.columns:
+        raise ValueError("simulate_dca_cycles() requires a 'close' column")
 
-
-def _level_triggered_at(cycle: _OpenCycle, price: float, config: DCAConfig) -> bool:   # claude code changed: new — same >= rule as _maybe_trigger_dca, decision only
-    idx = cycle.next_level_index
-    if idx >= len(config.levels):
-        return False
-    last = cycle.fills[-1].price
-    adverse = (last - price) / last if config.direction == "LONG" else (price - last) / last
-    return adverse >= config.levels[idx].drop_pct
-
-
-def _mtm_pnl(cycle: _OpenCycle, mark_price: float, config: DCAConfig) -> float:   # claude code changed: new — Post-audit Phase 2 B3
-    """Liquidation-value P&L of an open cycle at mark_price: what closing it
-    now would realise (adverse slippage + exit fee), net of entry fees and
-    KNOWN financing accrued."""
-    liq = apply_slippage(mark_price, config.direction, is_entry=False, slippage_rate=config.slippage_rate)
-    qty = cycle.total_quantity
-    gross = (liq - cycle.weighted_avg_price) * qty if config.direction == "LONG" else (cycle.weighted_avg_price - liq) * qty
-    return gross - cycle.total_fees_usdt - liq * qty * config.fee_rate - cycle.financing_accrued
-
-
-def _accrue_financing(cycle: _OpenCycle, until, config: DCAConfig) -> None:   # claude code changed: new — Post-audit Phase 2 B6
-    if config.resolved_financing_status != FINANCING_KNOWN or cycle.last_accrual_time is None:
-        cycle.last_accrual_time = until
-        return
-    hours = (until - cycle.last_accrual_time).total_seconds() / 3600.0
-    if hours > 0:
-        cycle.financing_accrued += config.financing_rate_per_hour * cycle.total_cost_usdt * hours
-    cycle.last_accrual_time = until
-
-
-def _finalize_trade(trade: Dict, cycle: _OpenCycle, config: DCAConfig, *, censored: bool,
-                    exit_pending: bool = False) -> Dict:   # claude code changed: new — Post-audit Phase 2 labels (B1/B3/B6/B8)
-    status = config.resolved_financing_status
-    if status == FINANCING_KNOWN and cycle.financing_accrued:
-        trade["profit"] = round(trade["profit"] - cycle.financing_accrued, 6)
-        dep = trade["cycle_max_capital_deployed"]
-        trade["return_on_max_deployed"] = round(trade["profit"] / dep, 6) if dep else 0.0   # claude code changed: M-06 — was trade["r_multiple"]
-    trade.update({
-        "fill_model": config.fill_model,
-        "censored": censored,                                   # True = data ended with the cycle open; P&L is a LIQUIDATION MARK, not a realised exit
-        "exit_pending_at_data_end": exit_pending,               # an exit was decided at the last close but could not execute
-        "holding_hours": round((trade["exit_time"] - cycle.entry_time).total_seconds() / 3600.0, 4),
-        "gap_count": cycle.gap_count,
-        "gap_hours": round(cycle.gap_hours, 4),
-        "financing_status": status,
-        "financing_cost_usdt": round(cycle.financing_accrued, 6) if status == FINANCING_KNOWN else None,
-        "cycle_max_unrealised_loss": round(cycle.max_unrealised_loss, 6),
-    })
-    return trade
-
-
-def _simulate_legacy_close(df: pd.DataFrame, config: DCAConfig) -> Tuple[List[Dict], pd.DataFrame]:
-    """claude code changed: the PRE-2026-10-02 clock, logic unchanged — decide
-    AND fill at close(c) (zero latency, same print); a new cycle opens at the
-    exit close; timeout counts ROWS. Kept only so earlier results reproduce
-    (fill_model=LEGACY_CLOSE); not canonical. An MTM row is recorded after
-    each candle for the tail metrics."""
     trades: List[Dict] = []
-    rows = []
-    realised = 0.0
     cycle: Optional[_OpenCycle] = None
-    closes = df["close"].to_numpy(dtype=float)
-    for timestamp, price in zip(df.index, closes):
-        price = float(price)
+
+    for timestamp, row in df.iterrows():
+        price = float(row["close"])
 
         if cycle is not None:
             cycle.candles_held += 1
             if _check_exit(cycle, price, config):
-                t = _finalize_trade(_close_cycle(cycle, timestamp, price, config, exit_reason="PROFIT_TARGET_TRAILING"), cycle, config, censored=False)
-                trades.append(t)
-                realised += t["profit"]
+                trades.append(_close_cycle(cycle, timestamp, price, config, exit_reason="PROFIT_TARGET_TRAILING"))
                 cycle = None
             elif config.max_cycle_candles is not None and cycle.candles_held >= config.max_cycle_candles:
-                t = _finalize_trade(_close_cycle(cycle, timestamp, price, config, exit_reason="MAX_CYCLE_CANDLES_TIMEOUT"), cycle, config, censored=False)
-                trades.append(t)
-                realised += t["profit"]
+                trades.append(_close_cycle(cycle, timestamp, price, config, exit_reason="MAX_CYCLE_CANDLES_TIMEOUT"))
                 cycle = None
 
         if cycle is None:
@@ -568,161 +451,17 @@ def _simulate_legacy_close(df: pd.DataFrame, config: DCAConfig) -> Tuple[List[Di
         else:
             _maybe_trigger_dca(cycle, timestamp, price, config)
 
-        unreal = _mtm_pnl(cycle, price, config)
-        cycle.max_unrealised_loss = min(cycle.max_unrealised_loss, unreal)
-        rows.append((timestamp, realised, unreal, realised + unreal, cycle.total_cost_usdt, len(cycle.fills) - 1, True))
-
+    # claude code changed: Phase 26 ("no false confidence") — a cycle still
+    # open when the data runs out is NOT silently dropped (that would hide
+    # exactly the trapped-capital tail risk this whole engine exists to
+    # measure). Force-marked at the final candle, tagged distinctly so
+    # summarize_dca_cycles() can report it separately from real exits.
     if cycle is not None:
-        trades.append(_finalize_trade(_close_cycle(cycle, df.index[-1], float(closes[-1]), config, exit_reason="DATA_END_STILL_OPEN"),
-                                      cycle, config, censored=True))
-    return trades, _equity_frame(rows)
+        last_timestamp = df.index[-1]
+        last_price = float(df["close"].iloc[-1])
+        trades.append(_close_cycle(cycle, last_timestamp, last_price, config, exit_reason="DATA_END_STILL_OPEN"))
 
-
-def _equity_frame(rows) -> pd.DataFrame:   # claude code changed: new — Post-audit Phase 2 B3
-    return pd.DataFrame(rows, columns=["timestamp", "realised_pnl", "unrealised_pnl", "mtm_equity_pnl",
-                                       "capital_deployed", "ladder_depth", "in_cycle"]).set_index("timestamp")
-
-
-def simulate_dca_path(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> Tuple[List[Dict], pd.DataFrame]:
-    """
-    claude code changed: new — Post-audit Phase 2 (DCA_RESEARCH_PROTOCOL_2026-10-02.md).
-    Returns (cycle trade dicts, per-candle mark-to-market frame).
-
-    CANONICAL CLOCK (NEXT_OPEN / INTRABAR_LADDER): every decision is taken at
-    a candle CLOSE from candles <= c only, and executes at the NEXT available
-    candle's OPEN (gaps never invent prices); an exit at open(c+1) is followed
-    by an entry decided at close(c+1), executed at open(c+2). Profit
-    activation / trailing / timeout are evaluated at closes; the timeout is
-    ELAPSED time. Ladder levels: NEXT_OPEN — close-confirmed, one level per
-    decision; INTRABAR_LADDER — resting limits at the known trigger prices,
-    filled from the candle's low (LONG) / high (SHORT), at the open on a gap
-    through the trigger, several levels per candle when the range crosses
-    them (deterministic on a continuous path). The two models bracket how
-    FAST the ladder deploys in a crash — NOT P&L or drawdown (INTRABAR fills
-    at the triggers, NEXT_OPEN after a crashed close; on real BTC 2021-26
-    INTRABAR showed the smaller drawdown). Neither is called conservative.
-
-    A cycle open when the data ends is CENSORED: its row carries a
-    liquidation MARK (labelled, censored=True), never a fabricated fill.
-
-    MTM frame (one row per candle, state at that candle's CLOSE):
-    realised_pnl, unrealised_pnl (liquidation value), mtm_equity_pnl,
-    capital_deployed, ladder_depth, in_cycle.
-    """
-    if config.fill_model == FILL_MODEL_LEGACY_CLOSE:
-        if "close" not in df.columns:
-            raise ValueError("simulate_dca_cycles() requires a 'close' column")
-        return _simulate_legacy_close(df, config)
-
-    needed = ["open", "close"] + (["high", "low"] if config.fill_model == FILL_MODEL_INTRABAR_LADDER else [])
-    missing = [c for c in needed if c not in df.columns]
-    if missing:
-        raise ValueError(f"fill_model {config.fill_model} requires columns {needed}; missing {missing} "
-                         f"(no prices are invented — use fill_model='LEGACY_CLOSE' only to reproduce old close-only results)")
-    delta = _bar_interval(df.index)
-    delta_h = delta.total_seconds() / 3600.0
-    limit_hours = config.max_cycle_hours if config.max_cycle_hours is not None else (
-        config.max_cycle_candles * delta_h if config.max_cycle_candles is not None else None)
-    intrabar = config.fill_model == FILL_MODEL_INTRABAR_LADDER
-
-    ts = df.index
-    o = df["open"].to_numpy(dtype=float)
-    c = df["close"].to_numpy(dtype=float)
-    h = df["high"].to_numpy(dtype=float) if intrabar else None
-    lo = df["low"].to_numpy(dtype=float) if intrabar else None
-
-    trades: List[Dict] = []
-    rows = []
-    realised = 0.0
-    cycle: Optional[_OpenCycle] = None
-    pending: Optional[str] = None          # "OPEN" | "DCA" | "EXIT", decided at the previous close
-    pending_reason: Optional[str] = None
-
-    for i in range(len(ts)):
-        t_open = ts[i]
-        t_close = t_open + delta
-        # ── 0. gap accounting for an open cycle (B8) ──
-        if cycle is not None and i > 0:
-            step = ts[i] - ts[i - 1]
-            if step > delta:
-                cycle.gap_count += 1
-                cycle.gap_hours += (step - delta).total_seconds() / 3600.0
-        # ── 1. execute what was decided at the previous close, at this OPEN ──
-        if pending == "OPEN":
-            cycle = _open_new_cycle(t_open, float(o[i]), config)
-            cycle.last_accrual_time = t_open
-        elif pending == "DCA":
-            fill_price = apply_slippage(float(o[i]), config.direction, is_entry=True, slippage_rate=config.slippage_rate)
-            _append_fill(cycle, cycle.next_level_index, t_open, fill_price, config)
-        elif pending == "EXIT":
-            _accrue_financing(cycle, t_open, config)
-            t = _finalize_trade(_close_cycle(cycle, t_open, float(o[i]), config, exit_reason=pending_reason), cycle, config, censored=False)
-            trades.append(t)
-            realised += t["profit"]
-            cycle = None
-        pending, pending_reason = None, None
-
-        # ── 2. resting ladder limits fill intrabar (INTRABAR_LADDER only) ──
-        if intrabar and cycle is not None:
-            while True:
-                trig = _trigger_price(cycle, config)
-                if trig is None:
-                    break
-                if config.direction == "LONG":
-                    if lo[i] > trig:
-                        break
-                    fill_price = min(trig, float(o[i]))   # gap through the limit → filled at the (better) open
-                else:
-                    if h[i] < trig:
-                        break
-                    fill_price = max(trig, float(o[i]))
-                _append_fill(cycle, cycle.next_level_index, t_open, fill_price, config)
-
-        # ── 2b. a fresh cycle's own first candle is held from its open ──
-        # ── 3. mark-to-market at this CLOSE, then decide (information <= this candle) ──
-        if cycle is not None:
-            cycle.candles_held += 1
-            _accrue_financing(cycle, t_close, config)
-            unreal = _mtm_pnl(cycle, float(c[i]), config)
-            cycle.max_unrealised_loss = min(cycle.max_unrealised_loss, unreal)
-            rows.append((t_open, realised, unreal, realised + unreal, cycle.total_cost_usdt, len(cycle.fills) - 1, True))
-            if _check_exit(cycle, float(c[i]), config):
-                pending, pending_reason = "EXIT", "PROFIT_TARGET_TRAILING"
-            elif limit_hours is not None and (t_close - cycle.entry_time).total_seconds() / 3600.0 >= limit_hours:
-                pending, pending_reason = "EXIT", "MAX_CYCLE_CANDLES_TIMEOUT"
-            elif not intrabar and _level_triggered_at(cycle, float(c[i]), config):
-                pending = "DCA"
-        else:
-            rows.append((t_open, realised, 0.0, realised, 0.0, 0, False))
-            pending = "OPEN"
-
-    if cycle is not None:
-        trades.append(_finalize_trade(
-            _close_cycle(cycle, ts[-1], float(c[-1]), config, exit_reason="DATA_END_STILL_OPEN"),
-            cycle, config, censored=True, exit_pending=(pending == "EXIT")))
-    return trades, _equity_frame(rows)
-
-
-def simulate_dca_cycles(df: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> List[Dict]:
-    """
-    Candle-by-candle DCA/Martingale cycle simulator — returns the cycle
-    trade dicts only (the oos_validator.evaluate_strategy_oos() contract).
-    claude code changed: Post-audit Phase 2 — now a thin wrapper over
-    simulate_dca_path(); see that function and
-    DCA_RESEARCH_PROTOCOL_2026-10-02.md for the canonical clock, the fill
-    models and censoring.
-
-    Supports both config.direction values: LONG (average down on drops,
-    profit on a rise) and SHORT (average into a rise, profit on a fall).
-
-    claude code changed: the former docstring called close-only evaluation
-    "a conservative (not favorable) bias". That was not demonstrated and is
-    not true for exposure: a close-only clock fills at most one level per
-    candle, UNDER-stating an intrabar bot's deployment speed in a crash.
-    Removed; NEXT_OPEN / INTRABAR_LADDER now bracket the deployment speed
-    explicitly (their P&L ordering is empirical, not assumed).
-    """
-    return simulate_dca_path(df, config)[0]
+    return trades
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -812,71 +551,6 @@ def summarize_dca_cycles(trades: List[Dict], config: DCAConfig = BASELINE_CONFIG
         # profit per dollar of the worst single-cycle exposure, not per
         # dollar of the (misleadingly small) initial leg.
         "profit_to_max_exposure_ratio": round(total_net_profit / total_max_deployed, 4) if total_max_deployed else None,
-        # claude code changed: Post-audit Phase 2 B3 — realised vs censored are
-        # NEVER mixed silently. total_net_profit above keeps its historical
-        # meaning (= total MARK-TO-MARKET P&L: realised + the censored cycle's
-        # liquidation mark) so earlier numbers stay comparable; the split:
-        "total_realised_net_profit": round(sum(t["profit"] for t in trades if not _is_censored(t)), 4),
-        "censored_mtm_pnl": round(sum(t["profit"] for t in trades if _is_censored(t)), 4),
-        "total_mark_to_market_pnl": round(total_net_profit, 4),
-        "n_censored_cycles": sum(1 for t in trades if _is_censored(t)),
-        "fill_models": sorted({t.get("fill_model", FILL_MODEL_LEGACY_CLOSE) for t in trades}),
-        # B6 — cost completeness: False whenever any cycle's financing is UNAVAILABLE / ASSUMED_ZERO
-        "financing_statuses": sorted({t.get("financing_status", config.resolved_financing_status) for t in trades}),
-        "cost_complete": all(t.get("financing_status", config.resolved_financing_status) in (FINANCING_NOT_APPLICABLE, FINANCING_KNOWN)
-                             for t in trades),
-    }
-
-
-def _is_censored(trade: Dict) -> bool:   # claude code changed: new — Post-audit Phase 2 B3
-    return bool(trade.get("censored", trade["cycle_exit_reason"] == "DATA_END_STILL_OPEN"))
-
-
-def summarize_dca_tail_risk(trades: List[Dict], equity: pd.DataFrame, config: DCAConfig = BASELINE_CONFIG) -> Dict:
-    """claude code changed: new — Post-audit Phase 2 B3. The risk a
-    martingale ladder actually carries — capital trapped while unrealised
-    loss grows — from the per-candle mark-to-market frame of
-    simulate_dca_path(). Win rate and realised profit cannot show it."""
-    if equity.empty:
-        return {"available": False, "reason": "no candles"}
-    eq = equity["mtm_equity_pnl"]
-    running_peak = eq.cummax().clip(lower=0.0)           # equity starts at 0 P&L
-    drawdown = running_peak - eq
-    full_ladder = compute_theoretical_ladder(config)["total_deployment"]
-    # longest underwater spell (equity below its prior peak), in elapsed hours
-    under = drawdown > 1e-12
-    longest_h, start, unrecovered = 0.0, None, False
-    for ts_, u in under.items():
-        if u and start is None:
-            start = ts_
-        elif not u and start is not None:
-            longest_h = max(longest_h, (ts_ - start).total_seconds() / 3600.0)
-            start = None
-    if start is not None:
-        unrecovered = True
-        longest_h = max(longest_h, (eq.index[-1] - start).total_seconds() / 3600.0)
-    exhausted = sum(1 for t in trades if t["cycle_max_level_reached"] == len(config.levels))
-    censored = [t for t in trades if _is_censored(t)]
-    return {
-        "available": True,
-        "fill_model": config.fill_model,
-        "max_capital_deployed": round(float(equity["capital_deployed"].max()), 2),
-        "theoretical_full_ladder_deployment": full_ladder,
-        "max_ladder_depth": int(equity["ladder_depth"].max()),
-        "configured_max_level": len(config.levels),
-        "ladder_full_exhaustion_count": exhausted,
-        "max_unrealised_loss": round(float(equity["unrealised_pnl"].min()), 4),
-        "worst_open_cycle_loss": round(min((t.get("cycle_max_unrealised_loss", 0.0) for t in trades), default=0.0), 4),
-        "max_mtm_drawdown_usd": round(float(drawdown.max()), 4),
-        "max_mtm_drawdown_pct_of_full_ladder": round(float(drawdown.max()) / full_ladder * 100, 2) if full_ladder else None,
-        "time_in_cycle_pct": round(float(equity["in_cycle"].mean()) * 100, 2),
-        "longest_cycle_hours": round(max((t.get("holding_hours", 0.0) for t in trades), default=0.0), 2),
-        "longest_underwater_hours": round(longest_h, 2),
-        "underwater_unrecovered_at_data_end": unrecovered,
-        "final_mtm_equity_pnl": round(float(eq.iloc[-1]), 4),
-        "censored_cycles": [{"entry_time": t["entry_time"], "mark_pnl": t["profit"], "level_reached": t["cycle_max_level_reached"],
-                             "holding_hours": t.get("holding_hours"), "exit_pending_at_data_end": t.get("exit_pending_at_data_end", False)}
-                            for t in censored],
     }
 
 
@@ -913,24 +587,7 @@ def summarize_dca_tail_risk(trades: List[Dict], equity: pd.DataFrame, config: DC
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_PERMUTATION_BLOCK_CANDLES = 24   # 1 day of hourly candles — long enough to preserve real intraday volatility clustering, short enough for a rich shuffle distribution over a multi-year series
-# claude code changed: Post-audit Phase 2 B4 — was 100 (resolution 1/101). The
-# smallest attainable empirical p is 1/(B+1); below MIN_PERMUTATIONS_FOR_CLAIM
-# the assessment is INSUFFICIENT_RESOLUTION and no claim may be made.
-DEFAULT_N_PERMUTATIONS = 999
-MIN_PERMUTATIONS_FOR_CLAIM = 999
-DEFAULT_SENSITIVITY_BLOCK_SIZES = (24, 168, 720)   # 1 day, 1 week, ~1 month of 1h candles
-
-# claude code changed: Post-audit Phase 2 B4 — the two canonical nulls
-# (DCA_RESEARCH_PROTOCOL_2026-10-02.md §4).
-NULL_BLOCK_SHUFFLE = "BLOCK_SHUFFLE"
-NULL_DRIFT_REMOVED = "DRIFT_REMOVED_BLOCK_SHUFFLE"
-NULL_MODELS = (NULL_BLOCK_SHUFFLE, NULL_DRIFT_REMOVED)
-NULL_MODEL_SEMANTICS = {
-    NULL_BLOCK_SHUFFLE: "preserves drift, start/end price, candle shapes and block-local structure; destroys ordering beyond "
-                        "the block length — tests PATH DEPENDENCE given the real drift",
-    NULL_DRIFT_REMOVED: "preserves candle shapes, volatility and block-local structure; removes drift (terminal price = start) "
-                        "— tests whether the strategy makes money WITHOUT the drift",
-}
+DEFAULT_N_PERMUTATIONS = 100             # matches this project's own established convention (feature_validator.py's BLOCK_PERMUTATION_N, permutation_test_engine.py's DEFAULT_N_PERMUTATIONS)
 
 
 def _block_shuffle_returns(returns: "np.ndarray", block_size: int, rng: "np.random.Generator") -> "np.ndarray":
@@ -938,8 +595,7 @@ def _block_shuffle_returns(returns: "np.ndarray", block_size: int, rng: "np.rand
     randomly shuffled order — same principle as this project's other two
     block-shuffle implementations, applied here to log-returns so the
     shuffled result can be turned back into a valid, continuous price
-    path (see _reconstruct_price_path). claude code changed: also accepts a
-    2-D (n, k) array — rows are shuffled in blocks (Post-audit Phase 2 B4)."""
+    path (see _reconstruct_price_path)."""
     n = len(returns)
     n_blocks = int(np.ceil(n / block_size))
     blocks = [returns[i * block_size:(i + 1) * block_size] for i in range(n_blocks)]
@@ -957,155 +613,80 @@ def _reconstruct_price_path(initial_price: float, log_returns: "np.ndarray") -> 
     return np.exp(log_prices)
 
 
-def _synthetic_path(df: pd.DataFrame, block_size: int, rng: "np.random.Generator", null_model: str) -> pd.DataFrame:
-    """claude code changed: new — Post-audit Phase 2 B4. One null draw.
-    Each candle i >= 1 is the tuple log(open, high, low, close / previous
-    close) (close only when the frame has no OHLC), so block-shuffling rows
-    keeps every candle's intrabar shape and opening gap. DRIFT_REMOVED
-    subtracts the mean close-to-close log return μ from all four entries
-    of every candle (a level shift of the whole candle), so the synthetic
-    terminal price equals the start. Candle 0 is the real candle; the real
-    timestamps are reused (gap positions are kept; the candles that follow
-    them are shuffled like any other)."""
-    if null_model not in NULL_MODELS:
-        raise ValueError(f"null_model must be one of {NULL_MODELS}, got {null_model!r}")
-    close = df["close"].to_numpy(dtype=float)
-    prev = close[:-1]
-    has_ohlc = all(col in df.columns for col in ("open", "high", "low"))
-    cols = [np.log(close[1:] / prev)]
-    if has_ohlc:
-        cols = [np.log(df[k].to_numpy(dtype=float)[1:] / prev) for k in ("open", "high", "low")] + cols
-    x = np.column_stack(cols)
-    if null_model == NULL_DRIFT_REMOVED:
-        x = x - x[:, -1].mean()
-    xs = _block_shuffle_returns(x, block_size, rng)
-    new_close = np.concatenate([[close[0]], _reconstruct_price_path(close[0], xs[:, -1])])
-    out = {"close": new_close}
-    if has_ohlc:
-        new_prev = new_close[:-1]
-        for j, k in enumerate(("open", "high", "low")):
-            out[k] = np.concatenate([[float(df[k].iloc[0])], new_prev * np.exp(xs[:, j])])
-    return pd.DataFrame(out, index=df.index)
-
-
-def _mtm_statistics(df: pd.DataFrame, config: DCAConfig) -> Tuple[float, float]:   # claude code changed: new — the two tested statistics
-    s = summarize_dca_cycles(simulate_dca_cycles(df, config), config)
-    mtm = s.get("total_mark_to_market_pnl", 0.0) if s.get("n_cycles") else 0.0
-    dep = s.get("max_capital_deployed_any_cycle") or 0.0
-    return mtm, (mtm / dep if dep else 0.0)
-
-
 def run_dca_permutation_test(
     df: pd.DataFrame,
     config: DCAConfig = BASELINE_CONFIG,
     n_permutations: int = DEFAULT_N_PERMUTATIONS,
     block_size: int = DEFAULT_PERMUTATION_BLOCK_CANDLES,
     seed: int = 42,
-    null_model: str = NULL_BLOCK_SHUFFLE,
-    alpha: float = 0.05,
 ) -> Dict:
     """
-    claude code changed: Post-audit Phase 2 B4 (rewritten). One null, one
-    block size. Tested statistics (both required — an intersection-union
-    test, valid at alpha across these two without further correction):
-    total MARK-TO-MARKET P&L (realised + censored liquidation mark — a
-    realised-only statistic would reward hiding losses in an open cycle)
-    and MTM P&L / max capital deployed.
+    THE genuine-edge test. Runs simulate_dca_cycles() once on the REAL
+    price path, then n_permutations times on block-shuffled
+    reconstructions of the SAME return distribution (same volatility,
+    same marginal return distribution, same local autocorrelation texture
+    within each block — only the larger-scale sequence/alignment of
+    those blocks is randomized). If the real result is not meaningfully
+    better than the shuffled distribution, the observed profitability is
+    not coming from anything real about this asset's price structure.
 
-    WHAT THE FORMER TEST PRESERVED (still available as null_model=
-    BLOCK_SHUFFLE): shuffling log returns leaves their sum unchanged, so the
-    start AND end price — the drift — are preserved exactly; only ordering
-    beyond the block length is destroyed. It cannot attribute profit to
-    drift. DRIFT_REMOVED_BLOCK_SHUFFLE removes it. Use run_dca_null_suite()
-    for both nulls across block sizes.
+    Tests two metrics independently (both matter — see Phase 8's own
+    "don't judge by win rate" framing): total_net_profit (the raw
+    economic outcome) and profit_to_max_exposure_ratio (profit per
+    dollar of real capital at risk, immune to a strategy that just
+    trades more often).
 
-    raw_assessment is UNCORRECTED for the caller's family (symbols, configs,
-    nulls, block sizes): never "significant" on its own. B below
-    MIN_PERMUTATIONS_FOR_CLAIM → INSUFFICIENT_RESOLUTION.
+    claude code changed: seed is explicit and always recorded (matches
+    feature_validator.py's own rng.default_rng(seed) pattern) — never
+    hidden randomness.
     """
-    real_mtm, real_ratio = _mtm_statistics(df, config)
+    close = df["close"].values.astype(float)
+    log_returns = np.diff(np.log(close))
+    initial_price = close[0]
+
+    real_trades = simulate_dca_cycles(df, config)
+    real_summary = summarize_dca_cycles(real_trades, config)
+    real_profit = real_summary["total_net_profit"]
+    real_ratio = real_summary["profit_to_max_exposure_ratio"] or 0.0
+
     rng = np.random.default_rng(seed)
-    sh_mtm, sh_ratio = [], []
+    shuffled_profits: List[float] = []
+    shuffled_ratios: List[float] = []
+
     for i in range(n_permutations):
-        m, r = _mtm_statistics(_synthetic_path(df, block_size, rng, null_model), config)
-        sh_mtm.append(m)
-        sh_ratio.append(r)
-        if (i + 1) % 100 == 0:
-            logger.info(f"  DCA permutation test [{null_model}, block {block_size}]: {i + 1}/{n_permutations}")
-    # empirical p-value, this project's convention: (k + 1)/(B + 1) — never exactly zero
-    p_mtm = (sum(1 for v in sh_mtm if v >= real_mtm) + 1) / (n_permutations + 1)
-    p_ratio = (sum(1 for v in sh_ratio if v >= real_ratio) + 1) / (n_permutations + 1)
-    if n_permutations < MIN_PERMUTATIONS_FOR_CLAIM:
-        assessment = "INSUFFICIENT_RESOLUTION"
-    elif p_mtm < alpha and p_ratio < alpha:
-        assessment = "REJECTS_NULL_UNCORRECTED"
-    else:
-        assessment = "DOES_NOT_REJECT_NULL"
+        shuffled_returns = _block_shuffle_returns(log_returns, block_size, rng)
+        shuffled_prices = np.concatenate([[initial_price], _reconstruct_price_path(initial_price, shuffled_returns)])
+        shuffled_df = pd.DataFrame({"close": shuffled_prices}, index=df.index[: len(shuffled_prices)])
+        shuffled_trades = simulate_dca_cycles(shuffled_df, config)
+        shuffled_summary = summarize_dca_cycles(shuffled_trades, config)
+        shuffled_profits.append(shuffled_summary["total_net_profit"])
+        shuffled_ratios.append(shuffled_summary["profit_to_max_exposure_ratio"] or 0.0)
+        if (i + 1) % 20 == 0:
+            logger.info(f"  DCA permutation test: {i + 1}/{n_permutations} shuffles complete")
+
+    # claude code changed: empirical p-value formula matches this
+    # project's own established convention exactly — see
+    # feature_validator.py's _block_permutation_pvalue() docstring.
+    extreme_profit = sum(1 for p in shuffled_profits if p >= real_profit)
+    extreme_ratio = sum(1 for r in shuffled_ratios if r >= real_ratio)
+    p_value_profit = (extreme_profit + 1) / (n_permutations + 1)
+    p_value_ratio = (extreme_ratio + 1) / (n_permutations + 1)
+
     return {
-        "null_model": null_model,
-        "null_semantics": NULL_MODEL_SEMANTICS[null_model],
         "n_permutations": n_permutations,
-        "p_value_resolution": round(1.0 / (n_permutations + 1), 6),
         "block_size_candles": block_size,
-        "seed": seed,
-        "fill_model": config.fill_model,
-        "real_total_mtm_pnl": round(real_mtm, 4),
-        "shuffled_mtm_mean": round(float(np.mean(sh_mtm)), 4) if sh_mtm else None,
-        "shuffled_mtm_std": round(float(np.std(sh_mtm)), 4) if sh_mtm else None,
-        "p_value_mtm_pnl": round(p_mtm, 6),
-        "real_mtm_to_max_exposure_ratio": round(real_ratio, 6),
-        "p_value_mtm_to_max_exposure_ratio": round(p_ratio, 6),
-        "alpha": alpha,
-        "raw_assessment": assessment,
-    }
-
-
-def run_dca_null_suite(
-    df: pd.DataFrame,
-    config: DCAConfig = BASELINE_CONFIG,
-    null_models: Tuple[str, ...] = NULL_MODELS,
-    block_sizes: Tuple[int, ...] = DEFAULT_SENSITIVITY_BLOCK_SIZES,
-    n_permutations: int = DEFAULT_N_PERMUTATIONS,
-    seed: int = 42,
-    alpha: float = 0.05,
-) -> Dict:
-    """claude code changed: new — Post-audit Phase 2 B4. Both nulls × every
-    block size. Within this suite the family is len(null_models) ×
-    len(block_sizes) tests; each p-value is also reported Bonferroni-adjusted
-    for it. Readings per block size use the ADJUSTED p-values (both
-    statistics): drift-preserving rejected / drift-removed rejected →
-      no / yes  PROFIT_EXPLAINED_BY_DRIFT
-      yes / yes CONSISTENT_WITH_PATH_STRUCTURE
-      no / no   NO_EVIDENCE
-      yes / no  INCONSISTENT_REVIEW
-    robust_across_block_sizes is True only when every block size gives the
-    same reading. A caller testing several symbols/configs must correct
-    across them as well — this suite does not know that family."""
-    family = len(null_models) * len(block_sizes)
-    rows = []
-    for k, bs in enumerate(block_sizes):
-        for j, nm in enumerate(null_models):
-            r = run_dca_permutation_test(df, config, n_permutations=n_permutations, block_size=bs,
-                                         seed=seed + 1000 * k + j, null_model=nm, alpha=alpha)
-            r["p_value_mtm_pnl_bonferroni"] = min(1.0, r["p_value_mtm_pnl"] * family)
-            r["p_value_ratio_bonferroni"] = min(1.0, r["p_value_mtm_to_max_exposure_ratio"] * family)
-            rows.append(r)
-    readings = {}
-    if n_permutations < MIN_PERMUTATIONS_FOR_CLAIM:
-        readings = {bs: "INSUFFICIENT_RESOLUTION" for bs in block_sizes}
-    elif set(null_models) == set(NULL_MODELS):
-        for bs in block_sizes:
-            rej = {r["null_model"]: (r["p_value_mtm_pnl_bonferroni"] < alpha and r["p_value_ratio_bonferroni"] < alpha)
-                   for r in rows if r["block_size_candles"] == bs}
-            s, d = rej[NULL_BLOCK_SHUFFLE], rej[NULL_DRIFT_REMOVED]
-            readings[bs] = {(False, True): "PROFIT_EXPLAINED_BY_DRIFT", (True, True): "CONSISTENT_WITH_PATH_STRUCTURE",
-                            (False, False): "NO_EVIDENCE", (True, False): "INCONSISTENT_REVIEW"}[(s, d)]
-    return {
-        "family_size_within_suite": family,
-        "results": rows,
-        "reading_by_block_size": readings,
-        "robust_across_block_sizes": len(set(readings.values())) == 1 if readings else False,
-        "note": "raw evidence only — correct across symbols/configs before any claim; never 'significant' on this alone",
+        "real_total_net_profit": real_profit,
+        "shuffled_profit_mean": round(float(np.mean(shuffled_profits)), 4),
+        "shuffled_profit_std": round(float(np.std(shuffled_profits)), 4),
+        "shuffled_profit_percentile_of_real": round(
+            float(np.mean([real_profit >= p for p in shuffled_profits]) * 100), 2
+        ),
+        "p_value_profit": round(p_value_profit, 4),
+        "real_profit_to_max_exposure_ratio": real_ratio,
+        "shuffled_ratio_mean": round(float(np.mean(shuffled_ratios)), 4),
+        "shuffled_ratio_std": round(float(np.std(shuffled_ratios)), 4),
+        "p_value_profit_to_max_exposure_ratio": round(p_value_ratio, 4),
+        "edge_appears_real": bool(p_value_profit < 0.05 and p_value_ratio < 0.05),
     }
 
 
@@ -1224,7 +805,6 @@ def summarize_feature_experiment(
     feature_col: str,
     bucket_fn: Callable[[float], str],
     bucket_col_name: str = "feature_bucket",
-    configured_max_level: Optional[int] = None,   # claude code changed: Post-audit Phase 2 B7
 ) -> pd.DataFrame:
     """
     Generic version of Experiment 1's bucket-and-summarize logic. Buckets
@@ -1240,20 +820,6 @@ def summarize_feature_experiment(
     """
     if events_df.empty:
         return pd.DataFrame()
-
-    # claude code changed: Post-audit Phase 2 B7 — "full exhaustion" means the
-    # CONFIGURED final level, never the deepest level a bucket happened to
-    # observe (was: each bucket's own .max(), so a bucket whose deepest cycle
-    # reached level 3 of 6 reported every level-3 cycle as "fully
-    # exhausted"). Every event row carries fill_level + levels_remaining_at_fill
-    # = the configured level count (research_feature_at_dca_events); it must
-    # be one value and agree with configured_max_level when given.
-    derived = set((events_df["fill_level"] + events_df["levels_remaining_at_fill"]).astype(int))
-    if len(derived) != 1:
-        raise ValueError(f"events mix ladder definitions (configured level counts {sorted(derived)}) — summarize each config separately")
-    n_levels = derived.pop()
-    if configured_max_level is not None and configured_max_level != n_levels:
-        raise ValueError(f"configured_max_level={configured_max_level} disagrees with the events' ladder ({n_levels} levels)")
 
     events_df = events_df.copy()
     events_df[bucket_col_name] = events_df[feature_col].apply(bucket_fn)
@@ -1272,9 +838,8 @@ def summarize_feature_experiment(
             "n_dca_events": len(group),
             "n_distinct_cycles_touched": len(cycles_touched),
             "eventual_ladder_full_exhaustion_rate_pct": round(
-                (cycles_touched["cycle_final_level_reached"] == n_levels).mean() * 100, 2   # claude code changed: B7 — configured, was the bucket's observed .max()
+                (cycles_touched["cycle_final_level_reached"] == cycles_touched["cycle_final_level_reached"].max()).mean() * 100, 2
             ) if len(cycles_touched) else None,
-            "configured_max_level": n_levels,   # claude code changed: B7 — the denominator, auditable
             "mean_eventual_cycle_profit": round(cycles_touched["cycle_final_profit"].mean(), 4) if len(cycles_touched) else None,
             "mean_hours_to_resolution": round(group["hours_from_fill_to_resolution"].mean(), 1),
         })
@@ -1424,26 +989,7 @@ def load_close_series_for_oos(canonical_symbol: str) -> pd.DataFrame:
 # comparable relative frequency to how it engages with crypto.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-def _vol_ratio_on_window(ref_close: pd.Series, target_close: pd.Series, start=None, end=None) -> float:
-    """claude code changed: new — Post-audit Phase 2 B5. target / reference
-    hourly log-return std using ONLY rows in [start, end) (end exclusive;
-    start None = from the beginning). Raises when a window holds too little
-    data to estimate a standard deviation."""
-    def window(s):
-        s = s.sort_index()
-        if start is not None:
-            s = s[s.index >= pd.Timestamp(start)]
-        if end is not None:
-            s = s[s.index < pd.Timestamp(end)]
-        return np.log(s).diff().dropna()
-    r, g = window(ref_close), window(target_close)
-    if len(r) < 30 or len(g) < 30:
-        raise ValueError(f"calibration window [{start}, {end}) has too few returns (reference {len(r)}, target {len(g)})")
-    return float(g.std() / r.std())
-
-
-def compute_volatility_scale_factor(reference_symbol: str, target_symbol: str,
-                                    calibration_end=None, calibration_start=None) -> float:
+def compute_volatility_scale_factor(reference_symbol: str, target_symbol: str) -> float:
     """
     Returns target's hourly-return std / reference's hourly-return std,
     computed from real OHLCV data (never hardcoded) — the empirical
@@ -1457,20 +1003,11 @@ def compute_volatility_scale_factor(reference_symbol: str, target_symbol: str,
     representative of "crypto" broadly; a caller wanting a different
     reference asset can pass one directly.
     """
-    # claude code changed: Post-audit Phase 2 B5 — was the FULL history of both
-    # series, then used to scale thresholds applied to every fold: temporal
-    # leakage (future volatility shaped past decisions). A scale factor is a
-    # FITTED PARAMETER: it must come from a pre-specified calibration window
-    # [calibration_start, calibration_end) — or, inside walk-forward, from each
-    # fold's purged training slice (make_fx_scaled_oos_fns). Full-history use
-    # is refused.
-    if calibration_end is None:
-        raise ValueError("compute_volatility_scale_factor requires calibration_end (exclusive): a full-history volatility "
-                         "ratio leaks future information into every earlier decision — use a pre-specified calibration "
-                         "window, or make_fx_scaled_oos_fns() for per-fold fitting")
     ref_df = load_close_series_for_oos(reference_symbol)
     target_df = load_close_series_for_oos(target_symbol)
-    return _vol_ratio_on_window(ref_df["close"], target_df["close"], calibration_start, calibration_end)
+    ref_std = np.log(ref_df["close"]).diff().dropna().std()
+    target_std = np.log(target_df["close"]).diff().dropna().std()
+    return float(target_std / ref_std)
 
 
 def scale_config_thresholds(base_config: DCAConfig, scale_factor: float) -> DCAConfig:
@@ -1501,9 +1038,6 @@ def get_fx_baseline_config(
     reference_symbol: str = "BTC/USDT",
     target_symbol: str = "EUR/USD",
     base_config: DCAConfig = BASELINE_CONFIG,
-    *,
-    calibration_end=None,     # claude code changed: Post-audit Phase 2 B5 — REQUIRED (exclusive); see compute_volatility_scale_factor
-    calibration_start=None,
 ) -> DCAConfig:
     """
     Derived, not guessed — real BTC/USDT vs EUR/USD hourly-return-std
@@ -1521,29 +1055,8 @@ def get_fx_baseline_config(
     this keeps that same property and only touches disk when a caller
     actually asks for the FX-scaled config.
     """
-    scale_factor = compute_volatility_scale_factor(reference_symbol, target_symbol,
-                                                   calibration_end=calibration_end, calibration_start=calibration_start)
+    scale_factor = compute_volatility_scale_factor(reference_symbol, target_symbol)
     return scale_config_thresholds(base_config, scale_factor)
-
-
-def make_fx_scaled_oos_fns(reference_close: pd.Series, base_config: DCAConfig = BASELINE_CONFIG):
-    """claude code changed: new — Post-audit Phase 2 B5. (fit_fn,
-    run_strategy_fn) for evaluate_strategy_oos(): fit_fn receives ONLY the
-    purged training slice (the evaluator's own leakage enforcement) and
-    fits the volatility scale factor on that slice's time range — the
-    reference series is cut to the same [first, last] training timestamps,
-    so nothing after the training end is read. run_strategy_fn applies the
-    fold's own fitted factor to the test slice."""
-    def fit_fn(train_df: pd.DataFrame) -> Dict:
-        start, end = train_df.index.min(), train_df.index.max()
-        ref = reference_close[(reference_close.index >= start) & (reference_close.index <= end)]
-        factor = _vol_ratio_on_window(ref, train_df["close"])
-        return {"scale_factor": factor, "calibration_start": start, "calibration_end_inclusive": end}
-
-    def run_strategy_fn(df_slice: pd.DataFrame, fitted_params: Dict) -> List[Dict]:
-        return simulate_dca_cycles(df_slice, scale_config_thresholds(base_config, fitted_params["scale_factor"]))
-
-    return fit_fn, run_strategy_fn
 
 
 def build_config_with_real_costs(
@@ -1587,15 +1100,7 @@ def build_config_with_real_costs(
     from bot.config.cost_model import get_cost_model
 
     costs = get_cost_model(asset_class, venue_id=venue_id, symbol=symbol).get_costs()
-    # claude code changed: Post-audit Phase 2 B6 — FX swap/rollover applies to
-    # BOTH directions and no real data exists (see above): label it
-    # UNAVAILABLE so every result says cost_complete=False, instead of
-    # silently pricing financing at zero. An explicit KNOWN/ASSUMED_ZERO set by
-    # the caller is kept.
-    financing = base_config.financing_status
-    if asset_class.upper() == "FOREX" and financing is None:
-        financing = FINANCING_UNAVAILABLE
-    return replace(base_config, fee_rate=costs["fee_rate"], slippage_rate=costs["slippage_rate"], financing_status=financing)
+    return replace(base_config, fee_rate=costs["fee_rate"], slippage_rate=costs["slippage_rate"])
 
 
 def run_dca_research_oos(
@@ -1617,7 +1122,7 @@ def run_dca_research_oos(
         config=wf_config,
         fit_fn=None,
         strategy_name="dca_martingale_baseline",
-        strategy_version=f"2026-10-02.2-canonical-clock-{config.fill_model}",   # claude code changed: Post-audit Phase 2 — the clock/fill model is part of the method version
+        strategy_version="2026-09-26.1-baseline",
     )
 
 

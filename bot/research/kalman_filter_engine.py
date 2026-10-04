@@ -157,6 +157,7 @@ import numpy as np                              # Numerical operations — core 
 import pandas as pd                             # DataFrame operations
 from scipy import stats                         # Spearman IC, OLS initialisation
 from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.research_zones import ZONES   # claude code changed: D-8
 from statsmodels.regression.linear_model import OLS    # OLS for hedge ratio seed
 from statsmodels.tools import add_constant             # Adds intercept column to OLS
 
@@ -750,6 +751,14 @@ class KalmanFilterEngine:
         """
         protocol = protocol or self.protocol()
         aligned = self._align_prices(price_a, price_b)
+        ZONES.assert_no_sealed_data(aligned.index, purpose=f"run_canonical {self.pair_name}")   # claude code changed: D-8 — sealed forward holdout
+        # claude code changed: 2026-10-04 asset-agnostic — the canonical state may only run under a COMPLETE market
+        # profile (FX: FX_CALENDAR_UNAVAILABLE until Decision 5's owner rules exist), and the 24/7 crypto rules
+        # refuse session-traded data that arrives under an unregistered name. Crypto behaviour is otherwise unchanged.
+        from bot.quant_core.market_profile import assert_continuous_market, profile_for_pair
+        market = profile_for_pair(self.symbol_a, self.symbol_b).require_canonical(f"run_canonical {self.pair_name}")
+        if market.calendar.is_continuous:
+            assert_continuous_market(aligned.dropna().index, purpose=f"run_canonical {self.pair_name}")
         log_a, log_b = self._to_log_prices(aligned)
         init = causal_init(log_a, log_b, protocol)
         k = log_a.index.get_loc(init.seed_timestamp)
@@ -1108,6 +1117,7 @@ class KalmanFilterEngine:
         self,
         price_a: pd.Series,
         price_b: pd.Series,
+        calendar=None,   # claude code changed: 2026-10-04 asset-agnostic — None = the unchanged 24/7 hourly grid; a SessionCalendar = its trading grid (closure hours are not rows, Decision 5 A)
     ) -> pd.DataFrame:
         """
         Align AVAX and ATOM to a shared timestamp grid.
@@ -1153,7 +1163,12 @@ class KalmanFilterEngine:
         both = aligned.dropna().index                                   # claude code changed: Stage 2D Rev B — only to locate the common span
         if len(both) == 0:
             raise ValueError("Insufficient aligned data: the two legs share no candle")
-        grid = pd.date_range(both[0], both[-1], freq="h", tz=both.tz)   # claude code changed: Stage 2D Rev B — complete hourly grid
+        if calendar is None or calendar.is_continuous:                  # claude code changed: 2026-10-04 asset-agnostic — crypto line below unchanged
+            grid = pd.date_range(both[0], both[-1], freq="h", tz=both.tz)   # claude code changed: Stage 2D Rev B — complete hourly grid
+        else:                                                           # claude code changed: 2026-10-04 asset-agnostic — session calendar: scheduled closures excluded from the grid
+            from bot.quant_core.market_profile import assert_no_closure_rows
+            assert_no_closure_rows(aligned.dropna(how="all").index, calendar, purpose="align prices")
+            grid = calendar.trading_grid(both[0], both[-1])
         aligned = aligned.reindex(grid)                                 # claude code changed: Stage 2D Rev B — missing hours stay NaN rows
         n_missing = int(aligned.isna().any(axis=1).sum())               # claude code changed: Stage 2D Rev B
         if n_missing:

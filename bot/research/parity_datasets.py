@@ -11,6 +11,7 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
+from bot.quant_core.research_zones import ZONES   # claude code changed: D-8
 
 DATASET_A_SEED = 21          # recorded seed
 TRUE_BETA = 1.3
@@ -34,7 +35,9 @@ def dataset_a(n: int = 1500, seed: int = DATASET_A_SEED) -> Tuple[pd.Series, pd.
     u, e = np.zeros(n), g.normal(0, SIGMA_U, n)
     for t in range(1, n):
         u[t] = phi * u[t - 1] + e[t]
-    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    # claude code changed: D-8 — start at the canonical init-window start (S start − L), so candle L is the
+    # selection-zone start and tests exercise the REAL canonical seed placement. Values are unchanged.
+    idx = pd.date_range(ZONES.init_window()[0], periods=n, freq="h", tz="UTC")
     pa = pd.Series(np.exp(TRUE_ALPHA_LOG + TRUE_BETA * y + u) * PRICE_SCALE, index=idx)
     pb = pd.Series(np.exp(y) * PRICE_SCALE, index=idx)
     return pa, pb

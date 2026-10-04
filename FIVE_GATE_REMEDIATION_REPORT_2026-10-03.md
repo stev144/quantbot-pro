@@ -9,14 +9,62 @@
 - no expensive calibration;
 - no holdout touched;
 - nothing traded;
-- no historical artifact deleted;
-- no commit.
+- no historical artifact deleted.
+
+**Committed** as `757578d` (branch `stage2d-revb`) on the owner's instruction; not pushed.
 
 **Status vocabulary (as instructed):**
 - **FIXED** = root cause repaired, regression test exists, five gates reassessed, consumers reviewed, provenance and classification updated.
 - Otherwise: IMPLEMENTED BUT NOT YET VERIFIED, PARTIALLY REMEDIATED, BLOCKED, or OPEN.
 
 ---
+
+## Five-gate status per finding
+
+**Gates:**
+- **G1** Python / software correctness
+- **G2** Mathematical correctness
+- **G3** Statistical correctness
+- **G4** Quantitative / trading correctness
+- **G5** Research integrity / provenance
+
+**Cell values:**
+- **PASS:** verified this program with a test, a known answer or line-level reading.
+- **FAIL:** a defect remains.
+- **PARTIAL:** part verified, part open.
+- **BLOCKED:** needs an owner decision or data.
+- **N/A:** the gate does not apply to this finding.
+
+| ID | Sev. | Finding | G1 Software | G2 Math | G3 Statistics | G4 Quant / trading | G5 Research integrity | Status |
+|---|---|---|---|---|---|---|---|---|
+| F-01 | CRITICAL | PCA look-ahead | PASS | PASS | FAIL (B = 100 vs family) | FAIL (causal fit PASS; labels still same-close, F-04) | PARTIAL (fit window/cadence = reused conventions, sensitivity untested) | PARTIALLY REMEDIATED |
+| F-02 | CRITICAL | IID p-values on dependent labels | PASS | PASS | FAIL (labelled, not repaired) | N/A | PARTIAL (labelled descriptive; calibration UNVERIFIED) | PARTIALLY REMEDIATED (D-2) |
+| F-03 | CRITICAL | Legacy Kalman seed look-ahead | PASS | PASS | N/A | PARTIAL (canonical PASS; legacy consumers FAIL) | PARTIAL (lineage self-declared; migration needs D-8) | PARTIALLY REMEDIATED |
+| F-04 | HIGH | Same-close / zero-latency labels | PASS (contract) | PASS (known answer) | N/A | FAIL (contract not wired) | BLOCKED (D-1) | BLOCKED |
+| F-05 | HIGH | Pairs permutation null | PASS | PASS | FAIL | FAIL | BLOCKED (D-4) | BLOCKED |
+| F-06 | HIGH | Walk-forward boundary overlap | PASS | PASS | N/A | PASS (no shared candle) | PASS | FIXED |
+| F-07 | HIGH | Permutation resolution vs families | PASS | PASS | FAIL (families) | N/A | PARTIAL (resolution now reported) | PARTIALLY REMEDIATED (D-3) |
+| F-08 | HIGH | DCA design power ≈ 0 | PASS | PASS | FAIL | PASS (accounting) | BLOCKED (D-5) | BLOCKED |
+| F-09 | MEDIUM | Partial last candles | PASS | PASS | N/A | PASS | PASS | FIXED |
+| F-10 | HIGH | Survivorship | N/A | N/A | FAIL (selection bias) | FAIL | BLOCKED (D-6) | BLOCKED |
+| F-11 | HIGH | Research-lab verdict overstatement | PASS | N/A | PASS (field honest) | N/A | BLOCKED (vocabulary, D-7) | PARTIALLY REMEDIATED |
+| F-12 | MEDIUM | Borrow assumed zero | PASS | PASS | N/A | PASS (fail-closed) | PASS | FIXED |
+| F-13 | MEDIUM | DCA r_multiple basis | PASS | PASS | N/A | PASS | PASS | FIXED |
+| F-14 | MEDIUM | Strategy scorer | PASS | PASS | N/A | BLOCKED (thresholds, D-11) | PASS | PARTIALLY REMEDIATED |
+| F-15 | MEDIUM | Decision Lock drift | N/A | N/A | N/A | N/A | PASS | FIXED |
+| F-16 | HIGH | Repeated cointegration scans | N/A | N/A | FAIL | N/A | BLOCKED (D-3, D-8) | BLOCKED |
+| F-17 | MEDIUM | Health drift vs legacy seed | PASS | PASS | N/A | PASS | PASS | FIXED (N-2 recorded) |
+| F-18 | LOW | Kalman writer column | PASS (mutation-checked) | N/A | N/A | N/A | PASS | FIXED |
+| F-19 | MEDIUM | "Untouched holdout" wording | N/A | N/A | N/A | N/A | PASS | FIXED |
+| F-20 | MEDIUM | Forming candle at fetch | PASS | PASS | N/A | PASS | PASS | FIXED |
+| F-21 | LOW | Duplicate ATR feature | PASS | N/A | PARTIAL (count once per family, D-3) | N/A | PASS | FIXED (documented) |
+
+**Totals:**
+- FIXED: 10 (F-06, F-09, F-12, F-13, F-15, F-17, F-18, F-19, F-20, F-21).
+- PARTIALLY REMEDIATED: 6 (F-01, F-02, F-03, F-07, F-11, F-14).
+- BLOCKED: 5 (F-04, F-05, F-08, F-10, F-16).
+
+**All three critical findings are partially remediated and none is closed.**
 
 ## A. Remediation report (F-01 … F-21)
 
@@ -92,7 +140,7 @@
 
 | Item | Value |
 |---|---|
-| Code commit | `39b76a2` + uncommitted working tree (43 paths; **dirty**) |
+| Code commit | `757578d` (batch 1 + Stage A), working tree clean at commit time. Earlier states: `39b76a2` (audit), `ef5636b` |
 | Data version | v2 (`bot/research/governance/data_manifest_CRRP-2026-10-02_v2.json`, 213 files fingerprinted; v1 archived at `data/_archive/v1_CRRP-2026-10-02/`) |
 | Methodology version | `STAGE2D-REVB-3` |
 | Protocol hash | `7dbaa8fe8bab068708565852950589fd8d546c53d4ee7d68b75182f8fe455a6c` |
@@ -144,7 +192,6 @@ All runs below were offline under the network guard. Each harness used its own t
 | D-9 | PCA fit window: **taken from existing conventions** (expanding, 1000 / 168); confirm or replace | F-01 sensitivity |
 | D-11 | Scorer thresholds | F-14 |
 | — | Borrow-rate data source | canonical pairs output (F-12 now fails closed) |
-| — | Commit of batch 1 + Stage A | — |
 
 Options, consequences and evidence for D-1…D-9 are in `RESEARCH_PIPELINE_REMEDIATION_PLAN_2026-10-03.md` §5.
 

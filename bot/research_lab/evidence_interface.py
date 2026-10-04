@@ -45,7 +45,12 @@ from typing import Dict, List, Optional
 from bot.research_lab.capability_registry import RESEARCH_CAPABILITIES
 from bot.research_lab.models import ResearchExperiment
 
-SURVIVED_VERDICTS = ("SUPPORTED", "PARTIALLY_SUPPORTED")
+# claude code changed: owner decision D-7 — "survived" now means STATISTICAL or higher on the verdict ladder
+# (dependence-aware AND confirmed inside a registered D-3 family). OBSERVATION is an unconfirmed observation and
+# does not survive. Stored pre-D-7 SUPPORTED/PARTIALLY_SUPPORTED rows are UNVERIFIED (F-11) and no longer count.
+SURVIVED_VERDICTS = ("STATISTICAL", "ECONOMIC", "TRADEABLE", "CANONICAL")
+OBSERVED_VERDICTS = ("OBSERVATION",)
+LEGACY_UNVERIFIED_VERDICTS = ("SUPPORTED", "PARTIALLY_SUPPORTED")
 FAILED_VERDICTS = ("REJECTED", "INCONCLUSIVE")
 INVALID_VERDICTS = ("INVALID_RESEARCH", "INSUFFICIENT_DATA")
 

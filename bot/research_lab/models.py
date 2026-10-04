@@ -59,8 +59,15 @@ class ResearchRecordIsImmutableError(Exception):
 # ─────────────────────────────────────────────────────────────
 
 VERDICT_CHOICES = [
-    ("SUPPORTED", "Supported"),
-    ("PARTIALLY_SUPPORTED", "Partially Supported"),
+    # claude code changed: owner decision D-7 — the verdict ladder; each level requires every level below it
+    ("OBSERVATION", "Observation"),
+    ("STATISTICAL", "Statistical (D-2 + D-3 family)"),
+    ("ECONOMIC", "Economic (net of complete costs)"),
+    ("TRADEABLE", "Tradeable (d ≥ 1, zone V, capacity)"),
+    ("CANONICAL", "Canonical (provenance + forward holdout)"),
+    # pre-D-7 values kept ONLY so stored rows stay readable; never produced again (UNVERIFIED, F-11)
+    ("SUPPORTED", "Supported (legacy — unverified)"),
+    ("PARTIALLY_SUPPORTED", "Partially Supported (legacy — unverified)"),
     ("INCONCLUSIVE", "Inconclusive"),
     ("REJECTED", "Rejected"),
     ("INVALID_RESEARCH", "Invalid Research"),

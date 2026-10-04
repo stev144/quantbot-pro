@@ -937,6 +937,8 @@ class EntryExitEngine:
         price_data_dir:        Optional[str] = None,   # claude code changed: new — audit C-01. Folder holding {SYMBOL}_1h.csv real closes, joined by timestamp so P&L can be marked on fixed leg quantities; None = DEFAULT_PRICE_DATA_DIR. Ignored when the kalman CSV already carries close_a/close_b.
         borrow_rate_hourly_a:  Optional[float] = None,   # claude code changed: new — Phase 1 §7, hourly borrow rate of symbol_a's base asset (only charged while A is short). None = not modelled — see borrow_cost_modeled.
         borrow_rate_hourly_b:  Optional[float] = None,   # claude code changed: new — same, for symbol_b
+        funding_rates_a:       Optional[pd.Series] = None,   # claude code changed: owner decision (borrow row) — perp funding history of symbol_a (rate per settlement, indexed by settlement time); short leg via USDT-M perpetual
+        funding_rates_b:       Optional[pd.Series] = None,   # claude code changed: same, for symbol_b
         disable_target_exit:   bool = False,   # claude code changed: new — exit-rule redesign, "fixed holding period" attempt (model_governance_log.md). False preserves every existing construction site's behavior unchanged. True removes Exit 1 (TARGET, the z-score-crossing check) from _check_exit_conditions() entirely, leaving STOPLOSS (safety, rare-tail) and TIMESTOP as the only two exit paths — TIMESTOP then becomes the PRIMARY, not backstop, exit, so callers using this mode should also pass an exit_time_stop_hours tied to the pair's own half-life (e.g. 1x), not the old 2x-half-life backstop value. The point: TARGET's "does z cross back near its own mean" check is exactly the mechanism diagnosed as producing the same inflated win-rate/Sharpe on shuffled data as on real data (see the "Why entry_ic won't move" and five prior design-attempt entries) — a pure time exit never asks that question at all.
         execution_delay_candles: int = 1,   # claude code changed: Stage 2D (Stage 2C §2) — d ≥ 1: a decision at the close of candle t fills at the close of candle t+d, for entries AND exits. 1 is the FORCED minimum, not a calibrated value; the primary d is an owner decision (OPEN-1b/1c, live latency)
     ) -> None:
@@ -1039,6 +1041,21 @@ class EntryExitEngine:
         # own underscore convention ("EUR_USD"/"AVAX_USDT"), not the
         # instrument registry's canonical "BASE/QUOTE" form — converted
         # here rather than changing this engine's established convention.
+        # claude code changed: 2026-10-04 asset-agnostic — market rules may not leak between asset classes:
+        # (1) recorded PERPETUAL FUNDING is a crypto financing source (borrow row) and can never finance a non-crypto
+        #     pair; (2) a CANONICAL run must name the asset class its symbols belong to (the default CRYPTO cannot
+        #     silently price an FX pair with crypto costs) and that class's market profile must be complete
+        #     (FX: FX_CALENDAR_UNAVAILABLE until Decision 5's owner rules exist). Crypto runs are unchanged.
+        from bot.quant_core.market_profile import AssetClassMismatch, asset_class_for_symbol, profile_for_asset_class
+        _sym_classes = {s: asset_class_for_symbol(s) for s in (symbol_a, symbol_b) if s}
+        if funding_rates_a is not None and (asset_class != ASSET_CLASS_CRYPTO
+                                            or any(c != ASSET_CLASS_CRYPTO for c in _sym_classes.values())):
+            raise AssetClassMismatch(f"recorded perpetual funding is a CRYPTO financing source; it cannot finance "
+                                     f"{asset_class} / {_sym_classes} (no FX swap source is decided)")
+        if rule_set in CANONICAL_RULE_SETS:
+            if any(c != asset_class for c in _sym_classes.values()):
+                raise AssetClassMismatch(f"rule_set={rule_set!r} with asset_class={asset_class!r} but symbols are {_sym_classes}")
+            profile_for_asset_class(asset_class).require_canonical(f"EntryExitEngine rule_set={rule_set} {pair_name}")
         self.venue_id      = venue_id
         self.asset_class   = asset_class
         _canonical_symbol_a = self.symbol_a.replace("_", "/", 1) if self.symbol_a else self.symbol_a
@@ -1050,12 +1067,30 @@ class EntryExitEngine:
         # No historical borrow-rate data exists in this repo, so a missing rate is
         # never guessed: it is charged as 0 and flagged via borrow_cost_modeled
         # (also written into the strategy summary) so results can't be read as complete.
-        self.borrow_cost_modeled = borrow_rate_hourly_a is not None and borrow_rate_hourly_b is not None   # claude code changed: new
+        # claude code changed: owner decision (borrow row, signed 2026-10-03) — the canonical financing source is
+        # recorded PERPETUAL FUNDING history. Constant user-supplied borrow rates are kept for exploration but are
+        # an assumption, not a recorded source, so they can no longer make an output CANONICAL.
+        if (funding_rates_a is None) != (funding_rates_b is None):
+            raise ValueError("pass funding history for BOTH legs (either leg can be the short)")
+        if funding_rates_a is not None and (borrow_rate_hourly_a is not None or borrow_rate_hourly_b is not None):
+            raise ValueError("funding history and constant borrow rates are mutually exclusive financing models")
+        if funding_rates_a is not None:
+            from bot.quant_core.funding import normalise_funding
+            self.financing_mode = "PERP_FUNDING"
+            self._funding = {"a": normalise_funding(funding_rates_a), "b": normalise_funding(funding_rates_b)}
+        elif borrow_rate_hourly_a is not None and borrow_rate_hourly_b is not None:
+            self.financing_mode = "BORROW_RATE_ASSUMED"
+            self._funding = None
+        else:
+            self.financing_mode = "NONE"
+            self._funding = None
+        self.funding_gaps = []      # reasons a trade's funding could not be computed (fail closed)
+        self.borrow_cost_modeled = self.financing_mode == "PERP_FUNDING"   # claude code changed: True only for the recorded-source model; re-evaluated after the run
         self.pair_costs = PairCosts(   # claude code changed: new
             fee_rate=self.fee_rate, slippage_rate=self.slippage_rate,
-            borrow_rate_hourly_a=borrow_rate_hourly_a or 0.0, borrow_rate_hourly_b=borrow_rate_hourly_b or 0.0,
+            borrow_rate_hourly_a=borrow_rate_hourly_a or 0.0, borrow_rate_hourly_b=borrow_rate_hourly_b or 0.0,   # 0 in PERP_FUNDING mode: funding is applied per slice in _realise_slice
         )
-        if not self.borrow_cost_modeled:   # claude code changed: new
+        if self.financing_mode != "PERP_FUNDING":   # claude code changed: owner decision (borrow row) — was `not borrow_cost_modeled`
             logger.warning("  Borrow interest NOT modelled (no borrow_rate_hourly_a/_b supplied) — short-leg financing is charged as 0; results are economically incomplete.")
 
         # claude code changed: Stage 2D Rev B step 8 — fixed-fraction sizing
@@ -1153,6 +1188,8 @@ class EntryExitEngine:
             self._validate_canonical_input(kalman_csv)
         self._kalman_seed_lineage = self._input_seed_lineage(kalman_csv)   # claude code changed: 2026-10-03 F-03 — recorded in every summary
         df = self._load_kalman_data(kalman_csv)
+        self._px = ({"a": df[PRICE_COL_A], "b": df[PRICE_COL_B]}
+                    if PRICE_COL_A in df.columns and PRICE_COL_B in df.columns else None)   # claude code changed: funding notional marks
 
         # ── Step 2: Validate required columns ────────────────────────────────
         self._validate_columns(df)
@@ -1168,6 +1205,11 @@ class EntryExitEngine:
         # ── Step 5: Calculate equity curve ────────────────────────────────────
         equity_curve = self._build_equity_curve(trade_log, df)
         self._mtm_equity = self._build_mtm_equity(df)   # claude code changed: Stage 2D — mark-to-market equity on actual capital (drawdown source)
+
+        # claude code changed: owner decision (borrow row) — a funding gap in ANY trade makes the run cost-incomplete
+        if self.financing_mode == "PERP_FUNDING" and self.funding_gaps:
+            self.borrow_cost_modeled = False
+            logger.warning(f"  Funding unavailable for {len(self.funding_gaps)} slice(s) — BORROW_UNAVAILABLE, not canonical: {self.funding_gaps[:3]}")
 
         # ── Step 6: Calculate strategy summary ───────────────────────────────
         summary = self._build_strategy_summary(trade_log, equity_curve)
@@ -1860,6 +1902,11 @@ class EntryExitEngine:
         self._lineage = {"seed_ts": seed.seed_ts, "seed_id": extra["seed_id"], "data_version": prov.data_version,
                          "input_run_id": prov.run_id, "seed_design": seed.seed_design}
 
+    def _borrow_status(self) -> str:   # claude code changed: owner decision (borrow row) — new
+        if self.financing_mode == "PERP_FUNDING":
+            return "FUNDING_KNOWN" if not self.funding_gaps else "BORROW_UNAVAILABLE"
+        return "BORROW_RATE_ASSUMED" if self.financing_mode == "BORROW_RATE_ASSUMED" else "ASSUMED_ZERO_BORROW"
+
     def _canonical_lineage(self) -> bool:   # claude code changed: F-12 — validated canonical input lineage (independent of cost completeness)
         return self.rule_set == "CANONICAL" and self._lineage is not None
 
@@ -2126,6 +2173,28 @@ class EntryExitEngine:
     # fixed-quantity formula that replaced it are deleted, not kept for
     # compatibility. Every realised dollar goes through close_pair_slice().
 
+    def _apply_funding(self, trade, realised, ts):   # claude code changed: owner decision (borrow row) — new
+        """Funding paid/received by the SHORT leg (as a perpetual) over (last realisation, ts], folded into this
+        slice's borrow_cost / net_pnl / roc so trade totals and the MTM equity events stay one number. The
+        canonical lifecycle has no partial exits, so the full holding window lands on the single exit slice.
+        Missing coverage is recorded and the run becomes cost-incomplete (never CANONICAL); nothing is imputed."""
+        from dataclasses import replace as _replace
+        from bot.quant_core.funding import funding_cost
+        held = trade.pair_position
+        leg = "a" if held.qty_a < 0 else "b"
+        qty = abs(held.qty_a if leg == "a" else held.qty_b)
+        t0 = trade.slice_events[-1][0] if trade.slice_events else trade.entry_timestamp
+        if getattr(self, "_px", None) is None:
+            self.funding_gaps.append(f"trade {trade.trade_id}: no leg prices for funding notional")
+            return realised
+        fc = funding_cost(qty, self._px[leg], self._funding[leg], t0, ts)
+        if not fc.complete:
+            self.funding_gaps.append(f"trade {trade.trade_id} ({leg}-leg short): {fc.reason}")
+            return realised
+        net = realised.net_pnl - fc.cost
+        return _replace(realised, borrow_cost=realised.borrow_cost + fc.cost, net_pnl=net,
+                        roc=net / realised.capital if realised.capital else realised.roc)
+
     def _realise_slice(self, ts: pd.Timestamp, fraction: float, price_a: float, price_b: float):   # claude code changed: new
         """Close `fraction` of the open trade's CURRENT position via
         bot/pairs/pnl.close_pair_slice() and fold the realised slice into the
@@ -2138,6 +2207,8 @@ class EntryExitEngine:
         realised, remaining = close_pair_slice(
             trade.pair_position, fraction, price_a, price_b, ts, self.pair_costs,
         )
+        if self.financing_mode == "PERP_FUNDING":   # claude code changed: owner decision (borrow row) — perp funding on the short leg
+            realised = self._apply_funding(trade, realised, ts)
         s, f = self.pair_costs.slippage_rate, self.pair_costs.fee_rate   # claude code changed: Stage 2D — entry-side cost carried by this slice, same formula as pnl.py §5/§6
         entry_share = 0.0   # claude code changed: Stage 2D
         for q, m0 in ((fraction * held.qty_a, held.entry_mark_a), (fraction * held.qty_b, held.entry_mark_b)):   # claude code changed: Stage 2D
@@ -2560,7 +2631,7 @@ class EntryExitEngine:
             # vocabulary: BORROW_KNOWN (a rate was supplied and charged) or ASSUMED_ZERO_BORROW (no
             # rate — short financing charged as 0; never presented as a real zero cost). Historical
             # borrow availability is never invented.
-            "borrow_status": "BORROW_KNOWN" if self.borrow_cost_modeled else "ASSUMED_ZERO_BORROW",
+            "borrow_status": self._borrow_status(),   # claude code changed: owner decision (borrow row) — FUNDING_KNOWN / BORROW_UNAVAILABLE / BORROW_RATE_ASSUMED / ASSUMED_ZERO_BORROW
             "entry_ic":            round(float(ic_val), 4) if not np.isnan(ic_val) else np.nan,
             "entry_ic_pvalue":     round(float(ic_p), 4) if not np.isnan(ic_p) else np.nan,
             "validated_ic":        self.validated_ic if self.validated_ic is not None else np.nan,             # claude code changed: was VALIDATED_IC
@@ -2698,10 +2769,13 @@ class EntryExitEngine:
         # stamped UNCERTIFIED with cost_complete=False, so no consumer can read it as
         # CANONICAL (validate_canonical_provenance requires status CANONICAL).
         cost_complete = bool(self.borrow_cost_modeled)
-        extra = {"seed_id": lin["seed_id"], "input_run_id": lin["input_run_id"], "cost_complete": cost_complete}
+        extra = {"seed_id": lin["seed_id"], "input_run_id": lin["input_run_id"], "cost_complete": cost_complete,
+                 "financing": self._borrow_status()}   # claude code changed: owner decision (borrow row)
         if not cost_complete:
-            extra["downgrade_reason"] = ("F-12: short-leg borrow not modelled (ASSUMED_ZERO_BORROW); "
-                                         "canonical evidence requires complete costs")
+            extra["downgrade_reason"] = (f"F-12 / borrow row: short-leg financing is {self._borrow_status()} — canonical "
+                                         f"evidence requires recorded perpetual funding covering every trade")   # claude code changed
+            if self.funding_gaps:
+                extra["funding_gaps"] = self.funding_gaps[:20]
         _prov.write_provenance(path, _prov.OutputProvenance(
             kind=kind, status=status,   # claude code changed: F-12 — CANONICAL only when cost_complete (see _output_provenance_status)
             methodology_version=METHODOLOGY_VERSION,

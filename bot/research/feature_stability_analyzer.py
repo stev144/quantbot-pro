@@ -63,6 +63,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.inference import CONFIRMATORY_BASIS, confirmatory_ic_test, horizon_from_label, stable_seed   # claude code changed: D-2
 
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, get_instrument, periods_per_year  # claude code changed: new — see SYMBOLS comment below; get_instrument/periods_per_year added for the ANNUALISATION_FACTOR fix, see _compute_metrics
 
@@ -452,7 +453,12 @@ class FeatureStabilityAnalyzer:
             # ── IC: Spearman rank correlation ─────────────────────────────────
             # Measures predictive power: how well does feature predict return?
             # Spearman is rank-based — robust to extreme outliers in crypto
-            ic, pvalue = stats.spearmanr(feat_clean, fwd_clean)
+            # claude code changed: owner decision D-2 — block-permutation DECISION p; IID p descriptive only.
+            ct = confirmatory_ic_test(feat_clean, fwd_clean, horizon_from_label(self.forward_col),
+                                      seed=stable_seed("stability", symbol, feature, window, self.forward_col))
+            ic = ct["ic"] if ct["status"] == "OK" else float(stats.spearmanr(feat_clean, fwd_clean)[0])
+            pvalue = ct["p_value"] if ct["status"] == "OK" else np.nan
+            pvalue_iid = ct["p_iid"] if ct["status"] == "OK" else float(stats.spearmanr(feat_clean, fwd_clean)[1])
 
             # ── Sharpe: risk-adjusted return if trading this feature ──────────
             # We "trade" in the direction of the feature's sign
@@ -525,7 +531,7 @@ class FeatureStabilityAnalyzer:
 
             # ── Overall verdict ───────────────────────────────────────────────
             # A feature needs IC AND economic significance (spread) to be tradeable
-            verdict = self._overall_verdict(ic, pvalue, sharpe, spread)
+            verdict = self._overall_verdict(ic, pvalue, sharpe, spread) if ct["status"] == "OK" else "UNTESTABLE"   # claude code changed: D-2 — no verdict on a missing confirmatory test
 
             return {
                 "symbol":       symbol,
@@ -536,9 +542,11 @@ class FeatureStabilityAnalyzer:
                 "market_context": YEAR_CONTEXT.get(window, ""),
                 # IC metrics
                 "ic":           round(float(ic), 6) if not np.isnan(ic) else np.nan,
-                "ic_pvalue":    round(float(pvalue), 6),
-                "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
-                "ic_significant": pvalue < self.alpha,
+                "ic_pvalue":    float(pvalue) if not np.isnan(pvalue) else np.nan,   # claude code changed: D-2 — block-permutation p (decision)
+                "pvalue_basis": CONFIRMATORY_BASIS,
+                "ic_pvalue_iid": round(float(pvalue_iid), 6), "iid_basis": IID_PVALUE_BASIS,   # descriptive only (F-02)
+                "test_status": ct["status"], "block": ct["block"], "n_perm": ct["n_perm"], "seed": ct["seed"],
+                "ic_significant": bool(ct["status"] == "OK" and pvalue < self.alpha),
                 "ic_grade":     ic_grade,
                 # Sharpe metrics
                 "sharpe":       round(float(sharpe), 4),

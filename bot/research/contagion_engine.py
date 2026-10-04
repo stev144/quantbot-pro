@@ -105,6 +105,8 @@ import numpy as np                          # Numerical operations
 import pandas as pd                         # DataFrame operations
 from scipy import stats                     # Spearman IC calculation
 from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.inference import CONFIRMATORY_BASIS, confirmatory_ic_test, horizon_from_label, stable_seed   # claude code changed: D-2
+from bot.quant_core.timing import research_forward_return   # claude code changed: D-1
 from statsmodels.stats.multitest import multipletests   # claude code changed: new — Phase 1D, Objective 10. Family-wide FDR correction across DivergenceICReporter.report()'s (symbol x feature) results, the same discipline cointegration_engine.py's _apply_fdr_correction() and feature_validator.py's apply_family_wide_correction() already use.
 
 # claude code changed: new — real drift bug found by audit. ALTCOIN_SYMBOLS
@@ -1023,12 +1025,12 @@ class ContagionEngine:
         all divergence features against to compute IC.
 
         Formula:
-            forward_return_Nh at time T = sum of returns from T+1 to T+N
+            forward_return_Nh at time T = open(T+1+N) / open(T+1) - 1   (D-1: fill at the next bar's open; claude code changed)
 
         Implementation:
-            We use the cumulative return shifted back by N periods.
-            shift(-N) moves each value N rows earlier so the row at time T
-            receives the value that was originally at time T+N.
+            bot.quant_core.timing.research_forward_return (the D-1 contract):
+            the open price N+1 rows ahead over the open price 1 row ahead.
+            (Was a shifted N-period sum of close returns — zero latency, F-04.)
 
         Look-ahead bias:
             These labels USE future data intentionally — that is their purpose.
@@ -1041,28 +1043,11 @@ class ContagionEngine:
         The validator filters NaN labels automatically.
         """
 
+        # claude code changed: owner decision D-1 — was the sum of close-to-close returns T+1…T+N taken from
+        # the signal close (zero latency, F-04). Now the canonical research label: fill at the NEXT bar's
+        # open, open(T+1+N)/open(T+1) − 1. Raises if 'open' is missing (no fallback to close).
         for label_name, periods in self.forward_horizons.items():
-
-            # Compute N-period forward cumulative return
-            # Method: rolling sum of future returns using negative shift
-            # At time T: forward_return = return_T+1 + return_T+2 + ... + return_T+N
-            # shift(-1) moves return at T+1 to row T
-            # rolling(N).sum() then sums the next N returns starting from T+1
-
-            # Correct implementation:
-            # 1. shift(-1) to get return that happens AFTER current candle
-            # 2. rolling(N).sum() would give us PAST N returns of the shifted series
-            # Instead: use shift(-N) on the N-period cumulative return
-
-            # Simplest correct approach: shift the cumulative return backward
-            # cumret at T+N = what was the cumulative return ending at T+N?
-            # We shift the rolling sum backward N periods so row T sees it
-            n_period_cumret = alt_df["return_1h"].rolling(
-                window=periods, min_periods=periods
-            ).sum()
-
-            # shift(-periods) pulls the value N periods ahead to the current row
-            alt_df[label_name] = n_period_cumret.shift(-periods)
+            alt_df[label_name] = research_forward_return(alt_df, periods).to_numpy()
 
         logger.info(
             f"    {symbol}: forward return labels added "
@@ -1231,20 +1216,24 @@ class DivergenceICReporter:
                 if n < 100:   # Need minimum observations for meaningful IC
                     continue
 
-                # Spearman rank correlation — same method as feature_validator
-                ic, pvalue = stats.spearmanr(
-                    feat[valid].values,
-                    fwd[valid].values,
-                )
-
+                # claude code changed: owner decision D-2 — the DECISION p is the block permutation
+                # (block = max(4h, 24), B = 999); the analytic IID p is kept as a descriptive column only.
+                ct = confirmatory_ic_test(feat[valid].values, fwd[valid].values, horizon_from_label(forward_col),
+                                          seed=stable_seed("contagion", symbol, feature, forward_col))
+                if ct["status"] != "OK":
+                    logger.warning(f"  {symbol}/{feature}: confirmatory test untestable ({ct['reason']}) — skipped")
+                    continue
                 results.append({
                     "symbol":  symbol,
                     "feature": feature,
-                    "ic":      round(float(ic), 6),
-                    "pvalue":  round(float(pvalue), 6),
-                    "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
+                    "ic":      round(float(ct["ic"]), 6),
+                    "pvalue":  float(ct["p_value"]),
+                    "pvalue_basis": CONFIRMATORY_BASIS,
+                    "pvalue_iid": round(float(ct["p_iid"]), 6),
+                    "iid_basis": IID_PVALUE_BASIS,   # F-02 — descriptive only
+                    "block": ct["block"], "n_perm": ct["n_perm"], "seed": ct["seed"],
                     "n":       int(n),
-                    "significant": pvalue < 0.05,
+                    "significant": ct["p_value"] < 0.05,
                 })
 
         if not results:

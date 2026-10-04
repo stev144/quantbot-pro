@@ -1480,6 +1480,57 @@ def run_walk_forward_pipeline(
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: 2026-10-04 (step 3) — CANONICAL WALK-FORWARD. The WalkForwardEngine class above is the
+# LEGACY method: it re-runs the legacy Kalman (first-N OLS seed, F-03) per fold. Under Stage 2D (decision lock
+# §2.4–§2.6) nothing is fitted per fold: selection objects (EG test, causal seed, pair inclusion) are fitted
+# once, in zone S; the Kalman state runs CONTINUOUSLY from the one canonical seed; Q, R, thresholds, H and the
+# allocation are frozen. Canonical walk-forward is therefore the time-sliced evaluation of ONE canonical
+# lifecycle run (EntryExitEngine rule_set="CANONICAL"), with label truncation: a decision t counts in fold
+# [Z_s, Z_e] only if t ≤ Z_e − (d + H) (§2.3; never completed with prices from the next fold).
+# Fold boundaries are an OWNER PARAMETER (D-8 fixes only "inside S ∪ V"): there is no default.
+# Results are DEVELOPMENT evidence (decision lock §3.3) — never claim-eligible.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+CANONICAL_WF_VERSION = "QBP-WF-CANON-1"
+
+
+def canonical_walk_forward(trade_log: pd.DataFrame, fold_edges, *, protocol=None, zones=None) -> Dict:
+    """trade_log: a CANONICAL EntryExitEngine trade log (needs entry_decision_timestamp, net_pnl_pct,
+    net_pnl_usdt). fold_edges: strictly increasing timestamps e0 < e1 < … ; fold i = [e_i, e_{i+1} − 1 h].
+    Every fold must lie entirely inside zone S or entirely inside zone V."""
+    from bot.quant_core.protocol import CANONICAL
+    from bot.quant_core.research_zones import SELECTION, VALIDATION, ZONES
+    protocol, zones = protocol or CANONICAL, zones or ZONES
+    if fold_edges is None or len(fold_edges) < 2:
+        raise ValueError("fold boundaries are an owner parameter (D-8 fixes only 'inside S ∪ V'); pass >= 2 edges")
+    edges = [pd.Timestamp(e).tz_localize("UTC") if pd.Timestamp(e).tzinfo is None else pd.Timestamp(e).tz_convert("UTC")
+             for e in fold_edges]
+    if any(b <= a for a, b in zip(edges, edges[1:])):
+        raise ValueError("fold edges must be strictly increasing")
+    trunc = pd.Timedelta(hours=protocol.execution_delay_candles + protocol.require_max_holding())
+    t = pd.to_datetime(trade_log["entry_decision_timestamp"], utc=True) if len(trade_log) else pd.Series([], dtype="datetime64[ns, UTC]")
+    folds, used = [], np.zeros(len(trade_log), dtype=bool)
+    for i, (a, b) in enumerate(zip(edges, edges[1:])):
+        z_end = b - pd.Timedelta(hours=1)
+        zs = {zones.classify(a), zones.classify(z_end)}
+        if zs not in ({SELECTION}, {VALIDATION}):
+            raise ValueError(f"fold {i} [{a}, {z_end}] is not entirely inside zone S or entirely inside zone V ({sorted(zs)})")
+        mask = ((t >= a) & (t <= z_end - trunc)).to_numpy() if len(trade_log) else np.zeros(0, dtype=bool)
+        sub = trade_log.loc[mask]
+        used |= mask
+        r = sub["net_pnl_pct"].astype(float)
+        folds.append({"fold": i, "zone": zs.pop(), "start": a.isoformat(), "end": z_end.isoformat(),
+                      "last_label_complete_decision": (z_end - trunc).isoformat(), "n_trades": int(len(sub)),
+                      "net_mean_return_per_trade": float(r.mean()) if len(sub) else None,
+                      "net_pnl_usdt": float(sub["net_pnl_usdt"].astype(float).sum()) if len(sub) else 0.0,
+                      "win_rate": float((r > 0).mean()) if len(sub) else None})
+    return {"version": CANONICAL_WF_VERSION, "status": "DEVELOPMENT_EVIDENCE_NOT_CLAIM_ELIGIBLE",
+            "truncation_candles": int(trunc / pd.Timedelta(hours=1)), "folds": folds,
+            "n_trades_in_folds": int(used.sum()), "n_trades_excluded": int(len(trade_log) - used.sum())}
+
+
 if __name__ == "__main__":
     """
     Run from project root:

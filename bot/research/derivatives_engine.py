@@ -40,6 +40,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.inference import CONFIRMATORY_BASIS, confirmatory_ic_test, horizon_from_label, stable_seed   # claude code changed: D-2
+from bot.quant_core.timing import research_forward_return   # claude code changed: D-1
 
 logger = logging.getLogger(__name__)
 
@@ -214,8 +216,10 @@ class DerivativesEngine:
     # ─────────────────────────────────────────────────────────────────
 
     def _add_forward_returns(self, df: pd.DataFrame) -> pd.DataFrame:
+        # claude code changed: owner decision D-1 — was close(t+N)/close(t) − 1 (zero latency, F-04);
+        # now fill at the next bar's open: open(t+1+N)/open(t+1) − 1. Raises if 'open' is missing.
         for label, periods in self.forward_horizons.items():
-            df[label] = df["close"].shift(-periods) / df["close"] - 1
+            df[label] = research_forward_return(df, periods).to_numpy()
         return df
 
 
@@ -259,12 +263,19 @@ class DerivativesICReporter:
                 if n < 100:
                     continue
 
-                ic, pvalue = stats.spearmanr(feat[valid].values, fwd[valid].values)
+                # claude code changed: owner decision D-2 — block-permutation decision p; IID p descriptive only.
+                ct = confirmatory_ic_test(feat[valid].values, fwd[valid].values, horizon_from_label(forward_col),
+                                          seed=stable_seed("derivatives", symbol, feature, forward_col))
+                if ct["status"] != "OK":
+                    logger.warning(f"  {symbol}/{feature}: confirmatory test untestable ({ct['reason']}) — skipped")
+                    continue
                 results.append({
                     "symbol": symbol, "feature": feature,
-                    "ic": round(float(ic), 6), "pvalue": round(float(pvalue), 6),
-                    "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
-                    "n": int(n), "significant": pvalue < 0.05,
+                    "ic": round(float(ct["ic"]), 6), "pvalue": float(ct["p_value"]),
+                    "pvalue_basis": CONFIRMATORY_BASIS,
+                    "pvalue_iid": round(float(ct["p_iid"]), 6), "iid_basis": IID_PVALUE_BASIS,
+                    "block": ct["block"], "n_perm": ct["n_perm"], "seed": ct["seed"],
+                    "n": int(n), "significant": ct["p_value"] < 0.05,
                 })
 
         if not results:

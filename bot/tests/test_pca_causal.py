@@ -74,3 +74,66 @@ class CausalPCATests(SimpleTestCase):
         r["S0"] = 0.0
         with self.assertRaisesRegex(ValueError, "std"):
             compute_residuals_causal(r, CFG)
+
+
+# claude code changed: owner decision D-1 (PCA option 1) — executable factor-residual labels.
+from bot.research.pca_engine import compute_open_labels_causal
+
+LCFG = PCAConfig(n_components=1, min_fit_candles=1000, refit_every=168,
+                 forward_horizons={"forward_return_1h": 1, "forward_return_4h": 4})
+
+
+def _open_close(n=1600, seed=0):
+    r, _, _ = _factor_returns(n=n, seed=seed)
+    rng = np.random.default_rng(seed + 100)
+    o = r + 0.002 * rng.standard_normal(r.shape)            # open returns: same factor structure, different prints
+    return r, pd.DataFrame(o.values, index=r.index, columns=r.columns)
+
+
+class OpenLabelTests(SimpleTestCase):
+    def _fit_for_row(self, r, t):
+        """Hand-derived decision fit: the refit block containing t, fitted on close rows before its start."""
+        start = 1000 + ((t - 1000) // 168) * 168
+        fit = r.values[:start]
+        m, s = fit.mean(axis=0), fit.std(axis=0, ddof=1)
+        w, v = np.linalg.eigh(np.corrcoef((fit - m) / s, rowvar=False))
+        return m, s, v[:, [np.argmax(w)]]
+
+    def test_known_answer_spans_open_t1_to_open_t1h_with_frozen_decision_fit(self):
+        r, o = _open_close()
+        lab = compute_open_labels_causal(r, o, LCFG)
+        for t in (1000, 1165, 1166, 1300):                 # 1166/1167: a refit (1168) falls inside the 4h hold
+            m, s, L = self._fit_for_row(r, t)
+            z = (o.values[t + 2:t + 6] - m) / s            # open-return rows t+2 … t+5 = open(t+1) → open(t+5)
+            expected = ((z - z @ L @ L.T) * s).sum(axis=0)
+            np.testing.assert_allclose(lab[[f"forward_return_4h_S{i}" for i in range(6)]].values[t], expected, atol=1e-15)
+
+    def test_close_and_pre_fill_open_cannot_change_the_label(self):
+        r, o = _open_close()
+        t = 1300
+        base = compute_open_labels_causal(r, o, LCFG).iloc[t]
+        r2 = r.copy(); r2.iloc[1168:] *= 4.0               # every close row from the decision block's start onward
+        o2 = o.copy(); o2.iloc[:t + 2] *= 3.0              # open returns up to the fill bar (row t+1 = open_t → open_{t+1})
+        pd.testing.assert_series_equal(compute_open_labels_causal(r2, o, LCFG).iloc[t], base)
+        pd.testing.assert_series_equal(compute_open_labels_causal(r, o2, LCFG).iloc[t], base)
+
+    def test_holding_period_open_changes_the_label(self):  # positive control
+        r, o = _open_close()
+        t = 1300
+        o2 = o.copy(); o2.iloc[t + 3] += 0.05
+        a = compute_open_labels_causal(r, o, LCFG).iloc[t]
+        b = compute_open_labels_causal(r, o2, LCFG).iloc[t]
+        self.assertFalse(np.allclose(a.filter(like="4h").values, b.filter(like="4h").values))
+        pd.testing.assert_series_equal(a.filter(like="1h"), b.filter(like="1h"))   # 1h exits at open(t+2): row t+3 unused
+
+    def test_no_label_without_exit_open_or_before_first_fit(self):
+        r, o = _open_close()
+        lab = compute_open_labels_causal(r, o, LCFG)
+        self.assertTrue(lab.iloc[:1000].isna().all().all())
+        self.assertTrue(lab.filter(like="4h").iloc[-5:].isna().all().all())    # open(t+5) beyond the data
+        self.assertTrue(lab.filter(like="4h").iloc[-6].notna().all())
+
+    def test_misaligned_open_returns_are_refused(self):
+        r, o = _open_close()
+        with self.assertRaisesRegex(ValueError, "share one index"):
+            compute_open_labels_causal(r, o.iloc[1:], LCFG)

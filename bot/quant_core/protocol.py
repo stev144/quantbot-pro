@@ -22,8 +22,9 @@ from dataclasses import asdict, dataclass, replace
 from typing import Optional
 
 from bot.quant_core.provenance import config_hash
+from bot.quant_core.research_zones import ZONES   # claude code changed: D-8 — zones are the single source for the seed candle
 
-METHODOLOGY_VERSION = "STAGE2D-REVB-3"   # claude code changed: Stage 2D Rev B D-1..D-5 — was REVB-2; bumped for L = 1000, Design A seed placement and the provenance requirements (a REVB-2 seed/result can never validate as REVB-3)   # claude code changed: Stage 2D Rev B Steps 9–11 — was REVB-1; bumped because the trade lifecycle (C1/C2, H = 24) and seed semantics (causal init, C6) changed, so REVB-1 results/seeds can never pass as REVB-2
+METHODOLOGY_VERSION = "STAGE2D-REVB-4"   # claude code changed: 2026-10-03 owner decision D-8 — was REVB-3; bumped because the canonical seed candle is now bound to the selection-zone start (2021-11-07 00:00 UTC), so a REVB-3 seed/result can never validate as REVB-4   # claude code changed: Stage 2D Rev B D-1..D-5 — was REVB-2; bumped for L = 1000, Design A seed placement and the provenance requirements (a REVB-2 seed/result can never validate as REVB-3)   # claude code changed: Stage 2D Rev B Steps 9–11 — was REVB-1; bumped because the trade lifecycle (C1/C2, H = 24) and seed semantics (causal init, C6) changed, so REVB-1 results/seeds can never pass as REVB-2
 
 
 class ProtocolValueMissing(RuntimeError):
@@ -72,6 +73,12 @@ class CanonicalProtocol:
     # Kalman state keeps a fading (measured, nonzero) dependence on them.
     seed_design: str = "A_PRE_SELECTION"
 
+    # claude code changed: 2026-10-03 owner decision D-8 (signed). Design A + zones: the canonical
+    # seed candle IS the selection-zone start; θ₀ is fitted on the L candles immediately before it.
+    # None is a labelled TEST/DEVELOPMENT-ONLY setting (seed at the (L+1)-th grid candle of whatever
+    # data is passed); its config hash differs, so such a seed can never validate as canonical.
+    selection_start_utc: Optional[str] = ZONES.selection_start
+
     # Q7 — execution delay: decision at cutoff t, fill at close of t + d
     execution_delay_candles: int = 1
 
@@ -115,6 +122,11 @@ class CanonicalProtocol:
             raise ValueError("init_window_candles must be an integer >= 2")
         if self.seed_design != "A_PRE_SELECTION":   # claude code changed: owner lock — the only canonical seed placement
             raise ValueError("seed_design must be 'A_PRE_SELECTION' (owner lock, Design A)")
+        if self.selection_start_utc is not None:   # claude code changed: D-8
+            import pandas as pd
+            t = pd.Timestamp(self.selection_start_utc)
+            if t.tzinfo is None or t != t.floor("h"):
+                raise ValueError("selection_start_utc must be a tz-aware ISO timestamp on the hourly grid")
         if self.partial_exit:
             raise ValueError("partial exits are not part of the canonical Stage 2D strategy (owner D4)")
 
@@ -129,6 +141,13 @@ class CanonicalProtocol:
         if self.init_window_candles is None:
             raise ProtocolValueMissing("init_window_candles (causal Kalman init window, C6) has not been frozen by the owner")
         return self.init_window_candles
+
+    def require_selection_start(self):   # claude code changed: D-8
+        """The canonical seed candle (= S start). Raises when unset (test/development protocol)."""
+        if self.selection_start_utc is None:
+            raise ProtocolValueMissing("selection_start_utc is unset — a test/development protocol, not canonical")
+        import pandas as pd
+        return pd.Timestamp(self.selection_start_utc).tz_convert("UTC")
 
     def time_stop_decision_offset(self) -> int:
         """Candles after the entry fill at which the time-stop decision is taken

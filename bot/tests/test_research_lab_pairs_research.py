@@ -272,8 +272,13 @@ class ComputeVerdictPairsTest(TestCase):
         was empirically re-checked under the corrected log-price test and
         is is_cointegrated=True, passes_filters=False (half-life ~262
         candles > 120 max)."""
-        result = compute_verdict_pairs(run_cointegration_test(asset_a="BTC/USDT", asset_b="BCH/USDT"))
-        self.assertEqual(result.verdict, "PARTIALLY_SUPPORTED")
+        # claude code changed: 2026-10-04 (step 2, D-8) — the tool now tests ZONE S ONLY. Under the old whole-history
+        # split BTC/BCH was cointegrated (half-life ~262); inside zone S (21,023 candles) its Engle–Granger p is
+        # 0.119, i.e. NOT cointegrated, so the honest verdict is REJECTED. The evidence changed with the window.
+        evidence = run_cointegration_test(asset_a="BTC/USDT", asset_b="BCH/USDT")
+        self.assertEqual(evidence["selection_basis"], "ZONE_S_D8")
+        result = compute_verdict_pairs(evidence)
+        self.assertEqual(result.verdict, "REJECTED")
 
     def test_cointegrated_and_passes_filters_is_supported(self):
         """claude code changed: synthetic evidence — no pair in this
@@ -286,4 +291,4 @@ class ComputeVerdictPairsTest(TestCase):
             "coint_pvalue": 0.001, "adf_pvalue": 0.0001, "half_life_hours": 48.0,
             "hedge_ratio": 1.2, "reject_reason": "",
         })
-        self.assertEqual(result.verdict, "SUPPORTED")
+        self.assertEqual(result.verdict, "OBSERVATION")   # claude code changed: owner decision D-7 — a single research-lab test is capped at OBSERVATION on the verdict ladder (no registered D-3 family / costs / holdout); was SUPPORTED-family

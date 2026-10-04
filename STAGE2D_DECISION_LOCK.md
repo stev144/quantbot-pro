@@ -289,6 +289,8 @@ The timing null rotates or permutes decision times. Every permuted decision must
 
 ## Decision 3 — Research zones
 
+> **Superseded (S-2, 2026-10-03).** The zone decision below is no longer BLOCKED: the owner approved D-8 (`DECISION_SHEET_D1-D11_2026-10-03.md`). Boundaries live in `bot/quant_core/research_zones.py` (`QBP-ZONES-1`). The original text is kept for the record.
+
 **Status: ZONE DECISION = BLOCKED.** Calendar boundaries cannot be established from repository evidence. Inventing them would be a hidden assumption.
 
 ### 3.1 Evidence available
@@ -454,5 +456,6 @@ Entries are appended only; superseded text above stays in place, marked.
 | ID | Date | Superseded text | Current value | Authority | Found by |
 |---|---|---|---|---|---|
 | S-1 | 2026-10-03 | C6 "L BLOCKED"; §C6 "BLOCKED — L, the init-window length"; "`init_window_candles = None`" | **L = 1000**, Design A (`A_PRE_SELECTION`), methodology `STAGE2D-REVB-3` | `bot/quant_core/protocol.py`; `STAGE2D_CANONICAL_PROTOCOL.md` §C6; `STAGE2D_D1_D5_G1_IMPLEMENTATION_REPORT.md` §10 | Five-gate audit F-15 |
+| S-2 | 2026-10-03 | Decision 3 "ZONE DECISION = BLOCKED"; §3.3 zone table (all BLOCKED); C6 open clause "seed candle = S start" | **S** 2021-11-07 00:00 → 2024-03-31 23:00 · **embargo** 504 · **V** 2024-04-22 00:00 → 2026-09-24 23:00 · **F** 2026-10-04 00:00 (sealed; one evaluation at 2027-04-04 00:00, +90-day extensions while < 30 trades) · seed candle = S start; methodology `STAGE2D-REVB-4` | Owner decision D-8 (signed 2026-10-03); `bot/quant_core/research_zones.py`; `bot/quant_core/protocol.py` | Owner decision sheet |
 
-**Still BLOCKED (unchanged by S-1):** the zone decision (S / V / WF / F calendar boundaries) and the forward-holdout start. C6's remaining clause, the seed candle = the selection-zone start, depends on zone S and is therefore still open.
+**Still BLOCKED (unchanged by S-1):** the zone decision (S / V / WF / F calendar boundaries) and the forward-holdout start. C6's remaining clause, the seed candle = the selection-zone start, depends on zone S and is therefore still open. *(Resolved by S-2.)*

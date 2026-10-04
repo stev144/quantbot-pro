@@ -2219,3 +2219,73 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 **Verdict:** GOVERNANCE — data correction; no research result.
 
 145 hourly price files (142 PARTIAL, 3 UNVERIFIABLE) ended with a candle written before it closed (audit F-09). Rule: a candle is complete only if it was fetched after its close (t_fetch >= open + interval); for stored files the write time bounds the fetch time, and a last row closing within 60 s of the write is treated as unverifiable. Each affected file's original (v1) is preserved byte-identical in `data/_archive/v1_CRRP-2026-10-02/`. The live file is the original minus its final row (every other row byte-identical). Lineage: `bot/research/governance/data_manifest_CRRP-2026-10-02.json` (v1) and `..._v2.json` (v2: per-file v1/v2 SHA-256, rule, dropped row). Future fetches drop the forming candle at the source (`data_fetcher._build_ohlcv_dataframe`). Artifacts built on the v1 final row keep their existing classes; none is upgraded.
+
+
+---
+
+## 2026-10-03 — RESEARCH PROTOCOL: ZONES + SEALED FORWARD HOLDOUT (owner decision D-8)
+
+- **Decision:** `DECISION_SHEET_D1-D11_2026-10-03.md` D-8, approved as written by the owner on 2026-10-03.
+- **Source of truth:** `bot/quant_core/research_zones.py`, version `QBP-ZONES-1`.
+- **Init:** the L = 1000 candles 2021-09-26 08:00 → 2021-11-06 23:00 UTC.
+- **Selection S:** 2021-11-07 00:00 → 2024-03-31 23:00 UTC.
+- **Embargo:** 504 candles.
+- **Validation V:** 2024-04-22 00:00 → 2026-09-24 23:00 UTC.
+- **Unassigned:** 2026-09-25 → 2026-10-03 23:00, exposed, never evidence.
+- **Forward holdout F:** 2026-10-04 00:00 UTC, SEALED. One evaluation at 2027-04-04 00:00 UTC, extended 90 days at a time while fewer than 30 trades have occurred.
+- **Claim eligibility:** S, V and all earlier history are `PSEUDO_HOLDOUT — NOT CLAIM-ELIGIBLE`; only F is claim-eligible.
+- **Methodology:** `STAGE2D-REVB-3` → `STAGE2D-REVB-4`. The canonical Kalman seed candle is bound to the S start (Design A), so a REVB-3 seed can never validate. No canonical seed existed, so there is no live effect.
+- **Seal:** candles ≥ F are refused by `run_canonical`. The four raw-data writers (crypto, forex, MT5, funding/OI) route them to `data/_sealed_holdout_F2026-10-04/` instead of `data/`.
+- **Evaluate-once ledger:** `bot/research/governance/forward_holdout_ledger.json` (not yet created; it is written only by `open_holdout_evaluation`).
+- **Consequence:** pairs whose common history does not cover the full init window before 2021-11-07 cannot be seeded canonically (e.g. FIDA, whose data starts 2021-09-30).
+- **History:** nothing deleted and no classification changed.
+
+
+---
+
+## 2026-10-03 — RESEARCH LABELS: EXECUTION DELAY d = 1 AT THE NEXT OPEN (owner decision D-1)
+
+- **Change:** every research label (feature, cross-sectional, contagion, derivatives, PCA) now fills at bar t+1's OPEN after a signal at bar t's close: open(t+1+h) / open(t+1) − 1 (`bot/quant_core/timing.py`, `RESEARCH_LABEL_CONTRACT`). No fallback to close.
+- **PCA (owner choice, option 1):** the causal close-return factor model, frozen at the decision bar, is applied to open-to-open returns over open(t+1) → open(t+1+h).
+- **Cross-sectional:** the label is now raw (not winsorised).
+- **d = 2:** sensitivity check only. **d = 0:** labelled diagnostic only.
+- **Column names:** unchanged. Every historical label file was built under d = 0 (same close) and stays LEGACY; any rerun under D-1 is a NEW experiment.
+
+
+---
+
+## 2026-10-03 — INFERENCE, FAMILIES, PAIRS NULL, FINANCING (owner decisions D-2, D-10, D-3, D-4, borrow row)
+
+- **D-2 / D-10:** the confirmatory test is block permutation, block = max(4h, 24), B = 999 (QBP-INF-D2D10-1). Calibrated size 3.3–6.3 % (9 scenarios). The interaction test is Freedman–Lane block permutation (size 4.0–6.0 % vs 27–57 % for the old IID ANOVA). IID p-values are descriptive only, in every engine.
+- **D-3:** hypothesis registry (QBP-HYP-D3-1): at most 5 pre-registered hypotheses per program per quarter; Holm FWER 0.05 on zone V only; exploration BH q = 0.10 on zone S only, never claimable.
+- **D-4:** Step-17 null implemented (QBP-STEP17-D4-1). NOT usable until its size/power calibration (R >= 500) is run — owner compute decision pending.
+- **Borrow row:** short-leg financing = recorded perpetual funding (QBP-FUND-1). A CANONICAL output requires funding coverage for every trade; constant borrow rates are BORROW_RATE_ASSUMED (non-canonical).
+- **History:** no historical result reclassified.
+
+
+---
+
+## 2026-10-03 — VERDICT LADDER, DESCRIPTIVE SCORER, PIT UNIVERSE, DCA REDESIGN (owner decisions D-7, D-11, D-6, D-5)
+
+- **D-7:** SUPPORTED replaced by the ladder OBSERVATION > STATISTICAL > ECONOMIC > TRADEABLE > CANONICAL (QBP-LADDER-D7-1). A single research-lab test is capped at OBSERVATION. Stored legacy SUPPORTED rows stay readable but are UNVERIFIED and never survived. Migration 0015 (no-op SQL).
+- **D-11:** strategy scorer is descriptive only; no trade/avoid selection.
+- **D-6:** point-in-time membership rules implemented (QBP-PIT-D6-1); the volume floor and the listing table are pending, so cross-sectional research stays BLOCKED.
+- **D-5:** single DCA statistic and the 80 % power gate implemented (QBP-DCA-D5-1); calibration pending owner definitions, so DCA stays descriptive only.
+
+
+---
+
+## 2026-10-04 — CANONICAL PAIRS PATHS (steps 2 and 3)
+
+- **Step 2:** cointegration selection runs on zone S only (`run_selection_zone_screen`, QBP-COINT-ZONE-S-1). D-3 exploratory BH q = 0.10, never claimable, at most 5 nominated; canonical-seed eligibility required. Legacy `cointegration_pairs.csv` rows are labelled LEGACY_FIRST_N_TRAINING_WINDOW. The research-lab cointegration tool is zone-S. Real-data note: BTC/BCH is NOT cointegrated within zone S (EG p = 0.119).
+- **Step 3:** the research-lab Kalman tool uses `run_canonical` (data to the end of zone S). Canonical walk-forward (QBP-WF-CANON-1): one canonical run, label truncation 25 candles, owner fold boundaries required. The D-4 statistic is the D-3 endpoint on label-complete zone-V decisions. Canonical pair ladder (QBP-PAIR-LADDER-CANON-1): recorded funding or stop; the D-4 null and walk-forward are BLOCKED until the owner supplies calibration compute and fold boundaries. Legacy paths are kept and self-identify as LEGACY.
+- **History:** no historical result reclassified.
+
+---
+
+## 2026-10-04 — ASSET-AGNOSTIC MARKET LAYER (QBP-MARKET-1)
+
+- Market rules (calendar, gap policy, seed rule, horizon basis, financing, costs, universe) are now an explicit MarketProfile (`bot/quant_core/market_profile.py`). CRYPTO_PROFILE describes REVB-4 exactly: protocol hash unchanged, 14 crypto output fingerprints identical before and after.
+- FOREX: decision-lock Decision 5 principle implemented as a mechanism (scheduled closures excluded from the grid; missing trading hours follow an owner g_max). Decision 5 remains BLOCKED: every FOREX_PROFILE rule is an owner decision (OD-FX-1 to OD-FX-9). Every canonical consumer returns or raises FX_CALENDAR_UNAVAILABLE; FX is never negative evidence.
+- Cross-asset leaks refused: perpetual funding, crypto costs and the D-6 universe cannot reach FX; mixed-class pairs are refused; session-traded data under a crypto name is refused.
+- Tests: test_asset_agnostic_market (16), mutations 9/9; full suite 1,807 tests with 0 new failures. No live change; no historical result reclassified; no FX result produced.

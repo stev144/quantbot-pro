@@ -132,12 +132,14 @@ class DivergenceCalculationSanityTest(SimpleTestCase):
         df = pd.DataFrame(index=idx)
         # Distinct return per row so the shift direction is unambiguous.
         df["return_1h"] = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
+        # claude code changed: owner decision D-1 — the label is open(T+1+N)/open(T+1) − 1 (fill at the next
+        # bar's open), so the frame carries distinct open prices; it still must use only FUTURE candles.
+        df["open"] = [100.0, 101.0, 103.0, 106.0, 110.0, 115.0, 121.0, 128.0, 136.0, 145.0]
 
         out = engine._calculate_forward_returns(df, "TEST/USDT")
 
-        # Row 2 (return=0.02) should see the sum of rows 3+4 (0.03+0.04=0.07),
-        # never its own or earlier rows' returns.
-        self.assertAlmostEqual(out["forward_return_2h"].iloc[2], 0.07, places=10)
+        # Row 2 fills at open[3] = 106 and exits at open[5] = 115 — never its own or earlier rows.
+        self.assertAlmostEqual(out["forward_return_2h"].iloc[2], 115.0 / 106.0 - 1, places=10)
         # Last two rows have no full 2h future window left — must be NaN.
         self.assertTrue(pd.isna(out["forward_return_2h"].iloc[-1]))
 

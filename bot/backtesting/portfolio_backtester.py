@@ -241,17 +241,10 @@ class PortfolioBacktester:
         summary = self._build_summary()
 
         # ── Classify coins ────────────────────────────────────
-        # Coins to trade: grade B+ or above (score >= 70)
-        coins_to_trade = [
-            r["symbol"] for r in self.ranked
-            if r["total_score"] >= 70
-        ]
-
-        # Coins to avoid: grade D or F (score < 50)
-        coins_to_avoid = [
-            r["symbol"] for r in self.ranked
-            if r["total_score"] < 50
-        ]
+        # claude code changed: owner decision D-11 — the scorer has NO selection role. These keys stay (empty) so
+        # existing consumers keep working; trade eligibility comes only from the D-7 verdict ladder.
+        coins_to_trade = []
+        coins_to_avoid = []
 
         # Log the final ranking
         logger.info("=" * 55)
@@ -281,8 +274,9 @@ class PortfolioBacktester:
             "ranked":         self.ranked,                          # All coins sorted by score
             "best_symbol":    self.ranked[0] if self.ranked else None,   # Highest scorer
             "worst_symbol":   self.ranked[-1] if self.ranked else None,  # Lowest scorer
-            "coins_to_trade": coins_to_trade,                      # Grade B+ and above
-            "coins_to_avoid": coins_to_avoid,                      # Grade D/F
+            "coins_to_trade": coins_to_trade,                      # claude code changed: D-11 — always empty (no selection role)
+            "coins_to_avoid": coins_to_avoid,                      # claude code changed: D-11 — always empty
+            "selection_role": "NONE — D-11: scores rank for display only; eligibility = D-7 verdict ladder",   # claude code changed
             "summary":        summary,                              # Aggregate stats
             "errors":         self.errors,                         # Failed symbols
             "total_tested":   len(self.ranked),                    # Successful tests
@@ -517,14 +511,8 @@ class PortfolioBacktester:
             print(f"Weighted score:   {summary['weighted_avg_score']}")
             print(f"Profitable coins: {summary['profitable_coins']}/{summary['total_coins_tested']}")
 
-        # Print recommendations
-        coins_to_trade = [r["symbol"] for r in self.ranked if r["total_score"] >= 70]
-        coins_to_avoid = [r["symbol"] for r in self.ranked if r["total_score"] < 50]
-
-        if coins_to_trade:
-            print(f"\n✓ TRADE THESE:  {', '.join(coins_to_trade)}")
-        if coins_to_avoid:
-            print(f"✗ AVOID THESE:  {', '.join(coins_to_avoid)}")
+        # claude code changed: owner decision D-11 — no TRADE/AVOID recommendation from the scorer.
+        print("\nScores are descriptive only (D-11); trade eligibility comes from the D-7 verdict ladder.")
 
         if self.errors:
             print(f"\n⚠ FAILED: {list(self.errors.keys())}")

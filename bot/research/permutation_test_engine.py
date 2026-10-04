@@ -594,6 +594,8 @@ class PermutationTestEngine:
         verdict["win_rate_significant"] = (not pd.isna(verdict.get("win_rate_p_value", np.nan))
                                             and verdict["win_rate_p_value"] < (1 - SIGNIFICANCE_PERCENTILE))
 
+        verdict["null_validity"] = ("LEGACY — the z-timing shuffle keeps the cross-asset relationship, so it cannot "
+                                    "test a pairs edge (F-05). Canonical pairs null: bot.research.pairs_step17_null (D-4)")   # claude code changed: step 3
         verdict["edge_appears_real"] = bool(
             verdict["sharpe_significant"] and verdict["win_rate_significant"]
             and verdict["real_entry_ic_meaningfully_positive"]
