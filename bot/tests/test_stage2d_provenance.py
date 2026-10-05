@@ -529,3 +529,101 @@ class ParityConsumerDistinguishesTests(SimpleTestCase):
                            "live_exit_fill_candle_missing": [False, False, False, False]})
         r = ForensicReport([], {}, 1, pd.DataFrame(), [], [], tp, pd.DataFrame(), {})
         self.assertEqual(list(r.clean_trade_pairs().index), [0])
+
+
+# claude code changed: 2026-10-05 — provenance for the non-canonical research engines (cross-section, feature
+# validation, contagion, PCA): every output records its exact inputs, config, code state and a run id; LEGACY only.
+class ResearchEngineProvenanceTests(SimpleTestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _csv(self, name, closes):
+        idx = pd.date_range("2024-01-01", periods=len(closes), freq="h", tz="UTC")
+        p = self.d / name
+        pd.DataFrame({"timestamp": idx, "open": closes, "high": closes, "low": closes, "close": closes,
+                      "volume": 1.0}).to_csv(p, index=False)
+        return p
+
+    def test_input_fingerprint_is_exact(self):
+        from bot.quant_core import provenance as pv
+        a, b = self._csv("A.csv", [1.0, 2.0]), self._csv("B.csv", [3.0, 4.0])
+        f1, f2 = pv.input_files_fingerprint([a, b]), pv.input_files_fingerprint([b, a])
+        self.assertEqual(f1["version"], f2["version"])                         # order of listing is not data
+        self.assertEqual(set(f1["files"]), {a.as_posix(), b.as_posix()})
+        self._csv("B.csv", [3.0, 4.000001])                                     # one value changes
+        self.assertNotEqual(pv.input_files_fingerprint([a, b])["version"], f1["version"])
+        fr = {"A": pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2024-01-01", periods=2, freq="h", tz="UTC"))}
+        v1 = pv.input_frames_fingerprint(fr, columns=["close", "volume"])     # absent column skipped, recorded
+        self.assertEqual(v1["columns"], ["close"])
+        fr["A"].iloc[1, 0] = 2.5
+        self.assertNotEqual(pv.input_frames_fingerprint(fr, columns=["close"])["version"], v1["version"])
+
+    def test_sidecar_is_legacy_complete_deterministic_and_never_canonical(self):
+        from bot.quant_core import provenance as pv
+        art, src = self._csv("OUT.csv", [1.0]), self._csv("IN.csv", [5.0])
+        inputs, code = pv.input_files_fingerprint([src]), pv.code_state()
+        pv.write_research_output_provenance(art, kind="CROSS_SECTION_FEATURES", producer="t", inputs=inputs,
+                                            config={"k": 1}, code=code)
+        p1 = pv.read_provenance(art)
+        self.assertEqual((p1.status, p1.methodology_version, p1.data_version), (pv.LEGACY, pv.RESEARCH_ENGINE_METHODOLOGY, inputs["version"]))
+        self.assertEqual(p1.extra["inputs"]["files"], inputs["files"])
+        self.assertEqual(p1.artifact_sha256, pv.file_sha256(art))
+        pv.write_research_output_provenance(art, kind="CROSS_SECTION_FEATURES", producer="t", inputs=inputs,
+                                            config={"k": 1}, code=code)
+        self.assertEqual(pv.read_provenance(art).run_id, p1.run_id)            # deterministic
+        pv.write_research_output_provenance(art, kind="CROSS_SECTION_FEATURES", producer="t", inputs=inputs,
+                                            config={"k": 2}, code=code)
+        self.assertNotEqual(pv.read_provenance(art).run_id, p1.run_id)         # config is part of the identity
+        r = pv.validate_canonical_provenance(p1, kind="CROSS_SECTION_FEATURES", methodology_version="STAGE2D-REVB-4",
+                                             protocol_hash="x", artifact=art)
+        self.assertFalse(r.ok)                                                 # never canonical
+
+    def test_failure_is_logged_not_raised(self):
+        from bot.quant_core import provenance as pv
+        with self.assertLogs("bot.quant_core.provenance", level="WARNING"):
+            self.assertIsNone(pv.write_research_output_provenance(self.d / "missing.csv", kind="X", producer="t", inputs=None))
+
+    def test_cross_section_run_writes_a_sidecar_naming_its_exact_inputs(self):
+        from bot.quant_core import provenance as pv
+        from bot.research.cross_section_engine import UNIVERSE, run_cross_section_research
+        rng = np.random.default_rng(0)
+        data_dir, out_dir = self.d / "data", self.d / "out"
+        data_dir.mkdir()
+        used = []
+        for sym in UNIVERSE[:4]:
+            c = 100 * np.exp(np.cumsum(0.01 * rng.standard_normal(400)))
+            p = data_dir / f"{sym}_1h.csv"
+            idx = pd.date_range("2024-01-01", periods=400, freq="h", tz="UTC")
+            pd.DataFrame({"timestamp": idx, "open": c, "high": c * 1.001, "low": c * 0.999, "close": c,
+                          "volume": 10.0}).to_csv(p, index=False)
+            used.append(p)
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_cross_section_research(data_dir=str(data_dir), output_dir=str(out_dir))
+        outs = sorted(out_dir.glob("*_cross_section.csv"))
+        self.assertTrue(outs)
+        expected = pv.input_files_fingerprint(used)
+        for o in outs:
+            prov = pv.read_provenance(o)
+            self.assertEqual(prov.kind, "CROSS_SECTION_FEATURES")
+            self.assertEqual(prov.data_version, expected["version"])
+            self.assertEqual(set(prov.extra["inputs"]["files"]), set(expected["files"]))
+            self.assertEqual(prov.artifact_sha256, pv.file_sha256(o))
+
+    def test_pca_outputs_carry_sidecars(self):
+        from bot.quant_core import provenance as pv
+        from bot.research.pca_engine import save_outputs
+        src = self._csv("BTC_USDT_1h.csv", [1.0, 2.0])
+        inputs = pv.input_files_fingerprint([src])
+        idx = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+        z = pd.DataFrame({"BTC_USDT": [0.1, 0.2, 0.3], "ETH_USDT": [0.3, 0.2, 0.1]}, index=idx)
+        out = self.d / "pca"
+        with contextlib.redirect_stdout(io.StringIO()):
+            save_outputs(z, np.array([2.0, 1.0]), np.ones((2, 1)), ["BTC_USDT", "ETH_USDT"], 1,   # loadings: n_symbols x n_retained
+                         pd.DataFrame({"symbol": ["BTC_USDT"], "ic": [0.0]}), output_dir=out, inputs=inputs)
+        for name in ("pca_residuals.csv", "pca_components.csv", "pca_variance_explained.csv", "pca_ic_validation.csv"):
+            prov = pv.read_provenance(out / name)
+            self.assertEqual((prov.status, prov.data_version), (pv.LEGACY, inputs["version"]))
+            self.assertTrue(prov.run_id)

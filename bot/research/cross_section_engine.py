@@ -950,6 +950,8 @@ def run_cross_section_research(
     # ── Load all 7 CSVs ──────────────────────────────────────────────────────
     data: Dict[str, pd.DataFrame] = {}
 
+    input_paths = []   # claude code changed: 2026-10-05 — provenance: the files actually read
+
     for symbol in UNIVERSE:
 
         csv_path = Path(data_dir) / f"{symbol}_{interval}.csv"
@@ -975,6 +977,7 @@ def run_cross_section_research(
             df.sort_index(inplace=True)                  # Chronological order
 
             data[symbol] = df
+            input_paths.append(csv_path)   # claude code changed: 2026-10-05 — provenance
             logger.info(f"  Loaded {symbol}: {len(df):,} candles")
 
         except Exception as e:
@@ -987,9 +990,14 @@ def run_cross_section_research(
     # ── Save enriched CSVs ───────────────────────────────────────────────────
     Path(output_dir).mkdir(exist_ok=True)
 
+    from bot.quant_core import provenance as _prov   # claude code changed: 2026-10-05 — provenance sidecars
+    _inputs, _code = _prov.input_files_fingerprint(input_paths), _prov.code_state()
     for symbol, df in enriched_data.items():
         out = Path(output_dir) / f"{symbol}_cross_section.csv"
         df.reset_index().to_csv(out, index=False)        # Save timestamp as column
+        _prov.write_research_output_provenance(   # claude code changed: 2026-10-05 — each output depends on the whole universe
+            out, kind="CROSS_SECTION_FEATURES", producer="bot.research.cross_section_engine.run_cross_section_research",
+            inputs=_inputs, config={"asset_class": "CRYPTO", "interval": interval, "universe": sorted(data)}, code=_code)
         logger.info(f"  Saved: {out}")
 
     logger.info(
@@ -1033,6 +1041,7 @@ def run_forex_cross_section_research(output_dir: str = "research_data/forex") ->
 
     forex_symbols = symbols_for_asset_class(ASSET_CLASS_FOREX)
     data: Dict[str, pd.DataFrame] = {}
+    input_paths = []   # claude code changed: 2026-10-05 — provenance: the files actually read
 
     for symbol in forex_symbols:
         csv_path = resolve_ohlcv_path(symbol)
@@ -1051,6 +1060,7 @@ def run_forex_cross_section_research(output_dir: str = "research_data/forex") ->
             df.sort_index(inplace=True)
             key = symbol.replace("/", "_")  # claude code changed: this module's own underscore filename convention, matching the crypto runner's UNIVERSE keys
             data[key] = df
+            input_paths.append(csv_path)   # claude code changed: 2026-10-05 — provenance
             logger.info(f"  Loaded {symbol}: {len(df):,} candles")
         except Exception as e:
             logger.error(f"  Failed to load {symbol}: {e}")
@@ -1059,9 +1069,14 @@ def run_forex_cross_section_research(output_dir: str = "research_data/forex") ->
     enriched_data = engine.calculate_all(data)
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    from bot.quant_core import provenance as _prov   # claude code changed: 2026-10-05 — provenance sidecars
+    _inputs, _code = _prov.input_files_fingerprint(input_paths), _prov.code_state()
     for symbol, df in enriched_data.items():
         out = Path(output_dir) / f"{symbol}_cross_section.csv"
         df.reset_index().to_csv(out, index=False)
+        _prov.write_research_output_provenance(   # claude code changed: 2026-10-05
+            out, kind="CROSS_SECTION_FEATURES", producer="bot.research.cross_section_engine.run_forex_cross_section_research",
+            inputs=_inputs, config={"asset_class": "FOREX", "universe": sorted(data)}, code=_code)
         logger.info(f"  Saved: {out}")
 
     logger.info("Complete.")

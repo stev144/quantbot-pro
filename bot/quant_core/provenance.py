@@ -280,6 +280,56 @@ def write_legacy_provenance(artifact, *, kind: str, producer: str) -> Optional[P
         return None
 
 
+# claude code changed: 2026-10-05 — provenance for the NON-CANONICAL research engines (cross-section, feature
+# validation, contagion, PCA). Their outputs had no sidecar at all, so when a test overwrote 213 cross-section
+# files their origin could not be established. Each sidecar now records WHAT produced the file: the exact inputs
+# (per-file sha256, or a QBP-DATAV1 content version for in-memory data), the run configuration, the code state
+# and a deterministic run id. Status is always LEGACY — these engines do not follow the canonical protocol.
+RESEARCH_ENGINE_METHODOLOGY = "NON-CANONICAL-RESEARCH-ENGINE"
+INPUT_FILES_SCHEME = "QBP-INPUTFILES-SHA256-V1"
+
+
+def input_files_fingerprint(paths) -> dict:
+    """Exact identity of the input files a run read: sha256 of each file's bytes, keyed by its path as given;
+    `version` is the sha256 of the sorted "path:sha" lines (any changed, added or removed file changes it)."""
+    files = {str(Path(p).as_posix()): file_sha256(p) for p in paths}
+    version = hashlib.sha256("\n".join(f"{k}:{v}" for k, v in sorted(files.items())).encode("utf-8")).hexdigest()
+    return {"scheme": INPUT_FILES_SCHEME, "version": version, "files": files}
+
+
+def input_frames_fingerprint(frames, *, columns, timeframe: str = "1h") -> dict:
+    """Identity of in-memory input data (e.g. loaded through a provider): the QBP-DATAV1 content version of
+    exactly `columns` of every frame (reuses data_version())."""
+    cols = [c for c in columns if all(c in df.columns for df in frames.values())]
+    dv = data_version(frames, timeframe=timeframe, columns=cols)
+    return {"scheme": DATA_VERSION_SCHEME, "version": dv.data_version, "symbols": sorted(frames), "columns": cols}
+
+
+def write_research_output_provenance(artifact, *, kind: str, producer: str, inputs: Optional[dict],
+                                     config: Optional[Mapping[str, Any]] = None,
+                                     code: Optional[CodeState] = None) -> Optional[Path]:
+    """LEGACY sidecar for a non-canonical research engine's output. Compute `inputs` and `code` ONCE per run and
+    pass them for every artifact. Best-effort like write_legacy_provenance (a provenance failure must not break
+    the research run), but a failure is logged, never silent."""
+    import logging
+    try:
+        code = code or code_state()
+        cfg = dict(config or {})
+        chash = config_hash(cfg)
+        data_ver = (inputs or {}).get("version") or "NOT_RECORDED"
+        digest = file_sha256(artifact)
+        run_id = make_run_id(kind=kind, producer=producer, data=data_ver, config=chash, commit=code.commit,
+                             dirty=code.dirty_digest)
+        prov = OutputProvenance(kind, LEGACY, RESEARCH_ENGINE_METHODOLOGY, "", data_ver, run_id, producer, digest,
+                                code.commit, code.dirty,
+                                extra={"inputs": inputs, "config": cfg, "config_hash": chash,
+                                       "evidence_status": "DESCRIPTIVE — non-canonical engine, never evidence"})
+        return write_provenance(artifact, prov)
+    except (OSError, ValueError, TypeError) as e:
+        logging.getLogger(__name__).warning(f"provenance sidecar NOT written for {artifact}: {e}")
+        return None
+
+
 def read_provenance(artifact) -> OutputProvenance:
     """The artifact's provenance. No sidecar, or an unreadable one, is LEGACY
     of unknown methodology — never canonical by default."""

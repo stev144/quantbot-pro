@@ -611,6 +611,7 @@ def save_outputs(
     ic_results: pd.DataFrame,
     output_dir: Path = OUTPUT_DIR,
     output_prefix: str = "",
+    inputs: Optional[dict] = None,   # claude code changed: 2026-10-05 — provenance (input_files_fingerprint of the price files read)
 ) -> None:
     """Saves the 4 output files the spec requests, matching this
     project's existing research_data/ naming convention.
@@ -645,6 +646,14 @@ def save_outputs(
     logger.info(f"  Saved: {output_dir / f'{output_prefix}pca_variance_explained.csv'}")
 
     ic_results.to_csv(output_dir / f"{output_prefix}pca_ic_validation.csv", index=False)
+    # claude code changed: 2026-10-05 — LEGACY provenance sidecar on each of the 4 outputs (one run id)
+    from bot.quant_core import provenance as _prov
+    _code = _prov.code_state()
+    for _name in ("pca_residuals.csv", "pca_components.csv", "pca_variance_explained.csv", "pca_ic_validation.csv"):
+        _prov.write_research_output_provenance(output_dir / f"{output_prefix}{_name}", kind="PCA_" + _name[4:-4].upper(),
+                                               producer="bot.research.pca_engine.save_outputs", inputs=inputs,
+                                               config={"symbols": sorted(symbols), "n_retained": int(n_retained),
+                                                       "output_prefix": output_prefix}, code=_code)
     logger.info(f"  Saved: {output_dir / f'{output_prefix}pca_ic_validation.csv'}")
 
 
@@ -760,7 +769,10 @@ def run_pca_engine(
 
     ic_results = validate_ic_per_symbol(signal_df, label_df, list(returns.columns), config)
 
-    save_outputs(zscore_df, eigenvalues, loadings, list(returns.columns), n_retained, ic_results, output_prefix=output_prefix)
+    from bot.quant_core.provenance import input_files_fingerprint   # claude code changed: 2026-10-05 — provenance
+    _inputs = input_files_fingerprint([resolve_ohlcv_path(s.replace("_", "/")) for s in universe])
+    save_outputs(zscore_df, eigenvalues, loadings, list(returns.columns), n_retained, ic_results, output_prefix=output_prefix,
+                 inputs=_inputs)   # claude code changed: 2026-10-05
     print_comparison_report(ic_results)
 
     return ic_results

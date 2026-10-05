@@ -205,6 +205,10 @@ def process_single_symbol(symbol: str) -> dict:
 
         # Reset index so timestamp is saved as a plain column
         df_features.reset_index().to_csv(obs_file, index=False)
+        from bot.quant_core import provenance as _prov   # claude code changed: 2026-10-05 — provenance (input: this symbol's file)
+        _prov.write_research_output_provenance(obs_file, kind="FEATURE_OBSERVATIONS", producer="bot.run_research_all.process_single_symbol",
+                                               inputs=_prov.input_files_fingerprint([f'data/{symbol}_1h.csv']),
+                                               config={"symbol": symbol})
         print(f'  ✓ Saved to: {obs_file}')
 
         # ── STEP 4: Validate features (RAW — no correction yet) ────────────────
@@ -291,6 +295,13 @@ if __name__ == '__main__':
     # family-wide correction was actually run across.
     pooled_path = 'research_data/all_symbols_validated_features_pooled.csv'
     pooled_corrected.to_csv(pooled_path, index=False)
+    # claude code changed: 2026-10-05 — provenance; the family-wide correction makes every output depend on every symbol
+    from bot.quant_core import provenance as _prov
+    _inputs = _prov.input_files_fingerprint([f'data/{s}_1h.csv' for s in sorted(raw_by_symbol)])
+    _code = _prov.code_state()
+    _cfg = {"symbols": sorted(raw_by_symbol), "family_alpha": 0.05}
+    _prov.write_research_output_provenance(pooled_path, kind="FEATURE_VALIDATION_POOLED", producer="bot.run_research_all",
+                                           inputs=_inputs, config=_cfg, code=_code)
     print(f'  ✓ Saved pooled (family-wide, corrected) results to: {pooled_path}')
     print(f'  ✓ Family size: {len(pooled_corrected)} (symbol, feature) pairs across {len(raw_by_symbol)} symbols')
 
@@ -316,6 +327,8 @@ if __name__ == '__main__':
     for symbol, corrected_df in per_symbol_corrected.items():
         val_file = f'research_data/{symbol}_validated_features.csv'
         corrected_df.to_csv(val_file, index=False)
+        _prov.write_research_output_provenance(val_file, kind="FEATURE_VALIDATION", producer="bot.run_research_all",
+                                               inputs=_inputs, config={**_cfg, "symbol": symbol}, code=_code)   # claude code changed: 2026-10-05
 
         strong_keep = int((corrected_df['recommendation'] == 'STRONG KEEP').sum())
         keep        = int((corrected_df['recommendation'] == 'KEEP').sum())

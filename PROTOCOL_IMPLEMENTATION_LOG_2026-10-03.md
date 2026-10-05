@@ -1006,3 +1006,29 @@ The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, i
 - **Fix:** both tests now pass a temporary `research_data_dir` (deleted afterwards). Real price data is still only read. Each test asserts that none of the 213 real outputs changed (mtime and size snapshot).
 - **Verified:** the test module passes (5 tests); 0 files in `research_data/` or `data/` were written during the run. The guard detects a changed file (checked by shifting one file's mtime, then restoring it exactly). A deliberate re-break was **not** run, because re-breaking would overwrite the real files again.
 - **Consequence (G5):** the original cross-section outputs are **lost**. They are git-ignored, no backup exists anywhere in the project, and the engine writes no provenance sidecar. The files now on disk are **regenerations by the code as of the 2026-10-05 suite run, not original research outputs**. They can be rebuilt deterministically from `data/` by the cross-section engine, so no research input is lost. Any earlier result that cited them is not reproducible from these files as-is.
+
+
+---
+
+## Provenance for the non-canonical research engines (2026-10-05). Status: IMPLEMENTED AND VERIFIED
+
+- **Why:** the cross-section, feature-validation, contagion and PCA engines wrote outputs with no provenance at all. When a test overwrote 213 cross-section files, nothing could establish what had produced the originals.
+- **What:** `bot/quant_core/provenance.py` gains
+  - `input_files_fingerprint` (sha256 of each input file plus a set version);
+  - `input_frames_fingerprint` (QBP-DATAV1 content version of in-memory inputs);
+  - `write_research_output_provenance`: a sidecar recording inputs, config and config hash, code state and a deterministic run id.
+- **Status:** always **LEGACY** (methodology `NON-CANONICAL-RESEARCH-ENGINE`, evidence status descriptive). Fingerprints and code state are computed once per run. A sidecar failure is logged, not raised.
+- **Wired into:**
+  - `cross_section_engine` (crypto and forex runs; each output lists the whole universe's input files);
+  - `run_research_all` (observations; the pooled and per-symbol validated features, whose inputs are all symbols because of the family-wide correction);
+  - `contagion_engine` (provider-loaded inputs → QBP-DATAV1);
+  - `pca_engine.save_outputs` (all 4 files).
+- **Tests (`test_stage2d_provenance`, 5 new):**
+  - fingerprints exact and order-independent;
+  - sidecar LEGACY and complete, run id deterministic and config-sensitive, rejected as canonical;
+  - a failure is logged, not raised;
+  - a real cross-section run on temporary data names exactly its input files;
+  - PCA's 4 sidecars.
+- **Mutations, 3 of 3 caught:** inputs not recorded; config left out of the run id; PCA sidecars removed.
+- **Related tests:** 94 run (provenance, cross-section, PCA, contagion, stability gate, dataset explorer, D-1 labels), all pass. No file search in the code base matches a `.provenance.json` sidecar by accident.
+- **Not integration-tested:** `run_research_all` (multiprocess, all symbols) and `run_contagion_research` (provider loading). Both use the same helper, covered above.

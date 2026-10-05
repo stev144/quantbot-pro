@@ -2328,3 +2328,10 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 
 - test_run_cross_sectional_oos_forex.AssetClassDispatchTest wrote 155 research_data/*_cross_section.csv and 58 research_data/forex/*_cross_section.csv on every full-suite run (default research_data_dir). Fixed: temporary output dir plus an assertion that the real files are untouched.
 - The ORIGINAL cross-section outputs are lost (git-ignored, no backup, no provenance sidecar). Files now on disk are REGENERATIONS (code as of 2026-10-05), rebuildable from data/; any earlier result citing them is not reproducible from them as-is.
+
+---
+
+## 2026-10-05 — PROVENANCE FOR NON-CANONICAL RESEARCH ENGINES
+
+- Cross-section (crypto + forex), run_research_all (observations, pooled and per-symbol validated features), contagion and PCA outputs now carry LEGACY provenance sidecars: exact inputs (file sha256 or QBP-DATAV1), config hash, code state, deterministic run id. Never canonical; descriptive only.
+- Existing files on disk have no sidecar until their engine is next run (the regenerated cross-section files included).

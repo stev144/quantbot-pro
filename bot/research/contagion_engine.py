@@ -1378,6 +1378,12 @@ def run_contagion_research(
 
     # ── Save enriched CSVs ────────────────────────────────────────────────────
     Path(output_dir).mkdir(exist_ok=True)
+    # claude code changed: 2026-10-05 — provenance; inputs came through the provider (in memory), so they are
+    # identified by their QBP-DATAV1 content version (computed once per run)
+    from bot.quant_core import provenance as _prov
+    _inputs = _prov.input_frames_fingerprint(data, columns=["open", "high", "low", "close", "volume"], timeframe=interval)
+    _code = _prov.code_state()
+    _cfg = {"btc_symbol": BTC_SYMBOL, "altcoins": sorted(symbols), "interval": interval, "start": str(start), "end": str(end)}
 
     for symbol in symbols:   # claude code changed: was ALTCOIN_SYMBOLS — see this function's new altcoin_symbols param
         if symbol not in enriched:
@@ -1386,12 +1392,16 @@ def run_contagion_research(
         # was f"{symbol}_contagion.csv" directly on the slash-format symbol.
         out = Path(output_dir) / f"{_symbol_to_csv_stem(symbol)}_contagion.csv"
         enriched[symbol].reset_index().to_csv(out, index=False)
+        _prov.write_research_output_provenance(out, kind="CONTAGION_FEATURES", producer="bot.research.contagion_engine.run_contagion_research",
+                                               inputs=_inputs, config=_cfg, code=_code)   # claude code changed: 2026-10-05
         logger.info(f"  Saved: {out}")
 
     # Save IC report
     if not ic_results.empty:
         ic_path = Path(output_dir) / "hypothesis_7_ic_report.csv"
         ic_results.to_csv(ic_path, index=False)
+        _prov.write_research_output_provenance(ic_path, kind="CONTAGION_IC_REPORT", producer="bot.research.contagion_engine.run_contagion_research",
+                                               inputs=_inputs, config=_cfg, code=_code)   # claude code changed: 2026-10-05
         logger.info(f"  IC report saved: {ic_path}")
 
     logger.info(
