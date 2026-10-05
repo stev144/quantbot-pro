@@ -23,8 +23,7 @@
 # than editing their crypto call sites.
 # ============================================================
 
-import glob
-import os
+import os   # claude code changed: 2026-10-05 — `import glob` removed (its only use moved to terminal_data's shared function)
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -63,36 +62,12 @@ def get_forex_cross_sectional_dispersion():
     dashboard reads" pattern the rest of this platform uses; it never
     runs the engine itself on a page load).
     """
-    files = sorted(glob.glob(os.path.join(FOREX_RESEARCH_DATA_DIR, "*_cross_section.csv")))
-    if not files:
-        return {
-            "available": False,
-            "reason": "cross_section_engine.py has not been run against the Forex universe yet",
-        }
-
-    latest_zscores = {}
-    for path in files:
-        symbol = os.path.basename(path).replace("_cross_section.csv", "")
-        try:
-            col = pd.read_csv(path, usecols=["cs_zscore"])["cs_zscore"].dropna()
-            if len(col) > 0:
-                latest_zscores[symbol] = float(col.iloc[-1])
-        except Exception:
-            continue
-
-    if len(latest_zscores) < 3:
-        return {"available": False, "reason": "Fewer than 3 Forex symbols had a readable cs_zscore"}
-
-    values = list(latest_zscores.values())
-    dispersion = float(pd.Series(values).std())
-    ranked = sorted(latest_zscores.items(), key=lambda kv: abs(kv[1]), reverse=True)
-
-    return {
-        "available": True,
-        "dispersion_std": round(dispersion, 4),
-        "n_symbols": len(latest_zscores),
-        "top_extremes": [{"symbol": s, "cs_zscore": round(z, 3)} for s, z in ranked],
-    }
+    # claude code changed: 2026-10-05 — was a verbatim copy of the crypto logic (each symbol's own last value,
+    # mixing timestamps). Now the ONE shared implementation, which compares symbols at a single common timestamp.
+    from bot.views.terminal_data import cross_sectional_dispersion_at_common_timestamp
+    return cross_sectional_dispersion_at_common_timestamp(
+        FOREX_RESEARCH_DATA_DIR, top_n=None, asset_label="Forex symbols",
+        no_files_reason="cross_section_engine.py has not been run against the Forex universe yet")
 
 
 # ============================================================

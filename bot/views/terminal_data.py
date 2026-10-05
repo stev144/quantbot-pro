@@ -89,9 +89,17 @@ def get_cross_sectional_dispersion():
     Reads only the last valid row of the 'cs_zscore' column per file
     (not the whole file) to keep this cheap on every dashboard load.
     """
-    files = sorted(glob.glob(os.path.join(RESEARCH_DATA_DIR, "*_cross_section.csv")))
+    return cross_sectional_dispersion_at_common_timestamp(RESEARCH_DATA_DIR, top_n=5)   # claude code changed: 2026-10-05 — one shared implementation (also used by the Forex dashboard)
+
+
+def cross_sectional_dispersion_at_common_timestamp(directory, *, top_n=5, asset_label="symbols",
+                                                   no_files_reason=None):   # claude code changed: 2026-10-05 — new (was duplicated in forex_terminal_data.py)
+    """Dispersion and |z|-ranked extremes of the latest cs_zscore in <directory>/*_cross_section.csv, using ONLY
+    the symbols whose latest value is at the most common latest timestamp (a cross-section is one moment).
+    top_n=None returns every symbol ranked."""
+    files = sorted(glob.glob(os.path.join(directory, "*_cross_section.csv")))
     if not files:
-        return {"available": False, "reason": "No *_cross_section.csv files found in research_data/"}
+        return {"available": False, "reason": no_files_reason or f"No *_cross_section.csv files found in {directory}"}
     # claude code changed: 2026-10-05 — each symbol's last cs_zscore is read WITH its timestamp. Files end on
     # different dates (measured: 2026-08-19 … 2026-09-27), and a cross-sectional comparison is only meaningful
     # across symbols at the SAME timestamp. The reading uses the most common latest timestamp; symbols whose last
@@ -106,12 +114,12 @@ def get_cross_sectional_dispersion():
         except Exception:
             continue
     if not latest:
-        return {"available": False, "reason": "No symbol had a readable cs_zscore"}
+        return {"available": False, "reason": f"No {asset_label} had a readable cs_zscore"}
     counts = pd.Series([ts for ts, _ in latest.values()]).value_counts()
     as_of = max(counts[counts == counts.max()].index)            # most common latest timestamp (latest on a tie)
     latest_zscores = {s: z for s, (ts, z) in latest.items() if ts == as_of}
     if len(latest_zscores) < 3:
-        return {"available": False, "reason": f"Fewer than 3 symbols share one latest timestamp ({len(latest_zscores)} at {as_of})"}
+        return {"available": False, "reason": f"Fewer than 3 {asset_label} share one latest timestamp ({len(latest_zscores)} at {as_of})"}
     values = list(latest_zscores.values())
     dispersion = float(pd.Series(values).std())
     ranked = sorted(latest_zscores.items(), key=lambda kv: abs(kv[1]), reverse=True)
@@ -119,7 +127,7 @@ def get_cross_sectional_dispersion():
         "available": True,
         "dispersion_std": round(dispersion, 4),
         "n_symbols": len(latest_zscores),
-        "top_extremes": [{"symbol": s, "cs_zscore": round(z, 3)} for s, z in ranked[:5]],
+        "top_extremes": [{"symbol": s, "cs_zscore": round(z, 3)} for s, z in (ranked if top_n is None else ranked[:top_n])],
         "as_of": as_of.strftime("%Y-%m-%d %H:%M UTC"),             # claude code changed: 2026-10-05
         "n_excluded_other_timestamp": len(latest) - len(latest_zscores),   # claude code changed: 2026-10-05
     }
