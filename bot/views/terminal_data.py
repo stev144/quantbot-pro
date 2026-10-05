@@ -92,29 +92,36 @@ def get_cross_sectional_dispersion():
     files = sorted(glob.glob(os.path.join(RESEARCH_DATA_DIR, "*_cross_section.csv")))
     if not files:
         return {"available": False, "reason": "No *_cross_section.csv files found in research_data/"}
-
-    latest_zscores = {}
+    # claude code changed: 2026-10-05 — each symbol's last cs_zscore is read WITH its timestamp. Files end on
+    # different dates (measured: 2026-08-19 … 2026-09-27), and a cross-sectional comparison is only meaningful
+    # across symbols at the SAME timestamp. The reading uses the most common latest timestamp; symbols whose last
+    # value is from another time are excluded from the dispersion and the ranking, and counted.
+    latest = {}
     for path in files:
         symbol = os.path.basename(path).replace("_cross_section.csv", "")
         try:
-            col = pd.read_csv(path, usecols=["cs_zscore"])["cs_zscore"].dropna()
-            if len(col) > 0:
-                latest_zscores[symbol] = float(col.iloc[-1])
+            df = pd.read_csv(path, usecols=["timestamp", "cs_zscore"]).dropna(subset=["cs_zscore"])
+            if len(df) > 0:
+                latest[symbol] = (pd.Timestamp(df["timestamp"].iloc[-1]), float(df["cs_zscore"].iloc[-1]))
         except Exception:
             continue
-
+    if not latest:
+        return {"available": False, "reason": "No symbol had a readable cs_zscore"}
+    counts = pd.Series([ts for ts, _ in latest.values()]).value_counts()
+    as_of = max(counts[counts == counts.max()].index)            # most common latest timestamp (latest on a tie)
+    latest_zscores = {s: z for s, (ts, z) in latest.items() if ts == as_of}
     if len(latest_zscores) < 3:
-        return {"available": False, "reason": "Fewer than 3 symbols had a readable cs_zscore"}
-
+        return {"available": False, "reason": f"Fewer than 3 symbols share one latest timestamp ({len(latest_zscores)} at {as_of})"}
     values = list(latest_zscores.values())
     dispersion = float(pd.Series(values).std())
     ranked = sorted(latest_zscores.items(), key=lambda kv: abs(kv[1]), reverse=True)
-
     return {
         "available": True,
         "dispersion_std": round(dispersion, 4),
         "n_symbols": len(latest_zscores),
         "top_extremes": [{"symbol": s, "cs_zscore": round(z, 3)} for s, z in ranked[:5]],
+        "as_of": as_of.strftime("%Y-%m-%d %H:%M UTC"),             # claude code changed: 2026-10-05
+        "n_excluded_other_timestamp": len(latest) - len(latest_zscores),   # claude code changed: 2026-10-05
     }
 
 
@@ -221,6 +228,9 @@ def get_alpha_intelligence(cross_section_dispersion, backtest_results):
         except Exception:
             continue
 
+    # claude code changed: 2026-10-05 — the date of the validator run behind this table, shown on the panel
+    feature_files_date = (datetime.fromtimestamp(max(os.path.getmtime(p) for p in feature_files), tz=timezone.utc)
+                          .strftime("%Y-%m-%d") if feature_files else None)
     if rows:
         all_features = pd.concat(rows, ignore_index=True)
         all_features["abs_ic"] = all_features["ic_overall"].abs()
@@ -247,6 +257,8 @@ def get_alpha_intelligence(cross_section_dispersion, backtest_results):
     return {
         "feature_power_available": feature_power_available,
         "top_features": top_features_list,
+        "feature_files_date": feature_files_date,                                      # claude code changed: 2026-10-05
+        "n_feature_estimates": int(len(all_features)) if rows else 0,                  # claude code changed: 2026-10-05 — the "of N" for top-8 selection
         "cross_sectional_opportunities": (
             cross_section_dispersion.get("top_extremes", [])
             if cross_section_dispersion.get("available") else []
