@@ -995,3 +995,14 @@ The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, i
 | G3 | PASS (one BH family, unchanged) |
 | G4 | n/a |
 | G5 | PASS (no overwrite; seal enforced in workers; no results exposed while verifying) |
+
+
+---
+
+## Defect: a test overwrote real research outputs on every full-suite run (2026-10-05). Status: FIXED
+
+- **Found** while checking the dashboard's Alpha Intelligence panel: all 155 `research_data/*_cross_section.csv` files had a 2026-10-04 22:15–22:19 timestamp, which fell inside a full-suite run.
+- **Cause:** `test_run_cross_sectional_oos_forex.AssetClassDispatchTest` ran `run_cross_sectional_research()` with its default `research_data_dir="research_data"`. The crypto test rewrote 155 `research_data/*_cross_section.csv` files and the forex test rewrote 58 `research_data/forex/*_cross_section.csv` files on **every** full-suite run, in this and earlier sessions. During the 2026-10-05 suite these 213 files were the only repository files written (checked across `research_data/`, `data/` and `logs/`).
+- **Fix:** both tests now pass a temporary `research_data_dir` (deleted afterwards). Real price data is still only read. Each test asserts that none of the 213 real outputs changed (mtime and size snapshot).
+- **Verified:** the test module passes (5 tests); 0 files in `research_data/` or `data/` were written during the run. The guard detects a changed file (checked by shifting one file's mtime, then restoring it exactly). A deliberate re-break was **not** run, because re-breaking would overwrite the real files again.
+- **Consequence (G5):** the original cross-section outputs are **lost**. They are git-ignored, no backup exists anywhere in the project, and the engine writes no provenance sidecar. The files now on disk are **regenerations by the code as of the 2026-10-05 suite run, not original research outputs**. They can be rebuilt deterministically from `data/` by the cross-section engine, so no research input is lost. Any earlier result that cited them is not reproducible from these files as-is.

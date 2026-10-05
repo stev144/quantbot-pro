@@ -2321,3 +2321,10 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - run_selection_zone_screen(n_workers=k) and run_selection_screen_on_data(): identical output to serial (synthetic + 190 and 66 real pairs, all worker counts); one BH family in the parent; worker errors raised; result files never overwritten. Speed on this laptop (i5-8365U, 4 cores, 15 W): best 1.28x with 3 workers; full 150-symbol screen ~2 h (3 workers) / ~2.8 h serial. Not run on the universe.
 - Incident 2026-10-05 08:26: kalman_filter_engine.py, test_cointegration_engine.py, config/settings.py reverted to Aug/Sep commits, a stray line in kraken_adapter.py (server crash), and 6 governance documents deleted (incl. STAGE2D_DECISION_LOCK.md) outside the session. All restored from 9e1e98d; reverted copies kept in the session scratchpad. Not caused by git (no reflog entry); likely an editor saving stale buffers.
 - Full suite: 1,825 tests, 0 new failures.
+
+---
+
+## 2026-10-05 — TEST OVERWROTE REAL CROSS-SECTION OUTPUTS (FIXED)
+
+- test_run_cross_sectional_oos_forex.AssetClassDispatchTest wrote 155 research_data/*_cross_section.csv and 58 research_data/forex/*_cross_section.csv on every full-suite run (default research_data_dir). Fixed: temporary output dir plus an assertion that the real files are untouched.
+- The ORIGINAL cross-section outputs are lost (git-ignored, no backup, no provenance sidecar). Files now on disk are REGENERATIONS (code as of 2026-10-05), rebuildable from data/; any earlier result citing them is not reproducible from them as-is.
