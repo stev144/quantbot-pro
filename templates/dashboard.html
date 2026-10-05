@@ -190,9 +190,9 @@ state, not an error the page failed to handle.
                     <div class="metric-sub">{{ research_state.strategies_unwired }} unwired (experimental)</div>
                 </div>
                 <div class="metric-tile">
-                    <div class="metric-label">Latest Research Run</div>
+                    <div class="metric-label">Latest Research Output</div>{# claude code changed: 2026-10-05 — was "Latest Research Run": a file date is not proof of a research run #}
                     <div class="metric-value small">{% if research_state.latest_run %}{{ research_state.latest_run|date:"Y-m-d" }}{% else %}—{% endif %}</div>
-                    <div class="metric-sub">{% if research_state.age_days is not None %}{{ research_state.age_days }}d ago{% endif %}</div>
+                    <div class="metric-sub">{% if research_state.age_days is not None %}{{ research_state.age_days }}d ago{% if research_state.latest_output_file %} · {{ research_state.latest_output_file }}{% endif %}{% endif %}</div>
                 </div>
                 <div class="metric-tile">
                     <div class="metric-label">Governance Log Entries</div>

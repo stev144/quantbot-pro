@@ -92,3 +92,33 @@ class CrossSectionSameTimestampTest(TestCase):
             self.assertAlmostEqual(r["dispersion_std"], round(float(pd.Series([1.0, -1.0, 0.5]).std()), 4))
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+
+# claude code changed: 2026-10-05 — research freshness comes from research OUTPUT files only: a newer document
+# (e.g. the governance log) or provenance sidecar must not make the research pipeline look fresh.
+class ResearchFreshnessOutputsOnlyTest(TestCase):
+    def test_documents_do_not_count_as_research_output(self):
+        import os
+        import shutil
+        import tempfile
+        import time
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        try:
+            out = os.path.join(d, "BTC_USDT_validated_features.csv")
+            open(out, "w").write("feature,valid\n")
+            old = time.time() - 30 * 86400
+            os.utime(out, (old, old))                                         # output: 30 days old
+            for doc in ("model_governance_log.md", "BTC_USDT_validated_features.csv.provenance.json", "notes.txt"):
+                open(os.path.join(d, doc), "w").write("x")                     # documents: brand new
+            os.mkdir(os.path.join(d, "some_subfolder"))
+            with mock.patch.object(terminal_data, "RESEARCH_DATA_DIR", d):
+                state = terminal_data.get_research_state()
+                health = [c for c in terminal_data.get_system_health()["checks"] if c["name"] == "Research Engine"][0]
+            self.assertEqual(state["latest_output_file"], "BTC_USDT_validated_features.csv")
+            self.assertEqual(state["pipeline_health"], "stale")               # 30 d > 14 d threshold
+            self.assertEqual(health["status"], "warn")
+            self.assertIn("BTC_USDT_validated_features.csv", health["detail"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

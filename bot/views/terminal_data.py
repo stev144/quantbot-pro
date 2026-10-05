@@ -24,6 +24,22 @@ from django.db import connection
 DATA_DIR = os.path.join(settings.BASE_DIR, "data")
 RESEARCH_DATA_DIR = os.path.join(settings.BASE_DIR, "research_data")
 
+# claude code changed: 2026-10-05 — research freshness is judged from research OUTPUT files only. Was the newest
+# mtime of ANYTHING in research_data/ (documents and sub-folders included), so editing the governance log made the
+# whole research pipeline read "FRESH".
+_NON_OUTPUT_SUFFIXES = (".md", ".txt", ".log", ".provenance.json")
+
+
+def _latest_research_output():   # claude code changed: 2026-10-05 — new; shared by Research State and System Health
+    """(mtime, filename) of the newest research output file directly in research_data/, or (None, None)."""
+    paths = [p for p in glob.glob(os.path.join(RESEARCH_DATA_DIR, "*"))
+             if os.path.isfile(p) and not p.lower().endswith(_NON_OUTPUT_SUFFIXES)]
+    if not paths:
+        return None, None
+    newest = max(paths, key=os.path.getmtime)
+    return os.path.getmtime(newest), os.path.basename(newest)
+
+
 # How stale research output can be before the dashboard calls it "STALE"
 # rather than "FRESH". Not a precise SLA — just a sanity threshold so a
 # multi-month-old research run doesn't silently read as current.
@@ -169,8 +185,7 @@ def get_research_state():
 
     # Latest research run — most recently modified file anywhere under
     # research_data/. Real filesystem mtime, not a claimed schedule.
-    all_research_files = glob.glob(os.path.join(RESEARCH_DATA_DIR, "*"))
-    latest_mtime = max((os.path.getmtime(p) for p in all_research_files), default=None)
+    latest_mtime, latest_output_file = _latest_research_output()   # claude code changed: 2026-10-05 — outputs only
 
     if latest_mtime is None:
         latest_run = None
@@ -202,6 +217,7 @@ def get_research_state():
         "strategies_active": strategies_active,
         "strategies_unwired": strategies_unwired,
         "latest_run": latest_run,
+        "latest_output_file": latest_output_file,   # claude code changed: 2026-10-05 — which file sets the date
         "age_days": age_days,
         "pipeline_health": pipeline_health,
         "governance_entries": governance_entries,
@@ -511,12 +527,11 @@ def get_system_health():
     checks.append(_import_check("Execution Engine (code)", "bot.engines.execution_engine", "ExecutionEngine"))
 
     # ---- Research engine (freshness, not import) ----
-    research_files = glob.glob(os.path.join(RESEARCH_DATA_DIR, "*"))
-    if research_files:
-        latest = max(os.path.getmtime(p) for p in research_files)
+    latest, latest_name = _latest_research_output()   # claude code changed: 2026-10-05 — outputs only (documents excluded)
+    if latest is not None:
         age_days = (time.time() - latest) / 86400
         status = "ok" if age_days <= RESEARCH_FRESHNESS_DAYS else "warn"
-        checks.append({"name": "Research Engine", "status": status, "detail": f"last output {age_days:.1f}d ago"})
+        checks.append({"name": "Research Engine", "status": status, "detail": f"last output {age_days:.1f}d ago ({latest_name})"})
     else:
         checks.append({"name": "Research Engine", "status": "err", "detail": "no research_data/ output found"})
 
