@@ -86,3 +86,37 @@ class ScreenTests(SimpleTestCase):
         u["A_USDT"] = u["A_USDT"][u["A_USDT"].index >= ZONES.S0 - pd.Timedelta(hours=500)]
         r = run_selection_zone_screen(u, pairs=[("A_USDT", "B_USDT"), ("C_USDT", "D_USDT")])
         self.assertEqual(r["nominated"], [])
+
+
+# claude code changed: 2026-10-04 — the parallel screen must be IDENTICAL to the serial screen (same rows, same order,
+# same BH family and nominations), must not swallow a worker's refusal, and must never overwrite an earlier result.
+class ParallelScreenTests(SimpleTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.u = _universe()
+
+    def test_parallel_equals_serial_exactly(self):
+        import json
+        serial = run_selection_zone_screen(self.u)
+        parallel = run_selection_zone_screen(self.u, n_workers=2)
+        self.assertEqual(json.dumps(serial, sort_keys=True, default=str), json.dumps(parallel, sort_keys=True, default=str))
+        self.assertEqual([r["pair_name"] for r in parallel["pairs"]], [r["pair_name"] for r in serial["pairs"]])
+
+    def test_a_worker_refusal_is_raised_not_skipped(self):
+        u = dict(self.u)
+        a = u["A_USDT"].copy()
+        a.loc[ZONES.F] = 1.0                                                    # one sealed-holdout candle
+        u["A_USDT"] = a
+        with self.assertRaises(HoldoutSealedError):
+            run_selection_zone_screen(u, n_workers=2)
+
+    def test_an_existing_result_file_is_never_overwritten(self):
+        import os, tempfile
+        from bot.research.cointegration_engine import run_selection_screen_on_data
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "screen.json")
+        open(out, "w").write("{}")
+        with self.assertRaises(FileExistsError):
+            run_selection_screen_on_data(data_dir=d, symbols=[], output_path=out)
+        self.assertEqual(open(out).read(), "{}")

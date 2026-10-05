@@ -2313,3 +2313,11 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - Since ef5636b (Phase 3 M-02) the strategy-to-outcome evaluator reported max_drawdown_pct = 0.0 for every fold (it injected Backtester.max_drawdown but _build_results() reads the never-set max_drawdown_mtm). Real BTC folds: 0.0 % reported vs 10.3-26.7 % closed-trade drawdown.
 - Fixed: closed-trade balance peak-to-trough, with max_drawdown_basis stating intra-trade MTM is not observable from a trade list. Field-by-field diff vs 7e9645c: only drawdown fields changed.
 - No stored artifact affected (no strategy-to-outcome output saved after ef5636b). Full suite 1,822 tests, 0 new failures.
+
+---
+
+## 2026-10-05 — PARALLEL ZONE-S SELECTION SCREEN; SECOND SILENT-REVERT INCIDENT
+
+- run_selection_zone_screen(n_workers=k) and run_selection_screen_on_data(): identical output to serial (synthetic + 190 and 66 real pairs, all worker counts); one BH family in the parent; worker errors raised; result files never overwritten. Speed on this laptop (i5-8365U, 4 cores, 15 W): best 1.28x with 3 workers; full 150-symbol screen ~2 h (3 workers) / ~2.8 h serial. Not run on the universe.
+- Incident 2026-10-05 08:26: kalman_filter_engine.py, test_cointegration_engine.py, config/settings.py reverted to Aug/Sep commits, a stray line in kraken_adapter.py (server crash), and 6 governance documents deleted (incl. STAGE2D_DECISION_LOCK.md) outside the session. All restored from 9e1e98d; reverted copies kept in the session scratchpad. Not caused by git (no reflog entry); likely an editor saving stale buffers.
+- Full suite: 1,825 tests, 0 new failures.

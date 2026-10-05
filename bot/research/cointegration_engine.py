@@ -1803,8 +1803,30 @@ def pair_test_in_selection_zone(symbol_a: str, symbol_b: str, close_a: pd.Series
     return out
 
 
+# claude code changed: 2026-10-04 — PARALLEL SELECTION SCREEN. Each pair test is a pure, deterministic function of
+# its two close series (no shared state, no randomness), so pairs can be tested in separate processes. Workers get
+# the universe's closes ONCE (initializer) and receive only (symbol_a, symbol_b) per task; ProcessPoolExecutor.map
+# returns results in the ORIGINAL pair order, and the exploratory BH correction runs once, in the parent, over the
+# merged rows — exactly as in the serial path. A worker exception (e.g. a sealed-holdout candle) is re-raised in the
+# parent: nothing is skipped silently. Serial and parallel outputs are tested to be identical.
+_SCREEN_WORKER_STATE = None
+
+
+def _screen_worker_init(closes, timeframe, zones, protocol):   # claude code changed: 2026-10-04 — new (runs in each worker)
+    global _SCREEN_WORKER_STATE
+    logging.disable(logging.WARNING)
+    _SCREEN_WORKER_STATE = (closes, timeframe, zones, protocol)
+
+
+def _screen_worker_pair(pair):   # claude code changed: 2026-10-04 — new (runs in each worker)
+    closes, timeframe, zones, protocol = _SCREEN_WORKER_STATE
+    a, b = pair
+    return pair_test_in_selection_zone(a, b, closes[a], closes[b], timeframe=timeframe, zones=zones, protocol=protocol)
+
+
 def run_selection_zone_screen(closes: Dict[str, pd.Series], pairs: Optional[List[Tuple[str, str]]] = None, *,
-                              timeframe: str = "1h", zones=None, protocol=None) -> Dict:
+                              timeframe: str = "1h", zones=None, protocol=None,
+                              n_workers: int = 1) -> Dict:   # claude code changed: 2026-10-04 — n_workers > 1 tests pairs in parallel processes (identical results)
     """The canonical selection stage (D-8 zone S + D-3 exploration). Never claimable — it can only NOMINATE at
     most 5 pairs for D-3 registration and a later single confirmatory test in zone V."""
     from itertools import combinations
@@ -1813,8 +1835,17 @@ def run_selection_zone_screen(closes: Dict[str, pd.Series], pairs: Optional[List
     from bot.quant_core.research_zones import ZONES
     zones, protocol = zones or ZONES, protocol or CANONICAL
     pairs = pairs if pairs is not None else list(combinations(sorted(closes), 2))
-    rows = [pair_test_in_selection_zone(a, b, closes[a], closes[b], timeframe=timeframe, zones=zones,
-                                        protocol=protocol) for a, b in pairs]
+    if n_workers is None or int(n_workers) <= 1 or len(pairs) < 2:
+        rows = [pair_test_in_selection_zone(a, b, closes[a], closes[b], timeframe=timeframe, zones=zones,
+                                            protocol=protocol) for a, b in pairs]
+    else:   # claude code changed: 2026-10-04 — parallel path; same function per pair, original order kept
+        from concurrent.futures import ProcessPoolExecutor
+        needed = {s: closes[s] for s in sorted({s for p in pairs for s in p})}
+        n_workers = int(n_workers)
+        chunk = max(1, len(pairs) // (n_workers * 8))
+        with ProcessPoolExecutor(max_workers=n_workers, initializer=_screen_worker_init,
+                                 initargs=(needed, timeframe, zones, protocol)) as ex:
+            rows = list(ex.map(_screen_worker_pair, [tuple(p) for p in pairs], chunksize=chunk))
     testable = [r for r in rows if r["status"] == "OK" and r.get("coint_pvalue") is not None]
     family_note = (f"one exploratory BH family = all {len(testable)} testable pairs of this scan "
                    f"(of {len(rows)} requested), Engle–Granger p on zone S only")
@@ -1836,6 +1867,31 @@ def run_selection_zone_screen(closes: Dict[str, pd.Series], pairs: Optional[List
             "half_life_bounds_candles": [MIN_HALF_LIFE_HOURS, MAX_HALF_LIFE_HOURS],
             "n_requested": len(rows), "n_testable": len(testable), "bh_survivors": screen["survivors"],
             "survivors_after_filters": survivors, "nominated": nominated, "pairs": rows}
+
+
+def run_selection_screen_on_data(data_dir: str = "data", symbols: Optional[List[str]] = None, *, n_workers: int = 1,
+                                 output_path: Optional[str] = None, timeframe: str = "1h") -> Dict:   # claude code changed: 2026-10-04 — new
+    """Load <SYMBOL>_1h.csv closes (crypto: *_USDT_1h.csv in `data_dir` when `symbols` is None) and run the zone-S
+    selection screen. Every symbol's FULL file is passed in, so the seal check sees any sealed candle and refuses.
+    `output_path` (JSON) is written only if it does not exist yet — an earlier screen is never overwritten."""
+    import glob
+    import json
+    from pathlib import Path
+    if output_path is not None and Path(output_path).exists():
+        raise FileExistsError(f"{output_path} already exists — a screen result is never overwritten; choose a new path")
+    if symbols is None:
+        symbols = sorted(Path(p).name[:-len("_1h.csv")] for p in glob.glob(str(Path(data_dir) / "*_USDT_1h.csv")))
+    closes = {}
+    for sym in symbols:
+        d = pd.read_csv(Path(data_dir) / f"{sym}_1h.csv", usecols=["timestamp", "close"], float_precision="round_trip")
+        closes[sym] = pd.Series(d["close"].to_numpy(float), index=pd.to_datetime(d["timestamp"], utc=True))
+    result = run_selection_zone_screen(closes, timeframe=timeframe, n_workers=n_workers)
+    result["universe"] = {"data_dir": str(data_dir), "symbols": list(symbols), "n_symbols": len(symbols)}
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "x", encoding="utf-8") as f:   # "x": fail if it appeared meanwhile
+            json.dump(result, f, indent=1, default=str)
+    return result
 
 
 if __name__ == "__main__":

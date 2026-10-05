@@ -953,3 +953,45 @@ The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, i
 | G3 | PASS |
 | G4 | **PASS**: drawdown no longer hidden; basis labelled honestly |
 | G5 | PASS: no stored artifact affected; cause traced to a commit |
+
+
+---
+
+## Parallel zone-S selection screen (2026-10-05). Status: IMPLEMENTED AND VERIFIED (not run on the universe)
+
+**What:**
+- `run_selection_zone_screen(..., n_workers=k)` tests pairs in k worker processes.
+  - Each worker receives the universe's closes once (initializer); a task carries only the two symbol names.
+  - `ProcessPoolExecutor.map` keeps the original pair order.
+  - The exploratory BH correction (D-3) runs once, in the parent, over the merged rows, exactly as in the serial path.
+  - A worker's exception (e.g. a sealed-holdout candle) is re-raised in the parent; nothing is skipped.
+- `run_selection_screen_on_data(data_dir, symbols, n_workers, output_path)` loads `*_USDT_1h.csv` closes (exact float parser) and runs the screen. It refuses to overwrite an existing result file (opened with "x"). Statistics, gates and labels are unchanged: exploratory, not claimable.
+
+**Accuracy:** each pair test is a pure, deterministic function of its two series.
+- **Synthetic universe:** serial and parallel outputs are identical (full serialized-output comparison).
+- **Real data:** 20 symbols / 190 pairs, and 12 symbols / 66 pairs with 2, 3, 4 and 8 workers: **byte-identical every time**. Only equality and timings were printed (no p-values), so this verification exposed no research results.
+
+**Speed on this machine** (Intel i5-8365U: 4 physical cores / 8 threads, 15 W, Balanced plan), 66 real pairs:
+
+| Workers | Time | Speed-up |
+|---|---|---|
+| serial | 57 s | — |
+| 2 | 46 s | 1.25× |
+| 3 | 45 s | 1.28× |
+| 4 | 51 s | 1.13× |
+| 8 | 72 s | 0.78× |
+
+- **Cause:** the Engle–Granger test's ADF autolag (OLS by SVD) is arithmetic-bound. Hyperthreads share arithmetic units, and a 15 W chip loses its turbo under all-core load.
+- **Measured serial cost:** about 0.9 s per pair (an earlier 2 s estimate came from cold calls). The full 150-symbol screen (11,175 pairs) takes **about 2.8 h serial, about 2 h with 3 workers** here. On 8+ physical cores, scaling should be close to linear.
+
+**Tests (`test_coint_selection_zone`, 3 new):** parallel equals serial exactly; a worker refusal is raised; an existing result file is never overwritten.
+**Full suite:** 1,825 tests, 85 failures = the known baseline set, 0 new (the run finished; Claude Code later stopped the idle shell for low memory).
+**Mutations, 2 of 2 caught:** results out of order; a worker refusal swallowed.
+
+| Gate | Result |
+|---|---|
+| G1 | PASS |
+| G2 | PASS (identical outputs) |
+| G3 | PASS (one BH family, unchanged) |
+| G4 | n/a |
+| G5 | PASS (no overwrite; seal enforced in workers; no results exposed while verifying) |
