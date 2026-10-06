@@ -106,7 +106,9 @@ class ForexDataProvenanceTest(SimpleTestCase):
         instrument = get_instrument("EUR/USD")
         result = forex_terminal_data.get_forex_data_provenance("EUR/USD", instrument, df)
         self.assertTrue(result["available"])
-        self.assertEqual(result["provider"], "yahoo_finance")
+        # claude code changed: 2026-10-06 — was "yahoo_finance" (only true while a test kept deleting EUR/USD's real
+        # MT5 marker); the provider must be the instrument's real, marker-recorded venue.
+        self.assertEqual(result["provider"], instrument.venue)
         self.assertEqual(result["row_count"], len(df))
         self.assertIsInstance(result["fingerprint"], str)
         self.assertGreater(len(result["fingerprint"]), 0)

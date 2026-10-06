@@ -251,9 +251,27 @@ def _crypto_profile() -> MarketProfile:
 
 CRYPTO_PROFILE = _crypto_profile()
 
-# Decision 5 is BLOCKED: every rule below is an owner decision (see the asset-agnostic section of
-# PROTOCOL_IMPLEMENTATION_LOG_2026-10-03.md). None of them is guessed here.
-FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=None, gap_max_candles=None, seed_rule=None,
+FX_CALENDAR_SOURCE = ("OD-FX-1 (owner, 2026-10-06): closed Friday 17:00 -> Sunday 17:00 America/New_York "
+                      "(= 22:00 UTC in winter, 21:00 UTC during US daylight saving); no holiday list")   # claude code changed: 2026-10-06
+
+
+def fx_new_york_close_calendar(start="2015-01-01", end="2031-12-31") -> SessionCalendar:   # claude code changed: 2026-10-06 — new (owner OD-FX-1)
+    """The owner's FX calendar: every week closed from Friday 17:00 to Sunday 17:00 New York time, converted to UTC
+    week by week (so it follows US daylight saving). No holidays (none chosen): Christmas / New Year closures show
+    up as missing trading hours, never as calendar closures."""
+    fridays = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="W-FRI")
+    iv = []
+    for f in fridays:
+        a = pd.Timestamp(f.date()).replace(hour=17).tz_localize("America/New_York").tz_convert("UTC")
+        b = (pd.Timestamp(f.date()) + pd.Timedelta(days=2)).replace(hour=17).tz_localize("America/New_York").tz_convert("UTC")
+        iv.append((a, b))
+    return SessionCalendar(iv, source=FX_CALENDAR_SOURCE)
+
+
+# Decision 5: the calendar is decided (OD-FX-1, 2026-10-06); every other rule below is still an owner decision (see
+# the asset-agnostic section of PROTOCOL_IMPLEMENTATION_LOG_2026-10-03.md). None of them is guessed here.
+FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=fx_new_york_close_calendar(),   # claude code changed: 2026-10-06 — was None
+                              gap_max_candles=None, seed_rule=None,
                               horizon_basis=None, financing_source=None, cost_model=None, universe_rule=None,
                               protocol_hash=None)
 

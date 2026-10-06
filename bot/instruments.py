@@ -131,6 +131,7 @@ def write_provenance_marker(
     end_date: Optional[str] = None,
     row_count: Optional[int] = None,
     schema_version: str = "1",
+    clock: Optional[str] = None,   # claude code changed: 2026-10-06 — which clock the timestamps are in (e.g. MT5 server time converted to UTC)
 ) -> None:
     """claude code changed: new — called by a fetcher immediately after it
     writes ohlcv_path, recording which provider/pipeline actually produced
@@ -166,6 +167,8 @@ def write_provenance_marker(
         )
         payload["dataset_identity"] = asdict(identity)
         payload["fingerprint"] = identity.fingerprint()
+    if clock is not None:   # claude code changed: 2026-10-06
+        payload["clock"] = clock
     with open(marker_path, "w") as f:
         json.dump(payload, f, indent=2)
 

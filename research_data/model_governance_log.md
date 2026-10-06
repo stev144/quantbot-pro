@@ -2341,3 +2341,12 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 ## 2026-10-06 — KALMAN P0 SENSITIVITY (DESCRIPTIVE)
 
 - Synthetic only. Baseline P0 = 1 is in the robust region (x10/x100: |dz| <= 0.24, entries >= 98.4 % identical). Smaller P0 is sensitive on weakly identified pairs (x0.01: |dz| up to 2.3, entries 80 %, influence ~20k candles). Recommendation (owner): keep P0 = 1, report a P0 = 10 robustness check with any canonical pairs result; P0 < 1 = protocol change. No code changed.
+
+---
+
+## 2026-10-06 — FX DATA CLOCK FIXED; FX CALENDAR DECIDED (OD-FX-1)
+
+- All 58 data/forex files were MT5 broker SERVER time labelled as UTC (server = America/New_York + 7 h, inferred from the weekend signature across US/EU DST-mismatch weeks; live confirmation pending). Converted to true UTC; originals archived in data/forex/_archive_server_clock_2026-10-06/. The fetcher now converts at download.
+- OD-FX-1 (owner): closed Friday 17:00 -> Sunday 17:00 America/New_York (22:00 UTC winter / 21:00 UTC summer), no holidays. Converted data: 0 rows inside closures. Metals need their own calendar (daily break).
+- Forex research outputs computed before today (research_data/forex/*_cross_section.csv, forex_pca_*, forex_cointegration_pairs*, forex_cross_sectional_family_verdict.json) are LEGACY on the server clock (2-3 h shifted).
+- test_instruments.ProvenanceMarkerTest deleted the real EUR/USD marker on every run: fixed (temporary data folder); marker restored.

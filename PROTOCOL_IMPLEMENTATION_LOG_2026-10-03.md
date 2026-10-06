@@ -1051,3 +1051,47 @@ The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, i
 - Smaller values make the filter overconfident in θ₀, so it adapts slowly. On weakly identified pairs, where (β, α) are nearly collinear because log price varies little relative to its level, the seed's influence then persists for most of zone S. This matches the earlier Q/R finding that P0 matters most on weakly identified pairs.
 
 **Recommendation (owner decision; nothing changed):** keep P0 = 1. Report any canonical pairs result with a P0 = 10 robustness check. Treat P0 < 1 as a protocol change.
+
+
+---
+
+## FX data clock fix and FX calendar (2026-10-06). Status: IMPLEMENTED AND VERIFIED (live offset confirmation pending)
+
+**Owner decisions:**
+- **Option A** "fix the data clock".
+- **OD-FX-1 calendar:** the owner chose "closed Friday 22:00 to Sunday 22:00". It is implemented as **closed Friday 17:00 to Sunday 17:00 America/New_York**, which is that rule in winter and follows US daylight saving (21:00 UTC in summer), as recommended and approved with option A. **No holiday list** has been chosen.
+
+**Defect found:**
+- `mt5_data_fetcher` stored MT5 bar times with `pd.to_datetime(time, unit="s", utc=True)`. MT5 bar times are the broker **server** wall clock, so all 58 `data/forex/*_1h.csv` files were labelled UTC while really being server time.
+- **Evidence:** every weekend is Friday 23:00 → Monday 00:00 (metals: Monday 01:00) in all seasons, including every spring and autumn window where US and EU daylight-saving dates differ. So the server clock follows US daylight saving: **server = America/New_York + 7 h** (UTC+2 winter, UTC+3 summer). The only exceptions are Christmas and New Year.
+- This is inferred from the data and **not yet confirmed live**: run `confirm_mt5_server_clock()` with the terminal open.
+
+**Fix:**
+- `mt5_server_time_to_utc()` (`MT5_SERVER_CLOCK`, default "NY+7") is used by both fetch paths. It fails closed on non-existent or ambiguous New York times.
+- `convert_server_clock_files()` converted the existing files: originals and markers copied to `data/forex/_archive_server_clock_2026-10-06/` (115 files); only files with the server-time signature are converted (all 58 had it); markers rewritten with a `clock` field.
+- EUR_USD had **no** provenance marker. Its MT5 origin is inferred from the identical signature and start time (2021-09-20 03:00 server = 00:00 UTC), and its marker says so.
+- `FOREX_PROFILE.calendar = fx_new_york_close_calendar()`. The other FX rules are still undecided, so FX stays FX_CALENDAR_UNAVAILABLE for canonical use.
+
+**Verification:**
+- **Known answers:** the winter and summer Monday open and Friday close land on 22:00/21:00 UTC and 21:00/20:00 UTC; an impossible New York time is refused.
+- **Converted data vs calendar:** **0 rows inside a closure across all 58 files** (before conversion, every Friday's 22:00 and 23:00 bars fell inside it). There are 16,357 missing trading hours, 10,355 of them Christmas/New Year (no holiday list chosen).
+- **Metals (XAU, XAG):** about 1,470 further missing hours each, from the daily 17:00–18:00 New York metals break. Metals need their own calendar (owner, with OD-FX-7).
+- **Tests (`test_asset_agnostic_market`, 3 new + 1 justified update):** conversion known answers; calendar daylight-saving boundaries; the one-off conversion archives, converts exactly, leaves non-MT5 files untouched and refuses a second run. The profile test now expects the calendar decided.
+- **Mutations, 3 of 3 caught:** a 6 h offset; a calendar without daylight saving; originals not archived.
+- **Second test-isolation defect found:** `test_instruments.ProvenanceMarkerTest` wrote, and in `tearDown` **deleted**, the REAL `data/forex/EUR_USD_1h.provenance.json` on every run. That is why EUR/USD was the only MT5 file without a marker, and it deleted the new marker again during this verification.
+  - **Fixed:** the class now runs against a temporary data folder (`instruments.DATA_DIR` swapped) and asserts the real marker is untouched.
+  - **Test updates (justified):** three tests asserted EUR/USD = Yahoo, a state the deleting test had created; they now assert the venue the real marker records.
+  - The previously failing `test_forex_registry_reports_mt5_once_mt5_has_written_the_marker` now passes.
+  - **Mutation:** with the folder swap disabled, the tests fail, and the real marker stays untouched.
+  - The real EUR/USD marker was restored, with the history noted.
+- **Forex regression:** 102 tests run. Remaining failures are known baseline ones only (Yahoo live-network tests; `test_universe_is_currency_balanced_not_usd_dominated`). The 4 failures caused by the marker defect pass after the fix (30 affected tests re-run, all OK).
+
+**Affected existing outputs (G5; nothing deleted).** These were computed from the server-clock timestamps (2–3 h late, with daylight-saving seams):
+- `research_data/forex/*_cross_section.csv` (58);
+- `research_data/forex_pca_*.csv` (4);
+- `research_data/forex_cointegration_pairs*.csv` (7);
+- `research_data/forex_cross_sectional_family_verdict.json`.
+
+They are LEGACY on the server clock and are not comparable with crypto or with the corrected data. Within-FX statistics are shifted rather than scrambled, but any cross-asset alignment was 2–3 h off. The forex dashboard's cross-section "as of 2026-09-18 22:00 UTC" was a server-clock label until those files are regenerated.
+
+**Still owner decisions for FX:** gap limit (OD-FX-2), seed rule (OD-FX-3), horizon basis (4), financing (5), spread model (6), universe incl. metals and their calendar (7), protocol values (8), older history (9), holiday list (optional).

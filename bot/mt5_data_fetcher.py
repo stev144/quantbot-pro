@@ -59,6 +59,82 @@ from typing import Dict, List, Optional
 import pandas as pd
 from bot.quant_core.research_zones import seal_before_write   # claude code changed: D-8
 
+# claude code changed: 2026-10-06 — DATA CLOCK FIX (owner-approved option A). MT5 returns bar times in the BROKER
+# SERVER's wall clock encoded as epoch seconds; they were stored as if UTC. Measured on all 58 data/forex files:
+# the weekend gap is Fri 23:00 -> Mon 00:00 in every week of every season, INCLUDING the weeks when US and EU
+# daylight-saving dates differ, i.e. the server clock follows US DST: server time = America/New_York + 7 h
+# (UTC+2 in winter, UTC+3 in summer — the standard "New York close" broker). Inferred from the data; confirm live
+# with confirm_mt5_server_clock() when the terminal is running. Another broker clock is set via MT5_SERVER_CLOCK.
+MT5_SERVER_CLOCK = os.getenv("MT5_SERVER_CLOCK", "NY+7")
+MT5_CLOCK_LABEL = "UTC (converted from MT5 server time = America/New_York + 7 h)"
+
+
+def mt5_server_time_to_utc(server_wall_clock) -> pd.Series:   # claude code changed: 2026-10-06 — new
+    """MT5 server wall-clock times (epoch seconds, or naive/UTC-labelled datetimes that are really server time)
+    -> true tz-aware UTC. Fails closed on times that do not exist / are ambiguous in New York (DST switches fall on
+    Sunday early morning, when the market is closed, so a bar there means the clock assumption is wrong)."""
+    if MT5_SERVER_CLOCK != "NY+7":
+        raise ValueError(f"unsupported MT5_SERVER_CLOCK={MT5_SERVER_CLOCK!r} (only 'NY+7' is implemented and verified)")
+    s = pd.Series(server_wall_clock)
+    naive = pd.to_datetime(s, unit="s") if pd.api.types.is_numeric_dtype(s) else pd.to_datetime(s)
+    if getattr(naive.dt, "tz", None) is not None:
+        naive = naive.dt.tz_localize(None)              # the label was wrong: keep the wall-clock digits
+    ny = (naive - pd.Timedelta(hours=7)).dt.tz_localize("America/New_York", ambiguous="raise", nonexistent="raise")
+    return ny.dt.tz_convert("UTC")
+
+
+def convert_server_clock_files(directory, archive_dir) -> list:   # claude code changed: 2026-10-06 — new, one-off
+    """Convert data/forex/*_1h.csv written with MT5 server time labelled as UTC to true UTC, after copying every
+    original to `archive_dir` (refuses if an archive copy already exists — nothing is ever overwritten twice).
+    Only files whose weekend gap is the MT5 server-time signature (Fri 23:00 -> Mon 00:00/01:00) are converted;
+    anything else is reported and left untouched."""
+    import shutil
+    from pathlib import Path
+    from bot.instruments import write_provenance_marker
+    directory, archive_dir = Path(directory), Path(archive_dir)
+    archive_dir.mkdir(parents=True, exist_ok=False)
+    report = []
+    for p in sorted(directory.glob("*_1h.csv")):
+        df = pd.read_csv(p, float_precision="round_trip")
+        t = pd.to_datetime(df["timestamp"], utc=True)
+        gaps = [(t.iloc[i - 1], t.iloc[i]) for i in range(1, len(t)) if t.iloc[i] - t.iloc[i - 1] > timedelta(hours=30)]
+        sig = sum(1 for a, b in gaps if a.dayofweek == 4 and a.hour == 23 and b.dayofweek == 0 and b.hour in (0, 1))
+        if not gaps or sig / len(gaps) < 0.9:
+            report.append({"file": p.name, "converted": False, "reason": f"server-time signature in {sig}/{len(gaps)} weekends"})
+            continue
+        shutil.copy2(p, archive_dir / p.name)
+        m = p.with_suffix(".provenance.json")
+        had_marker = m.exists()   # claude code changed: 2026-10-06 — read BEFORE the new marker is written
+        if had_marker:
+            shutil.copy2(m, archive_dir / m.name)
+        df["timestamp"] = mt5_server_time_to_utc(t).dt.strftime("%Y-%m-%d %H:%M:%S+00:00").to_numpy()
+        df.to_csv(p, index=False)
+        ts = pd.to_datetime(df["timestamp"], utc=True)
+        symbol = p.name[:-len("_1h.csv")].replace("_", "/")
+        write_provenance_marker(p, venue="mt5", data_source="mt5_data_fetcher", source="mt5_terminal_ipc", symbol=symbol,
+                                timeframe=INTERVAL, start_date=str(ts.iloc[0].date()), end_date=str(ts.iloc[-1].date()),
+                                row_count=len(df), clock=MT5_CLOCK_LABEL + "; converted 2026-10-06 from stored server-time rows"
+                                + ("" if had_marker else "; original marker missing — MT5 origin inferred from the weekend signature"))
+        report.append({"file": p.name, "converted": True, "rows": len(df), "weekend_signature": f"{sig}/{len(gaps)}",
+                       "had_marker": had_marker})
+    return report
+
+
+def confirm_mt5_server_clock() -> dict:   # claude code changed: 2026-10-06 — new; live check (needs the terminal)
+    """Compare the terminal's latest server tick time with the real UTC clock: the offset must be +3 h during US
+    daylight saving and +2 h otherwise if MT5_SERVER_CLOCK='NY+7' is right."""
+    mt5 = connect()
+    try:
+        tick = mt5.symbol_info_tick("EURUSD" + os.getenv("MT5_SYMBOL_SUFFIX", ""))
+        now_utc = pd.Timestamp.now(tz="UTC")
+        server = pd.Timestamp(tick.time, unit="s")
+        expected = now_utc.tz_convert("America/New_York").tz_localize(None) + pd.Timedelta(hours=7)
+        return {"server_minus_utc_hours": round((server - now_utc.tz_localize(None)).total_seconds() / 3600, 2),
+                "expected_hours": round((expected - now_utc.tz_localize(None)).total_seconds() / 3600, 2),
+                "note": "tick time is the LAST tick; outside market hours it can be stale"}
+    finally:
+        mt5.shutdown()
+
 # claude code changed: new — reuse, not reimplementation. Same universe,
 # same filename convention, same gap-detection logic as the Yahoo fetcher
 # — only the provider call underneath changes. See module docstring for
@@ -281,7 +357,7 @@ def get_mt5_klines(symbol: str, interval: str = INTERVAL, history_days: int = HI
             )
 
         df = pd.DataFrame(rates)
-        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        df["timestamp"] = mt5_server_time_to_utc(df["time"]).to_numpy()   # claude code changed: 2026-10-06 — was utc=True on server time
         df = df.rename(columns={"tick_volume": "volume"})[
             ["timestamp", "open", "high", "low", "close", "volume"]
         ]
@@ -338,7 +414,7 @@ def download_all_mt5_symbols() -> dict:
                     raise MT5ConnectionError(f"no data returned: {mt5.last_error()}")
 
                 df = pd.DataFrame(rates)
-                df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                df["timestamp"] = mt5_server_time_to_utc(df["time"]).to_numpy()   # claude code changed: 2026-10-06 — was utc=True on server time
                 df = df.rename(columns={"tick_volume": "volume"})[
                     ["timestamp", "open", "high", "low", "close", "volume"]
                 ]
@@ -386,7 +462,7 @@ def download_all_mt5_symbols() -> dict:
                     filepath, venue="mt5", data_source="mt5_data_fetcher",
                     source="mt5_terminal_ipc", symbol=symbol, timeframe=INTERVAL,
                     start_date=str(df["timestamp"].iloc[0].date()), end_date=str(df["timestamp"].iloc[-1].date()),
-                    row_count=len(df),
+                    row_count=len(df), clock=MT5_CLOCK_LABEL,   # claude code changed: 2026-10-06
                 )
 
                 last_timestamp = df["timestamp"].iloc[-1]

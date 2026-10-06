@@ -19,7 +19,8 @@ class ForexDashboardViewTest(TestCase):
         resp = self.client.get(reverse("forex_dashboard"), {"symbol": "EUR/USD"})
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "EUR/USD")
-        self.assertContains(resp, "yahoo_finance")
+        from bot.instruments import get_instrument   # claude code changed: 2026-10-06 — was a hard-coded "yahoo_finance"
+        self.assertContains(resp, get_instrument("EUR/USD").venue)
 
     def test_no_symbol_param_defaults_to_a_real_registered_symbol(self):
         resp = self.client.get(reverse("forex_dashboard"))

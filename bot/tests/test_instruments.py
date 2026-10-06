@@ -64,7 +64,11 @@ class InstrumentRegistryTest(SimpleTestCase):
         self.assertIsNotNone(instrument)
         self.assertEqual(instrument.base_currency, "EUR")
         self.assertEqual(instrument.quote_currency, "USD")
-        self.assertEqual(instrument.venue, "yahoo_finance")
+        # claude code changed: 2026-10-06 — was assertEqual(venue, "yahoo_finance"): true only because another test
+        # kept deleting EUR/USD's real MT5 marker. The venue must be whatever the real marker records (Yahoo fallback
+        # only when there is no marker).
+        real_marker = read_provenance_marker(Path(DATA_DIR) / "forex" / forex_symbol_to_filename("EUR/USD"))
+        self.assertEqual(instrument.venue, real_marker["venue"] if real_marker else "yahoo_finance")
         self.assertEqual(instrument.timeframe, "1h")
 
     def test_unknown_symbol_returns_none_not_a_guess(self):
@@ -231,16 +235,32 @@ class ProvenanceMarkerTest(SimpleTestCase):
     this project's convention: exercises real file I/O against a throwaway
     path, and against EUR/USD's real (but temporary, cleaned-up) marker."""
 
+    # claude code changed: 2026-10-06 — test-isolation fix. This class used the REAL data/forex/ folder and its
+    # tearDown DELETED the real data/forex/EUR_USD_1h.provenance.json on every run (that is why EUR/USD was the only
+    # MT5 file without a marker). It now runs against a temporary copy of the data folder (instruments.DATA_DIR is
+    # swapped for the test) and asserts the real marker is untouched.
     def setUp(self):
-        self.dummy_csv = Path("data/forex/__test_provenance_dummy_1h.csv")
+        import tempfile
+        from unittest import mock
+        self.tmp = Path(tempfile.mkdtemp(prefix="instr_marker_"))
+        (self.tmp / "forex").mkdir()
+        for sym in ("EUR/USD", "GBP/USD"):
+            (self.tmp / "forex" / forex_symbol_to_filename(sym)).write_text("timestamp,close\n")
+        self.dummy_csv = self.tmp / "forex" / "__test_provenance_dummy_1h.csv"
         self.dummy_marker = self.dummy_csv.with_suffix(".provenance.json")
-        self.eurusd_csv = Path(DATA_DIR) / "forex" / forex_symbol_to_filename("EUR/USD")
+        self.eurusd_csv = self.tmp / "forex" / forex_symbol_to_filename("EUR/USD")
         self.eurusd_marker = self.eurusd_csv.with_suffix(".provenance.json")
+        self._real_marker = (Path(DATA_DIR) / "forex" / forex_symbol_to_filename("EUR/USD")).with_suffix(".provenance.json")
+        self._real_state = (self._real_marker.exists(), self._real_marker.stat().st_mtime if self._real_marker.exists() else None)
+        self._patch = mock.patch.object(instruments, "DATA_DIR", str(self.tmp))
+        self._patch.start()
 
     def tearDown(self):
-        for marker in (self.dummy_marker, self.eurusd_marker):
-            if marker.exists():
-                os.remove(marker)
+        import shutil
+        self._patch.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        real_now = (self._real_marker.exists(), self._real_marker.stat().st_mtime if self._real_marker.exists() else None)
+        self.assertEqual(real_now, self._real_state, "the test touched the REAL EUR/USD provenance marker")
 
     def test_read_provenance_marker_returns_none_when_absent(self):
         self.assertIsNone(read_provenance_marker(self.dummy_csv))

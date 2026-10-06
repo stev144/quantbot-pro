@@ -4,6 +4,7 @@
 # canonical while Decision 5's owner rules are undecided (FX_CALENDAR_UNAVAILABLE, not negative evidence);
 # financing/cost/universe/symbol rules cannot leak between asset classes; the holdout seal applies to every class.
 # The SessionCalendar used here is a TEST FIXTURE (Fri 22:00 → Sun 22:00 UTC) — not an FX calendar decision.
+import json   # claude code changed: 2026-10-06
 import shutil
 import tempfile
 from pathlib import Path
@@ -193,7 +194,9 @@ class ForexCannotBeCanonicalTests(SimpleTestCase):
         cls.a, cls.b = _fx_like()
 
     def test_profile_and_symbol_resolution(self):
-        self.assertEqual(set(FOREX_PROFILE.missing_decisions()), set(FOREX_PROFILE.DECISION_FIELDS))
+        # claude code changed: 2026-10-06 — the calendar is now decided (OD-FX-1); every other rule is still missing,
+        # so FX stays FX_CALENDAR_UNAVAILABLE for canonical use.
+        self.assertEqual(set(FOREX_PROFILE.missing_decisions()), set(FOREX_PROFILE.DECISION_FIELDS) - {"calendar"})
         with self.assertRaisesRegex(OwnerDecisionMissing, FX_CALENDAR_UNAVAILABLE):
             FOREX_PROFILE.require_canonical("test")
         for s, c in (("EUR/USD", "FOREX"), ("EUR_USD", "FOREX"), ("XAU/USD", "FOREX"), ("BTC/USDT", "CRYPTO"),
@@ -288,3 +291,47 @@ class NoCrossAssetLeakTests(SimpleTestCase):
         r = pair_test_in_selection_zone("X_USDT", "Y_USDT", a, b)
         self.assertEqual(r["status"], "UNTESTABLE")                               # the crypto gap rule, unchanged
         self.assertIn("gap policy", r["reject_reason"])
+
+
+# claude code changed: 2026-10-06 — data clock fix (owner option A) and the owner's FX calendar (OD-FX-1).
+class Mt5ServerClockTests(SimpleTestCase):
+    def test_server_time_converts_to_the_real_market_open_and_close(self):
+        from bot.mt5_data_fetcher import mt5_server_time_to_utc
+        cases = {"2026-01-05 00:00": "2026-01-04 22:00",   # winter: Monday-open bar = Sunday 22:00 UTC
+                 "2026-01-09 23:00": "2026-01-09 21:00",   # winter: last Friday bar (closes 22:00 UTC)
+                 "2026-07-06 00:00": "2026-07-05 21:00",   # summer (US DST): Sunday 21:00 UTC
+                 "2026-07-10 23:00": "2026-07-10 20:00"}   # summer: last Friday bar (closes 21:00 UTC)
+        got = mt5_server_time_to_utc(pd.Series([pd.Timestamp(k, tz="UTC") for k in cases]))   # stored form: server digits labelled UTC
+        self.assertEqual([str(x) for x in got], [str(pd.Timestamp(v, tz="UTC")) for v in cases.values()])
+        epoch = int(pd.Timestamp("2026-01-05 00:00").timestamp())
+        self.assertEqual(mt5_server_time_to_utc(pd.Series([epoch])).iloc[0], pd.Timestamp("2026-01-04 22:00", tz="UTC"))
+        with self.assertRaises(Exception):                                     # a bar at a non-existent NY time = wrong clock
+            mt5_server_time_to_utc(pd.Series([pd.Timestamp("2026-03-08 09:30")]))
+
+    def test_fx_calendar_follows_new_york_daylight_saving(self):
+        cal = FOREX_PROFILE.calendar
+        self.assertIn("America/New_York", cal.source)
+        win_close, sum_close = pd.Timestamp("2026-01-09 22:00", tz="UTC"), pd.Timestamp("2026-07-10 21:00", tz="UTC")
+        hours = pd.DatetimeIndex([win_close - H, win_close, pd.Timestamp("2026-01-11 21:00", tz="UTC"), pd.Timestamp("2026-01-11 22:00", tz="UTC"),
+                                  sum_close - H, sum_close, pd.Timestamp("2026-07-12 20:00", tz="UTC"), pd.Timestamp("2026-07-12 21:00", tz="UTC")])
+        self.assertEqual(cal.is_trading(hours).tolist(), [True, False, False, True, True, False, False, True])
+
+    def test_one_off_conversion_archives_converts_and_never_runs_twice(self):
+        from bot.mt5_data_fetcher import convert_server_clock_files
+        d = Path(tempfile.mkdtemp())
+        try:
+            idx = FOREX_PROFILE.calendar.trading_grid("2026-01-05", "2026-01-23 23:00")
+            server = (idx.tz_convert("America/New_York").tz_localize(None) + pd.Timedelta(hours=7)).tz_localize("UTC")
+            pd.DataFrame({"timestamp": server, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1}).to_csv(d / "EUR_USD_1h.csv", index=False)
+            pd.DataFrame({"timestamp": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1}).to_csv(d / "GBP_USD_1h.csv", index=False)   # already UTC
+            rep = {r["file"]: r for r in convert_server_clock_files(d, d / "archive")}
+            self.assertTrue(rep["EUR_USD_1h.csv"]["converted"])
+            self.assertFalse(rep["GBP_USD_1h.csv"]["converted"])               # no server-time signature: untouched
+            back = pd.to_datetime(pd.read_csv(d / "EUR_USD_1h.csv")["timestamp"], utc=True)
+            self.assertTrue(back.equals(pd.Series(idx)))                       # exactly the true UTC trading grid
+            self.assertTrue((d / "archive" / "EUR_USD_1h.csv").exists())       # original kept
+            self.assertIn("original marker missing", json.loads((d / "EUR_USD_1h.provenance.json").read_text())["clock"])
+            with self.assertRaises(FileExistsError):                           # never converts (or archives) twice
+                convert_server_clock_files(d, d / "archive")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
