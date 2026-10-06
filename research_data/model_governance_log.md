@@ -2362,3 +2362,15 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 ## 2026-10-06 — FX HISTORY FETCHED (OD-FX-9)
 
 - 58/58 MT5 pairs re-downloaded in true UTC from 2021-05-02 to 2026-10-02 (>= 3,093 trading candles before zone S; zone V complete); rows >= F sealed; 0 rows inside calendar closures. Previous files archived in data/forex/_archive_pre_history_2026-10-06/.
+
+
+---
+
+## 2026-10-06 — FX SELECTION RULES (OD-FX-2/3/7, OWNER-DELEGATED)
+
+- Delegated by the owner ("do what's recommended"); strictest defensible choices:
+  - g_max = 5 missing trading hours on the FX grid (admits the measured 2021-12-02 5 h broker outage; 5 of 51 pairs exceed it in zone S, so USD/SEK, EUR/SEK, USD/NOK, EUR/NOK (2023-01-02 Scandinavian closure) and USD/THB are UNTESTABLE);
+  - seed = first trading candle at or after S0;
+  - universe FX-FLOATING-51 v1 (excludes HKD/DKK pegs and XAU/XAG metals; outside the universe = BLOCKED);
+  - 11 measured Christmas/New Year closure intervals added to the FX calendar (the outage is not a holiday).
+- FX may now run the exploratory zone-S SELECTION screen only (FX_SELECTION_ONLY, never claimable). Canonical FX (Kalman, lifecycle, evidence) stays BLOCKED: horizon, financing, costs and protocol are undecided. Crypto unchanged.

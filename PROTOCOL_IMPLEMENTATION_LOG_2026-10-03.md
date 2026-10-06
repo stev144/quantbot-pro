@@ -1112,3 +1112,33 @@ They are LEGACY on the server clock and are not comparable with crypto or with t
   - 0 rows inside calendar closures.
 - **Tests:** 96 forex/data tests run; only the known baseline failure remains. The live-terminal download path itself has no automated test (tests never contact an exchange).
 - **Remaining for an FX zone-S screen:** OD-FX-2 (gap limit), OD-FX-3 (seed rule), OD-FX-7 (universe, incl. metals and their daily break).
+
+
+---
+
+## FX selection rules OD-FX-2/3/7 + holiday list (2026-10-06). Status: DONE (owner-delegated)
+
+- **Owner-delegated ("do what's recommended").** Each choice is the strictest defensible option, recorded here as owner-delegated rather than owner-chosen.
+  - **OD-FX-2, gap limit:** `gap_max_candles = 5` missing TRADING hours, counted on the FX trading grid (scheduled closures are not gaps; Decision 5 B). It is data-informed and was measured on zone S for the 51 universe pairs.
+    - 46 of 51: the longest hole is exactly the 5 h broker-wide outage on 2021-12-02.
+    - 5 of 51 go over the limit, so every pair containing them is UNTESTABLE in the screen:
+      - USD/SEK and EUR/SEK: 24 h from 2023-01-01 22:00 UTC;
+      - USD/NOK and EUR/NOK: 17 h from the same time;
+      - USD/THB: 6 h from 2023-12-22 16:00.
+    - The SEK/NOK holes are the per-symbol Scandinavian New Year closure, not broker-wide, so they are not added to the shared calendar. A per-symbol holiday list would be an owner decision.
+    - A looser limit would admit unmeasured holes; a tighter one would discard every pair for one shared outage.
+  - **OD-FX-3, seed rule:** `FIRST_TRADING_CANDLE_AT_OR_AFTER_S`. The causal seed sits at the first trading candle at or after S0, never before S and never interpolated across a closure. This is the same strict causal rule as crypto, applied on the trading grid.
+  - **OD-FX-7, universe:** `FX-FLOATING-51 v1`, the 51 MT5 currency pairs excluding hard pegs (HKD: USD/HKD, EUR/HKD; DKK: EUR/DKK, GBP/DKK, USD/DKK) and metals (XAU/USD, XAG/USD).
+    - Pegs are excluded because a policy-pegged pair is cointegrated by construction, so a "discovery" there is not evidence.
+    - Metals are excluded because they need their own calendar (daily break), which is not decided.
+    - Pairs outside the universe are BLOCKED (OwnerDecisionMissing), never UNTESTABLE or rejected.
+  - **Holiday list (optional item of OD-FX-1):** 11 UTC closure intervals (9 Christmas/New Year events, 2021–2026) measured from the data. The 2021-12-02 outage is deliberately NOT a holiday, so it still counts against g_max.
+- **Code:**
+  - `bot/quant_core/market_profile.py`: `SELECTION_FIELDS`, `require_selection()`, `FX_HOLIDAY_CLOSURES`, `fx_new_york_close_calendar(holidays=True)`, `FX_UNIVERSE`, `in_universe()`, and FOREX_PROFILE values.
+  - `bot/research/cointegration_engine.py`: the FX selection path uses the FX calendar for alignment, seed and gap; rows are tagged `selection_mode = FX_SELECTION_ONLY`; it is exploratory and never claimable.
+  - `bot/research_lab/tools/research_tools.py`: the Kalman tool now returns REQUIRES_REVIEW (with the FX_CALENDAR_UNAVAILABLE reason) instead of raising.
+- **Still blocked for FX (canonical):** Kalman state, lifecycle and evidence. Horizon basis (OD-FX-4), financing (5), spread/cost model (6) and protocol values (8) are undecided, so `require_canonical` still refuses FX. Crypto is unchanged (golden fingerprints identical apart from the known trade_log difference).
+- **Tests:** `test_asset_agnostic_market` was updated. Every changed assertion follows the decided rules; none were loosened.
+  - New: in-universe pair OK and seed-eligible, a peg BLOCKED; a 5 h hole gives OK and a 6 h hole gives UNTESTABLE; holiday and outage probes.
+- **Mutation checks (6/6 caught):** gap limit 6; universe not enforced; holidays dropped; outage relabelled as a holiday; FX through the canonical gate; lab catch removed.
+- **Regression:** 120 related tests plus 4 MT5 tests, offline with no network attempts. Only the known baseline failure `test_universe_is_currency_balanced_not_usd_dominated` remains (it predates this change; its module path imports none of the changed files).

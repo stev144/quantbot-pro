@@ -41,6 +41,10 @@ def _fx_like(seed=3):
     return _coint(TEST_CAL.trading_grid(FIXTURE_START, FIXTURE_END), seed)
 
 
+def _fx_real(seed=3):   # claude code changed: 2026-10-06 — data on the REAL FX calendar (weekly NY close + holidays)
+    return _coint(FOREX_PROFILE.calendar.trading_grid(FIXTURE_START, FIXTURE_END), seed)
+
+
 def _crypto_like(seed=3, end="2024-06-30 23:00"):
     return _coint(pd.date_range(ZONES.init_window()[0], pd.Timestamp(end, tz="UTC"), freq="h"), seed)
 
@@ -186,17 +190,20 @@ class SessionSeedIsCausalTests(SimpleTestCase):
 
 
 class ForexCannotBeCanonicalTests(SimpleTestCase):
-    """Decision 5 is BLOCKED: every canonical consumer refuses FX with FX_CALENDAR_UNAVAILABLE (not negative evidence)."""
+    """Every CANONICAL consumer refuses FX with FX_CALENDAR_UNAVAILABLE (not negative evidence). claude code changed:
+    2026-10-06 — the owner-delegated selection rules (calendar, gap limit, seed rule, universe) now allow the
+    exploratory zone-S SELECTION screen for in-universe FX pairs; Kalman state, lifecycle and evidence stay blocked."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.a, cls.b = _fx_like()
+        cls.a, cls.b = _fx_real()   # claude code changed: 2026-10-06 — real FX calendar (was the TEST calendar)
 
     def test_profile_and_symbol_resolution(self):
-        # claude code changed: 2026-10-06 — the calendar is now decided (OD-FX-1); every other rule is still missing,
-        # so FX stays FX_CALENDAR_UNAVAILABLE for canonical use.
-        self.assertEqual(set(FOREX_PROFILE.missing_decisions()), set(FOREX_PROFILE.DECISION_FIELDS) - {"calendar"})
+        # claude code changed: 2026-10-06 — calendar (OD-FX-1) and the delegated selection rules (OD-FX-2/3/7) are
+        # decided; horizon, financing, costs and protocol are not, so FX stays FX_CALENDAR_UNAVAILABLE for canonical use.
+        self.assertEqual(set(FOREX_PROFILE.missing_decisions()), set(FOREX_PROFILE.DECISION_FIELDS) - set(FOREX_PROFILE.SELECTION_FIELDS))
+        self.assertIs(FOREX_PROFILE.require_selection("test"), FOREX_PROFILE)
         with self.assertRaisesRegex(OwnerDecisionMissing, FX_CALENDAR_UNAVAILABLE):
             FOREX_PROFILE.require_canonical("test")
         for s, c in (("EUR/USD", "FOREX"), ("EUR_USD", "FOREX"), ("XAU/USD", "FOREX"), ("BTC/USDT", "CRYPTO"),
@@ -205,17 +212,28 @@ class ForexCannotBeCanonicalTests(SimpleTestCase):
         with self.assertRaisesRegex(AssetClassMismatch, "mixes asset classes"):
             profile_for_pair("BTC/USDT", "EUR/USD")
 
-    def test_selection_is_blocked_not_untestable_or_rejected(self):
+    def test_selection_runs_in_universe_and_blocks_outside_it(self):   # claude code changed: 2026-10-06 — was "selection is blocked"
         from bot.research.cointegration_engine import pair_test_in_selection_zone, run_selection_zone_screen
         from bot.research_lab.verdict import compute_verdict_pairs
         r = pair_test_in_selection_zone("EUR/USD", "GBP/USD", self.a, self.b)
-        self.assertEqual(r["status"], "BLOCKED")
-        self.assertIn(FX_CALENDAR_UNAVAILABLE, r["reject_reason"])
-        self.assertIsNone(r["is_cointegrated"])                                  # unknown, not False
-        self.assertEqual(compute_verdict_pairs(r).verdict, "REQUIRES_REVIEW")
-        scr = run_selection_zone_screen({"EUR/USD": self.a, "GBP/USD": self.b, "AUD/USD": self.a * 1.1})
-        self.assertEqual((scr["n_testable"], scr["nominated"]), (0, []))          # never enters a BH family
-        self.assertEqual({p["status"] for p in scr["pairs"]}, {"BLOCKED"})
+        self.assertEqual((r["status"], r["seed_eligible"]), ("OK", True))
+        self.assertIn("FX_SELECTION_ONLY", r["selection_mode"])
+        p = pair_test_in_selection_zone("EUR/USD", "USD/HKD", self.a, self.b)   # hard peg: outside the universe
+        self.assertEqual(p["status"], "BLOCKED")
+        self.assertIn("outside the FOREX universe", p["reject_reason"])
+        self.assertIsNone(p["is_cointegrated"])                                  # unknown, not False
+        self.assertEqual(compute_verdict_pairs(p).verdict, "REQUIRES_REVIEW")
+        scr = run_selection_zone_screen({"EUR/USD": self.a, "GBP/USD": self.b, "USD/HKD": self.a * 1.1})
+        self.assertEqual(scr["n_testable"], 1)                                   # only the in-universe pair enters the family
+        self.assertEqual(sorted(x["status"] for x in scr["pairs"]), ["BLOCKED", "BLOCKED", "OK"])
+        self.assertFalse(scr["claimable"])
+
+    def test_fx_gap_rule_uses_the_trading_grid_and_the_delegated_limit(self):   # claude code changed: 2026-10-06
+        from bot.research.cointegration_engine import pair_test_in_selection_zone
+        wed = pd.Timestamp("2023-03-08 03:00", tz="UTC")
+        for hole, expect in ((5, "OK"), (6, "UNTESTABLE")):                     # g_max = 5 missing TRADING hours
+            a = self.a.drop(self.a.index[(self.a.index >= wed) & (self.a.index < wed + hole * H)])
+            self.assertEqual(pair_test_in_selection_zone("EUR/USD", "GBP/USD", a, self.b)["status"], expect, hole)
 
     def test_kalman_pipeline_and_lab_refuse(self):
         from bot.research.cointegration_pipeline_runner import run_pair_canonical
@@ -237,10 +255,9 @@ class ForexCannotBeCanonicalTests(SimpleTestCase):
             c = rt.run_cointegration_test("EUR/USD", "GBP/USD")
         self.assertEqual(k["verdict"], "REQUIRES_REVIEW")
         self.assertIsNone(k["observation"])
-        from bot.research_lab.verdict import compute_verdict_pairs
-        self.assertEqual(c["status"], "BLOCKED")                                   # not rewritten to "insufficient data"
-        self.assertNotIn("insufficient", c["reject_reason"].lower())
-        self.assertEqual(compute_verdict_pairs(c).verdict, "REQUIRES_REVIEW")
+        self.assertIn(FX_CALENDAR_UNAVAILABLE, k["reject_reason"])               # claude code changed: 2026-10-06 — canonical Kalman still blocked
+        self.assertEqual(c["status"], "OK")                                       # claude code changed: 2026-10-06 — selection now allowed (exploratory)
+        self.assertIn("FX_SELECTION_ONLY", c["selection_mode"])
 
     def test_holdout_seal_applies_to_fx_before_any_market_rule(self):
         from bot.research.cointegration_engine import pair_test_in_selection_zone
@@ -315,6 +332,10 @@ class Mt5ServerClockTests(SimpleTestCase):
         hours = pd.DatetimeIndex([win_close - H, win_close, pd.Timestamp("2026-01-11 21:00", tz="UTC"), pd.Timestamp("2026-01-11 22:00", tz="UTC"),
                                   sum_close - H, sum_close, pd.Timestamp("2026-07-12 20:00", tz="UTC"), pd.Timestamp("2026-07-12 21:00", tz="UTC")])
         self.assertEqual(cal.is_trading(hours).tolist(), [True, False, False, True, True, False, False, True])
+        # claude code changed: 2026-10-06 — measured Christmas/New Year closures are closures; the 2021-12-02 broker
+        # outage is NOT (it must stay missing data, never be relabelled as a holiday)
+        probe = pd.DatetimeIndex(["2023-12-25 12:00", "2024-01-01 12:00", "2021-12-24 20:00", "2021-12-02 10:00", "2023-12-27 12:00"], tz="UTC")
+        self.assertEqual(cal.is_trading(probe).tolist(), [False, False, False, True, True])
 
     def test_one_off_conversion_archives_converts_and_never_runs_twice(self):
         from bot.mt5_data_fetcher import convert_server_clock_files

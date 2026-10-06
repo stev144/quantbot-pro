@@ -1736,7 +1736,7 @@ def _zone_s_slice(log_a: pd.Series, log_b: pd.Series, *, zones=None, protocol=No
     return s, ""
 
 
-def _seed_eligibility(raw_a: pd.Series, raw_b: pd.Series, *, protocol=None):
+def _seed_eligibility(raw_a: pd.Series, raw_b: pd.Series, *, protocol=None, calendar=None):   # claude code changed: 2026-10-06 — calendar (FX trading grid)
     """(eligible, reason) using the canonical seed code path (KalmanFilterEngine alignment + causal_init)."""
     from bot.quant_core.protocol import CANONICAL
     from bot.quant_core.seed import causal_init
@@ -1744,15 +1744,15 @@ def _seed_eligibility(raw_a: pd.Series, raw_b: pd.Series, *, protocol=None):
     protocol = protocol or CANONICAL
     eng = KalmanFilterEngine(pair_name="A/B", symbol_a="A", symbol_b="B", ols_beta=1.0, ols_alpha=0.0)
     try:
-        aligned = eng._align_prices(raw_a, raw_b)
+        aligned = eng._align_prices(raw_a, raw_b, calendar=calendar)   # claude code changed: 2026-10-06 — None = unchanged crypto grid
         la, lb = eng._to_log_prices(aligned)
-        causal_init(la, lb, protocol)
+        causal_init(la, lb, protocol, calendar=calendar)               # claude code changed: 2026-10-06
         return True, ""
     except Exception as e:      # any refusal of the canonical seed makes the pair non-nominatable
         return False, f"no canonical seed: {e}"
 
 
-def _market_block(symbol_a, symbol_b, close_a, close_b, zones) -> Optional[Dict]:   # claude code changed: 2026-10-04 asset-agnostic — new
+def _market_block(symbol_a, symbol_b, close_a, close_b, zones, market_out: Optional[list] = None) -> Optional[Dict]:   # claude code changed: 2026-10-04 asset-agnostic — new; 2026-10-06 market_out
     """None when the pair may run under its market profile; otherwise a BLOCKED result (never UNTESTABLE or
     REJECTED: an undecided market rule is not a data problem and not negative evidence). The holdout seal is
     checked first, for every asset class."""
@@ -1761,10 +1761,20 @@ def _market_block(symbol_a, symbol_b, close_a, close_b, zones) -> Optional[Dict]
     for s in (close_a, close_b):
         zones.assert_no_sealed_data(s.index, purpose="cointegration selection screen")
     try:
-        market = profile_for_pair(symbol_a, symbol_b).require_canonical(f"zone-S selection {symbol_a}/{symbol_b}")
+        market = profile_for_pair(symbol_a, symbol_b)   # claude code changed: 2026-10-06 — gate chosen per asset class below
+        if market.asset_class == "CRYPTO":   # claude code changed: 2026-10-06 — crypto path unchanged
+            market.require_canonical(f"zone-S selection {symbol_a}/{symbol_b}")
+        else:                                # claude code changed: 2026-10-06 — FX: selection-only gate + universe
+            from bot.quant_core.market_profile import in_universe
+            market.require_selection(f"zone-S selection {symbol_a}/{symbol_b}")
+            outside = [s for s in (symbol_a, symbol_b) if not in_universe(market, s)]
+            if outside:
+                raise OwnerDecisionMissing(f"{outside} outside the {market.asset_class} universe ({market.universe_rule})")
         if market.calendar.is_continuous:
             assert_continuous_market(close_a.dropna().index, purpose=f"zone-S selection {symbol_a}")
             assert_continuous_market(close_b.dropna().index, purpose=f"zone-S selection {symbol_b}")
+        if market_out is not None:   # claude code changed: 2026-10-06 — hand the resolved profile to the caller
+            market_out.append(market)   # claude code changed: 2026-10-06
         return None
     except (OwnerDecisionMissing, AssetClassMismatch) as e:
         return {"symbol_a": symbol_a, "symbol_b": symbol_b, "pair_name": f"{symbol_a}/{symbol_b}",
@@ -1780,17 +1790,25 @@ def pair_test_in_selection_zone(symbol_a: str, symbol_b: str, close_a: pd.Series
     selection_basis / status / seed eligibility / zone provenance."""
     from bot.quant_core.research_zones import ZONES
     zones = zones or ZONES
-    blocked = _market_block(symbol_a, symbol_b, close_a, close_b, zones)   # claude code changed: 2026-10-04 asset-agnostic
+    _m = []   # claude code changed: 2026-10-06 — receives the resolved market profile
+    blocked = _market_block(symbol_a, symbol_b, close_a, close_b, zones, market_out=_m)   # claude code changed: 2026-10-04 asset-agnostic
     if blocked is not None:
         return blocked
+    market = _m[0]   # claude code changed: 2026-10-06
+    cal = None if market.calendar.is_continuous else market.calendar   # claude code changed: 2026-10-06 — FX trading grid
     log_a = np.log(close_a.astype(float).clip(lower=1e-12))
     log_b = np.log(close_b.astype(float).clip(lower=1e-12))
-    eligible, seed_reason = _seed_eligibility(close_a, close_b, protocol=protocol)
+    eligible, seed_reason = _seed_eligibility(close_a, close_b, protocol=protocol, calendar=cal)   # claude code changed: 2026-10-06 — calendar
     base = {"symbol_a": symbol_a, "symbol_b": symbol_b, "selection_basis": "ZONE_S_D8",
             "selection_screen_version": SELECTION_SCREEN_VERSION, "zones_hash": zones.zones_hash(),
             "zone_s": [zones.S0.isoformat(), zones.S1.isoformat()],
             "seed_eligible": eligible, "seed_reason": seed_reason}
-    s, reason = _zone_s_slice(log_a, log_b, zones=zones, protocol=protocol)
+    if cal is not None:   # claude code changed: 2026-10-06 — FX rows say what they are (crypto rows unchanged)
+        base.update({"asset_class": market.asset_class, "market_profile_hash": market.profile_hash(),
+                     "selection_mode": "FX_SELECTION_ONLY — costs, financing, holding horizon and protocol values "
+                                       "undecided; exploratory, never claimable"})
+    s, reason = _zone_s_slice(log_a, log_b, zones=zones, protocol=protocol, calendar=cal,
+                              gap_max_candles=market.gap_max_candles if cal is not None else None)   # claude code changed: 2026-10-06
     if s is None:
         return {**base, "status": "UNTESTABLE", "reject_reason": reason, "is_cointegrated": False,
                 "passes_filters": False, "coint_pvalue": None}

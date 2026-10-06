@@ -208,6 +208,9 @@ class MarketProfile:
 
     DECISION_FIELDS = ("calendar", "gap_max_candles", "seed_rule", "horizon_basis", "financing_source",
                        "cost_model", "universe_rule", "protocol_hash")
+    # claude code changed: 2026-10-06 — the rules a zone-S cointegration SELECTION screen needs (no costs, financing,
+    # holding horizon or protocol values are used by the Engle–Granger screen itself)
+    SELECTION_FIELDS = ("calendar", "gap_max_candles", "seed_rule", "universe_rule")
 
     def missing_decisions(self) -> List[str]:
         return [f for f in self.DECISION_FIELDS if getattr(self, f) is None]
@@ -222,6 +225,15 @@ class MarketProfile:
             status = FX_CALENDAR_UNAVAILABLE if self.asset_class == "FOREX" else "MARKET_PROFILE_INCOMPLETE"
             raise OwnerDecisionMissing(f"{status}: {purpose} — {self.asset_class} market profile has undecided owner "
                                        f"rules {missing}; not negative evidence (decision lock Decision 5)")
+        return self
+
+    def require_selection(self, purpose: str) -> "MarketProfile":   # claude code changed: 2026-10-06 — new
+        """Gate for the exploratory zone-S selection screen only: calendar, gap rule, seed rule and universe must be
+        decided. Everything downstream (Kalman state, lifecycle, costs, evidence) still needs require_canonical()."""
+        missing = [f for f in self.SELECTION_FIELDS if getattr(self, f) is None]
+        if missing:
+            status = FX_CALENDAR_UNAVAILABLE if self.asset_class == "FOREX" else "MARKET_PROFILE_INCOMPLETE"
+            raise OwnerDecisionMissing(f"{status}: {purpose} — {self.asset_class} selection rules undecided {missing}")
         return self
 
     def identity(self) -> dict:
@@ -252,27 +264,75 @@ def _crypto_profile() -> MarketProfile:
 CRYPTO_PROFILE = _crypto_profile()
 
 FX_CALENDAR_SOURCE = ("OD-FX-1 (owner, 2026-10-06): closed Friday 17:00 -> Sunday 17:00 America/New_York "
-                      "(= 22:00 UTC in winter, 21:00 UTC during US daylight saving); no holiday list")   # claude code changed: 2026-10-06
+                      "(= 22:00 UTC in winter, 21:00 UTC during US daylight saving)")   # claude code changed: 2026-10-06 — holidays described separately
 
 
-def fx_new_york_close_calendar(start="2015-01-01", end="2031-12-31") -> SessionCalendar:   # claude code changed: 2026-10-06 — new (owner OD-FX-1)
+# claude code changed: 2026-10-06 — owner-delegated holiday list ("do what's recommended"). Every broker-wide gap in
+# the 2021-05 .. 2026-10 MT5 data (missing for >= 54 of 56 currency pairs at once) that falls on Christmas or New
+# Year, taken hour by hour from the data. The one non-holiday broker-wide gap (Thu 2021-12-02 09:00-14:00 UTC, an
+# outage) is deliberately NOT a closure: it stays missing data. Coverage ends 2026-10-02; later holidays are not
+# listed, so they would show as missing hours until added.
+FX_HOLIDAY_CLOSURES = tuple((pd.Timestamp(a, tz="UTC"), pd.Timestamp(b, tz="UTC")) for a, b in (
+    ("2021-12-24 19:00", "2021-12-24 22:00"),   # Fri 24 Dec 14:00 NY early close
+    ("2021-12-26 22:00", "2021-12-26 23:00"),   # Sun 26 Dec late reopen
+    ("2021-12-31 19:00", "2021-12-31 22:00"),   # Fri 31 Dec 14:00 NY early close
+    ("2022-01-02 22:00", "2022-01-02 23:00"),   # Sun 02 Jan late reopen
+    ("2022-12-25 22:00", "2022-12-26 22:00"),   # Christmas observed Mon 26 Dec
+    ("2023-12-24 22:00", "2023-12-25 22:00"),   # Christmas Mon 25 Dec
+    ("2023-12-31 22:00", "2024-01-01 22:00"),   # New Year Mon 1 Jan
+    ("2024-12-24 22:00", "2024-12-25 22:00"),   # Christmas Wed 25 Dec
+    ("2024-12-31 22:00", "2025-01-01 22:00"),   # New Year Wed 1 Jan
+    ("2025-12-24 23:00", "2025-12-25 22:00"),   # Christmas Thu 25 Dec
+    ("2025-12-31 23:00", "2026-01-01 22:00"),   # New Year Thu 1 Jan
+))
+FX_HOLIDAY_SOURCE = ("owner-delegated 2026-10-06: Christmas/New Year broker-wide closures measured in the "
+                     "ICFundedEvaluations MT5 data 2021-05..2026-10 (the 2021-12-02 outage excluded)")
+
+
+def fx_new_york_close_calendar(start="2015-01-01", end="2031-12-31", holidays: bool = True) -> SessionCalendar:   # claude code changed: 2026-10-06 — new (owner OD-FX-1)
     """The owner's FX calendar: every week closed from Friday 17:00 to Sunday 17:00 New York time, converted to UTC
-    week by week (so it follows US daylight saving). No holidays (none chosen): Christmas / New Year closures show
-    up as missing trading hours, never as calendar closures."""
+    week by week (so it follows US daylight saving), plus the measured Christmas/New Year closures
+    (FX_HOLIDAY_CLOSURES; holidays=False gives the weekly rule alone)."""
     fridays = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="W-FRI")
     iv = []
     for f in fridays:
         a = pd.Timestamp(f.date()).replace(hour=17).tz_localize("America/New_York").tz_convert("UTC")
         b = (pd.Timestamp(f.date()) + pd.Timedelta(days=2)).replace(hour=17).tz_localize("America/New_York").tz_convert("UTC")
         iv.append((a, b))
-    return SessionCalendar(iv, source=FX_CALENDAR_SOURCE)
+    source = FX_CALENDAR_SOURCE + "; no holidays"
+    if holidays:
+        iv = iv + list(FX_HOLIDAY_CLOSURES)
+        source = FX_CALENDAR_SOURCE + "; holidays: " + FX_HOLIDAY_SOURCE
+    return SessionCalendar(iv, source=source)
+
+
+# claude code changed: 2026-10-06 — owner-delegated OD-FX-7: the 56 MT5 currency pairs minus hard pegs (HKD, DKK:
+# cointegrated by construction, not by market behaviour); metals (XAU, XAG) excluded (different session calendar —
+# daily break — and contract). 51 pairs.
+FX_UNIVERSE = frozenset(s.replace("_", "/") for s in (
+    "AUD_CAD AUD_CHF AUD_JPY AUD_NZD AUD_SGD AUD_USD CAD_CHF CAD_JPY CHF_JPY CHF_SGD EUR_AUD EUR_CAD EUR_CHF "
+    "EUR_GBP EUR_JPY EUR_NOK EUR_NZD EUR_PLN EUR_SEK EUR_SGD EUR_USD EUR_ZAR GBP_AUD GBP_CAD GBP_CHF GBP_JPY "
+    "GBP_NOK GBP_NZD GBP_SEK GBP_SGD GBP_USD NOK_JPY NOK_SEK NZD_CAD NZD_CHF NZD_JPY NZD_USD SEK_JPY SGD_JPY "
+    "USD_CAD USD_CHF USD_CNH USD_CZK USD_JPY USD_MXN USD_NOK USD_PLN USD_SEK USD_SGD USD_THB USD_ZAR").split())
+FX_UNIVERSE_RULE = ("FX-FLOATING-51 v1 (owner-delegated 2026-10-06): MT5 currency pairs excluding hard pegs "
+                    "(HKD, DKK) and metals (XAU, XAG)")
+
+
+def in_universe(profile: "MarketProfile", symbol: str) -> bool:   # claude code changed: 2026-10-06 — new
+    """FX: membership of FX_UNIVERSE. Crypto keeps its D-6 rule elsewhere (not applied by the selection screen)."""
+    if profile.asset_class != "FOREX":
+        return True
+    canon = symbol if "/" in symbol else symbol.replace("_", "/", 1)
+    return canon in FX_UNIVERSE
 
 
 # Decision 5: the calendar is decided (OD-FX-1, 2026-10-06); every other rule below is still an owner decision (see
 # the asset-agnostic section of PROTOCOL_IMPLEMENTATION_LOG_2026-10-03.md). None of them is guessed here.
 FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=fx_new_york_close_calendar(),   # claude code changed: 2026-10-06 — was None
-                              gap_max_candles=None, seed_rule=None,
-                              horizon_basis=None, financing_source=None, cost_model=None, universe_rule=None,
+                              gap_max_candles=5,                            # claude code changed: OD-FX-2 (owner-delegated): smallest limit that admits the single broker-wide outage (5 h, 2021-12-02); data-informed, recorded
+                              seed_rule="FIRST_TRADING_CANDLE_AT_OR_AFTER_S",   # claude code changed: OD-FX-3 (owner-delegated): strict, = the crypto rule
+                              horizon_basis=None, financing_source=None, cost_model=None,
+                              universe_rule=FX_UNIVERSE_RULE,               # claude code changed: OD-FX-7 (owner-delegated)
                               protocol_hash=None)
 
 _PROFILES = {"CRYPTO": CRYPTO_PROFILE, "FOREX": FOREX_PROFILE}

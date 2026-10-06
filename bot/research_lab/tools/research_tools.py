@@ -216,7 +216,14 @@ def run_kalman_pairs_test(
         **kalman_kwargs,
     )
     s_end = ZONES.S1
-    kalman_df = kalman_engine.run_canonical(price_a[price_a.index <= s_end], price_b[price_b.index <= s_end])
+    from bot.quant_core.market_profile import OwnerDecisionMissing   # claude code changed: 2026-10-06
+    try:
+        kalman_df = kalman_engine.run_canonical(price_a[price_a.index <= s_end], price_b[price_b.index <= s_end])
+    except OwnerDecisionMissing as e:   # e.g. FX: selection rules decided, canonical market rules not yet
+        return {
+            "asset_a": asset_a, "asset_b": asset_b, "observation": None, "statistical_evidence": evidence,
+            "verdict": "REQUIRES_REVIEW", "reject_reason": str(e),
+        }
     seed = kalman_engine.seed_record
     protocol = kalman_engine.canonical_protocol
 
