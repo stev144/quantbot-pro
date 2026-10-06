@@ -1095,3 +1095,20 @@ The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, i
 They are LEGACY on the server clock and are not comparable with crypto or with the corrected data. Within-FX statistics are shifted rather than scrambled, but any cross-asset alignment was 2–3 h off. The forex dashboard's cross-section "as of 2026-09-18 22:00 UTC" was a server-clock label until those files are regenerated.
 
 **Still owner decisions for FX:** gap limit (OD-FX-2), seed rule (OD-FX-3), horizon basis (4), financing (5), spread model (6), universe incl. metals and their calendar (7), protocol values (8), older history (9), holiday list (optional).
+
+
+---
+
+## FX history fetch, OD-FX-9 (2026-10-06). Status: DONE
+
+- **Owner-approved.** Through the logged-in MT5 terminal (read-only attach, no stored credentials): `download_all_mt5_symbols(date_from="2021-05-01", attach_only=True, archive_dir=...)`. The new optional arguments keep the old behaviour by default. Previous files and markers were archived in `data/forex/_archive_pre_history_2026-10-06/`.
+- **The first pass left 53 of 58 symbols ending 2026-09-18:** MT5 serves its local cache and only syncs a symbol when it is requested. A sync request (`copy_rates_from_pos`) brought all 53 up to date, and a second pass rewrote the files.
+- **Result (validated):**
+  - 58 of 58 pairs, none stale;
+  - history from 2021-05-02 21:00/22:00 UTC (the Sunday open) to 2026-10-02 20:00 UTC (the last bar before F);
+  - at least 3,093 trading candles before zone S (L = 1000 needed);
+  - zone V fully covered;
+  - 0 rows at or after F in the research files (all sealed: 58 files in `_sealed_holdout_F2026-10-04`);
+  - 0 rows inside calendar closures.
+- **Tests:** 96 forex/data tests run; only the known baseline failure remains. The live-terminal download path itself has no automated test (tests never contact an exchange).
+- **Remaining for an FX zone-S screen:** OD-FX-2 (gap limit), OD-FX-3 (seed rule), OD-FX-7 (universe, incl. metals and their daily break).

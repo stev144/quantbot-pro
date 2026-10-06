@@ -2356,3 +2356,9 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 ## 2026-10-06 — MT5 SERVER CLOCK CONFIRMED LIVE
 
 - Read-only attach to the logged-in terminal (ICFundedEvaluations-MT5-Demo, account 90018157, investor/read-only): last EURUSD tick 2026-10-06 21:42:15 server vs 18:42:17 UTC = +3.00 h during US daylight saving, exactly as server = America/New_York + 7 h predicts. The data-clock conversion of 85fec26 is confirmed.
+
+---
+
+## 2026-10-06 — FX HISTORY FETCHED (OD-FX-9)
+
+- 58/58 MT5 pairs re-downloaded in true UTC from 2021-05-02 to 2026-10-02 (>= 3,093 trading candles before zone S; zone V complete); rows >= F sealed; 0 rows inside calendar closures. Previous files archived in data/forex/_archive_pre_history_2026-10-06/.

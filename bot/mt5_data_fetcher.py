@@ -373,7 +373,19 @@ def get_mt5_klines(symbol: str, interval: str = INTERVAL, history_days: int = HI
         mt5.shutdown()   # claude code changed: always release the terminal connection, even on error
 
 
-def download_all_mt5_symbols() -> dict:
+def _attach_running_terminal():   # claude code changed: 2026-10-06 — new
+    """Attach to the terminal that is already running and logged in (no login call, no stored credentials) —
+    read-only use of whatever account the operator opened, e.g. with the investor password."""
+    mt5 = _import_mt5()
+    if not mt5.initialize():
+        raise MT5ConnectionError(f"mt5.initialize() failed — is the MT5 terminal running and logged in? {mt5.last_error()}")
+    return mt5
+
+
+def download_all_mt5_symbols(date_from=None, attach_only: bool = False, archive_dir=None) -> dict:
+    # claude code changed: 2026-10-06 — optional args (defaults = previous behaviour): date_from (history start;
+    # default = HISTORY_DAYS before now), attach_only (use the logged-in terminal, no stored credentials) and
+    # archive_dir (copy each existing file + marker there BEFORE overwriting it; refuses an existing archive dir).
     """
     claude code changed: new — the MT5 equivalent of forex_data_fetcher.py's
     download_all_forex_symbols(). Same shape (per-symbol try/except,
@@ -387,16 +399,22 @@ def download_all_mt5_symbols() -> dict:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(tz=timezone.utc)
+    start = (pd.Timestamp(date_from).tz_localize("UTC") if pd.Timestamp(date_from).tzinfo is None
+             else pd.Timestamp(date_from).tz_convert("UTC")).to_pydatetime() if date_from is not None else None   # claude code changed: 2026-10-06
+    if archive_dir is not None:   # claude code changed: 2026-10-06
+        from pathlib import Path as _P
+        archive_dir = _P(archive_dir)
+        archive_dir.mkdir(parents=True, exist_ok=False)
 
     print("\n" + "=" * 80)
     print(f"DOWNLOADING MT5 FOREX DATA FOR {len(SYMBOLS)} PAIRS")
-    print(f"History : most recent {HISTORY_DAYS} days as of {now.isoformat()}")
+    print(f"History : {'from ' + start.isoformat() if start else f'most recent {HISTORY_DAYS} days'} to {now.isoformat()}")   # claude code changed: 2026-10-06
     print(f"Interval: {INTERVAL}")
     print("Fetcher : MetaTrader5 package (local terminal IPC)")
     print("=" * 80)
 
     summary = {}
-    mt5 = connect()   # claude code changed: one connection for the whole run
+    mt5 = _attach_running_terminal() if attach_only else connect()   # claude code changed: one connection for the whole run; 2026-10-06 attach_only
 
     try:
         for symbol in SYMBOLS:
@@ -409,8 +427,8 @@ def download_all_mt5_symbols() -> dict:
                     raise MT5ConnectionError(f"mt5.symbol_select({mt5_symbol!r}) failed: {mt5.last_error()}")
 
                 date_to = now
-                date_from = now - timedelta(days=HISTORY_DAYS)
-                rates = mt5.copy_rates_range(mt5_symbol, timeframe, date_from, date_to)
+                window_from = start if start is not None else now - timedelta(days=HISTORY_DAYS)   # claude code changed: 2026-10-06
+                rates = mt5.copy_rates_range(mt5_symbol, timeframe, window_from, date_to)
                 if rates is None or len(rates) == 0:
                     raise MT5ConnectionError(f"no data returned: {mt5.last_error()}")
 
@@ -434,6 +452,11 @@ def download_all_mt5_symbols() -> dict:
                 other_gaps = [g for g in gaps if not g["likely_weekend"]]
 
                 filepath = OUTPUT_DIR / symbol_to_filename(symbol)
+                if archive_dir is not None:   # claude code changed: 2026-10-06 — keep the previous version
+                    import shutil
+                    for _old in (filepath, filepath.with_suffix(".provenance.json")):
+                        if _old.exists():
+                            shutil.copy2(_old, archive_dir / _old.name)
                 df = seal_before_write(df, filepath)   # claude code changed: D-8 — sealed forward holdout
                 df.to_csv(filepath, index=False)
 
