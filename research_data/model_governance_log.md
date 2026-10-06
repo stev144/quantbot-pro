@@ -2335,3 +2335,9 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 
 - Cross-section (crypto + forex), run_research_all (observations, pooled and per-symbol validated features), contagion and PCA outputs now carry LEGACY provenance sidecars: exact inputs (file sha256 or QBP-DATAV1), config hash, code state, deterministic run id. Never canonical; descriptive only.
 - Existing files on disk have no sidecar until their engine is next run (the regenerated cross-section files included).
+
+---
+
+## 2026-10-06 — KALMAN P0 SENSITIVITY (DESCRIPTIVE)
+
+- Synthetic only. Baseline P0 = 1 is in the robust region (x10/x100: |dz| <= 0.24, entries >= 98.4 % identical). Smaller P0 is sensitive on weakly identified pairs (x0.01: |dz| up to 2.3, entries 80 %, influence ~20k candles). Recommendation (owner): keep P0 = 1, report a P0 = 10 robustness check with any canonical pairs result; P0 < 1 = protocol change. No code changed.

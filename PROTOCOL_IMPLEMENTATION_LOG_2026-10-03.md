@@ -1032,3 +1032,22 @@ The evaluator's `worst_fold_max_drawdown_pct` reads 0.0 for every non-DCA run, i
 - **Mutations, 3 of 3 caught:** inputs not recorded; config left out of the run id; PCA sidecars removed.
 - **Related tests:** 94 run (provenance, cross-section, PCA, contagion, stability gate, dataset explorer, D-1 labels), all pass. No file search in the code base matches a `.provenance.json` sidecar by accident.
 - **Not integration-tested:** `run_research_all` (multiprocess, all symbols) and `run_contagion_research` (provider loading). Both use the same helper, covered above.
+
+
+---
+
+## Kalman P0 sensitivity (2026-10-06). Status: DESCRIPTIVE ANALYSIS (no code change)
+
+**Setup:** synthetic pairs only (constant, step and drifting true beta, plus unrelated random walks; 2 seeds each), canonical `run_canonical` with the causal seed at S0. Q and R are fixed at baseline; only `p0_scale` varies (0.01, 0.1, 1 [baseline], 10, 100). Each run is compared with the baseline on post-warmup candles (20,856 per run). No market data, no zone V, no P&L; script in the session scratchpad.
+
+| P0 | Well-identified (constant / step beta) | Weakly identified (drifting / unrelated) |
+|---|---|---|
+| ×10, ×100 | back to baseline beta within ~650 candles; max \|Δz\| ≤ 0.035; entries ≥ 99.3 % identical | ~6,500–7,400 candles; max \|Δz\| ≤ 0.24; entries ≥ 98.4 % |
+| ×0.1 | ~3,900 candles; \|Δz\| ≤ 0.15; entries ≥ 99.3 % | 12,800–13,600 candles; \|Δz\| ≤ 1.06; entries ≥ 91.7 % |
+| ×0.01 | ~6,900 candles; \|Δz\| ≤ 0.29; entries ≥ 98.9 % | 18,300–20,300 candles (most of zone S); \|Δz\| ≤ 2.3; entries ≥ 80 %; beta RMSE 0.129 vs 0.022 |
+
+**Reading:**
+- The baseline P0 = 1 lies in the **robust** region: larger values barely change the output.
+- Smaller values make the filter overconfident in θ₀, so it adapts slowly. On weakly identified pairs, where (β, α) are nearly collinear because log price varies little relative to its level, the seed's influence then persists for most of zone S. This matches the earlier Q/R finding that P0 matters most on weakly identified pairs.
+
+**Recommendation (owner decision; nothing changed):** keep P0 = 1. Report any canonical pairs result with a P0 = 10 robustness check. Treat P0 < 1 as a protocol change.
