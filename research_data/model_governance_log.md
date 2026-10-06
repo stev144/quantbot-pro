@@ -2350,3 +2350,9 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - OD-FX-1 (owner): closed Friday 17:00 -> Sunday 17:00 America/New_York (22:00 UTC winter / 21:00 UTC summer), no holidays. Converted data: 0 rows inside closures. Metals need their own calendar (daily break).
 - Forex research outputs computed before today (research_data/forex/*_cross_section.csv, forex_pca_*, forex_cointegration_pairs*, forex_cross_sectional_family_verdict.json) are LEGACY on the server clock (2-3 h shifted).
 - test_instruments.ProvenanceMarkerTest deleted the real EUR/USD marker on every run: fixed (temporary data folder); marker restored.
+
+---
+
+## 2026-10-06 — MT5 SERVER CLOCK CONFIRMED LIVE
+
+- Read-only attach to the logged-in terminal (ICFundedEvaluations-MT5-Demo, account 90018157, investor/read-only): last EURUSD tick 2026-10-06 21:42:15 server vs 18:42:17 UTC = +3.00 h during US daylight saving, exactly as server = America/New_York + 7 h predicts. The data-clock conversion of 85fec26 is confirmed.

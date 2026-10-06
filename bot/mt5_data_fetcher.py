@@ -63,8 +63,9 @@ from bot.quant_core.research_zones import seal_before_write   # claude code chan
 # SERVER's wall clock encoded as epoch seconds; they were stored as if UTC. Measured on all 58 data/forex files:
 # the weekend gap is Fri 23:00 -> Mon 00:00 in every week of every season, INCLUDING the weeks when US and EU
 # daylight-saving dates differ, i.e. the server clock follows US DST: server time = America/New_York + 7 h
-# (UTC+2 in winter, UTC+3 in summer — the standard "New York close" broker). Inferred from the data; confirm live
-# with confirm_mt5_server_clock() when the terminal is running. Another broker clock is set via MT5_SERVER_CLOCK.
+# (UTC+2 in winter, UTC+3 in summer — the standard "New York close" broker). Inferred from the data and CONFIRMED
+# LIVE 2026-10-06 (ICFundedEvaluations-MT5-Demo, account 90018157: last EURUSD tick 21:42:15 server vs 18:42:17 UTC
+# = +3.00 h during US DST, exactly as NY+7 predicts). Another broker clock is set via MT5_SERVER_CLOCK.   # claude code changed: 2026-10-06
 MT5_SERVER_CLOCK = os.getenv("MT5_SERVER_CLOCK", "NY+7")
 MT5_CLOCK_LABEL = "UTC (converted from MT5 server time = America/New_York + 7 h)"
 
