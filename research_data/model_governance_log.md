@@ -2374,3 +2374,19 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - universe FX-FLOATING-51 v1 (excludes HKD/DKK pegs and XAU/XAG metals; outside the universe = BLOCKED);
   - 11 measured Christmas/New Year closure intervals added to the FX calendar (the outage is not a holiday).
 - FX may now run the exploratory zone-S SELECTION screen only (FX_SELECTION_ONLY, never claimable). Canonical FX (Kalman, lifecycle, evidence) stays BLOCKED: horizon, financing, costs and protocol are undecided. Crypto unchanged.
+
+
+---
+
+## 2026-10-06 — FX ZONE-S SELECTION SCREEN (EXPLORATORY, NOT CLAIMABLE)
+
+- **Run.** `run_selection_screen_on_data("data/forex", FX-FLOATING-51, n_workers=3)` at commit 25283c4. Output: `research_data/selection_screen/fx_screen_2026-10-06.json` (new file, opened with "x"). Runtime 1,101 s.
+- **Result.**
+  - 1,275 pairs requested: 1,033 testable, 242 UNTESTABLE (gap rule), 0 BLOCKED, 0 seed-ineligible.
+  - One exploratory BH family (q = 0.10) over the 1,033 testable pairs, Engle–Granger on zone S: **0 BH survivors, 0 nominated**.
+  - Raw (unadjusted) EG p < 0.05: 56 of 1,033 (5.4 %). That is about the rate expected by chance across this many tests; the pairs share currencies, so the tests are not independent and this is descriptive only.
+  - Reading: no FX pair is distinguishable from multiple-testing noise under this screen. That is "edge not established", not proof that no relationship exists. Nothing advances to V or F.
+- **UNTESTABLE breakdown.**
+  - 240 pairs contain a symbol with its own zone-S hole longer than 5 h: USD/SEK, EUR/SEK, USD/NOK, EUR/NOK, USD/THB.
+  - The other 2 (EUR/PLN–USD/CZK and USD/CZK–USD/PLN) have no single-symbol hole above 5 h, but their joint (inner-joined) series has a 7 h hole where adjacent holes of the two legs meet. This is correct: the rule applies to the series the test actually uses.
+- **CORRECTION to the entry above ("FX SELECTION RULES").** The 2023-01-02 SEK/NOK hole is NOT a Scandinavian market closure, as I had called it. NOK/SEK, SEK/JPY and NOK/JPY were quoted normally through that day, and only the four USD/EUR crosses of SEK and NOK are missing (no other universe pair is). It is a broker feed gap on those four symbols with unknown cause; the USD/THB hole (2023-12-22 16:00–21:00 UTC) is likewise unexplained. Neither is a holiday, so neither may be added to the calendar. Re-admitting these pairs would mean loosening the rule after seeing data, which is an owner decision.
