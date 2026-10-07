@@ -247,6 +247,17 @@ def _monitor_weight(response: requests.Response) -> None:
 # Small utility endpoints
 # ---------------------------------------------------------------------------
 
+def binance_reachable(timeout: float = 3.05) -> bool:   # claude code changed: 2026-10-07 — new (fail-fast probe)
+    """ONE /api/v3/ping attempt with NO retries and a short timeout: True only on HTTP 200. Lets a caller that is
+    about to make many requests find out in ~3 s that the network is down, instead of each request burning the
+    retrying session's ~19 s. Never raises."""
+    try:
+        return requests.get(f"{BINANCE_BASE_URL}/api/v3/ping", timeout=(timeout, timeout)).status_code == 200
+    except Exception as e:
+        LOGGER.warning(f"Binance API unreachable: {e}")
+        return False
+
+
 def get_server_time() -> int:
     """Fetch Binance server time in milliseconds."""  # Useful for sync checks.
     url = f"{BINANCE_BASE_URL}/api/v3/time"  # Server time endpoint.

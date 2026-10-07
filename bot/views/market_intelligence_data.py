@@ -18,7 +18,7 @@ import glob
 
 from django.conf import settings
 
-from bot.data_fetcher import get_klines
+from bot.data_fetcher import binance_reachable, get_klines   # claude code changed: 2026-10-07 — fail fast when offline
 from bot.engines.regime_detector import RegimeDetector
 from bot.views.terminal_data import get_cross_sectional_dispersion
 
@@ -29,6 +29,9 @@ DATA_DIR = os.path.join(settings.BASE_DIR, "data")
 # for a synchronous page render (live_regime_monitor uses 1440 candles,
 # but that view only ever looks at one symbol per request).
 CANDLES_PER_SYMBOL = 300
+# claude code changed: 2026-10-07 — the universe is ~155 symbols now (not ~20); offline, every symbol cost ~19 s
+# of retries (~50 min for one page). Stop live fetching after this many consecutive failures.
+MAX_CONSECUTIVE_FETCH_FAILURES = 3
 
 
 def discover_symbol_universe():
@@ -57,15 +60,30 @@ def get_market_regime_overview(limit=None):
     if limit:
         symbols = symbols[:limit]
 
+    if not binance_reachable():   # claude code changed: 2026-10-07 — fail fast when offline: one ~3 s probe instead of ~19 s per symbol
+        return {"available": False, "candles_per_symbol": CANDLES_PER_SYMBOL, "n_errors": 0, "errors": {},
+                "reason": "Live market data unreachable — the Binance API did not answer within 3 s. Check the internet "
+                          "connection (some networks/carriers block Binance even when other sites work), then reload."}
     detector = RegimeDetector()
     rows = []
     errors = {}
-    for sym in symbols:
+    consecutive_failures = 0   # claude code changed: 2026-10-07 — fail fast when offline
+    aborted_reason = ""   # claude code changed: 2026-10-07 — fail fast when offline
+    for k, sym in enumerate(symbols):
+        if consecutive_failures >= MAX_CONSECUTIVE_FETCH_FAILURES:   # claude code changed: 2026-10-07 — fail fast when offline: circuit breaker
+            aborted_reason = (f"live fetching stopped after {consecutive_failures} consecutive failures "
+                              f"({len(symbols) - k} symbols not fetched) — Binance is unreachable from this network right now "
+                              f"(connection dropped, or Binance blocked/unrouted by the network or carrier)")
+            for rest in symbols[k:]:
+                errors[rest] = "not fetched (live fetching stopped)"
+            break
         try:
             df = get_klines(_to_klines_symbol(sym), interval="1h", total_candles=CANDLES_PER_SYMBOL)
             if df is None or df.empty:
                 errors[sym] = "no data returned"
+                consecutive_failures += 1   # claude code changed: 2026-10-07 — fail fast when offline
                 continue
+            consecutive_failures = 0   # claude code changed: 2026-10-07 — fail fast when offline
             result = detector.detect(df)
             rows.append({
                 "symbol": sym,
@@ -80,6 +98,7 @@ def get_market_regime_overview(limit=None):
             })
         except Exception as e:
             errors[sym] = str(e)[:120]
+            consecutive_failures += 1   # claude code changed: 2026-10-07 — fail fast when offline
 
     regime_counts = {}
     for r in rows:
@@ -93,6 +112,9 @@ def get_market_regime_overview(limit=None):
         "errors": errors,
         "regime_counts": regime_counts,
         "candles_per_symbol": CANDLES_PER_SYMBOL,
+        "fetch_aborted": bool(aborted_reason),   # claude code changed: 2026-10-07 — fail fast when offline
+        "aborted_reason": aborted_reason,   # claude code changed: 2026-10-07 — fail fast when offline
+        "reason": aborted_reason or "no symbol could be classified",   # claude code changed: 2026-10-07 — fail fast when offline (shown when nothing classified)
     }
 
 
