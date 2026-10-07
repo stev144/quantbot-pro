@@ -2494,3 +2494,21 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - Any off-machine run must pin `OPENBLAS_CORETYPE=Haswell` and be checksum-verified against this PC.
   - Reported, not changed (methodology unchanged).
 - **Signed D-4 size calibration:** still NOT started. Estimated ≈ 50 days on this PC after the speed-up. The next recommended route (cloud with a pinned kernel) needs an owner account/cost decision. The D-4 power criterion is still unspecified.
+
+
+---
+
+## 2026-10-07 — ZONE-S DIAGNOSTICS OF THE FIVE NOMINATED CRYPTO PAIRS (DESCRIPTIVE, ZONE V UNTOUCHED)
+
+- **Owner choice:** "Zone-S only, keep V clean". Code b6c15df (clean). Output: research_data/selection_screen/zone_s_pair_diagnostics_2026-10-07.json plus sidecar.
+- **Zone discipline:** every price and funding series is cut at S1 (2024-03-31 23:00) and asserted; trades count only if decided in S and label-complete in S. Canonical Kalman seed at the S start; canonical lifecycle; recorded perp funding.
+- **Funding coverage:** AVA (from 2024-12), PUNDIX (from 2025-04) and DIA (from 2024-10) had NO Binance perpetual during zone S. Under the signed borrow row, those short legs are BORROW_UNAVAILABLE. FIL, IOTX and ONT are covered; LPT from 2021-11-11.
+- **Signed 3× pre-screen** (mean gross edge per trade ≥ 3 × round-trip cost): ALL FIVE FAIL in zone S, even on fees + slippage alone (≈0.30 %/trade).
+  - AVA/PUNDIX: gross 0.88 %/trade (block-bootstrap 95 % CI 0.45–1.36 %), short of the 0.90 % bar; financing unpriceable for every trade; 0.57 % after the selection test window.
+  - DIA/FIL 0.01 %, DIA/IOTX −0.07 %, DIA/LPT 0.14 %, DIA/ONT 0.26 %; all four gross CIs include 0.
+  - Mean net on trades with priced financing: −0.13 % to −0.57 % per trade.
+- **Walk-forward** (canonical_walk_forward, 10 calendar quarters inside S; a descriptive fold choice, owner canonical boundaries unset):
+  - quarters with positive gross: AVA/PUNDIX 10/10, DIA/ONT 8/10, DIA/LPT 7/10, DIA/FIL 6/10, DIA/IOTX 5/10;
+  - quarters meeting 3×: 1–3 of 10 for each pair.
+- **Reading (descriptive):** the cointegration-selected relationships do not show a cost-surviving gross edge in zone S. AVA/PUNDIX is consistent but below the bar and was not shortable by perpetual in S.
+- **Status:** OBSERVATION / EXPLORATORY / NON-CLAIMABLE; no verdict, no registration; zone V not read.
