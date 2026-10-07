@@ -2478,3 +2478,19 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - The signed run needs 3,202 × 1,000 ≈ 3.2 M evaluations ≈ 65 days on this PC. **It was NOT started:** the compute is an owner decision.
   - The D-4 power criterion (OU parameters, required power) is unspecified, so the power calibration cannot run.
 - **Not changed:** strategy, execution, zones, holdout, D-1, D-2/D-10, five-gate standards. The recorded D-2 calibration (size 3.3–6.3 %) is preserved as historical evidence; it predates the signed replicate requirement. No historical result reclassified.
+
+
+---
+
+## 2026-10-07 — D-4 STATISTIC SPEED-UP (BIT-IDENTICAL) AND A BLAS REPRODUCIBILITY FINDING
+
+- **Decision:** owner instruction "proceed with the most recommended" = option C, accelerate without changing any result.
+- **Changes** (both byte-verified on 13 cases, including gaps and re-seeds: statistic, data version, full Kalman frame and seed record identical):
+  - `data_version` builds its canonical text column-wise with C-vectorised timestamps: fingerprint 0.70 s → 0.22 s;
+  - the Kalman update writes `np.outer` as the identical element-wise broadcast, and caches Q (read-only).
+- **Net:** about 1.2–1.3× per D-4 evaluation (machine load is noisy). The rest of the cost is the per-step numpy/BLAS matrix products, which cannot change without changing bits.
+- **Finding (G5, reproducibility):** the canonical Kalman output depends on the CPU-specific OpenBLAS kernel. On this PC (Haswell kernel) β = 1.5124510083044023; the Sandybridge/Prescott kernels give …038 (≈1e-15 relative).
+  - Canonical results are bit-reproducible only on the same kernel, and provenance does not record it.
+  - Any off-machine run must pin `OPENBLAS_CORETYPE=Haswell` and be checksum-verified against this PC.
+  - Reported, not changed (methodology unchanged).
+- **Signed D-4 size calibration:** still NOT started. Estimated ≈ 50 days on this PC after the speed-up. The next recommended route (cloud with a pinned kernel) needs an owner account/cost decision. The D-4 power criterion is still unspecified.

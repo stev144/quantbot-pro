@@ -164,6 +164,33 @@ def _num(v) -> str:
     return "NaN" if math.isnan(f) else repr(f)
 
 
+def _iso_strings(grid):   # claude code changed: 2026-10-07 D-4 speed-up (byte-identical to Timestamp.isoformat())
+    """isoformat() text of every grid timestamp, or None when the fast form cannot be guaranteed identical
+    (non-UTC zone or sub-second components) — the caller then uses the original per-row path."""
+    import pandas as pd
+    if str(grid.tz) != "UTC" or len(grid) == 0 or bool((grid != grid.floor("s")).any()):   # unit-agnostic (ns or us storage)
+        return None
+    import numpy as np
+    base = np.datetime_as_string(grid.tz_localize(None).to_numpy().astype("datetime64[s]"), unit="s")   # claude code changed: 2026-10-07 D-4 speed-up — C-vectorised, byte-identical to isoformat()
+    out = [s + "+00:00" for s in base.tolist()]
+    if out[0] != grid[0].isoformat() or out[-1] != grid[-1].isoformat():   # self-check against the original form
+        return None
+    return out
+
+
+def _fast_value_texts(g):   # claude code changed: 2026-10-07 D-4 speed-up (byte-identical to _num per value)
+    """Per column, the _num() text of every value, built column-wise; None when a column is not a plain float/int
+    dtype (the caller then uses the original per-row path)."""
+    import numpy as np
+    cols = []
+    for c in g.columns:
+        if g[c].dtype.kind not in "fiu":
+            return None
+        vals = g[c].to_numpy(dtype=float).tolist()          # Python floats: repr() == _num() for every non-NaN
+        cols.append(["NaN" if v != v else repr(v) for v in vals])
+    return cols
+
+
 def data_version(frames, *, timeframe: str, columns, start=None, end=None) -> DataVersion:
     """Deterministic content fingerprint of the rows an experiment consumes.
 
@@ -205,9 +232,19 @@ def data_version(frames, *, timeframe: str, columns, start=None, end=None) -> Da
     grid = pd.date_range(lo, hi, freq=step)
     h = hashlib.sha256(f"{DATA_VERSION_SCHEME}|{timeframe}|{','.join(cols)}\n".encode())
     n_obs = n_miss = 0
+    iso = _iso_strings(grid)   # claude code changed: 2026-10-07 D-4 speed-up — computed once, shared by every symbol
     for sym in sorted(norm):
         g = norm[sym].reindex(grid)
         present = g.notna().any(axis=1).to_numpy()
+        fast = _fast_value_texts(g) if iso is not None else None   # claude code changed: 2026-10-07 D-4 speed-up
+        if fast is not None:   # claude code changed: 2026-10-07 D-4 speed-up — identical bytes, built column-wise, one update per symbol
+            lines = [f"{sym}|{iso[i]}|{'|'.join(c[i] for c in fast)}\n" if has else f"{sym}|{iso[i]}|MISSING\n"
+                     for i, has in enumerate(present)]
+            k_obs = int(present.sum())
+            n_obs += k_obs
+            n_miss += len(present) - k_obs
+            h.update("".join(lines).encode())
+            continue
         for ts, row, has in zip(grid, g.itertuples(index=False, name=None), present):
             if has:
                 n_obs += 1

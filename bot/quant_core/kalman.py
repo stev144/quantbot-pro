@@ -65,8 +65,8 @@ def measurement_update(theta_prior: np.ndarray, P_prior: np.ndarray, log_a: floa
     S = float(H @ P_prior @ H + r)
     K = P_prior @ H / S
     theta_post = theta_prior + K * e
-    KH = np.outer(K, H)
-    P_post = (_I2 - KH) @ P_prior @ (_I2 - KH).T + np.outer(K, K) * r
+    KH = K[:, None] * H[None, :]        # claude code changed: 2026-10-07 D-4 speed-up — = np.outer(K, H): the same element-wise products, no wrapper
+    P_post = (_I2 - KH) @ P_prior @ (_I2 - KH).T + (K[:, None] * K[None, :]) * r   # claude code changed: 2026-10-07 D-4 speed-up — = np.outer(K, K)
     return Update(float(e), S, K, theta_post, P_post, float(log_a - H @ theta_post))
 
 
@@ -92,7 +92,15 @@ class CanonicalKalman:
 
     @property
     def Q(self) -> np.ndarray:
-        return np.diag([self.protocol.q_beta, self.protocol.q_alpha])
+        # claude code changed: 2026-10-07 D-4 speed-up — built once per protocol instead of on every step (same values;
+        # a read-only array, so no caller can mutate the cached copy)
+        cached = self.__dict__.get("_q_cache")
+        if cached is None or cached[0] is not self.protocol:
+            q = np.diag([self.protocol.q_beta, self.protocol.q_alpha])
+            q.setflags(write=False)
+            cached = (self.protocol, q)
+            self.__dict__["_q_cache"] = cached
+        return cached[1]
 
     def _reset_state(self):
         self.theta = self.theta0.copy()
