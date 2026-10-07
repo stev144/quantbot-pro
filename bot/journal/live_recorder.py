@@ -105,6 +105,7 @@ class LiveDecisionRecorder:
                                                       "note": "order attempted, outcome never recorded; not guessed"})
                     orphans += 1
             run.status, run.closed_at = "INCOMPLETE", timezone.now()
+            run.n_decisions = len(done)   # claude code changed: 2026-10-07 Phase 6 — a crashed run's count was left at 0 (found by the synthetic UI demo)
             run.incomplete_reasons = sorted(set((run.incomplete_reasons or []) + ["PROCESS_ENDED_WITHOUT_CLOSE"] +
                                                 (["ORPHANED_ATTEMPT"] if orphans else [])))
             run.save()

@@ -254,3 +254,25 @@ class RecorderOffPathTests(TestCase):
         self.assertEqual(bot_runner.process_venue_candle(session), "ok")
         self.assertEqual(len(executed), 1)
         self.assertEqual(executed[0]["signal"], "BUY")
+
+
+@skipUnless(DATA.exists(), "data/BTC_USDT_1h.csv not present")
+class CrashedRunSummaryTests(TestCase):
+    """claude code changed: 2026-10-07 Phase 6 — the synthetic UI demo showed a crashed run listed with 0 decisions
+    although its decisions were recorded: _close_stale_runs never set n_decisions."""
+
+    def test_a_crashed_run_keeps_its_decision_count(self):
+        from bot.core.bot_runner import process_venue_candle
+        from bot.journal.live_recorder import LiveDecisionRecorder
+        from bot.journal.models import DecisionEvent, JournalRun
+        ex, s = make_session()
+        first = LiveDecisionRecorder(s.engine, symbol=s.symbol, venue=s.venue_id).attach(s)
+        for _ in range(30):
+            process_venue_candle(s)
+            ex.advance()                                                  # ...and the process dies (no close)
+        recorded = DecisionEvent.objects.filter(run=first.run).count()
+        self.assertGreater(recorded, 0)
+        LiveDecisionRecorder(s.engine, symbol=s.symbol, venue=s.venue_id)  # the next start closes it out
+        old = JournalRun.objects.get(pk=first.run.pk)
+        self.assertEqual(old.status, "INCOMPLETE")
+        self.assertEqual(old.n_decisions, recorded)
