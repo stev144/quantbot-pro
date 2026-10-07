@@ -5,16 +5,28 @@
 {% block content %}
 
 {% comment %}
-   claude code changed: new template — System Health. Real checks only:
-   DB connectivity, per-module import checks (bot/views/terminal_data.py
-   ::get_system_health()), research-data freshness, exchange API key
-   presence. "Execution Engine: OK" means the module imports cleanly, NOT
-   that bot_runner.py is currently running — that is a separate process
-   this web request has no visibility into, and this page does not
-   pretend otherwise. deep_health_check.py's full 5-layer audit stays
-   CLI-only (python manage.py deep_health_check) — it is not triggered
-   from here since it is slow and built for a CLI run, not a page load.
+   claude code changed: 2026-10-07 Deep Health dashboard (DEEP_HEALTH_PLAN_2026-10-07.md). Replaces the import-only
+   System Health list as the primary view. L0 (the old get_system_health() rows, unchanged) and L1 (known-answer
+   and invariant checks) run live on each request — offline, read-only, nothing written. L2 (causal mutations,
+   calibration runs, canonical suites) runs only from the CLI and is shown here only when it matches this exact
+   code state. Statuses aggregate worst-of: FAIL > BLOCKED > UNKNOWN > PARTIAL > PASS; N/A is ignored.
+   This page does NOT monitor the live trading process (bot_runner.py), which runs separately.
 {% endcomment %}
+
+<style>
+    .dh-meta { display:flex; flex-wrap:wrap; gap:6px 18px; font-family:var(--font-mono); font-size:11px; color:var(--text-dim); margin:4px 0 14px; }
+    .dh-meta b { color:var(--text-primary); font-weight:500; }
+    .dh-gate { text-align:center; white-space:nowrap; }
+    .dh-table td, .dh-table th { vertical-align:top; }
+    .dh-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    .dh-detail summary { cursor:pointer; color:var(--text-primary); }
+    .dh-detail summary:hover { text-decoration:underline; }
+    .dh-sub { font-size:11px; color:var(--text-dim); margin:6px 0 4px; }
+    .dh-results td { font-size:11.5px; }
+    .dh-mono { font-family:var(--font-mono); font-size:11px; word-break:break-word; }
+    .dh-alert { border:1px solid var(--negative); background:var(--negative-dim); color:var(--text-primary); padding:10px 12px; margin-bottom:12px; }
+    .dh-legend span { margin-right:10px; }
+</style>
 
 {% include "partials/_topbar.html" with active="system_health" %}
 
@@ -22,39 +34,138 @@
 
     <div class="term-section">
         <div class="term-section-head">
-            <span class="term-section-title">System Health</span>
-            <span class="term-section-meta">source: terminal_data.get_system_health()</span>
+            <span class="term-section-title">Deep Health</span>
+            <span class="term-section-meta">five-gate known-answer checks · bot/deep_health</span>
         </div>
         <div class="term-section-body">
-            <div class="term-grid term-grid-3" style="margin-bottom:16px">
+            <div class="dh-meta">
+                <span>run <b>{{ dh.live.run_id }}</b></span>
+                <span>at <b>{{ dh.live.started_at|slice:":19" }} UTC</b></span>
+                <span>commit <b>{{ dh.live.code_commit|default:"NO_GIT"|slice:":12" }}{% if dh.live.code_dirty %} (uncommitted changes){% endif %}</b></span>
+                <span>methodology <b>{{ dh.live.methodology_version }}</b></span>
+                <span>zones <b>{{ dh.live.zones_version }}</b></span>
+                <span>{{ dh.live.health_version }}</span>
+                <span>L0+L1 in <b>{{ dh.live.duration_ms|floatformat:0 }} ms</b></span>
+            </div>
+
+            {% if dh.n_fail %}
+            <div class="dh-alert"><b>{{ dh.n_fail }} component{{ dh.n_fail|pluralize }} FAILING.</b> A check returned a wrong known answer or crashed — see "Needs attention" below.</div>
+            {% endif %}
+
+            <div class="term-grid term-grid-4" style="margin-bottom:14px">
                 <div class="metric-tile">
                     <div class="metric-label">Overall</div>
-                    <div class="metric-value small"><span class="status-dot {% if health.overall == 'ok' %}ok{% elif health.overall == 'warn' %}warn{% else %}err{% endif %}"></span><span class="badge {{ health.overall|health_class }}">{{ health.overall|upper }}</span></div>
+                    <div class="metric-value small"><span class="status-dot {{ dh.overall|deep_health_dot }}"></span><span class="badge {{ dh.overall|deep_health_class }}">{{ dh.overall }}</span></div>
                 </div>
-            </div>
-            <div class="chart-caption" style="margin-bottom:10px">"OK" on an engine check means its module imports cleanly and required dependencies resolve — it does NOT mean bot_runner.py (the live trading loop) is currently running. That process is separate and has no status this web request can observe.</div>
-            <div>
-                {% for c in health.checks %}
-                <div class="status-row">
-                    <span class="status-name"><span class="status-dot {% if c.status == 'ok' %}ok{% elif c.status == 'warn' %}warn{% else %}err{% endif %}"></span>{{ c.name }}</span>
-                    <span class="status-detail">{{ c.detail }}</span>
+                {% for a in dh.areas %}
+                <div class="metric-tile">
+                    <div class="metric-label">{{ a.title }}</div>
+                    <div class="metric-value small"><span class="status-dot {{ a.status|deep_health_dot }}"></span><span class="badge {{ a.status|deep_health_class }}">{{ a.status }}</span></div>
+                    <div class="dh-sub">{{ a.n_non_pass }} of {{ a.n }} components not PASS</div>
                 </div>
                 {% endfor %}
+            </div>
+
+            <div class="chart-caption" style="margin-bottom:6px">
+                PASS = every known answer and invariant held. PARTIAL = works, with a documented weakness. FAIL = a wrong known answer, a broken invariant or a crashed check.
+                BLOCKED = cannot be judged until an owner decision or calibration is completed (reason shown). UNKNOWN = no current evidence (e.g. L2 not run on this code).
+                Overall is the <b>worst</b> component status, never an average. "Import OK" rows (L0) prove only that code loads. This page does not monitor the live trading process.
+            </div>
+            <div class="dh-legend dh-sub">
+                {% for s, n in dh.counts.items %}<span><span class="badge {{ s|deep_health_class }}">{{ s }}</span> {{ n }}</span>{% endfor %}
             </div>
         </div>
     </div>
 
     <div class="term-section">
         <div class="term-section-head">
-            <span class="term-section-title">Deep Structural Audit</span>
+            <span class="term-section-title">L2 Research Integrity</span>
+            <span class="term-section-meta">on demand · {{ dh.l2.command }}</span>
         </div>
         <div class="term-section-body">
-            <div class="unavailable">Not run from the web — deep_health_check.py's 5-layer (structural/functional/behavioural/integration/drift) audit runs against synthetic test data and takes real time across the whole bot/ package. Run it from the CLI: <code class="mono">python manage.py deep_health_check --mode standard</code></div>
+            <div class="status-row">
+                <span class="status-name"><span class="status-dot {{ dh.l2.status|deep_health_dot }}"></span><span class="badge {{ dh.l2.status|deep_health_class }}">{{ dh.l2.status }}</span>&nbsp;
+                    {% if dh.l2.attached %}last run <span class="mono">&nbsp;{{ dh.l2.run_id }}&nbsp;</span> at {{ dh.l2.started_at|slice:":19" }} UTC ({{ dh.l2.duration_ms|floatformat:0 }} ms) — matches this code; its components are included below{% else %}{{ dh.l2.reason }}{% endif %}
+                </span>
+            </div>
+            <div class="dh-sub">Causal look-ahead mutations, null-size and coverage calibration runs, and the canonical DB-free test suites re-run in-process. Not run from this page (minutes, not milliseconds).</div>
         </div>
     </div>
 
+    {% if dh.attention %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Needs attention</span>
+            <span class="term-section-meta">{{ dh.attention|length }} check{{ dh.attention|length|pluralize }} not PASS · worst first</span>
+        </div>
+        <div class="term-section-body dh-scroll">
+            <table class="term-table dh-table dh-results">
+                <thead><tr><th>Status</th><th>Component</th><th>Gate</th><th>Check</th><th>Expected</th><th>Observed</th><th>Reason</th></tr></thead>
+                <tbody>
+                {% for r in dh.attention %}
+                <tr>
+                    <td><span class="badge {{ r.status|deep_health_class }}">{{ r.status }}</span></td>
+                    <td>{{ r.component }}<div class="dh-sub">{{ r.area }} · {{ r.level }}</div></td>
+                    <td class="mono">{{ r.gate }}</td>
+                    <td>{{ r.name }}</td>
+                    <td class="dh-mono">{{ r.expected|default:"—" }}</td>
+                    <td class="dh-mono">{{ r.observed|default:"—" }}</td>
+                    <td>{{ r.reason }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    {% for a in dh.areas %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">{{ a.title }}</span>
+            <span class="term-section-meta"><span class="badge {{ a.status|deep_health_class }}">{{ a.status }}</span></span>
+        </div>
+        <div class="term-section-body dh-scroll">
+            <table class="term-table dh-table">
+                <thead><tr><th>Component</th><th>Level</th>{% for g, t in dh.gates %}<th class="dh-gate" title="{{ t }}">{{ g }}<div class="dh-sub">{{ t }}</div></th>{% endfor %}<th>Status</th></tr></thead>
+                <tbody>
+                {% for c in a.components %}
+                <tr>
+                    <td>
+                        <details class="dh-detail">
+                            <summary>{{ c.title }}</summary>
+                            {% if c.version %}<div class="dh-sub">version {{ c.version }}</div>{% endif %}
+                            {% if c.reuses %}<div class="dh-sub">canonical tests: {{ c.reuses|join:", " }}</div>{% endif %}
+                            <table class="term-table dh-results" style="margin-top:6px">
+                                <thead><tr><th>Gate</th><th>Check</th><th>Status</th><th>Expected</th><th>Observed</th><th>Reason</th></tr></thead>
+                                <tbody>
+                                {% for r in c.results %}
+                                <tr>
+                                    <td class="mono">{{ r.gate }}</td>
+                                    <td>{{ r.name }}</td>
+                                    <td><span class="badge {{ r.status|deep_health_class }}">{{ r.status }}</span></td>
+                                    <td class="dh-mono">{{ r.expected|default:"—" }}</td>
+                                    <td class="dh-mono">{{ r.observed|default:"—" }}</td>
+                                    <td>{{ r.reason }}</td>
+                                </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </details>
+                    </td>
+                    <td class="mono">{{ c.level }}</td>
+                    {% for g, t in dh.gates %}{% with s=c.gates|dict_get:g %}<td class="dh-gate">{% if s == "N/A" %}<span class="dh-sub">N/A</span>{% else %}<span class="badge {{ s|deep_health_class }}">{{ s }}</span>{% endif %}</td>{% endwith %}{% endfor %}
+                    <td><span class="badge {{ c.status|deep_health_class }}">{{ c.status }}</span></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endfor %}
+
 </div>
 
-{% include "partials/_footer.html" with label="System Health" note="import checks + DB + research freshness, not a live process monitor" %}
+{% include "partials/_footer.html" with label="Deep Health" note="five-gate known-answer checks · offline and read-only · not a live process monitor" %}
 
 {% endblock %}
