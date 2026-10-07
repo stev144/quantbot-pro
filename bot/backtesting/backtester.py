@@ -88,6 +88,7 @@ logging.basicConfig(                    # Configures the logging output format
 # ewm() call downstream now run on a fixed-size slice instead of the whole,
 # ever-growing history.
 INDICATOR_LOOKBACK_CANDLES = 300
+BACKTEST_LOOP_START = 100   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (was the literal 100 in run(); same value)
 
 
 # ============================================================
@@ -112,7 +113,10 @@ class Backtester:
         initial_balance: float = 10000,
         allow_unvalidated_strategies: bool = False,
         venue_id: str = "binance",   # claude code changed: new param — Kraken Multi-Venue Execution, Step 14
+        journal_recorder=None,   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (opt-in, off by default)
     ):
+        self.journal_recorder = journal_recorder   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+        self._last_fill_refusal = None             # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (why _open_trade_from_signal returned None)
         # Store the original DataFrame safely so we never mutate the caller's data
         self.original_df = df.copy() if df is not None else pd.DataFrame()
 
@@ -353,6 +357,7 @@ class Backtester:
         stop — what the order would have been placed with; the realised risk
         uses the real fill."""
 
+        self._last_fill_refusal = None   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
         sig = signal["signal"]               # "BUY" or "SELL"
         entry_p = float(signal["entry"])     # The intended entry price from the strategy
         sl_p = float(signal["sl"])           # The stop loss price level
@@ -366,6 +371,7 @@ class Backtester:
         elif sig == "SELL":
             direction = "SHORT"    # Sell trade = short position
         else:
+            self._last_fill_refusal = "unexpected_signal_value"   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
             return None    # Unexpected signal value — cannot open a trade
 
         # Apply entry slippage — simulates paying slightly more/less than signal price
@@ -394,6 +400,7 @@ class Backtester:
         # degenerate input (zero/near-zero balance, zero-distance stop,
         # below its minimum quantity) — its own logging explains which
         if qty <= 0:
+            self._last_fill_refusal = "size_not_positive"   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
             return None    # Skip this trade
 
         distance = abs(entry - sl_p)   # Distance from the actual (post-slippage) fill to stop, in price units
@@ -402,6 +409,7 @@ class Backtester:
         # unlikely) case where slippage happens to move the actual fill
         # exactly onto the stop level even though entry_p != sl_p
         if distance == 0:
+            self._last_fill_refusal = "zero_stop_distance"   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
             return None    # Skip this trade — zero-distance stop is invalid
 
         risk_amount = distance * qty   # Actual dollar risk at the real fill — used for R-Multiple calculation later
@@ -1067,7 +1075,11 @@ class Backtester:
         self._prepare_data()
 
         # Guard — if data is empty or too short, return safe empty results
-        if self.df.empty or len(self.df) < 100:
+        if self.df.empty or len(self.df) < BACKTEST_LOOP_START:   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (was < 100)
+            self._journal("on_empty_run", self, BACKTEST_LOOP_START)   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+            empty = self._empty_results()                                # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+            self._journal("close", empty)                                # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+            return empty                                                 # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
             return self._empty_results()
 
         # claude code changed: new — one vectorized pass instead of one RegimeDetector.detect()
@@ -1077,7 +1089,8 @@ class Backtester:
 
         # ── MAIN CANDLE LOOP ──────────────────────────────────────
         # Start at candle 100 — strategy requires 100 candles minimum for warmup
-        for i in range(100, len(self.df)):
+        self._journal("on_run_start", self, precomputed_regimes, BACKTEST_LOOP_START)   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+        for i in range(BACKTEST_LOOP_START, len(self.df)):   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (was range(100, ...))
 
             # current_df is the slice of data visible at this candle
             # Prevents look-ahead bias — strategy cannot see future candles
@@ -1107,12 +1120,14 @@ class Backtester:
                 sig, reg = self.pending_entry
                 self.pending_entry = None
                 self.open_trade = self._open_trade_from_signal(sig, reg, i, fill_reference_price=open_px)
+                self._journal("on_fill", i, self.open_trade, self._last_fill_refusal)   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
 
             # ── EXIT LOGIC — always checked before entry ──────────
             if self.open_trade:
                 closed = self._process_exit(i, high, low, open_px)   # Returns True if trade was closed
                 if closed:
                     self._record_mtm(i)   # claude code changed: Phase 3 M-02
+                    self._journal("on_not_evaluated", i, "NOT_EVALUATED_EXIT_CANDLE")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
                     continue   # Move to next candle — do not look for entries on close candle
 
             # ── ENTRY LOGIC — only when no trade is currently open ──
@@ -1131,6 +1146,7 @@ class Backtester:
                 # Guard — router must always return a dict
                 if not isinstance(signal, dict):
                     self._record_rejection("invalid_signal", regime_result, {})
+                    self._journal("on_evaluation", i, current_df, regime_result, signal, "INVALID_OUTPUT")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
                     continue
 
                 # Skip if no valid signal was produced this candle
@@ -1140,11 +1156,13 @@ class Backtester:
                         regime_result,
                         signal,
                     )
+                    self._journal("on_evaluation", i, current_df, regime_result, signal, "NO_SIGNAL")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
                     continue
 
                 # Skip if signal is neither BUY nor SELL
                 if signal.get("signal") not in ("BUY", "SELL"):
                     self._record_rejection("invalid_signal", regime_result, signal)
+                    self._journal("on_evaluation", i, current_df, regime_result, signal, "INVALID_SIGNAL_VALUE")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
                     continue
 
                 # Count this as a valid signal seen
@@ -1153,12 +1171,16 @@ class Backtester:
                 # Step 3: claude code changed: Phase 3 M-01 — the decision is taken at this
                 # candle's CLOSE; the order fills at the NEXT candle's open (see loop top).
                 self.pending_entry = (signal, regime_result)
+                self._journal("on_evaluation", i, current_df, regime_result, signal, "CANDIDATE")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+            else:   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+                self._journal("on_not_evaluated", i, "NOT_EVALUATED_IN_POSITION")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
 
             self._record_mtm(i)   # claude code changed: Phase 3 M-02 — every candle close
 
         # claude code changed: Phase 3 M-01 — a decision at the last close has no next open
         if self.pending_entry is not None:
             self.unfilled_signals_at_data_end += 1
+            self._journal("on_censored_end_of_data")   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (D5)
             self.pending_entry = None
 
         # ── FORCE CLOSE — end of data ─────────────────────────────
@@ -1171,7 +1193,23 @@ class Backtester:
             self.drawdown_curve.append(round(self.max_drawdown, 2))   # Add final drawdown point
 
         # Build and return the complete results dict
-        return self._build_results()
+        results = self._build_results()      # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (was: return self._build_results())
+        self._journal("close", results)      # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+        return results                       # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+
+    def _journal(self, hook: str, *args):   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+        """Call the optional decision-journal recorder. A recorder error is logged and handed to the recorder
+        (its run closes INCOMPLETE) but NEVER propagates: the journal cannot change a backtest."""
+        if self.journal_recorder is None:
+            return
+        try:
+            getattr(self.journal_recorder, hook)(*args)
+        except Exception as e:
+            logger.error(f"[Backtester] decision journal hook {hook} failed: {e} — backtest unaffected")
+            try:
+                self.journal_recorder.record_failure(hook, e)
+            except Exception:
+                logger.exception("[Backtester] decision journal record_failure itself failed")
 
 
 # ============================================================
@@ -1546,6 +1584,7 @@ def backtest(
     initial_balance: float = 5000,
     allow_unvalidated_strategies: bool = False,
     venue_id: str = "binance",   # claude code changed: new param — Kraken Multi-Venue Execution, Step 14
+    journal_recorder=None,   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (opt-in, off by default)
 ) -> dict:
     """
     Backward-compatible wrapper.
@@ -1567,4 +1606,5 @@ def backtest(
         df=df, initial_balance=initial_balance,
         allow_unvalidated_strategies=allow_unvalidated_strategies,
         venue_id=venue_id,
+        journal_recorder=journal_recorder,   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
     ).run()
