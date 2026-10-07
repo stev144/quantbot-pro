@@ -444,6 +444,7 @@ class SignalRejection(models.Model):
     price_a = models.FloatField()                               # decision-candle closes used for h_t
     price_b = models.FloatField()
     reason = models.CharField(max_length=40)                    # ENTRY_SIGN_MISMATCH
+    decision_id = models.UUIDField(null=True, blank=True, db_index=True)   # claude code changed: 2026-10-07 Phase 3 — legacy backfill (nullable link, Rev B §17)
     methodology_version = models.CharField(max_length=40)
     protocol_hash = models.CharField(max_length=64)
     data_version = models.CharField(max_length=64, default="", blank=True)   # the seed record's content data version, if the engine was seeded canonically
@@ -478,6 +479,7 @@ class ExecutionIncident(models.Model):
     resolved = models.BooleanField(default=False)
     resolved_at = models.DateTimeField(null=True, blank=True)
     resolution_note = models.TextField(default="", blank=True)
+    decision_id = models.UUIDField(null=True, blank=True, db_index=True)   # claude code changed: 2026-10-07 Phase 3 — legacy backfill (nullable link, Rev B §17)
     execution_mode = models.CharField(max_length=10, default="UNKNOWN", db_index=True)   # claude code changed: Post-audit Phase 1 journal-mode separation — LIVE / DRY_RUN / UNKNOWN, same vocabulary as TradeRecord
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -649,6 +651,7 @@ class DecisionEvent(_InsertOnlyModel):   # claude code changed: new
     config_hash = models.CharField(max_length=64)
     data_version = models.CharField(max_length=64)
     taxonomy_version = models.CharField(max_length=40)
+    terminal_source = models.CharField(max_length=20, default="ENGINE")   # claude code changed: 2026-10-07 Phase 3 — legacy backfill: ENGINE | RECONCILIATION | LEGACY_BACKFILL
     supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by")
     recorded_at = models.DateTimeField(auto_now_add=True)
 
@@ -656,7 +659,9 @@ class DecisionEvent(_InsertOnlyModel):   # claude code changed: new
         constraints = [
             models.UniqueConstraint(fields=["run", "symbol", "candle_open_time"], name="one_decision_per_candle_per_run"),
             models.UniqueConstraint(fields=["run", "backtest_trade_seq"], name="one_decision_per_backtest_trade"),
-            models.CheckConstraint(condition=models.Q(information_time__gt=models.F("candle_open_time")),
+            # # claude code changed: 2026-10-07 Phase 3 — legacy backfill: legacy rows carry the RECORDED time in both fields (no decision candle is invented)
+            models.CheckConstraint(condition=models.Q(information_time__gt=models.F("candle_open_time")) |
+                                   (models.Q(terminal_source="LEGACY_BACKFILL") & models.Q(information_time=models.F("candle_open_time"))),
                                    name="decision_information_after_open"),
             models.CheckConstraint(condition=models.Q(status__in=["EXECUTED", "NO_SIGNAL", "REJECTED", "REGIME_REJECTED",
                                                                    "COST_REJECTED", "LIQUIDITY_REJECTED", "TIMING_REJECTED",
@@ -664,9 +669,13 @@ class DecisionEvent(_InsertOnlyModel):   # claude code changed: new
                                                                    "DATA_REJECTED", "DUPLICATE_REJECTED", "EXECUTION_FAILED",
                                                                    "SYSTEM_REJECTED", "CENSORED_END_OF_DATA"]),
                                    name="decision_status_terminal"),
+            # # claude code changed: 2026-10-07 Phase 3 — legacy backfill: a legacy EXECUTED decision is linked from TradeRecord.decision_id instead of a backtest trade
             models.CheckConstraint(condition=models.Q(status="EXECUTED", backtest_trade_seq__isnull=False) |
+                                   models.Q(status="EXECUTED", terminal_source="LEGACY_BACKFILL", backtest_trade_seq__isnull=True) |
                                    (~models.Q(status="EXECUTED") & models.Q(backtest_trade_seq__isnull=True)),
                                    name="decision_trade_link_iff_executed"),
+            models.CheckConstraint(condition=models.Q(terminal_source__in=["ENGINE", "RECONCILIATION", "LEGACY_BACKFILL"]),
+                                   name="decision_terminal_source_valid"),   # claude code changed: 2026-10-07 Phase 3 — legacy backfill
         ]
 
 

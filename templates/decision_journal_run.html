@@ -17,6 +17,9 @@
         </div>
         <div class="term-section-body">
             {% include "partials/_journal_banner.html" %}
+            {% if run.taxonomy_version == "QBP-JRNL-LEGACY-1" %}{# claude code changed: 2026-10-07 Phase 3 — legacy notice #}
+            <div class="unavailable" style="margin-bottom:12px"><strong>LEGACY — incomplete population.</strong> These decisions were reconstructed from rows journaled at the time (trades / incidents only). There are no no-signal or rejection rows, no denominator, no snapshots and no recorded provenance; times are the recorded times, not decision candles. Never usable for rates, rejection value, episodes or evidence.</div>
+            {% endif %}
             {% if run.status == "INCOMPLETE" %}
             <div class="unavailable" style="margin-bottom:12px">This run is <strong>INCOMPLETE</strong> ({{ run.incomplete_reasons|join:", " }}): it is not complete research evidence. See the journal gaps below.</div>
             {% endif %}

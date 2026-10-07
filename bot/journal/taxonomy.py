@@ -286,6 +286,23 @@ def gate_vector(path: str, *, failed: Optional[str], passed_through: Optional[st
     return vec
 
 
+# ── legacy backfill vocabulary (Phase 3) — a SEPARATE taxonomy, never mixed with backtest vocabularies ──────
+LEGACY_TAXONOMY_VERSION = "QBP-JRNL-LEGACY-1"   # claude code changed: 2026-10-07 Phase 3 — legacy backfill
+LEGACY_REASON_CODES = {   # claude code changed: 2026-10-07 Phase 3 — legacy backfill
+    "ENTRY_SIGN_MISMATCH": (REJECTED, STAGE_STRATEGY),            # pairs SignalRejection (not backfilled: no execution mode)
+    "LEGACY_EXECUTION_INCIDENT": (EXECUTION_FAILED, "EXECUTION"),   # ExecutionIncident; kind/state kept in detail
+}
+
+
+def validate_legacy_terminal(status: str, reason_code, reason_stage) -> None:   # claude code changed: 2026-10-07 Phase 3 — legacy backfill
+    if status == EXECUTED:
+        if reason_code is not None:
+            raise ValueError("a legacy EXECUTED decision carries no reason code")
+        return
+    if LEGACY_REASON_CODES.get(reason_code) != (status, reason_stage):
+        raise ValueError(f"legacy reason {reason_code!r} must be {LEGACY_REASON_CODES.get(reason_code)}, got {(status, reason_stage)}")
+
+
 def validate_terminal(stages, status: str, reason_code: Optional[str], reason_stage: Optional[str]) -> None:
     """Enforce the lifecycle transition table and the reason/status pairing; raises ValueError."""
     stages = list(stages)
