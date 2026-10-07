@@ -61,5 +61,6 @@ class VersionAndTableTests(SimpleTestCase):
         from pathlib import Path
         with self.assertRaisesRegex(FileNotFoundError, "BLOCKED"):
             pit.load_listing_table(Path(tempfile.gettempdir()) / "no_such_pit_table.json")
-        with self.assertRaises(NotImplementedError):
-            pit.build_listing_table(["AAA/USDT"])
+        # claude code changed: 2026-10-07 — build_listing_table is now implemented (owner sign-off of
+        # DECISION_SHEET_D5_D6_DCA_PROPOSAL_2026-10-07.md item 3 authorised the archive download); it needs the network,
+        # so tests no longer call it. What must still hold: without a table, research stays BLOCKED (asserted above).

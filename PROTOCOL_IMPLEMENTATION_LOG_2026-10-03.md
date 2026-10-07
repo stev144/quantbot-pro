@@ -1297,3 +1297,23 @@ They are LEGACY on the server clock and are not comparable with crypto or with t
   - Tail risk: max MTM drawdown up to 451–683 USDT (59–90 % of the full ladder); the full ladder was exhausted 1–3 times on most coins; the longest underwater spell reached 14,976–16,703 h (SOL/ADA INTRABAR).
   - Fill-model sensitivity is large (e.g. SOL +318 vs +97 USDT; ADA 179 vs 40 cycles).
 - **Reading (descriptive):** a high win rate with rare deep drawdowns. Zone S ends in the 2024 Q1 rally, so every deep cycle recovered inside the window. The 7 coins are today's survivors (survivorship bias). No evidence that DCA beats a null; D-5 is still blocked. Not claimable.
+
+
+---
+
+## 2026-10-07 — D-5 / D-6 OPEN ITEMS SIGNED FOR THE DCA "REAL ANSWER" (owner: "accept all")
+
+- Signed: DECISION_SHEET_D5_D6_DCA_PROPOSAL_2026-10-07.md.
+  1. **Benchmark:** constant exposure = the DCA run's time-weighted average deployed capital, same coin and costs. Statistic = (DCA MTM − benchmark MTM) / DCA max deployed capital.
+  2. **Mean bootstrap block:** 24 h (6 h and 72 h as sensitivities only).
+  3. **Universe:** top 50 USDT spot pairs by trailing 30-day quote volume at the test start; listed ≥ 90 days and still trading; stablecoins, fiat, pegged and leveraged tokens excluded; delisted coins included (data.binance.vision); frozen at t.
+  4. **Scope:** (a) zone S + V development evidence (descriptive); (b) ≤ 5 registered per-coin hypotheses for zone F, Holm FWER 0.05, owner rationale; (c) calibration first (OPEN-36 size + D-5 power).
+  5. **Compute:** cloud.
+- **Facts recorded with the sign-off:**
+  - The DCA engine and baseline ladder were first committed 2026-09-27, so zone V is not independent for DCA (strict V-1 reasoning). A claimable answer exists only at the single F evaluation (≥ 2027-04-04).
+  - A pooled 50-coin confirmatory calibration (≈ 5 CPU-years) is infeasible.
+- **Implementation:**
+  - dca_significance_d5: MEAN_BLOCK_H, SENSITIVITY_BLOCKS_H, matched_exposure_benchmark_mtm, d5_excess_statistic.
+  - point_in_time_universe: archive listing and monthly fetch (cached; months ≥ the F month refused); µs/ms timestamp parsing; signed exclusions; top_n_universe_at; build_listing_table implemented.
+  - **D-6 look-ahead fix:** trailing_volume_at now counts only candles CLOSED by t. It previously counted the candle opening at t, a full day of future volume for daily data. Pinned by test.
+  - Tests: test_dca_d5_d6_signed (10); mutations 3/3 caught.

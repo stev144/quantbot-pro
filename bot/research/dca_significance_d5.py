@@ -49,6 +49,44 @@ def d5_statistic(df: pd.DataFrame, config) -> float:
     return float(_mtm_statistics(df, config)[1])
 
 
+# claude code changed: 2026-10-07 — owner sign-off of DECISION_SHEET_D5_D6_DCA_PROPOSAL_2026-10-07.md ("accept all"):
+# the two open D-5 definitions are now fixed.
+MEAN_BLOCK_H = 24                       # claude code changed: 2026-10-07 D-5 item 2 (signed) — stationary-bootstrap mean block
+SENSITIVITY_BLOCKS_H = (6, 72)          # claude code changed: 2026-10-07 D-5 item 2 (signed) — reported, never used for selection
+D5_DECISION_REF = "DECISION_SHEET_D5_D6_DCA_PROPOSAL_2026-10-07.md (owner sign-off 2026-10-07)"   # claude code changed: 2026-10-07
+
+
+def matched_exposure_benchmark_mtm(df: pd.DataFrame, config, equity: pd.DataFrame) -> dict:   # claude code changed: 2026-10-07 D-5 item 1 (signed)
+    """The signed benchmark: a CONSTANT USDT exposure in the same coin equal to the DCA run's time-weighted average
+    deployed capital (mean of `capital_deployed` over every candle of the run, 0 while out of a cycle), bought at the
+    first open and sold at the last close with the run's own fee and slippage rates."""
+    from bot.engines.simulation import apply_slippage
+    cap = float(equity["capital_deployed"].astype(float).mean()) if len(equity) else 0.0
+    if cap <= 0:
+        return {"avg_deployed_capital": cap, "mtm": 0.0}
+    side = config.direction
+    entry = apply_slippage(float(df["open"].iloc[0]), side, True, config.slippage_rate)
+    exit_ = apply_slippage(float(df["close"].iloc[-1]), side, False, config.slippage_rate)
+    units = cap / entry
+    gross = units * (exit_ - entry) if side == "LONG" else units * (entry - exit_)
+    fees = (cap + units * exit_) * config.fee_rate
+    return {"avg_deployed_capital": cap, "mtm": float(gross - fees), "entry_fill": entry, "exit_fill": exit_}
+
+
+def d5_excess_statistic(df: pd.DataFrame, config) -> dict:   # claude code changed: 2026-10-07 D-5 item 1 (signed)
+    """(DCA MTM − matched-exposure benchmark MTM) / DCA maximum deployed capital — the signed D-5 test statistic."""
+    from bot.research.dca_engine import simulate_dca_path, summarize_dca_cycles
+    trades, equity = simulate_dca_path(df, config)
+    s = summarize_dca_cycles(trades, config)
+    dca_mtm = float(s.get("total_mark_to_market_pnl", 0.0)) if s.get("n_cycles") else 0.0
+    dep = float(s.get("max_capital_deployed_any_cycle") or 0.0)
+    bench = matched_exposure_benchmark_mtm(df, config, equity)
+    return {"statistic": ((dca_mtm - bench["mtm"]) / dep) if dep else None, "dca_mtm": dca_mtm,
+            "benchmark_mtm": bench["mtm"], "avg_deployed_capital": bench["avg_deployed_capital"],
+            "max_deployed_capital": dep, "n_cycles": s.get("n_cycles", 0),
+            "n_censored_cycles": s.get("n_censored_cycles", 0)}
+
+
 def planted_mean_reversion_path(n: int, amplitude: float, half_life_h: float, rng: np.random.Generator, *,
                                 rw_sigma: float = 0.01, start_price: float = 100.0,
                                 amplitude_definition: str = "stationary_sd") -> pd.DataFrame:
