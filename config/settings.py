@@ -56,6 +56,7 @@ ALLOWED_HOSTS = [
     # caveat as above: check `ipconfig` and update this list again if
     # phone access breaks after reconnecting to a different network).
     "172.16.1.177",
+    "172.20.10.6",   # claude code changed: 2026-10-07 — this laptop's IP on the iPhone hotspot (WiFi adapter, `ipconfig`); DHCP-leased, re-check if phone access breaks
     # claude code changed: new — Railway deployment. Leading-dot wildcard
     # matches any *.up.railway.app subdomain (Django's documented syntax
     # for ALLOWED_HOSTS wildcards), covering the default domain Railway
