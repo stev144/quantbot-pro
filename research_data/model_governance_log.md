@@ -2512,3 +2512,19 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - quarters meeting 3×: 1–3 of 10 for each pair.
 - **Reading (descriptive):** the cointegration-selected relationships do not show a cost-surviving gross edge in zone S. AVA/PUNDIX is consistent but below the bar and was not shortable by perpetual in S.
 - **Status:** OBSERVATION / EXPLORATORY / NON-CLAIMABLE; no verdict, no registration; zone V not read.
+
+
+---
+
+## 2026-10-07 — AVA/PUNDIX THROUGH THE RESEARCH LAB PAIR CAPABILITIES (ZONE S ONLY, DESCRIPTIVE)
+
+- **Run:** offline (network guard), at owner request. Output: research_data/selection_screen/ava_pundix_research_lab_2026-10-07.json plus sidecar.
+- **Lab tools used:** run_cointegration_test (zone-S Engle-Granger) and run_kalman_pairs_test (canonical causal Kalman, data stop at S1).
+- **Regime-conditional analysis:** regime_conditional_cointegration was called directly on prices and causal regime labels cut at S1. The lab driver run_regime_conditional_research was NOT used: it defaults to a 5-year window ending now (zones V/F) and downloads live data.
+- **Not run:** the lab's walk_forward_validation and permutation_robustness_testing capabilities are BLOCKED_BY_DEPENDENCY.
+- **Results:**
+  - **Cointegration** (first 10,000 S candles): EG p ≈ 0; hedge ratio 1.134; half-life 32.8 h; seed-eligible. Within-S pseudo-holdout ADF p = 0.0138 (raw, not FDR-corrected).
+  - **Kalman:** β drifted from the causal seed 0.187 (init window) to 0.414 at the end of S (posterior variance 0.0046).
+  - **Regime conditioning:** full-S static hedge ratio 1.914 (EG p 1.2e-8). 877 trend-state episodes (median 16 h, max 191 h), 0 reach the 1,000-candle minimum, so no regime-conditional estimate exists.
+- **Reading (descriptive):** the hedge ratio is unstable across estimators and windows (0.19 / 0.41 / 1.13 / 1.91). That is evidence against one stable linear relationship over S, consistent with the earlier cost-screen failure.
+- **Status:** OBSERVATION / EXPLORATORY / NON-CLAIMABLE; zone V not read.
