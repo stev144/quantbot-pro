@@ -82,6 +82,7 @@ class BacktestDecisionRecorder:
         self._warmup_open = {"TREND": True, "RANGING": True}
         self._trade_seq = 0
         self._seen_candles = set()
+        self._executed_pairs = []   # claude code changed: 2026-10-07 Phase 2 — post-trade metrics
 
     # ── run start ───────────────────────────────────────────────────────────────────────────────────────
     def on_run_start(self, bt, regimes, loop_start: int) -> None:
@@ -258,7 +259,7 @@ class BacktestDecisionRecorder:
     def close(self, results: dict) -> None:
         from django.db import transaction
         from bot.journal.models import (DecisionEvent, JournalGap, MarketSnapshot, JOURNAL_RUN_CLOSED,
-                                        JOURNAL_RUN_INCOMPLETE)
+                                        JOURNAL_RUN_INCOMPLETE, PostTradeMetrics)   # claude code changed: 2026-10-07 Phase 2 — post-trade metrics
         if self.closed:
             raise RecorderDefect("close() called twice")
         self.closed = True
@@ -283,6 +284,7 @@ class BacktestDecisionRecorder:
                                                   batch_size=1000)
                 MarketSnapshot.objects.bulk_create([MarketSnapshot(**s) for s in snapshots], batch_size=1000)
                 JournalGap.objects.bulk_create([JournalGap(run=self.run, **g) for g in self._gaps])
+                PostTradeMetrics.objects.bulk_create(self._post_trade_rows(PostTradeMetrics))   # claude code changed: 2026-10-07 Phase 2 — post-trade metrics
                 self.run.status = JOURNAL_RUN_INCOMPLETE if reasons else JOURNAL_RUN_CLOSED
                 self.run.incomplete_reasons = reasons
                 self.run.coverage = self._coverage_summary()
@@ -315,6 +317,19 @@ class BacktestDecisionRecorder:
             if t.get("entry_index") != d["fill_candle_index"]:
                 raise RecorderDefect(f"trade {d['backtest_trade_id']}: entry_index {t.get('entry_index')} != "
                                      f"fill candle {d['fill_candle_index']}")
+        self._executed_pairs = list(zip(executed, trades))   # claude code changed: 2026-10-07 Phase 2 — post-trade metrics
+
+    def _post_trade_rows(self, model) -> list:   # claude code changed: 2026-10-07 Phase 2 — post-trade metrics
+        from bot.journal.labeler import METRICS_VERSION, post_trade_metrics
+        if self.failed:
+            return []
+        c = {name: self.arr[:, k] for k, name in enumerate(self.cols)}
+        rows = []
+        for d, t in self._executed_pairs:
+            m = post_trade_metrics(t, float(c["close"][d["candle_index"]]), c["open"], c["high"], c["low"])
+            rows.append(model(decision_id=d["decision_id"], run=self.run, metrics_version=METRICS_VERSION,
+                              trade_ref=d["backtest_trade_id"], **m))
+        return rows
 
     def _coverage_summary(self) -> dict:
         counts = {c: 0 for c in T.COVERAGE_CATEGORIES}

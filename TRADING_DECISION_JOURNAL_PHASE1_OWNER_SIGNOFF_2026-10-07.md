@@ -472,3 +472,28 @@ Proceed with Phase 1 only after recording these decisions exactly.
 - **Owner answer:** "Reuse RESEARCH (Recommended)".
 - **Effect:** Phase 1 records environment = BACKTEST and execution_mode = RESEARCH. No SIMULATED value was added.
 - **D7 safeguard:** no `run_type` field exists anywhere in the repository code, so nothing needed deprecating.
+
+
+## Phases 2-7 owner decisions (2026-10-07, AskUserQuestion answers, recorded before implementation)
+The owner asked to "build all the 7 journal phases in order" under the five gates, and answered:
+- **Open decisions → "Delegate: use recommendations".** Each is set to the strictest recommendation already written in
+  Revision B and is recorded as **owner-delegated**:
+
+| ID | Delegated value |
+|---|---|
+| OD-J2 | Counterfactual rule: signal at the close of t; fill at the OPEN of t+1; the decision's planned SL/TP; a gap through a level at a bar's open exits at that open; same-bar stop+target counts as stop first (baseline, labelled an assumption), with target-first as the bound; time exit after H = 24 bars; venue fees + slippage from `execution_costs`; shorts financed through recorded funding, and missing funding gives COST_UNAVAILABLE (never 0) |
+| OD-J3 | Label horizons: forward returns at 1, 4 and 24 candles plus the rule outcome, fixed and versioned |
+| OD-J4 | Labels whose window touches the sealed holdout F are SEALED, with no values |
+| OD-J8 | No attachment/screenshot storage (none until storage is chosen); notes, tags and structured fields only |
+| OD-J9 | Bar-resolution MAE/MFE stored both with and without the exit bar |
+| OD-J11 | A journal endpoint is added to the registry by a version bump |
+| OD-J12 | `display_min_episodes` = 30, a display threshold only |
+| OD-J16 | Zone V label reads are guarded and logged through a registry extension (version bump) |
+| OD-J17 | Ambiguity reporting: stop-first baseline, target-first bound, interval plus ambiguous share |
+| OD-J18 | Gate ablations only as registered hypotheses |
+
+- **OD-J14 → "(iii) Break, report both counts".** Episodes break at a trade exit; every analysis also reports the
+  never-break count.
+- **Phase 6 → "Build it, DRY_RUN, equivalence-tested".** The live-loop half of OD-J13 is approved by this answer, with
+  the Revision B §4 live definition. Live trading is never enabled.
+- **Phase 7 → "statsmodels logistic only"** (OD-J10 = defer scikit-learn).

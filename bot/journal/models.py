@@ -713,3 +713,86 @@ class JournalGap(_InsertOnlyModel):   # claude code changed: new
     class Meta:
         constraints = [models.CheckConstraint(condition=models.Q(kind__in=[GAP_MAPPING_FAILURE, GAP_RECORDER_FAILURE]),
                                               name="journalgap_kind_valid")]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: new — 2026-10-07 Decision Journal PHASE 2 (owner-delegated OD-J2/J3/J4/J9/J17).
+#   DecisionLabel     post-decision OUTCOME of a decision under a frozen hypothetical rule or a fixed horizon —
+#                     always NOT_EXECUTED, never linked to TradeRecord (real P&L), never read by real-P&L code.
+#   PostTradeMetrics  derived post-trade metrics of an EXECUTED simulated trade (bar-resolution MAE/MFE, fill
+#                     shortfall); recomputable, never edits the trade itself.
+# Both insert-only. Label values for decisions outside zone S are read-guarded in the UI (OD-J16).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+LABEL_STATUSES = ("OK", "CENSORED", "UNTESTABLE", "SEALED", "COST_UNAVAILABLE")   # claude code changed: new
+
+
+class DecisionLabel(_InsertOnlyModel):   # claude code changed: new
+    decision = models.ForeignKey(DecisionEvent, on_delete=models.PROTECT, related_name="labels")
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="labels")
+    outcome_kind = models.CharField(max_length=32)                    # FORWARD_RETURN_NOT_EXECUTED | COUNTERFACTUAL_NOT_EXECUTED
+    label_type = models.CharField(max_length=24)                      # FORWARD_RETURN | COUNTERFACTUAL_RULE
+    label_version = models.CharField(max_length=40)
+    rule_id = models.CharField(max_length=64, blank=True, default="")
+    variant = models.CharField(max_length=24)                         # NONE | BASELINE_STOP_FIRST | BOUND_TARGET_FIRST
+    horizon_candles = models.IntegerField()                           # h for forward returns; H (max hold) for the rule
+    information_time = models.DateTimeField()                         # copy of the decision's, for the causality check
+    label_window_start = models.DateTimeField()                       # open of candle t+1 (= information_time)
+    label_window_end = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20)
+    status_reason = models.CharField(max_length=200, blank=True, default="")
+    research_zone = models.CharField(max_length=40)                   # zone of the DECISION (read guard key)
+    window_end_zone = models.CharField(max_length=40, blank=True, default="")
+    gross_return = models.FloatField(null=True, blank=True)           # forward return of the asset (direction-free)
+    fill_time = models.DateTimeField(null=True, blank=True)
+    fill_price = models.FloatField(null=True, blank=True)
+    exit_time = models.DateTimeField(null=True, blank=True)
+    exit_price = models.FloatField(null=True, blank=True)
+    exit_reason = models.CharField(max_length=20, blank=True, default="")
+    gross_r = models.FloatField(null=True, blank=True)
+    net_r = models.FloatField(null=True, blank=True)
+    cost_detail = models.JSONField(default=dict)
+    mae_bar_1h_r = models.FloatField(null=True, blank=True)
+    mfe_bar_1h_r = models.FloatField(null=True, blank=True)
+    mae_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    mfe_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    bars_to_exit = models.IntegerField(null=True, blank=True)
+    path_resolution = models.CharField(max_length=12, default="BAR_1H")
+    ambiguity = models.CharField(max_length=32, default="NONE")
+    outcome_assumption = models.CharField(max_length=24, default="RESOLVED")
+    data_version = models.CharField(max_length=64)
+    computed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["decision", "label_type", "label_version", "horizon_candles", "variant"],
+                                    name="one_label_per_decision_type_version_horizon_variant"),
+            models.CheckConstraint(condition=models.Q(label_window_start__gte=models.F("information_time")),
+                                   name="label_window_not_before_decision"),
+            models.CheckConstraint(condition=models.Q(status__in=list(LABEL_STATUSES)), name="label_status_valid"),
+            models.CheckConstraint(condition=~models.Q(status="SEALED") | (models.Q(gross_return__isnull=True) &
+                                   models.Q(gross_r__isnull=True) & models.Q(net_r__isnull=True)),
+                                   name="sealed_label_has_no_values"),
+            models.CheckConstraint(condition=models.Q(outcome_kind__endswith="_NOT_EXECUTED"), name="label_is_not_executed"),
+        ]
+
+
+class PostTradeMetrics(_InsertOnlyModel):   # claude code changed: new
+    decision = models.OneToOneField(DecisionEvent, on_delete=models.PROTECT, primary_key=True, related_name="post_trade")
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="post_trade_metrics")
+    metrics_version = models.CharField(max_length=40)
+    trade_ref = models.CharField(max_length=100)                      # backtest_trade_id (or TradeRecord pk later)
+    status = models.CharField(max_length=20, default="OK")
+    status_reason = models.CharField(max_length=200, blank=True, default="")
+    realized_risk_per_unit = models.FloatField(null=True, blank=True)  # |fill - stop|, the backtester's own R basis
+    mae_bar_1h_r = models.FloatField(null=True, blank=True)
+    mfe_bar_1h_r = models.FloatField(null=True, blank=True)
+    mae_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    mfe_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    bars_held = models.IntegerField(null=True, blank=True)
+    bars_to_mae = models.IntegerField(null=True, blank=True)
+    bars_to_mfe = models.IntegerField(null=True, blank=True)
+    implementation_shortfall_bps = models.FloatField(null=True, blank=True)   # fill vs decision close, adverse > 0
+    fill_vs_rule_reference_bps = models.FloatField(null=True, blank=True)     # fill vs open of t+1, adverse > 0
+    excursion_resolution = models.CharField(max_length=12, default="BAR_1H")
+    computed_at = models.DateTimeField(auto_now_add=True)
+

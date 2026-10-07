@@ -50,6 +50,15 @@
                 </div>
             </div>
 
+            {# claude code changed: 2026-10-07 Phase 2 — label status counts only (no outcome values on this page) #}
+            <div class="term-panel" style="margin-bottom:16px">
+                <div class="metric-label" style="margin-bottom:6px">Outcome labels (hypothetical, NOT executed) — counts by status</div>
+                {% if label_counts %}
+                <table class="term-table"><tbody>{% for c in label_counts %}<tr><td class="mono" style="font-size:12px">{{ c.label_type }}</td><td><span class="badge {% if c.status == 'OK' %}pos{% elif c.status == 'SEALED' %}warn{% else %}dim{% endif %}">{{ c.status }}</span></td><td class="num">{{ c.n }}</td></tr>{% endfor %}</tbody></table>
+                <div class="chart-caption mono" style="margin-top:6px">values appear on decision pages for zone-S decisions only</div>
+                {% else %}<div class="unavailable">Not labelled yet — <span class="mono">python manage.py label_journal_run --run {{ run.run_id }}</span></div>{% endif %}
+            </div>
+
             {% if gaps %}
             <div class="term-panel" style="margin-bottom:16px">
                 <div class="metric-label" style="margin-bottom:6px">Journal gaps ({{ n_gaps }})</div>

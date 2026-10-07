@@ -18,6 +18,7 @@ class Command(BaseCommand):
         parser.add_argument("--symbol", default="BTC_USDT", help="e.g. BTC_USDT (local data/<symbol>_1h.csv)")
         parser.add_argument("--candles", type=int, default=2000, help="most recent N candles (default 2000)")
         parser.add_argument("--venue", default="binance", help="cost model venue (default binance)")
+        parser.add_argument("--end", default=None, help="last candle open time (UTC, e.g. 2023-06-01); default = latest")   # claude code changed: 2026-10-07 Phase 2 — --end (record a run inside a chosen zone, e.g. zone S)
         parser.add_argument("--allow-unvalidated", action="store_true",
                             help="let the router route to strategies without a production-eligible verdict "
                                  "(default: off, as in production — decisions are then SYSTEM_REJECTED / STRATEGY_NOT_VALIDATED)")
@@ -33,9 +34,12 @@ class Command(BaseCommand):
             raise CommandError(f"no local price file for {canonical}: {path}")
         if opts["candles"] < 1:
             raise CommandError("--candles must be >= 1")
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, float_precision="round_trip")   # claude code changed: 2026-10-07 Phase 2 — exact parse (same as the labeler's provenance check)
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        df = df.set_index("timestamp").tail(opts["candles"])
+        df = df.set_index("timestamp")
+        if opts["end"]:   # claude code changed: 2026-10-07 Phase 2 — --end (record a run inside a chosen zone, e.g. zone S)
+            df = df[df.index <= pd.Timestamp(opts["end"], tz="UTC")]
+        df = df.tail(opts["candles"])
         rec = BacktestDecisionRecorder(opts["symbol"])
         result = backtest(df, allow_unvalidated_strategies=opts["allow_unvalidated"], venue_id=opts["venue"],
                           journal_recorder=rec)

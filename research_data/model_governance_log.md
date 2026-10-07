@@ -2428,3 +2428,10 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - The rejections therefore require contemporaneous co-movement; data quirks do not produce them.
 - (3) Flat (zero-change) hours in the first 10k of S: median coin 3.7 %; DIA 10.7 % (rank 13/149); top PAXG 20.5 %. Flat-heavy coins are inside the shifted null, which barely rejects, so flatness does not explain DIA's survivor concentration.
 - Reading: the zone-S signal is statistically genuine IN-SAMPLE (coins behave as a market trend plus a mean-reverting idiosyncratic part, Nov 2021 - Dec 2022). Not established: persistence out of sample (zone V) or tradeability after costs. Still EXPLORATORY; no claim. Scripts and results: session scratchpad (eg_size_crypto.py, eg_realdata_null.py, *_result.json).
+
+
+---
+
+## 2026-10-07 — DECISION JOURNAL PHASES 2-7: OWNER-DELEGATED DECISIONS
+
+- The owner asked for all 7 journal phases, in order and under the five gates. The open decisions OD-J2, J3, J4, J8, J9, J11, J12, J16, J17 and J18 were DELEGATED to the strictest Revision B recommendations. OD-J14 = (iii) break at exit and report both counts. Phase 6 = DRY_RUN live wiring, equivalence-tested (approves the OD-J13 live half). Phase 7 = statsmodels logistic only (OD-J10 defer). Full values: TRADING_DECISION_JOURNAL_PHASE1_OWNER_SIGNOFF_2026-10-07.md.

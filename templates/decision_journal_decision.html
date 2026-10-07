@@ -58,6 +58,37 @@
                 </div>
             </div>
 
+            {# claude code changed: 2026-10-07 Phase 2 — hypothetical outcomes (NOT executed), zone-guarded #}
+            <div class="term-panel" style="margin-bottom:16px">
+                <div class="metric-label" style="margin-bottom:6px">Outcomes after the decision — hypothetical, NOT executed (label {{ labels.0.label_version|default:"none yet" }})</div>
+                {% if not labels %}<div class="unavailable">Not labelled yet — run <span class="mono">python manage.py label_journal_run --run {{ run.run_id }}</span></div>
+                {% else %}
+                {% if not outcomes_visible %}<div class="unavailable" style="margin-bottom:8px">This decision is in zone <strong>{{ d.research_zone }}</strong>: outcome values are read-guarded (only zone-S outcomes are shown, so browsing cannot use up the validation zone). Statuses are shown; numbers are hidden.</div>{% endif %}
+                <table class="term-table">
+                    <thead><tr><th>Label</th><th>Variant / assumption</th><th>Status</th><th class="num">Return / R (gross)</th><th class="num">Net R</th><th>Exit</th><th class="num">MAE / MFE (bar, R)</th></tr></thead>
+                    <tbody>{% for l in labels %}
+                        <tr><td class="mono" style="font-size:12px">{% if l.label_type == "FORWARD_RETURN" %}forward {{ l.horizon_candles }}h{% else %}rule (max {{ l.horizon_candles }} bars){% endif %}</td>
+                            <td class="mono text-dim" style="font-size:11px">{{ l.variant }}{% if l.ambiguity != "NONE" %} · {{ l.ambiguity }} · {{ l.outcome_assumption }}{% endif %}</td>
+                            <td><span class="badge {% if l.status == 'OK' %}pos{% elif l.status == 'SEALED' %}warn{% else %}dim{% endif %}">{{ l.status }}</span>{% if l.status_reason %} <span class="text-dim" style="font-size:11px">{{ l.status_reason }}</span>{% endif %}</td>
+                            {% if outcomes_visible %}
+                            <td class="num">{% if l.label_type == "FORWARD_RETURN" %}{{ l.gross_return|floatformat:5|default:"—" }}{% else %}{{ l.gross_r|floatformat:3|default:"—" }}{% endif %}</td>
+                            <td class="num">{{ l.net_r|floatformat:3|default:"—" }}</td>
+                            <td class="mono" style="font-size:11px">{{ l.exit_reason|default:"" }}{% if l.bars_to_exit %} · {{ l.bars_to_exit }} bars{% endif %}</td>
+                            <td class="num">{% if l.mae_bar_1h_r is not None %}{{ l.mae_bar_1h_r|floatformat:2 }} / {{ l.mfe_bar_1h_r|floatformat:2 }}{% else %}—{% endif %}</td>
+                            {% else %}<td class="num text-dim" colspan="4">hidden (zone {{ d.research_zone }})</td>{% endif %}
+                        </tr>{% endfor %}
+                    </tbody>
+                </table>
+                <div class="chart-caption mono" style="margin-top:6px">rule: fill at the open after the decision, planned stop/target, same-bar touch = stop first (assumption; target-first bound stored), time exit after 24 bars, venue costs; bar-resolution excursions, not exact intrabar</div>
+                {% endif %}
+                {% if post_trade %}
+                <div class="metric-label" style="margin:12px 0 6px">Simulated trade, post-trade metrics ({{ post_trade.metrics_version }})</div>
+                {% if outcomes_visible %}
+                <div class="mono" style="font-size:12px">MAE {{ post_trade.mae_bar_1h_r|floatformat:2 }} R / MFE {{ post_trade.mfe_bar_1h_r|floatformat:2 }} R (excl. exit bar {{ post_trade.mae_excl_exit_bar_r|floatformat:2|default:"—" }} / {{ post_trade.mfe_excl_exit_bar_r|floatformat:2|default:"—" }}) · held {{ post_trade.bars_held }} bars · fill vs decision close {{ post_trade.implementation_shortfall_bps|floatformat:1 }} bps · vs open {{ post_trade.fill_vs_rule_reference_bps|floatformat:1 }} bps</div>
+                {% else %}<div class="text-dim" style="font-size:12px">hidden (zone {{ d.research_zone }})</div>{% endif %}
+                {% endif %}
+            </div>
+
             <div class="term-panel">
                 <div class="metric-label" style="margin-bottom:6px">Market snapshot{% if snapshot %} — {{ snapshot.snapshot_kind }} · {{ snapshot.feature_set_version }} · window {{ snapshot.window_rows }} candles ({{ snapshot.window_start_time|date:"Y-m-d H:i" }} → {{ snapshot.window_end_time|date:"Y-m-d H:i" }}){% endif %}</div>
                 {% if snapshot %}

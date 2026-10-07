@@ -16,6 +16,9 @@ from django.http import Http404
 from bot.journal import taxonomy as T
 
 PAGE_SIZE = 200
+# OD-J16 (owner-delegated): label/outcome VALUES are shown only for decisions in zone S; everything else (zone V,
+# unassigned, sealed F, pre-S) shows the label's status but not its numbers, so browsing can never consume V.
+VISIBLE_OUTCOME_ZONES = ("SELECTION",)   # claude code changed: 2026-10-07 Phase 2 — outcomes (zone-guarded)
 STATUS_BADGE = {T.EXECUTED: "pos", T.NO_SIGNAL: "dim", T.REJECTED: "warn", T.REGIME_REJECTED: "warn",
                 T.SYSTEM_REJECTED: "neg", T.DATA_REJECTED: "neg", T.EXECUTION_FAILED: "neg",
                 T.CENSORED_END_OF_DATA: "neu"}
@@ -77,7 +80,11 @@ def get_run(run_id: str, *, status: str = "", page: int = 1) -> dict:
     cov = run.coverage or {}
     coverage = [{"category": c, "label": COVERAGE_LABEL.get(c, c), "n": n}
                 for c, n in (cov.get("counts") or {}).items() if n]
-    return {"run": run, "by_status": by_status, "by_reason": by_reason, "page": page_obj, "status_filter": status,
+    from bot.journal.models import DecisionLabel   # claude code changed: 2026-10-07 Phase 2 — outcomes (zone-guarded)
+    label_counts = list(DecisionLabel.objects.filter(run=run).values("label_type", "status")
+                        .annotate(n=Count("pk")).order_by("label_type", "status"))
+    return {"label_counts": label_counts, "visible_outcome_zones": VISIBLE_OUTCOME_ZONES,   # claude code changed: 2026-10-07 Phase 2 — outcomes (zone-guarded)
+            "run": run, "by_status": by_status, "by_reason": by_reason, "page": page_obj, "status_filter": status,
             "statuses": [s["status"] for s in by_status], "coverage": coverage,
             "coverage_meta": {k: cov.get(k) for k in ("n_candles", "loop_start_index", "n_missing_grid_candles",
                                                       "rows_dropped_by_backtester_prepare", "warmup_raw_reasons")},
@@ -98,7 +105,12 @@ def get_decision(run_id: str, decision_id: str) -> dict:
     snap = MarketSnapshot.objects.filter(decision=d).first()
     prev_d = DecisionEvent.objects.filter(run=run, candle_index__lt=d.candle_index).order_by("-candle_index").only("decision_id").first()
     next_d = DecisionEvent.objects.filter(run=run, candle_index__gt=d.candle_index).order_by("candle_index").only("decision_id").first()
-    return {"run": run, "d": d, "gates": gates, "snapshot": snap,
+    from bot.journal.models import DecisionLabel, PostTradeMetrics   # claude code changed: 2026-10-07 Phase 2 — outcomes (zone-guarded)
+    visible = d.research_zone in VISIBLE_OUTCOME_ZONES
+    labels = list(DecisionLabel.objects.filter(decision=d).order_by("label_type", "horizon_candles", "variant"))
+    ptm = PostTradeMetrics.objects.filter(decision=d).first()
+    return {"labels": labels, "outcomes_visible": visible, "post_trade": ptm,   # claude code changed: 2026-10-07 Phase 2 — outcomes (zone-guarded)
+            "run": run, "d": d, "gates": gates, "snapshot": snap,
             "snapshot_values": sorted((snap.values or {}).items()) if snap else [],
             "stages": [{"stage": s, "reached": s in (d.lifecycle_stages or [])} for s in T.STAGE_ORDER],
             "prev_id": prev_d.decision_id if prev_d else None, "next_id": next_d.decision_id if next_d else None}
