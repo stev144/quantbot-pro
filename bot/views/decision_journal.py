@@ -44,4 +44,38 @@ def decision_journal_analytics(request, run_id):   # claude code changed: 2026-1
 
 @require_GET
 def decision_journal_decision(request, run_id, decision_id):
-    return render(request, "decision_journal_decision.html", get_decision(run_id, decision_id))
+    ctx = get_decision(run_id, decision_id)
+    ctx["can_annotate"] = request.user.is_authenticated and request.user.is_staff   # claude code changed: 2026-10-07 Phase 5 — human annotations (staff-only)
+    if ctx["can_annotate"]:
+        ctx["annotations"] = list(ctx["d"].annotations.select_related("author").order_by("created_at"))
+        from bot.journal.models import ANNOTATION_KINDS
+        ctx["annotation_kinds"] = ANNOTATION_KINDS
+    return render(request, "decision_journal_decision.html", ctx)
+
+
+def decision_journal_annotate(request, run_id, decision_id):   # claude code changed: 2026-10-07 Phase 5 — human annotations (staff-only)
+    from django.contrib import messages
+    from django.http import HttpResponseNotAllowed
+    from django.shortcuts import redirect
+    from bot.journal.annotations import AnnotationRejected, add_annotation
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not (request.user.is_authenticated and request.user.is_staff):
+        from django.http import HttpResponseForbidden
+        return HttpResponseForbidden("journal annotations are staff-only")
+    d = get_decision(run_id, decision_id)["d"]
+    kind = request.POST.get("kind", "")
+    value = {}
+    if kind == "CONFIDENCE":
+        try:
+            value = {"confidence": int(request.POST.get("confidence", ""))}
+        except ValueError:
+            value = {"confidence": None}
+    elif kind == "TAG":
+        value = {"tag": request.POST.get("text", "")}
+    try:
+        add_annotation(request.user, kind=kind, text=request.POST.get("text", ""), value=value, decision=d)
+        messages.success(request, "Note saved.")
+    except AnnotationRejected as e:
+        messages.error(request, f"Not saved: {e}")
+    return redirect("decision_journal_decision", run_id=run_id, decision_id=decision_id)

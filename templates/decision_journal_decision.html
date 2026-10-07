@@ -89,6 +89,26 @@
                 {% endif %}
             </div>
 
+            {# claude code changed: 2026-10-07 Phase 5 — human notes (staff-only; never a model feature) #}
+            {% if can_annotate %}
+            <div class="term-panel" style="margin-bottom:16px">
+                <div class="metric-label" style="margin-bottom:6px">Your journal notes (human — kept apart from the machine record, never used as model features)</div>
+                {% if messages %}{% for m in messages %}<div class="chart-caption" style="margin-bottom:6px">{{ m }}</div>{% endfor %}{% endif %}
+                {% for a in annotations %}
+                <div style="margin-bottom:8px"><span class="badge dim">{{ a.kind }}</span>{% if a.written_after_outcome %} <span class="badge warn" title="written once the outcome was knowable">written after outcome</span>{% endif %}{% if a.supersedes_id %} <span class="text-dim" style="font-size:11px">(revision)</span>{% endif %}
+                    <span class="text-dim mono" style="font-size:11px">{{ a.author.username }} · {{ a.created_at|date:"Y-m-d H:i" }}</span>
+                    <div style="white-space:pre-line">{{ a.text }}{% if a.value %} <span class="mono text-dim" style="font-size:11px">{{ a.value }}</span>{% endif %}</div></div>
+                {% empty %}<div class="text-dim" style="margin-bottom:8px">No notes yet.</div>{% endfor %}
+                <form method="post" action="{% url 'decision_journal_annotate' run.run_id d.decision_id %}">{% csrf_token %}
+                    <select name="kind">{% for k in annotation_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select>
+                    <input type="number" name="confidence" min="1" max="5" placeholder="confidence 1-5" style="width:130px">
+                    <textarea name="text" rows="3" style="width:100%; margin-top:6px" placeholder="note, plan, review, tag, lesson…"></textarea>
+                    <button type="submit" style="margin-top:6px">Save note</button>
+                </form>
+                <div class="chart-caption mono" style="margin-top:6px">no screenshot uploads (storage not chosen — OD-J8); notes are insert-only</div>
+            </div>
+            {% endif %}
+
             <div class="term-panel">
                 <div class="metric-label" style="margin-bottom:6px">Market snapshot{% if snapshot %} — {{ snapshot.snapshot_kind }} · {{ snapshot.feature_set_version }} · window {{ snapshot.window_rows }} candles ({{ snapshot.window_start_time|date:"Y-m-d H:i" }} → {{ snapshot.window_end_time|date:"Y-m-d H:i" }}){% endif %}</div>
                 {% if snapshot %}

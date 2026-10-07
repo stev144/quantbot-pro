@@ -805,3 +805,35 @@ class PostTradeMetrics(_InsertOnlyModel):   # claude code changed: new
     excursion_resolution = models.CharField(max_length=12, default="BAR_1H")
     computed_at = models.DateTimeField(auto_now_add=True)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: new — 2026-10-07 Decision Journal PHASE 5 (human journaling, Rev A §13 / Rev B).
+# HUMAN annotations, kept apart from MACHINE observations: never exported with decision streams, never a model
+# feature (no NLP pipeline exists), staff-only. Insert-only — an edit is a new row with `supersedes`. Owner-delegated
+# OD-J8: NO attachment/screenshot storage. `written_after_outcome` flags hindsight (written once the outcome was
+# knowable: decision + 24 h, the longest label window; for a trade, after it closed).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+ANNOTATION_KINDS = ("NOTE", "PRE_TRADE_PLAN", "POST_TRADE_REVIEW", "CHECKLIST", "SETUP_NAME", "TAG", "EMOTION",
+                    "CONFIDENCE", "MISTAKE", "LESSON")   # claude code changed: new
+
+
+class HumanAnnotation(_InsertOnlyModel):   # claude code changed: new
+    annotation_id = models.UUIDField(primary_key=True)
+    decision = models.ForeignKey(DecisionEvent, null=True, blank=True, on_delete=models.PROTECT, related_name="annotations")
+    trade_record = models.ForeignKey(TradeRecord, null=True, blank=True, on_delete=models.PROTECT, related_name="annotations")
+    author = models.ForeignKey("auth.User", on_delete=models.PROTECT, related_name="journal_annotations")
+    kind = models.CharField(max_length=20)
+    text = models.TextField(blank=True, default="")
+    value = models.JSONField(default=dict)
+    written_after_outcome = models.BooleanField(default=False)
+    supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=(models.Q(decision__isnull=False) & models.Q(trade_record__isnull=True)) |
+                                   (models.Q(decision__isnull=True) & models.Q(trade_record__isnull=False)),
+                                   name="annotation_exactly_one_target"),
+            models.CheckConstraint(condition=models.Q(kind__in=list(ANNOTATION_KINDS)), name="annotation_kind_valid"),
+        ]
+
