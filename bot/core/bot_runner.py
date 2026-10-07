@@ -247,6 +247,7 @@ class VenueSession:
     narrator: object               # TradeNarrativeGenerator
     last_regime: str = "UNKNOWN"
     last_signal: str = "NONE"
+    journal: object = None         # claude code changed: 2026-10-07 journal Phase 6 — observation only (None = no recorder; the default)
 
 
 # ============================================================
@@ -261,6 +262,23 @@ class VenueSession:
 # must be NTP-synced (documented assumption). A clock running BEHIND only
 # delays a decision by one loop (safe direction).
 # ============================================================
+def _journal(session, event, make_args=tuple):   # claude code changed: 2026-10-07 journal Phase 6 — observation only; args built lazily (P3 FormingCandle regression)
+    """Call the session's optional DRY_RUN decision recorder. Its errors are logged and handed to it; they never
+    reach trading. `make_args` is a zero-argument callable returning the argument tuple; it is evaluated ONLY when a
+    recorder is attached and INSIDE the try, so with no recorder the trading path reads nothing extra. Arguments are
+    copies, so the recorder cannot change what the bot uses."""
+    if getattr(session, "journal", None) is None:
+        return
+    try:
+        getattr(session.journal, event)(*make_args())   # claude code changed: 2026-10-07 journal Phase 6 — lazy args evaluated inside the guard
+    except Exception as e:
+        logging.getLogger(__name__).error(f"[BotRunner:{session.venue_id}] journal {event} failed: {e} — trading unaffected")
+        try:
+            session.journal.record_failure(event, e)
+        except Exception:
+            pass
+
+
 def drop_forming_candles(candles: list, timeframe_ms: int, now_ms: int) -> list:
     """Return only the candles that have CLOSED by now_ms: open_time +
     timeframe_ms <= now_ms. Order preserved; nothing invented."""
@@ -593,6 +611,7 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
             logger.warning(
                 f"[BotRunner:{session.venue_id}] Empty candle response — skipping this venue this loop"
             )
+            _journal(session, "on_no_evaluation", lambda: ("empty candle response",))   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return "error"
 
         # claude code changed: Phase 3 H-07 — decide on CLOSED candles only (see drop_forming_candles)
@@ -603,6 +622,7 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
             logger.info(f"[BotRunner:{session.venue_id}] Dropped {n_fetched - len(candles)} forming candle(s) — deciding on closed candles only")
         if not candles:
             logger.warning(f"[BotRunner:{session.venue_id}] No closed candles in the response — skipping this venue this loop")
+            _journal(session, "on_no_evaluation", lambda: ("no closed candle in the response",))   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return "error"
 
         # ── BUILD DATAFRAME ───────────────────────────────
@@ -612,6 +632,7 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
             logger.warning(
                 f"[BotRunner:{session.venue_id}] DataFrame build failed — skipping this venue this loop"
             )
+            _journal(session, "on_no_evaluation", lambda: ("dataframe build failed",))   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return "error"
 
         logger.info(f"[BotRunner:{session.venue_id}] DataFrame ready — {len(df)} candles")
@@ -630,6 +651,8 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
                     f"{price_check['secondary_exchange']}: {price_check['secondary_price']} | "
                     f"Deviation: {price_check['deviation_pct']:.3f}%"
                 )
+                _journal(session, "on_data_refusal", lambda: (df.copy(), "CROSS_VENUE_PRICE_DEVIATION", dict(price_check),   # claude code changed: 2026-10-07 journal Phase 6 — observation only; lazy
+                         session.engine.position_tracker.has_position(session.symbol)))
                 return "error"
 
         # ── DETECT MARKET REGIME ──────────────────────────
@@ -652,6 +675,10 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
             f"Strategy: {signal.get('strategy', 'none')} | "
             f"Reason: {signal.get('reason', 'none')}"
         )
+
+        _journal(session, "on_evaluation", lambda: (df.copy(), regime_result, dict(signal),   # claude code changed: 2026-10-07 journal Phase 6 — observation only; lazy (no engine read when off)
+                                                    session.engine.position_tracker.has_position(session.symbol),
+                                                    price_checker is not None))
 
         # ── PROCESS VALID SIGNAL ──────────────────────────
         if signal["signal"] in ("BUY", "SELL"):
@@ -688,6 +715,9 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
             # the module-level DRY_RUN — correct for whichever venue this
             # is (Kraken's dry-run state is independent, see KRAKEN_DRY_RUN).
             session.engine.execute_signal(signal)
+            _journal(session, "on_execution_result", lambda: (   # claude code changed: 2026-10-07 journal Phase 6 — observation only; lazy (no engine read when off)
+                session.engine._last_refusal,
+                dict(session.engine.position_tracker.open_positions.get(session.symbol) or {}) or None))
 
         # ── MANAGE OPEN POSITIONS ─────────────────────────
         session.engine.manage_positions()    # Executes exits when SL/TP hit (real or simulated)
@@ -733,6 +763,32 @@ def process_venue_candle(session: VenueSession, price_checker=None) -> str:
 # ============================================================
 # MAIN BOT FUNCTION
 # ============================================================
+def attach_journal_recorders(sessions):   # claude code changed: 2026-10-07 journal Phase 6 — opt-in DRY_RUN recorder
+    """Attach the decision-journal recorder to each DRY_RUN session when JOURNAL_LIVE_RECORDER=1. Off by default;
+    a LIVE engine is always refused; any failure here leaves the bot running exactly as without it."""
+    logger = logging.getLogger(__name__)
+    if os.environ.get("JOURNAL_LIVE_RECORDER", "") != "1":
+        return
+    from bot.journal.live_recorder import LiveDecisionRecorder, RecorderRefused
+    for session in sessions:
+        try:
+            LiveDecisionRecorder(session.engine, symbol=session.symbol, venue=session.venue_id).attach(session)
+            logger.info(f"[BotRunner:{session.venue_id}] decision journal recorder attached (DRY_RUN)")
+        except RecorderRefused as e:
+            logger.warning(f"[BotRunner:{session.venue_id}] decision journal not attached: {e}")
+        except Exception as e:
+            logger.error(f"[BotRunner:{session.venue_id}] decision journal failed to start: {e} — trading unaffected")
+
+
+def close_journal_recorders(sessions):   # claude code changed: 2026-10-07 journal Phase 6 — opt-in DRY_RUN recorder
+    for session in sessions:
+        if getattr(session, "journal", None) is not None:
+            try:
+                session.journal.close()
+            except Exception as e:
+                logging.getLogger(__name__).error(f"[BotRunner:{session.venue_id}] journal close failed: {e}")
+
+
 def run_bot():
     """
     Main entry point — initialises all components and runs the loop.
@@ -930,6 +986,7 @@ def run_bot():
         )
 
     logger.info("[BotRunner] Reconciliation complete — starting main loop")
+    attach_journal_recorders(sessions)   # claude code changed: 2026-10-07 journal Phase 6 — opt-in DRY_RUN recorder (off unless JOURNAL_LIVE_RECORDER=1)
 
     # ── HEARTBEAT STATE ───────────────────────────────────────
     last_heartbeat_time = time.time()    # When we last printed heartbeat
@@ -1005,6 +1062,7 @@ def run_bot():
             logger.info(
                 "[BotRunner] Keyboard interrupt — shutting down cleanly"
             )
+            close_journal_recorders(sessions)   # claude code changed: 2026-10-07 journal Phase 6 — opt-in DRY_RUN recorder
 
             # Print final route stats before exiting — per session
             for session in sessions:

@@ -264,17 +264,18 @@ def map_fill_refusal(tag: Optional[str], direction: str) -> Mapped:
 
 
 def gate_vector(path: str, *, failed: Optional[str], passed_through: Optional[str] = None,
-                disabled: Tuple[str, ...] = ()) -> Dict[str, str]:
+                disabled: Tuple[str, ...] = (), paths=None, order=None) -> Dict[str, str]:   # claude code changed: 2026-10-07 Phase 6 (paths/order: live variant)
     """The observed control flow over the full GATE_ORDER (D3).
     failed:          the gate that stopped the engine (None = no gate failed)
     passed_through:  when nothing failed, the LAST gate demonstrably passed (gates after it stay NOT_EVALUATED);
                      ignored when `failed` is given
     disabled:        gates on the path that configuration switched off (evaluated by nobody → NOT_EVALUATED)"""
-    order = PATHS[path]
+    full = GATE_ORDER if order is None else order   # claude code changed: 2026-10-07 Phase 6
+    order = (PATHS if paths is None else paths)[path]
     stop = failed if failed is not None else passed_through
     if stop is not None and stop not in order:
         raise ValueError(f"gate {stop!r} is not on the {path} path")
-    vec = {g: NOT_EVALUATED for g in GATE_ORDER}
+    vec = {g: NOT_EVALUATED for g in full}   # claude code changed: 2026-10-07 Phase 6
     if stop is None:
         return vec
     for g in order:
@@ -303,6 +304,59 @@ def validate_legacy_terminal(status: str, reason_code, reason_stage) -> None:   
         raise ValueError(f"legacy reason {reason_code!r} must be {LEGACY_REASON_CODES.get(reason_code)}, got {(status, reason_stage)}")
 
 
+# ── live / dry-run vocabulary (Phase 6) — the D4 backtester codes PLUS the ExecutionEngine's own branches, named
+# exactly as in Revision A §4.2 / Revision B §5.3. A separate version: never mixed with QBP-JRNL-REASON-1 runs.
+LIVE_TAXONOMY_VERSION = "QBP-JRNL-LIVE-1"   # claude code changed: 2026-10-07 Phase 6
+LIVE_GATE_ORDER_VERSION = "QBP-JRNL-GATES-LIVE-1"   # claude code changed: 2026-10-07 Phase 6
+STAGE_SYSTEM, STAGE_PORTFOLIO, STAGE_DUPLICATE, STAGE_EXECUTION = "SYSTEM", "PORTFOLIO", "DUPLICATE", "EXECUTION"   # claude code changed: 2026-10-07 Phase 6
+ORIGIN_BY_STAGE.update({STAGE_SYSTEM: "SYSTEM", STAGE_PORTFOLIO: "PORTFOLIO_CAPACITY", STAGE_DUPLICATE: "PORTFOLIO_CAPACITY",   # claude code changed: 2026-10-07 Phase 6
+                        STAGE_EXECUTION: "EXECUTION"})
+LIVE_REASON_CODES: Dict[str, Tuple[str, str]] = {**REASON_CODES,   # claude code changed: 2026-10-07 Phase 6
+    "CROSS_VENUE_PRICE_DEVIATION": (DATA_REJECTED, STAGE_DATA),
+    "DUPLICATE_SIGNAL": (DUPLICATE_REJECTED, STAGE_DUPLICATE),          # same direction as the open position (§5.3)
+    "POSITION_ALREADY_OPEN": (PORTFOLIO_REJECTED, STAGE_PORTFOLIO),      # opposite direction (§5.3)
+    "OPEN_TRADE_ROW_EXISTS": (DUPLICATE_REJECTED, STAGE_DUPLICATE),
+    "POSITIONS_NOT_RECONCILED": (SYSTEM_REJECTED, STAGE_SYSTEM),         # OD-J1
+    "BALANCE_UNAVAILABLE": (DATA_REJECTED, STAGE_DATA),
+    "DRAWDOWN_KILL_SWITCH": (RISK_REJECTED, STAGE_RISK),
+    "ORDER_STILL_OPEN": (EXECUTION_FAILED, STAGE_EXECUTION),
+    "ORDER_UNCONFIRMED": (EXECUTION_FAILED, STAGE_EXECUTION),
+    "RATE_LIMITED": (EXECUTION_FAILED, STAGE_EXECUTION),
+    "ORDER_EXCEPTION": (EXECUTION_FAILED, STAGE_EXECUTION),
+}
+ENGINE_GATES = ("ENGINE_NOT_IN_POSITION", "ENGINE_NO_OPEN_TRADE_ROW", "ENGINE_POSITIONS_RECONCILED",   # claude code changed: 2026-10-07 Phase 6
+                "ENGINE_BALANCE_AVAILABLE", "ENGINE_DRAWDOWN_OK", "ENGINE_SIZE_POSITIVE", "ENGINE_ORDER_FILLED")
+G_PRICE = "LIVE_PRICE_SANITY"   # claude code changed: 2026-10-07 Phase 6 — cross-venue price check, before regime detection (Binance session only)
+LIVE_GATE_ORDER = (G_PRICE,) + tuple(g for g in GATE_ORDER if not g.startswith("BT_")) + ENGINE_GATES   # claude code changed: 2026-10-07 Phase 6
+LIVE_PATHS = {"TREND": (G_PRICE,) + tuple(g for g in PATH_TREND if not g.startswith("BT_")) + ENGINE_GATES,   # claude code changed: 2026-10-07 Phase 6
+              "RANGING": (G_PRICE,) + tuple(g for g in PATH_RANGING if not g.startswith("BT_")) + ENGINE_GATES,
+              "HIGH_VOL": (G_PRICE,) + PATH_HIGH_VOL, "DATA": (G_PRICE,)}
+# ExecutionEngine._last_refusal tag -> (reason code, failing gate); "in_position" is resolved by direction (§5.3)
+ENGINE_REFUSALS = {   # claude code changed: 2026-10-07 Phase 6
+    "open_trade_row": ("OPEN_TRADE_ROW_EXISTS", "ENGINE_NO_OPEN_TRADE_ROW"),
+    "not_reconciled": ("POSITIONS_NOT_RECONCILED", "ENGINE_POSITIONS_RECONCILED"),
+    "balance_unavailable": ("BALANCE_UNAVAILABLE", "ENGINE_BALANCE_AVAILABLE"),
+    "drawdown_kill_switch": ("DRAWDOWN_KILL_SWITCH", "ENGINE_DRAWDOWN_OK"),
+    "size_not_positive": ("SIZE_BELOW_MINIMUM", "ENGINE_SIZE_POSITIVE"),
+    "order_still_open": ("ORDER_STILL_OPEN", "ENGINE_ORDER_FILLED"),
+    "order_unconfirmed": ("ORDER_UNCONFIRMED", "ENGINE_ORDER_FILLED"),
+    "rate_limited": ("RATE_LIMITED", "ENGINE_ORDER_FILLED"),
+    "order_exception": ("ORDER_EXCEPTION", "ENGINE_ORDER_FILLED"),
+}
+
+
+def map_engine_refusal(tag, *, direction: str, open_side: Optional[str]):   # claude code changed: 2026-10-07 Phase 6
+    if tag == "in_position":
+        same = (open_side or "").upper() in (("BUY", "LONG") if direction == "LONG" else ("SELL", "SHORT"))
+        code, gate = ("DUPLICATE_SIGNAL" if same else "POSITION_ALREADY_OPEN"), "ENGINE_NOT_IN_POSITION"
+    elif tag in ENGINE_REFUSALS:
+        code, gate = ENGINE_REFUSALS[tag]
+    else:
+        raise UnmappedReason(f"engine refusal {tag!r} has no mapping in {LIVE_TAXONOMY_VERSION}")
+    status, stage = LIVE_REASON_CODES[code]
+    return Mapped(status, stage, code, gate, True, direction, {"engine_refusal": tag})
+
+
 def validate_terminal(stages, status: str, reason_code: Optional[str], reason_stage: Optional[str]) -> None:
     """Enforce the lifecycle transition table and the reason/status pairing; raises ValueError."""
     stages = list(stages)
@@ -316,7 +370,8 @@ def validate_terminal(stages, status: str, reason_code: Optional[str], reason_st
         if reason_code is not None or reason_stage is not None:
             raise ValueError(f"{status} carries no reason code")
         return
-    if reason_code not in REASON_CODES:
+    codes = LIVE_REASON_CODES if (reason_code not in REASON_CODES and reason_code in LIVE_REASON_CODES) else REASON_CODES   # claude code changed: 2026-10-07 Phase 6
+    if reason_code not in codes:
         raise ValueError(f"unknown reason code {reason_code!r}")
-    if REASON_CODES[reason_code] != (status, reason_stage):
-        raise ValueError(f"reason {reason_code} must be {REASON_CODES[reason_code]}, got {(status, reason_stage)}")
+    if codes[reason_code] != (status, reason_stage):
+        raise ValueError(f"reason {reason_code} must be {codes[reason_code]}, got {(status, reason_stage)}")

@@ -122,6 +122,8 @@ class ExecutionEngine:
         # breaches bot.config.risk.MAX_DRAWDOWN_PCT; see that module for
         # the full rationale, including known scope limits.
         self.drawdown_guard = DrawdownGuard()
+        self.journal_hook = None      # claude code changed: 2026-10-07 journal Phase 6 — observation only (None = no recorder; the default)
+        self._last_refusal = None     # claude code changed: 2026-10-07 journal Phase 6 — observation only (which guard refused the last signal)
 
         # TradeLogger — writes entries and exits to TradeRecord database table
         # Read by dashboard and analytics views
@@ -154,6 +156,15 @@ class ExecutionEngine:
     # EXECUTE SIGNAL — ENTRY PIPELINE
     # Called by bot_runner.py when strategy returns BUY or SELL
     # ============================================================
+    def _journal(self, event, *args):   # claude code changed: 2026-10-07 journal Phase 6 — observation only
+        """Call the optional decision-journal hook; its errors are logged and never reach trading."""
+        if self.journal_hook is None:
+            return
+        try:
+            self.journal_hook(event, *args)
+        except Exception as e:
+            logger.error(f"[ExecutionEngine] journal hook {event} failed: {e} — trading unaffected")
+
     def execute_signal(self, signal):
         """
         Processes a BUY or SELL signal from MovingAverageStrategy.
@@ -172,6 +183,7 @@ class ExecutionEngine:
         """
 
         # Extract symbol once for use throughout this method
+        self._last_refusal = None   # claude code changed: 2026-10-07 journal Phase 6 — observation only
         symbol = signal["symbol"]
 
         # ----------------------------------------------------------
@@ -184,6 +196,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] Signal ignored — "
                 f"position already open on {symbol}"
             )
+            self._last_refusal = "in_position"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Exit method — do nothing
 
         # claude code changed: new — GUARD 1 above only checks in-memory
@@ -209,6 +222,7 @@ class ExecutionEngine:
                 f"memory (likely a restart after a crash). Reconcile "
                 f"manually before trading this symbol again."
             )
+            self._last_refusal = "open_trade_row"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Exit method — do nothing
 
         # ----------------------------------------------------------
@@ -222,6 +236,7 @@ class ExecutionEngine:
                 "reconciliation not complete. "
                 "Ensure reconcile_with_exchange() ran on startup."
             )
+            self._last_refusal = "not_reconciled"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Do not trade with unknown position state
 
         # ----------------------------------------------------------
@@ -237,6 +252,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] Balance unavailable (${current_balance:.2f}) "
                 f"— cannot size position for {symbol}. Skipping signal."
             )
+            self._last_refusal = "balance_unavailable"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Skip — cannot calculate correct size without balance
 
         # ----------------------------------------------------------
@@ -259,6 +275,7 @@ class ExecutionEngine:
                 f"No new entries until drawdown recovers below "
                 f"{self.drawdown_guard.max_drawdown_pct * 100:.1f}%."
             )
+            self._last_refusal = "drawdown_kill_switch"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Skip — kill switch is active, no new risk allowed
 
         # ----------------------------------------------------------
@@ -278,6 +295,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] Quantity is zero for {symbol} — "
                 f"check stop distance vs balance. Skipping signal..."
             )
+            self._last_refusal = "size_not_positive"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Skip — no point placing a zero-quantity order
 
         # ----------------------------------------------------------
@@ -323,6 +341,8 @@ class ExecutionEngine:
         # ----------------------------------------------------------
         entry_intent = OrderIntent.for_entry(signal, quantity)
 
+        if self.journal_hook is not None:   # claude code changed: 2026-10-07 journal Phase 6 — nothing evaluated when no recorder is attached
+            self._journal("before_order", dict(signal))   # claude code changed: 2026-10-07 journal Phase 6 — observation only (write-ahead point)
         try:
             result = self.adapter.place_order(**entry_intent.to_place_order_kwargs())
 
@@ -334,6 +354,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] ENTRY unconfirmed for {symbol}: {e}. "
                 f"Check exchange manually before next signal."
             )
+            self._last_refusal = "order_still_open"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Halt — do not proceed with unknown fill state
 
         except OrderUnconfirmedException as e:
@@ -343,6 +364,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] ENTRY unknown state for {symbol}: {e}. "
                 f"Manual reconciliation required."
             )
+            self._last_refusal = "order_unconfirmed"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Halt — do not assume fill happened
 
         except RateLimitException as e:
@@ -352,6 +374,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] Rate limit exceeded on entry for {symbol}: {e}. "
                 f"Bot pausing — check API key limits."
             )
+            self._last_refusal = "rate_limited"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Halt this signal — bot_runner will retry next candle
 
         except Exception as e:
@@ -360,6 +383,7 @@ class ExecutionEngine:
                 f"[ExecutionEngine] Entry order failed for {symbol}: "
                 f"{type(e).__name__}: {e}"
             )
+            self._last_refusal = "order_exception"   # claude code changed: 2026-10-07 journal Phase 6 — observation only
             return  # Clean abort — no position registered
 
         # ----------------------------------------------------------

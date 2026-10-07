@@ -165,6 +165,9 @@ def label_run(run, *, ohlcv: Optional[pd.DataFrame] = None) -> dict:
     from bot.quant_core.timing import RESEARCH_LABEL_CONTRACT, research_forward_return
     if run.status == "OPEN":
         raise LabelerRefused(f"run {run.run_id} is still OPEN")
+    if run.environment in ("LIVE", "DRY_RUN", "PAPER"):   # claude code changed: 2026-10-07 Phase 6 — OD-J4
+        raise LabelerRefused(f"{run.environment} decisions fall in the sealed holdout F / unassigned zone: their outcomes "
+                             f"stay sealed until the D-8 ledgered evaluation (OD-J4)")
     if DecisionLabel.objects.filter(run=run, label_version=LABEL_VERSION).exists():
         raise LabelerRefused(f"run {run.run_id} already has {LABEL_VERSION} labels (insert-only; bump the version)")
     grid = load_run_grid(run, ohlcv)

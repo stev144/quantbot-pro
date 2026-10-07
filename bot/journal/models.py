@@ -651,6 +651,7 @@ class DecisionEvent(_InsertOnlyModel):   # claude code changed: new
     config_hash = models.CharField(max_length=64)
     data_version = models.CharField(max_length=64)
     taxonomy_version = models.CharField(max_length=40)
+    reevaluation_of = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="reevaluations")   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder (same candle evaluated again in a later live run, e.g. after a restart)
     terminal_source = models.CharField(max_length=20, default="ENGINE")   # claude code changed: 2026-10-07 Phase 3 — legacy backfill: ENGINE | RECONCILIATION | LEGACY_BACKFILL
     supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by")
     recorded_at = models.DateTimeField(auto_now_add=True)
@@ -672,6 +673,7 @@ class DecisionEvent(_InsertOnlyModel):   # claude code changed: new
             # # claude code changed: 2026-10-07 Phase 3 — legacy backfill: a legacy EXECUTED decision is linked from TradeRecord.decision_id instead of a backtest trade
             models.CheckConstraint(condition=models.Q(status="EXECUTED", backtest_trade_seq__isnull=False) |
                                    models.Q(status="EXECUTED", terminal_source="LEGACY_BACKFILL", backtest_trade_seq__isnull=True) |
+                                   models.Q(status="EXECUTED", environment__in=["DRY_RUN", "LIVE", "PAPER"], backtest_trade_seq__isnull=True) |   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder: linked from TradeRecord.decision_id
                                    (~models.Q(status="EXECUTED") & models.Q(backtest_trade_seq__isnull=True)),
                                    name="decision_trade_link_iff_executed"),
             models.CheckConstraint(condition=models.Q(terminal_source__in=["ENGINE", "RECONCILIATION", "LEGACY_BACKFILL"]),
@@ -707,12 +709,13 @@ class MarketSnapshot(_InsertOnlyModel):   # claude code changed: new
 
 
 GAP_MAPPING_FAILURE, GAP_RECORDER_FAILURE = "MAPPING_FAILURE", "RECORDER_FAILURE"   # claude code changed: new
+GAP_EVALUATION_NOT_PERFORMED, GAP_ORPHANED_ATTEMPT = "EVALUATION_NOT_PERFORMED", "ORPHANED_ATTEMPT"   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder
 
 
 class JournalGap(_InsertOnlyModel):   # claude code changed: new
     """An explicit journal defect. Any gap makes its run INCOMPLETE (never complete research evidence)."""
     run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="gaps")
-    kind = models.CharField(max_length=20)
+    kind = models.CharField(max_length=32)   # claude code changed: 2026-10-07 Phase 6 — was 20; EVALUATION_NOT_PERFORMED is 24 characters
     candle_index = models.IntegerField(null=True, blank=True)
     candle_open_time = models.DateTimeField(null=True, blank=True)
     raw_reason = models.CharField(max_length=200, blank=True, default="")
@@ -720,7 +723,8 @@ class JournalGap(_InsertOnlyModel):   # claude code changed: new
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.CheckConstraint(condition=models.Q(kind__in=[GAP_MAPPING_FAILURE, GAP_RECORDER_FAILURE]),
+        constraints = [models.CheckConstraint(condition=models.Q(kind__in=[GAP_MAPPING_FAILURE, GAP_RECORDER_FAILURE,   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder
+                                                                       GAP_EVALUATION_NOT_PERFORMED, GAP_ORPHANED_ATTEMPT]),
                                               name="journalgap_kind_valid")]
 
 
@@ -836,4 +840,15 @@ class HumanAnnotation(_InsertOnlyModel):   # claude code changed: new
                                    name="annotation_exactly_one_target"),
             models.CheckConstraint(condition=models.Q(kind__in=list(ANNOTATION_KINDS)), name="annotation_kind_valid"),
         ]
+
+
+class DecisionAttempt(_InsertOnlyModel):   # claude code changed: new — 2026-10-07 Phase 6 (write-ahead, Rev B §5.4)
+    """Committed BEFORE a live/dry-run order is sent. A DecisionAttempt with no DecisionEvent of the same id after
+    the process stops is an ORPHAN: the next start records a JournalGap and marks that run INCOMPLETE — the outcome
+    is never guessed."""
+    decision_id = models.UUIDField(primary_key=True)
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="attempts")
+    symbol = models.CharField(max_length=40)
+    candle_open_time = models.DateTimeField()
+    attempted_at = models.DateTimeField(auto_now_add=True)
 
