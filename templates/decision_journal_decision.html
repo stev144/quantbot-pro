@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+{% comment %}
+   claude code changed: new template — 2026-10-07 Decision Journal UI: one decision exactly as recorded —
+   lifecycle, gate vector (observed control flow: PASS / FAIL / NOT_EVALUATED), planned values, and the
+   point-in-time snapshot (every value available at or before the decision time).
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="decision_journal" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title"><a href="{% url 'decision_journal' %}">Decision Journal</a> / <a class="mono" href="{% url 'decision_journal_run' run.run_id %}">{{ run.run_id }}</a> / candle {{ d.candle_index }}</span>
+            <span class="term-section-meta">
+                {% if prev_id %}<a href="{% url 'decision_journal_decision' run.run_id prev_id %}">← previous decision</a>{% endif %}
+                {% if next_id %}&nbsp;<a href="{% url 'decision_journal_decision' run.run_id next_id %}">next decision →</a>{% endif %}
+            </span>
+        </div>
+        <div class="term-section-body">
+            {% include "partials/_journal_banner.html" %}
+
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Status</div><div class="metric-value"><span class="badge {{ d.badge }}">{{ d.status }}</span></div></div>
+                <div class="metric-tile"><div class="metric-label">Reason</div><div class="metric-value mono" style="font-size:15px">{{ d.reason_code|default:"—" }}</div><div class="chart-caption mono">{{ d.reason_stage|default:"" }} {% if d.origin %}· origin {{ d.origin }}{% endif %}</div></div>
+                <div class="metric-tile"><div class="metric-label">Decision time (candle close, UTC)</div><div class="metric-value mono" style="font-size:15px">{{ d.information_time|date:"Y-m-d H:i" }}</div><div class="chart-caption mono">candle open {{ d.candle_open_time|date:"Y-m-d H:i" }} · zone {{ d.research_zone }}</div></div>
+                <div class="metric-tile"><div class="metric-label">Direction / strategy</div><div class="metric-value" style="font-size:15px">{{ d.direction|default:"no candidate" }}</div><div class="chart-caption">{{ d.strategy }}</div></div>
+            </div>
+
+            <div class="term-grid term-grid-2" style="margin-bottom:16px">
+                <div class="term-panel">
+                    <div class="metric-label" style="margin-bottom:6px">Lifecycle</div>
+                    {% for s in stages %}<span class="badge {% if s.reached %}pos{% else %}dim{% endif %}" style="margin-right:4px">{{ s.stage }}</span>{% endfor %}
+                    <div class="metric-label" style="margin:12px 0 6px">Planned at decision time</div>
+                    <table class="term-table"><tbody>
+                        <tr><td>Entry / stop / target</td><td class="num">{{ d.planned_entry|default:"—" }} / {{ d.planned_stop|default:"—" }} / {{ d.planned_target|default:"—" }}</td></tr>
+                        <tr><td>Risk per unit</td><td class="num">{{ d.planned_risk_per_unit|default:"—" }}</td></tr>
+                        <tr><td>Planned reward : risk</td><td class="num">{{ d.planned_reward_risk|floatformat:2|default:"—" }}</td></tr>
+                        <tr><td>Expected R</td><td class="num text-dim">{{ d.expected_r|default:"not available (no validated model)" }}</td></tr>
+                        <tr><td>Execution eligible</td><td class="num">{{ d.execution_eligible|yesno:"yes,no" }}</td></tr>
+                        {% if d.backtest_trade_id %}<tr><td>Simulated trade</td><td class="num mono">{{ d.backtest_trade_id }} (filled at candle {{ d.fill_candle_index }})</td></tr>{% endif %}
+                        {% if d.raw_reason %}<tr><td>Raw engine reason</td><td class="num mono">{{ d.raw_reason }}</td></tr>{% endif %}
+                        {% if d.reason_detail %}<tr><td>Reason detail</td><td class="num mono" style="font-size:12px">{{ d.reason_detail }}</td></tr>{% endif %}
+                    </tbody></table>
+                    <div class="metric-label" style="margin:12px 0 6px">State at decision time</div>
+                    <div class="mono text-dim" style="font-size:12px; line-height:1.7">
+                        risk {{ d.risk_state }}<br>portfolio {{ d.portfolio_state }}<br>data quality {{ d.data_quality_state }}<br>
+                        financing {{ d.financing_state }}<br>liquidity {{ d.liquidity_state }}{% if d.estimated_cost %}<br>estimated cost {{ d.estimated_cost }}{% endif %}
+                    </div>
+                </div>
+                <div class="term-panel">
+                    <div class="metric-label" style="margin-bottom:6px">Gate vector ({{ d.gate_order_version }}) — observed control flow, not causal credit</div>
+                    <table class="term-table"><tbody>
+                        {% for g in gates %}<tr><td class="mono" style="font-size:12px">{{ g.gate }}</td><td><span class="badge {{ g.badge }}">{{ g.result }}</span></td></tr>{% endfor %}
+                    </tbody></table>
+                </div>
+            </div>
+
+            <div class="term-panel">
+                <div class="metric-label" style="margin-bottom:6px">Market snapshot{% if snapshot %} — {{ snapshot.snapshot_kind }} · {{ snapshot.feature_set_version }} · window {{ snapshot.window_rows }} candles ({{ snapshot.window_start_time|date:"Y-m-d H:i" }} → {{ snapshot.window_end_time|date:"Y-m-d H:i" }}){% endif %}</div>
+                {% if snapshot %}
+                <table class="term-table"><tbody>
+                    {% for k, v in snapshot_values %}<tr><td class="mono" style="font-size:12px">{{ k }}</td><td class="num">{{ v|default_if_none:"—" }}</td></tr>{% endfor %}
+                </tbody></table>
+                <div class="chart-caption mono" style="margin-top:6px">every value available at {{ snapshot.information_time|date:"Y-m-d H:i" }} UTC or earlier · window sha256 {{ snapshot.input_window_sha256|slice:":16" }}…{% if snapshot.missing %} · missing: {{ snapshot.missing|join:", " }}{% endif %}</div>
+                {% else %}<div class="unavailable">no snapshot recorded</div>{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Decision Journal" note="one decision, exactly as recorded" %}
+{% endblock %}
