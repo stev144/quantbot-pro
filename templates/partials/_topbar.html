@@ -154,7 +154,8 @@
         {# "Research" dropdown's own first item is, confusingly, ALSO labeled "Research Lab" but #}
         {# points at a completely different, older /research/ view — a real, pre-existing naming #}
         {# collision, not introduced or fixed here; out of this refactor's scope). #}
-        <details class="term-nav-group" {% if active == 'research_lab_mvp' %}open{% endif %}>
+        {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
+        <details class="term-nav-group">
             <summary class="term-nav-link {% if active == 'research_lab_mvp' %}active{% endif %}"
                      {% if active == 'research_lab_mvp' %}aria-current="page"{% endif %}>Research Lab</summary>
             <div class="term-nav-dropdown">
@@ -171,7 +172,8 @@
             </div>
         </details>
 
-        <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
+        {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
+        <details class="term-nav-group">
             <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>
             <div class="term-nav-dropdown">
                 <a class="{% if active == 'research_lab' %}active{% endif %}" href="{% url 'research_lab' %}">Research Lab</a>
@@ -186,7 +188,8 @@
             </div>
         </details>
 
-        <details class="term-nav-group" {% if active in "portfolio_risk,execution_monitor,pairs_pilot,venue_comparison" %}open{% endif %}>
+        {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
+        <details class="term-nav-group">
             <summary class="term-nav-link {% if active in "portfolio_risk,execution_monitor,pairs_pilot,venue_comparison" %}active{% endif %}">Risk &amp; Execution</summary>
             <div class="term-nav-dropdown">
                 <a class="{% if active == 'portfolio_risk' %}active{% endif %}" href="{% url 'portfolio_risk' %}">Portfolio &amp; Risk</a>
