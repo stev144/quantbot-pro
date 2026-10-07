@@ -6,6 +6,8 @@
 # Tools only. The tolerances δ, confidence and power are owner decisions
 # (Rev B OPEN-36), so nothing here declares a gate PASS on its own defaults —
 # every gate call takes them explicitly.
+# claude code changed: 2026-10-07 — OPEN-36 is now SIGNED (δ = 1 pt, α = 0.05, power 0.80, R = 3,202): use
+# signed_size_gate() for any size claim; size_gate() stays the parameterised primitive.
 #
 #   * Wilson bounds for a rejection / coverage rate
 #   * minimum repetitions M, found by EXACT binomial search under the Wilson
@@ -100,6 +102,28 @@ def minimum_repetitions(*, nominal: float, delta: float, alpha: float, power: fl
         if pass_probability(n, nominal, nominal=nominal, delta=delta, alpha=alpha) >= power:
             return n
     raise ValueError(f"no M ≤ {n_max} reaches power {power}")
+
+
+# ── OPEN-36: the owner-signed size gate ───────────────────────────────────────
+# claude code changed: 2026-10-07 — owner sign-off of OPEN-36 (DECISION_SHEET_OPEN36_D3_PROPOSAL_2026-10-07.md,
+# signed 2026-10-07): nominal 5 %, δ = 1 percentage point, α = 0.05 (one-sided Wilson upper bound at 95 % ≤ 6 %),
+# design power 0.80 → the replicate count below. These values may not be loosened for cost or after a failure.
+OPEN36_NOMINAL = 0.05            # claude code changed: 2026-10-07 OPEN-36 (signed)
+OPEN36_DELTA = 0.01              # claude code changed: 2026-10-07 OPEN-36 (signed)
+OPEN36_ALPHA = 0.05              # claude code changed: 2026-10-07 OPEN-36 (signed)
+OPEN36_POWER = 0.80              # claude code changed: 2026-10-07 OPEN-36 (signed)
+OPEN36_MIN_REPS = 3202           # claude code changed: 2026-10-07 OPEN-36 (signed) — = minimum_repetitions(0.05, 0.01, 0.05, 0.80), pinned by test
+OPEN36_DECISION_REF = "DECISION_SHEET_OPEN36_D3_PROPOSAL_2026-10-07.md (owner sign-off 2026-10-07)"   # claude code changed: 2026-10-07 OPEN-36
+
+
+def signed_size_gate(k: int, n: int) -> Result:   # claude code changed: 2026-10-07 OPEN-36 (signed)
+    """The OPEN-36 size criterion: at least OPEN36_MIN_REPS testable replicates AND the one-sided 95 % Wilson upper
+    bound of the rejection rate ≤ 5 % + 1 pt. Fewer replicates is UNTESTABLE (never PASS); the Wilson criterion is
+    never replaced by the observed rate."""
+    if n < OPEN36_MIN_REPS:
+        return bad(Status.UNTESTABLE, f"{n} testable replicates < the signed {OPEN36_MIN_REPS} (OPEN-36)",
+                   value={"rate": (k / n) if n else None, "n": n})
+    return size_gate(k, n, nominal=OPEN36_NOMINAL, delta=OPEN36_DELTA, alpha=OPEN36_ALPHA)
 
 
 # ── null worlds (log prices; NO cointegration by construction) ────────────────

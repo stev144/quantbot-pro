@@ -16,8 +16,8 @@ from bot.deep_health.core import BLOCKED, PARTIAL, PASS, RESEARCH, Probe, health
 
 # The signed D-8 zone definition (QBP-ZONES-1, signed 2026-10-03). A different hash means the zones changed.
 SIGNED_ZONES_HASH = "271d720937c22352aaccd5384af388c52df6452a5a1793fb5fbd9281fe52b96c"
-OPEN_36 = ("owner decision OPEN-36 pending: the calibration gate margins δ and α are owner-declared "
-           "(quant_core.calibration.size_gate), so no calibration gate can report PASS")
+OPEN_36 = ("OPEN-36 signed 2026-10-07 (δ = 1 pt, α = 0.05: ≥ 3,202 testable replicates and one-sided 95 % Wilson "
+           "upper bound ≤ 6 %): calibration at the signed criterion has not been completed for this component")
 
 
 # ── 11. OOS validator ───────────────────────────────────────────────────────────────────────────────────────
@@ -217,8 +217,10 @@ def cointegration_eg():
 def step17_null():
     p = Probe()
     p.add("G3", "size/power calibration (R ≥ 500)", BLOCKED, expected="calibrated before use",
-          observed="implemented (QBP-STEP17-D4-1); calibration not run",
-          reason="owner decision D-4 pending: calibration compute — the null is not usable until it is calibrated")
+          observed="implemented (QBP-STEP17-D4-1); signed size calibration not run (timing pilot only)",
+          reason="owner compute decision pending: the signed size calibration (3,202 replicates × B = 999 full canonical "
+                 "runs ≈ 3.2 M evaluations, ≈ 65 days on this PC) and the unspecified D-4 power criterion — the null "
+                 "is not usable until both calibrations pass")
     return p.out
 
 

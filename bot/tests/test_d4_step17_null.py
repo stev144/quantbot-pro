@@ -91,8 +91,32 @@ class CalibrationGateTests(SimpleTestCase):
             art.write_text(json.dumps(bad))
             with self.subTest(bad=bad), self.assertRaises(nl.Step17NotCalibrated):
                 nl.require_calibrated(art)
-        art.write_text(json.dumps({"null_version": nl.NULL_VERSION, "reps_size": 600, "size": 0.05, "power": {"ou": 0.8}}))
-        self.assertEqual(nl.require_calibrated(art)["size"], 0.05)
+        # claude code changed: 2026-10-07 — owner-signed OPEN-36 makes the gate STRICTER: R = 600 at 5 % (which passed
+        # the old observed-band rule) is now refused; a pass needs >= 3,202 replicates, a consistent rejection count and a
+        # one-sided 95 % Wilson upper bound <= 6 % (at R = 3,202: at most 170 rejections, 5.31 %).
+        def cal(k, r, **extra):
+            return {"null_version": nl.NULL_VERSION, "reps_size": r, "rejections": k, "size": k / r, "power": {"ou": 0.8}, **extra}
+        for bad in (cal(30, 600),                                   # old rule passed; fewer than 3,202 replicates
+                    cal(171, 3202),                                 # 5.34 %: inside the D-4 band, Wilson UB > 6 %
+                    {**cal(160, 3202), "rejections": None},         # no raw count → the bound cannot be verified
+                    {**cal(160, 3202), "size": 0.04}):              # count and size disagree
+            art.write_text(json.dumps(bad))
+            with self.subTest(bad=bad), self.assertRaises(nl.Step17NotCalibrated):
+                nl.require_calibrated(art)
+        art.write_text(json.dumps(cal(170, 3202)))
+        self.assertEqual(nl.require_calibrated(art)["rejections"], 170)
+        art.write_text(json.dumps(cal(90, 3202)))                   # 2.8 %: Wilson passes but below the signed D-4 3–7 % band
+        with self.assertRaises(nl.Step17NotCalibrated):
+            nl.require_calibrated(art)
+
+    def test_signed_open36_constants(self):   # claude code changed: 2026-10-07 OPEN-36 (signed)
+        from bot.quant_core import calibration as cal
+        self.assertEqual((cal.OPEN36_NOMINAL, cal.OPEN36_DELTA, cal.OPEN36_ALPHA, cal.OPEN36_POWER), (0.05, 0.01, 0.05, 0.80))
+        self.assertEqual(cal.OPEN36_MIN_REPS, cal.minimum_repetitions(nominal=0.05, delta=0.01, alpha=0.05, power=0.80))
+        self.assertEqual(cal.OPEN36_MIN_REPS, 3202)
+        self.assertEqual(cal.signed_size_gate(40, 800).status.value, "UNTESTABLE")   # too few replicates is never PASS
+        self.assertTrue(cal.signed_size_gate(170, 3202).ok)
+        self.assertFalse(cal.signed_size_gate(171, 3202).ok)
 
 
 class CanonicalPipelineSmokeTest(SimpleTestCase):

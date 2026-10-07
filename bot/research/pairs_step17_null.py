@@ -79,6 +79,10 @@ def stationary_block_bootstrap(returns: np.ndarray, mean_block: float, rng: np.r
 
 
 def require_calibrated(artifact: Path = CALIBRATION_ARTIFACT) -> dict:
+    """D-4 gate. claude code changed: 2026-10-07 — now ALSO enforces the signed OPEN-36 criterion (≥ 3,202 testable
+    replicates and one-sided 95 % Wilson upper bound of the rejection rate ≤ 6 %, computed here from the recorded
+    rejection count — never trusted from a stored verdict), in addition to the D-4 observed-size band and power."""
+    from bot.quant_core.calibration import OPEN36_MIN_REPS, signed_size_gate   # claude code changed: 2026-10-07 OPEN-36
     if not Path(artifact).exists():
         raise Step17NotCalibrated(f"no Step-17 calibration artifact at {artifact}; the D-4 null requires size "
                                   f"{SIZE_BAND} with R >= {MIN_CALIBRATION_REPS} and a power calibration before any use")
@@ -88,6 +92,14 @@ def require_calibrated(artifact: Path = CALIBRATION_ARTIFACT) -> dict:
             or not (SIZE_BAND[0] <= size <= SIZE_BAND[1]) or "power" not in cal:
         raise Step17NotCalibrated(f"Step-17 calibration does not meet D-4 (version {cal.get('null_version')}, "
                                   f"R = {reps}, size = {size}, power present = {'power' in cal})")
+    k = cal.get("rejections")   # claude code changed: 2026-10-07 OPEN-36 — the gate is recomputed from the raw count
+    if not isinstance(k, int) or k < 0 or k > reps or abs(k / reps - size) > 1e-9:
+        raise Step17NotCalibrated(f"Step-17 calibration lacks a consistent rejection count (rejections = {k}, "
+                                  f"R = {reps}, size = {size}) — the OPEN-36 Wilson bound cannot be verified")
+    gate = signed_size_gate(k, reps)   # claude code changed: 2026-10-07 OPEN-36
+    if not gate.ok:
+        raise Step17NotCalibrated(f"Step-17 calibration fails the signed OPEN-36 size gate (R >= {OPEN36_MIN_REPS}, "
+                                  f"Wilson upper bound <= 6 %): {gate.reason}")
     return cal
 
 

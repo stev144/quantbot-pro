@@ -2455,3 +2455,26 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 - Phase 7: zone-S episodes only, purged + embargoed walk-forward folds, out-of-fold log-loss vs base rate and AUC, sign stability >= 0.8. Output is candidate hypotheses for owner review only: nothing is registered and nothing is reachable from trading code (import-boundary test). Evidence level is at most OBSERVATION. No scikit-learn.
 - Tests: 86 new across Phases 2-7; 32/32 mutations caught (P2-8, P4-3 and P7-4 exposed test holes, all fixed). Final offline regression after the last edit: 130 journal tests OK. The 6 remaining failures were all pre-existing and were reproduced identically on HEAD for the live-path modules (3 bot_runner venue-session network tests, test_exit_updates_trade_record, forex currency balance, research-lab 0.336 baseline).
 - No confirmatory journal test was run: none is permitted in zone V for the backtester strategies (V-1), and F is sealed. No strategy, execution, risk or live-trading behaviour changed. Report: TRADING_DECISION_JOURNAL_PHASES_2-7_REPORT_2026-10-07.md.
+
+
+---
+
+## 2026-10-07 — OPEN-36 SIGNED; D-3 CRYPTO REGISTRATION DEFERRED; D-4 SIZE CALIBRATION PREPARED (NOT RUN)
+
+- Owner sign-off of DECISION_SHEET_OPEN36_D3_PROPOSAL_2026-10-07.md.
+  - **OPEN-36:** nominal 5 %, δ = 1 percentage point, α = 0.05, design power 0.80. Size criterion: one-sided 95 % Wilson upper bound ≤ 6 % with ≥ 3,202 testable replicates (`minimum_repetitions`). Never loosened for cost or after a failure; never replaced by an observed-rate comparison.
+  - **D-3:** DEFERRED. AVA/PUNDIX, DIA/FIL, DIA/IOTX, DIA/LPT and DIA/ONT stay OBSERVATION / EXPLORATORY / NON-CLAIMABLE. No registry entry, no verdict.
+  - **BTC journal logistic run** (BT-d1f6aac01934e215acc5e2d18921e128): descriptive only. Out-of-fold log-loss 0.600 vs base rate 0.565 → 0 ML candidates. No added ML complexity.
+- **Implementation:**
+  - Code records the signed values: `calibration.OPEN36_*` and `signed_size_gate`.
+  - The D-4 gate (`pairs_step17_null.require_calibrated`) now enforces the signed Wilson criterion, recomputed from the recorded rejection count, IN ADDITION to the signed D-4 observed band (3–7 %) and power. It is stricter, nothing removed: the old rule accepted R = 600 at 5 %, which is now refused.
+  - New resumable runner (`bot/research/step17_calibration.py`, `calibrate_step17`):
+    - scenario = D-4 unrelated Gaussian random-walk pairs over the full canonical span;
+    - each replicate = a complete Step-17 test (B = 999, full canonical pipeline per shift);
+    - untestable replicates do not count towards the 3,202;
+    - provenance and checkpoint are bound to the exact code state;
+    - it never writes the canonical gate artifact.
+- **Timing pilot** (labelled, not evidence): 8 replicates × 50 evaluations = 400 canonical pipeline runs in 708 s on 4 workers (0.57 evaluations/s); 0 untestable.
+  - The signed run needs 3,202 × 1,000 ≈ 3.2 M evaluations ≈ 65 days on this PC. **It was NOT started:** the compute is an owner decision.
+  - The D-4 power criterion (OU parameters, required power) is unspecified, so the power calibration cannot run.
+- **Not changed:** strategy, execution, zones, holdout, D-1, D-2/D-10, five-gate standards. The recorded D-2 calibration (size 3.3–6.3 %) is preserved as historical evidence; it predates the signed replicate requirement. No historical result reclassified.
