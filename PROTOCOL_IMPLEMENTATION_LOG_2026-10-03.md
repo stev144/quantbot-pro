@@ -1187,3 +1187,12 @@ They are LEGACY on the server clock and are not comparable with crypto or with t
   - The rejections therefore require contemporaneous co-movement; data quirks do not produce them.
 - (3) Flat (zero-change) hours in the first 10k of S: median coin 3.7 %; DIA 10.7 % (rank 13/149); top PAXG 20.5 %. Flat-heavy coins are inside the shifted null, which barely rejects, so flatness does not explain DIA's survivor concentration.
 - Reading: the zone-S signal is statistically genuine IN-SAMPLE (coins behave as a market trend plus a mean-reverting idiosyncratic part, Nov 2021 - Dec 2022). Not established: persistence out of sample (zone V) or tradeability after costs. Still EXPLORATORY; no claim. Scripts and results: session scratchpad (eg_size_crypto.py, eg_realdata_null.py, *_result.json).
+
+
+---
+
+## 2026-10-07 — V-1 RESOLVED (STRICT): ZONE V IS NOT INDEPENDENT OF THE BACKTESTER STRATEGIES
+
+- Question (Revision B §11): were the MovingAverage / MeanReversion parameters and the router thresholds set while zone V data (2024-04-22 onward) was visible?
+- Evidence (git): repository first commit 2026-08-16. moving_average.py, mean_reversion_strategy.py and regime_detector.py were first and last committed 2026-08-16 (1 commit each). strategy_router.py was first committed 2026-08-16 and last changed 2026-08-20; min_adx_for_trend and the backtester thresholds date from the initial commit. All of this is more than two years after V0, with most of V already observable. Design work from before the repository existed cannot be shown either way, so independence cannot be established.
+- Ruling (strictest, per the delegated-strictness rule): zone V is NOT independent of these strategies' design. Journal findings about StrategyRouter[MovingAverageStrategy, MeanReversionStrategy] can never be confirmatory in V; only the sealed holdout F (from 2026-10-04) is clean for them. Enforced in code by the Phase 4 journal read guard.

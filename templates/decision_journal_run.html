@@ -13,7 +13,7 @@
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title"><a href="{% url 'decision_journal' %}">Decision Journal</a> / <span class="mono">{{ run.run_id }}</span></span>
-            <span class="term-section-meta"><span class="badge {{ run.badge }}">{{ run.status }}</span> {{ run.symbol }} · {{ run.environment }} · {{ run.execution_mode }}</span>
+            <span class="term-section-meta"><span class="badge {{ run.badge }}">{{ run.status }}</span> {{ run.symbol }} · {{ run.environment }} · {{ run.execution_mode }} · <a href="{% url 'decision_journal_analytics' run.run_id %}">analytics</a>{# claude code changed: 2026-10-07 Phase 4 #}</span>
         </div>
         <div class="term-section-body">
             {% include "partials/_journal_banner.html" %}

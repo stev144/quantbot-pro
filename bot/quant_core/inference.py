@@ -157,3 +157,29 @@ def horizon_from_label(label_col: str) -> int:   # claude code changed: D-2 — 
 def stable_seed(*parts) -> int:   # claude code changed: D-2 — reproducible per-test seeds (recorded in outputs)
     import zlib
     return zlib.crc32("|".join(str(p) for p in parts).encode()) % (2 ** 32)
+
+
+def time_block_bootstrap_mean_ci(values, times, *, block_hours: int, seed: int, n_boot: int = CONFIRMATORY_B,   # claude code changed: 2026-10-07 decision journal Phase 4
+                                 alpha: float = 0.05, min_blocks: int = 10) -> dict:
+    """Dependence-aware percentile CI for the MEAN of irregularly spaced observations (e.g. one row per journal
+    episode): calendar time is cut into non-overlapping blocks of `block_hours` (use d10_block_length(h)) and whole
+    blocks are resampled with replacement, so observations closer than one block stay together. DESCRIPTIVE ONLY —
+    an interval, never a test or a claim. Fails closed (no interval) with fewer than `min_blocks` non-empty blocks."""
+    import pandas as pd
+    v = np.asarray(values, dtype=float)
+    t = pd.DatetimeIndex(times)
+    if len(v) != len(t) or len(v) == 0 or not np.isfinite(v).all():
+        return {"ok": False, "reason": "need equal-length, finite, non-empty values/times", "n": int(len(v))}
+    bid = ((t - t.min()) // pd.Timedelta(hours=int(block_hours))).astype(int)
+    blocks = [v[bid == b] for b in np.unique(bid)]
+    k = len(blocks)
+    out = {"n": int(len(v)), "mean": float(v.mean()), "n_blocks": k, "block_hours": int(block_hours), "n_boot": int(n_boot),
+           "seed": int(seed), "alpha": alpha, "method": "TIME_BLOCK_BOOTSTRAP_PERCENTILE (descriptive)"}
+    if k < min_blocks:
+        return {**out, "ok": False, "reason": f"only {k} non-empty time blocks (< {min_blocks}): no interval"}
+    rng = np.random.default_rng(seed)
+    sums = np.array([b.sum() for b in blocks]); cnts = np.array([len(b) for b in blocks])
+    picks = rng.integers(0, k, size=(int(n_boot), k))
+    means = sums[picks].sum(axis=1) / cnts[picks].sum(axis=1)
+    lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
+    return {**out, "ok": True, "lo": float(lo), "hi": float(hi)}

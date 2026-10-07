@@ -7,6 +7,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_GET
 
 from bot.views.decision_journal_data import get_decision, get_run, get_runs
+from django.http import Http404   # claude code changed: 2026-10-07 Phase 4 — analytics page
 
 
 @require_GET
@@ -22,6 +23,23 @@ def decision_journal_run(request, run_id):
         page = 1
     return render(request, "decision_journal_run.html",
                   get_run(run_id, status=request.GET.get("status", ""), page=page))
+
+
+@require_GET
+def decision_journal_analytics(request, run_id):   # claude code changed: 2026-10-07 Phase 4 — analytics page
+    from bot.journal.analytics import GROUPINGS, LABELS, ZoneReadRefused, outcome_table
+    from bot.views.decision_journal_data import _run_or_404
+    run = _run_or_404(run_id)
+    by, label = request.GET.get("by", "status"), request.GET.get("label", "rule")
+    if by not in GROUPINGS or label not in LABELS:
+        raise Http404("unknown grouping or label")
+    try:
+        table, refused = outcome_table(run, by=by, label=label), ""
+    except ZoneReadRefused as e:
+        table, refused = None, str(e)
+    return render(request, "decision_journal_analytics.html",
+                  {"run": run, "table": table, "refused": refused, "by": by, "label": label,
+                   "groupings": GROUPINGS, "labels": list(LABELS)})
 
 
 @require_GET

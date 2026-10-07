@@ -15,7 +15,7 @@ from bot.views.pairs_performance import pairs_performance   # claude code change
 from bot.views.backtesting_view import backtesting
 from bot.views.robustness_analysis import robustness_analysis
 from bot.views.research_archive import rejected_research, research_archive
-from bot.views.decision_journal import decision_journal, decision_journal_run, decision_journal_decision   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+from bot.views.decision_journal import decision_journal, decision_journal_run, decision_journal_decision, decision_journal_analytics   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
 from bot.views.portfolio_risk import portfolio_risk
 from bot.views.execution_monitor import execution_monitor
 from bot.views.pairs_pilot import pairs_pilot   # claude code changed: new — Pairs Pilot live monitor page
@@ -74,6 +74,7 @@ urlpatterns = [
     path('research/rejected/', rejected_research, name='rejected_research'),
     path('research/archive/', research_archive, name='research_archive'),
     path('research/journal/', decision_journal, name='decision_journal'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+    path('research/journal/<str:run_id>/analytics/', decision_journal_analytics, name='decision_journal_analytics'),   # claude code changed: 2026-10-07 Phase 4 — analytics page
     path('research/journal/<str:run_id>/', decision_journal_run, name='decision_journal_run'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
     path('research/journal/<str:run_id>/<uuid:decision_id>/', decision_journal_decision, name='decision_journal_decision'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
 

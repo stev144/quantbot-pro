@@ -2435,3 +2435,12 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 ## 2026-10-07 — DECISION JOURNAL PHASES 2-7: OWNER-DELEGATED DECISIONS
 
 - The owner asked for all 7 journal phases, in order and under the five gates. The open decisions OD-J2, J3, J4, J8, J9, J11, J12, J16, J17 and J18 were DELEGATED to the strictest Revision B recommendations. OD-J14 = (iii) break at exit and report both counts. Phase 6 = DRY_RUN live wiring, equivalence-tested (approves the OD-J13 live half). Phase 7 = statsmodels logistic only (OD-J10 defer). Full values: TRADING_DECISION_JOURNAL_PHASE1_OWNER_SIGNOFF_2026-10-07.md.
+
+
+---
+
+## 2026-10-07 — V-1 RESOLVED (STRICT): ZONE V IS NOT INDEPENDENT OF THE BACKTESTER STRATEGIES
+
+- Question (Revision B §11): were the MovingAverage / MeanReversion parameters and the router thresholds set while zone V data (2024-04-22 onward) was visible?
+- Evidence (git): repository first commit 2026-08-16. moving_average.py, mean_reversion_strategy.py and regime_detector.py were first and last committed 2026-08-16 (1 commit each). strategy_router.py was first committed 2026-08-16 and last changed 2026-08-20; min_adx_for_trend and the backtester thresholds date from the initial commit. All of this is more than two years after V0, with most of V already observable. Design work from before the repository existed cannot be shown either way, so independence cannot be established.
+- Ruling (strictest, per the delegated-strictness rule): zone V is NOT independent of these strategies' design. Journal findings about StrategyRouter[MovingAverageStrategy, MeanReversionStrategy] can never be confirmatory in V; only the sealed holdout F (from 2026-10-04) is clean for them. Enforced in code by the Phase 4 journal read guard.

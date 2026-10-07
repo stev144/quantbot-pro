@@ -30,11 +30,11 @@ import pandas as pd
 from bot.quant_core.inference import CONFIRMATORY_B
 from bot.quant_core.research_zones import SELECTION, VALIDATION, ZONES, ResearchZones
 
-REGISTRY_VERSION = "QBP-HYP-D3-1"
+REGISTRY_VERSION = "QBP-HYP-D3-2"   # claude code changed: 2026-10-07 decision journal Phase 4 (OD-J11 endpoint + OD-J16 journal V-read events; was QBP-HYP-D3-1)
 MAX_PRIMARY = 5
 FWER_ALPHA = 0.05
 EXPLORATION_Q = 0.10
-ENDPOINTS = ("NET_MEAN_RETURN_PER_TRADE", "IC")
+ENDPOINTS = ("NET_MEAN_RETURN_PER_TRADE", "IC", "JOURNAL_RULE_NET_R")   # claude code changed: 2026-10-07 decision journal Phase 4 (OD-J11: mean counterfactual net R per journal episode)
 EXPLORATORY_LABEL = "EXPLORATORY — NOT CLAIMABLE (zone S, BH q = 0.10)"
 FEATURE_ALIASES = {"atr_indicator": "atr"}            # F-21: identical columns count once
 DEFAULT_REGISTRY = Path(__file__).resolve().parents[1] / "research" / "governance" / "hypothesis_registry.json"
@@ -117,6 +117,17 @@ class HypothesisRegistry:
 
     def _all(self) -> List[Hypothesis]:
         return [Hypothesis(**e["hypothesis"]) for e in self._load()["events"] if e["type"] == "REGISTERED"]
+
+    # ── journal zone-V read log (OD-J16) ────────────────────────────────────────   # claude code changed: 2026-10-07 decision journal Phase 4
+    def log_journal_validation_read(self, program: str, quarter: str, *, run_id: str, purpose: str, n_rows: int) -> dict:
+        """Record (append-only) that decision-journal labels from zone V are being read FOR a registered, still-open
+        family. Refuses when the family has no registered hypotheses or is already CLOSED."""
+        if not self.family(program, quarter):
+            raise RegistryError(f"no registered hypotheses for {program}/{quarter}: zone V journal labels stay closed")
+        if self.is_closed(program, quarter):
+            raise RegistryError(f"family {program}/{quarter} is CLOSED: its zone V read already happened")
+        return self._append({"type": "JOURNAL_V_READ", "program": program, "quarter": quarter, "run_id": run_id,
+                             "purpose": purpose, "n_rows": int(n_rows)})
 
     # ── confirmatory test (Holm, zone V only) ────────────────────────────────
     def confirm(self, program: str, quarter: str, results: Dict[str, dict], *, run_id: str,
