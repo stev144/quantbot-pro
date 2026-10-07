@@ -1280,3 +1280,20 @@ They are LEGACY on the server clock and are not comparable with crypto or with t
   - **Regime conditioning:** full-S static hedge ratio 1.914 (EG p 1.2e-8). 877 trend-state episodes (median 16 h, max 191 h), 0 reach the 1,000-candle minimum, so no regime-conditional estimate exists.
 - **Reading (descriptive):** the hedge ratio is unstable across estimators and windows (0.19 / 0.41 / 1.13 / 1.91). That is evidence against one stable linear relationship over S, consistent with the earlier cost-screen failure.
 - **Status:** OBSERVATION / EXPLORATORY / NON-CLAIMABLE; zone V not read.
+
+
+---
+
+## 2026-10-07 — DCA ENGINE: CORRECTNESS + DESCRIPTIVE ZONE-S RUN (NO SIGNIFICANCE)
+
+- **Correctness:** test_dca_engine, test_dca_phase2 and test_d5_dca_significance: 74/74 pass (offline). Deep Health DCA: G1/G2/G4/G5 PASS (next-open fills, weighted average, capital, censoring, sealed refusal); G3 BLOCKED (D-5 calibration pending owner definitions).
+- **Descriptive zone-S run** (owner request):
+  - Baseline ladder (6 USDT; ×2…×64; 762 USDT full ladder; full deployment after ≈48 % cumulative drop); real Binance costs (fee 0.1 %, slippage 0.05 %).
+  - BTC/ETH/SOL/BNB/XRP/ADA/DOGE × NEXT_OPEN and INTRABAR_LADDER; data cut at S1 (asserted).
+  - Output: research_data/dca_zone_s_descriptive_2026-10-07.json plus sidecar.
+- **Results:**
+  - Every run ended with positive mark-to-market P&L (+66 to +318 USDT); resolved-cycle win rates 95.8–100 %.
+  - D-5 statistic values 0.13–0.42. These are values only: no p-value, and the matched-exposure benchmark is not defined.
+  - Tail risk: max MTM drawdown up to 451–683 USDT (59–90 % of the full ladder); the full ladder was exhausted 1–3 times on most coins; the longest underwater spell reached 14,976–16,703 h (SOL/ADA INTRABAR).
+  - Fill-model sensitivity is large (e.g. SOL +318 vs +97 USDT; ADA 179 vs 40 cycles).
+- **Reading (descriptive):** a high win rate with rare deep drawdowns. Zone S ends in the 2024 Q1 rally, so every deep cycle recovered inside the window. The 7 coins are today's survivors (survivorship bias). No evidence that DCA beats a null; D-5 is still blocked. Not claimable.
