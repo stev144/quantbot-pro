@@ -76,8 +76,8 @@ urlpatterns = [
     path('research/journal/', decision_journal, name='decision_journal'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
     path('research/journal/<str:run_id>/analytics/', decision_journal_analytics, name='decision_journal_analytics'),   # claude code changed: 2026-10-07 Phase 4 — analytics page
     path('research/journal/<str:run_id>/', decision_journal_run, name='decision_journal_run'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
-    path('research/journal/<str:run_id>/<uuid:decision_id>/', decision_journal_decision, name='decision_journal_decision'),
-    path('research/journal/<str:run_id>/<uuid:decision_id>/annotate/', decision_journal_annotate, name='decision_journal_annotate'),   # claude code changed: 2026-10-07 Phase 5 — human annotations (staff-only)   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+    path('research/journal/<str:run_id>/<uuid:decision_id>/', decision_journal_decision, name='decision_journal_decision'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+    path('research/journal/<str:run_id>/<uuid:decision_id>/annotate/', decision_journal_annotate, name='decision_journal_annotate'),   # claude code changed: 2026-10-07 Phase 5 — human annotations (staff-only)
 
     # ---- RISK & EXECUTION ----
     path('portfolio/', portfolio_risk, name='portfolio_risk'),
