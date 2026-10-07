@@ -1158,3 +1158,32 @@ They are LEGACY on the server clock and are not comparable with crypto or with t
   - 240 pairs contain a symbol with its own zone-S hole longer than 5 h: USD/SEK, EUR/SEK, USD/NOK, EUR/NOK, USD/THB.
   - The other 2 (EUR/PLN–USD/CZK and USD/CZK–USD/PLN) have no single-symbol hole above 5 h, but their joint (inner-joined) series has a 7 h hole where adjacent holes of the two legs meet. This is correct: the rule applies to the series the test actually uses.
 - **CORRECTION to the entry above ("FX SELECTION RULES").** The 2023-01-02 SEK/NOK hole is NOT a Scandinavian market closure, as I had called it. NOK/SEK, SEK/JPY and NOK/JPY were quoted normally through that day, and only the four USD/EUR crosses of SEK and NOK are missing (no other universe pair is). It is a broker feed gap on those four symbols with unknown cause; the USD/THB hole (2023-12-22 16:00–21:00 UTC) is likewise unexplained. Neither is a holiday, so neither may be added to the calendar. Re-admitting these pairs would mean loosening the rule after seeing data, which is an owner decision.
+
+
+---
+
+## 2026-10-07 — CRYPTO ZONE-S SELECTION SCREEN (EXPLORATORY, NOT CLAIMABLE)
+
+- Run: run_selection_screen_on_data("data", all 155 *_USDT_1h files, n_workers=3). Output research_data/selection_screen/crypto_screen_2026-10-07.json (new file, "x"). Runtime 16,734 s.
+- 11,935 pairs: 11,026 testable, 909 UNTESTABLE (459 do not cover zone S; the rest have Binance data gaps of 4/8/18 days inside S, beyond the 3-candle policy). One exploratory BH family (q = 0.10) over the 11,026, Engle-Granger on zone S.
+- Raw EG p < 0.05: 3,620 of 11,026 (32.8 %), far above the ~5 % expected under the null. BH survivors: 2,863. After the half-life/seed filters: 277. Nominated (cap 5): AVA/PUNDIX, DIA/FIL, DIA/IOTX, DIA/LPT, DIA/ONT (half-lives 33-62 h, all seed-eligible).
+- Reading (descriptive): a raw rejection rate of 33 % means either widespread zone-S cointegration (crypto shares a dominant market factor and the 2022 bear trend) or EG size distortion on heavy-tailed, break-prone crypto series. The screen cannot tell which. Survivors are concentrated: DIA is in 48 of the 277 and in 4 of the 5 nominees, so the nominees are not 5 independent findings. Statistical cointegration in S is not tradeability (cf. the 09-29 pairs P&L-artifact audit). Nothing is claimable; confirmation would need owner-registered hypotheses (D-3, at most 5) tested in zone V (Holm, B = 999) under the corrected pairs P&L/cost model.
+
+
+---
+
+## 2026-10-07 — CRYPTO SCREEN: ENGLE-GRANGER SIZE CHECKS (DESCRIPTIVE)
+
+- Question: is the screen's 32.8 % raw EG rejection rate a test artifact? Same function and settings as the screen (bot.quant_core.cointegration.engle_granger, maxlag=None, autolag='aic', log prices, n = 10,000 = the screen's training window).
+- (1) Synthetic nulls, existing tools (bot.quant_core.calibration.eg_size_run; 200 replicates per cell, no cointegration by construction). Size at 5 %:
+  - independent random walks 3.5 / 5.0 / 9.0 % (gaussian / student-t3 / GARCH);
+  - common factor 2.5 / 8.5 / 4.5 %;
+  - beta walk 5.0 / 4.0 / 5.5 %;
+  - worst Wilson upper bound 13.8 %.
+  Heavy tails and volatility clustering inflate size modestly, nowhere near 33 %.
+- (2) Real-data null: 1,000 random pairs of 149 coins (6 excluded by the screen's 3-candle gap rule), zone S only.
+  - Same period (the screen's setting): 323/1000 = 32.3 % [29.5, 35.3], which reproduces the screen.
+  - B taken from a non-overlapping later part of S (no shared calendar time; real jumps, breaks and flat stretches kept): 4/1000 = 0.4 % [0.2, 1.0].
+  - The rejections therefore require contemporaneous co-movement; data quirks do not produce them.
+- (3) Flat (zero-change) hours in the first 10k of S: median coin 3.7 %; DIA 10.7 % (rank 13/149); top PAXG 20.5 %. Flat-heavy coins are inside the shifted null, which barely rejects, so flatness does not explain DIA's survivor concentration.
+- Reading: the zone-S signal is statistically genuine IN-SAMPLE (coins behave as a market trend plus a mean-reverting idiosyncratic part, Nov 2021 - Dec 2022). Not established: persistence out of sample (zone V) or tradeability after costs. Still EXPLORATORY; no claim. Scripts and results: session scratchpad (eg_size_crypto.py, eg_realdata_null.py, *_result.json).
