@@ -142,7 +142,7 @@ def collect_specs() -> dict:  # claude code changed: new — fetch instrument sp
     """Fetch instrument specs from the running MT5 terminal."""
     print("\n" + "="*70)
     print("STAGE 2: FETCHING INSTRUMENT SPECS FROM MT5")
-    print("Protocol: FX-DCA-PROTOCOL-1 (OD-FX-CM-1, OD-FX-FS-1)")
+    print("Protocol: FX-DCA-PROTOCOL-1-A1 (OD-FX-CM-1, OD-FX-FS-1)")  # claude code changed: F8 — updated to A1 amendment identifier
     print("="*70)
 
     specs = {}
@@ -179,7 +179,7 @@ def collect_specs() -> dict:  # claude code changed: new — fetch instrument sp
         json.dump({
             "collected_utc": datetime.now(tz=timezone.utc).isoformat(),
             "source": "ICFundedEvaluations-MT5-Demo",
-            "protocol": "FX-DCA-PROTOCOL-1",
+            "protocol": "FX-DCA-PROTOCOL-1-A1",  # claude code changed: F8 — updated to A1 amendment identifier
             "specs": specs,
         }, f, indent=2, default=str)
     print(f"\n  Specs saved to: {SPEC_OUTPUT}")
@@ -190,7 +190,7 @@ def collect_candles() -> dict:  # claude code changed: new — fetch and validat
     """Fetch ~50,000 1h candles per pair, validate, save with fingerprint."""
     print("\n" + "="*70)
     print(f"STAGE 2: FETCHING HISTORICAL 1h DATA ({HISTORY_DAYS} days)")
-    print("Protocol: FX-DCA-PROTOCOL-1 Part 2 — mandatory validation enforced")
+    print("Protocol: FX-DCA-PROTOCOL-1-A1 Part 2 — mandatory validation enforced")  # claude code changed: F8 — updated to A1 amendment identifier
     print("="*70)
 
     # Must be canonical before any data collection
@@ -264,7 +264,7 @@ def collect_candles() -> dict:  # claude code changed: new — fetch and validat
                     "source": "MT5 ICFundedEvaluations-MT5-Demo",
                     "timeframe": TIMEFRAME,
                     "collected_utc": datetime.now(tz=timezone.utc).isoformat(),
-                    "protocol": "FX-DCA-PROTOCOL-1",
+                    "protocol": "FX-DCA-PROTOCOL-1-A1",  # claude code changed: F8 — updated to A1 amendment identifier
                     "trading_candles": validation["trading_candles"],
                     "date_range": validation["date_range"],
                     "dataset_fingerprint_sha256": fingerprint,
@@ -302,7 +302,7 @@ def collect_candles() -> dict:  # claude code changed: new — fetch and validat
 def print_readiness_report(specs: dict, candles: dict) -> None:  # claude code changed: new — final gate summary
     """Print the readiness report: what is and isn't ready for simulation."""
     print("\n" + "="*70)
-    print("READINESS REPORT — FX-DCA-PROTOCOL-1")
+    print("READINESS REPORT — FX-DCA-PROTOCOL-1-A1")  # claude code changed: F8 — updated to A1 amendment identifier
     print("="*70)
     print(f"\n{'Pair':<12} {'Candles':>10} {'Min OK':>8} {'Cost Complete':>15} {'Notes'}")
     print("-"*70)
@@ -350,7 +350,7 @@ def print_readiness_report(specs: dict, candles: dict) -> None:  # claude code c
 
 if __name__ == "__main__":
     print(f"\nFX Data Collection — {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-    print(f"Protocol: FX-DCA-PROTOCOL-1")
+    print(f"Protocol: FX-DCA-PROTOCOL-1-A1")  # claude code changed: F8 — updated to A1 amendment identifier
     print(f"Account : ICFundedEvaluations-MT5-Demo (Read Only demo — data collection only)")
 
     specs = collect_specs()

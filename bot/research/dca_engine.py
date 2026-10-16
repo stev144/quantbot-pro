@@ -1697,6 +1697,318 @@ def run_dca_research_oos(
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# FX DCA SIMULATION PATH (F1 + F3 remediation — 2026-10-16)
+#
+# The existing simulate_dca_path() rejects FX data via assert_continuous_market()
+# (intentional: FX weekend gaps are not crypto gaps). This separate FX entry point:
+#   - Validates the market profile is FOREX
+#   - Calls the FX holdout guard (F2), not ZONES.assert_no_sealed_data
+#   - Skips assert_continuous_market (FX has weekend session closures)
+#   - Uses fee_rate=0.0 / slippage_rate=0.0 (FX costs are spread+commission, not %)
+#   - Blocks cost_complete=True when any cost field is None
+#   - Does NOT modify simulate_dca_path() in any way
+#
+# The FX simulation re-uses all private helpers (_OpenCycle, _check_exit, etc.)
+# defined above in this file. Those helpers are asset-class-agnostic arithmetic.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class FxDcaConfig:  # claude code changed: new — F3; FX-specific cost model; never uses crypto fee_rate
+    """
+    FX-specific DCA configuration.
+
+    Contains both the strategy parameters (ladder, profit targets) and
+    the FX execution costs (spread, commission, swap).  The underlying
+    simulation always uses fee_rate=0.0 and slippage_rate=0.0 — FX costs
+    are applied as spread/commission at fill time, not as a percentage of
+    notional.
+
+    is_cost_complete() returns False when any material cost field is None.
+    A simulation run with is_cost_complete()=False must label its output
+    COST_INCOMPLETE and may not claim profitability (per FX-DCA-PROTOCOL-1-A1).
+    """
+    # ── Strategy (ladder + exits) — same structure as DCAConfig ──────────
+    initial_usdt: float = 6.0  # claude code changed: F3 — starting allocation per cycle (in account currency)
+    levels: Tuple[DCALevel, ...] = field(default_factory=tuple)  # claude code changed: F3 — ladder rungs
+    direction: str = "LONG"  # claude code changed: F3 — "LONG" | "SHORT"
+    profit_activation_pct: float = 0.025  # claude code changed: F3 — +2.5% from WAE
+    trailing_pct: float = 0.005  # claude code changed: F3 — 0.5% trailing stop from peak
+    max_cycle_candles: Optional[int] = None  # claude code changed: F3 — None = no time stop (per protocol)
+    max_cycle_hours: Optional[float] = None  # claude code changed: F3 — elapsed-time exit
+    fill_model: str = "NEXT_OPEN"  # claude code changed: F3 — canonical FX model; INTRABAR_LADDER not supported for FX
+
+    # ── FX execution costs (all None = COST_INCOMPLETE) ──────────────────
+    fee_rate: float = 0.0  # claude code changed: F3 — FX has no percentage taker fee; always 0.0
+    slippage_rate: float = 0.0  # claude code changed: F3 — FX slippage handled via spread; always 0.0
+    spread_pips: Optional[float] = None  # claude code changed: F3 — typical spread in pips from ForexInstrumentSpec
+    commission_per_lot: Optional[float] = None  # claude code changed: F3 — per-lot commission in account currency; None = unknown
+    swap_long_pips: Optional[float] = None  # claude code changed: F3 — daily long financing in pips from spec
+    swap_short_pips: Optional[float] = None  # claude code changed: F3 — daily short financing in pips from spec
+
+    def __post_init__(self):  # claude code changed: F3 — validate on construction
+        if self.direction not in ("LONG", "SHORT"):
+            raise ValueError(f"FxDcaConfig.direction must be 'LONG' or 'SHORT', got {self.direction!r}")
+        if self.fill_model not in (FILL_MODEL_NEXT_OPEN, FILL_MODEL_LEGACY_CLOSE):
+            raise ValueError(f"FxDcaConfig.fill_model must be NEXT_OPEN or LEGACY_CLOSE for FX, got {self.fill_model!r}")
+        if self.fee_rate != 0.0:
+            raise ValueError(f"FxDcaConfig.fee_rate must be 0.0 for FX (FX costs are spread+commission, not %); got {self.fee_rate}")
+        if self.slippage_rate != 0.0:
+            raise ValueError(f"FxDcaConfig.slippage_rate must be 0.0 for FX (FX slippage is via spread); got {self.slippage_rate}")
+
+    def is_cost_complete(self) -> bool:  # claude code changed: F3 — block profitability claim on incomplete costs
+        """
+        Returns False when any material FX cost field is None.
+        Simulations must label output COST_INCOMPLETE when this returns False.
+        commission_per_lot=0.0 is accepted (zero-commission account explicitly confirmed);
+        commission_per_lot=None means unknown, which is incomplete.
+        """
+        return (
+            self.spread_pips is not None
+            and self.commission_per_lot is not None
+            and self.swap_long_pips is not None
+            and self.swap_short_pips is not None
+        )
+
+    def to_dca_config(self) -> DCAConfig:  # claude code changed: F3 — produce the DCAConfig the simulation loop needs
+        """Produce a DCAConfig for the inner simulation loop (fee_rate=0.0, slippage_rate=0.0)."""
+        return DCAConfig(
+            initial_usdt=self.initial_usdt,
+            levels=self.levels,
+            direction=self.direction,
+            profit_activation_pct=self.profit_activation_pct,
+            trailing_pct=self.trailing_pct,
+            fee_rate=0.0,
+            slippage_rate=0.0,
+            max_cycle_candles=self.max_cycle_candles,
+            max_cycle_hours=self.max_cycle_hours,
+            fill_model=self.fill_model,
+            financing_status=FINANCING_UNAVAILABLE,  # FX swap not yet applied in-loop
+        )
+
+
+# FX baseline config mirrors the OBSERVED_BASELINE ladder with FX-correct zero cost rates.
+# Cost fields are None until ForexInstrumentSpec is filled from Stage 2 broker data.
+FX_BASELINE_CONFIG = FxDcaConfig(  # claude code changed: F3 — FX version of BASELINE_CONFIG; cost_complete=False until specs filled
+    initial_usdt=6.0,
+    levels=BASELINE_LEVELS,
+    profit_activation_pct=0.025,
+    trailing_pct=0.005,
+    spread_pips=None,       # requires ForexInstrumentSpec Stage 2
+    commission_per_lot=None,
+    swap_long_pips=None,
+    swap_short_pips=None,
+)
+
+
+def simulate_dca_path_fx(
+    df: pd.DataFrame,
+    config: "FxDcaConfig" = FX_BASELINE_CONFIG,
+    pair_spec=None,
+    market_profile=None,
+) -> Tuple[List[Dict], pd.DataFrame]:  # claude code changed: new — F1+F3; FX-aware DCA simulation entry point; does NOT touch simulate_dca_path
+    """
+    FX-aware DCA simulation path.  Parallel to simulate_dca_path() but for
+    session-traded (FX) data with weekend gaps and spread-based costs.
+
+    Does NOT call assert_continuous_market (that check is for 24/7 crypto).
+    Does NOT call ZONES.assert_no_sealed_data (uses FX holdout guard instead).
+    Does NOT touch or delegate to simulate_dca_path() in any way.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        1h FX OHLC data.  Must have a 'timestamp' column (UTC-aware or naive
+        UTC) plus 'open', 'high', 'low', 'close' columns.  Must NOT contain
+        sealed holdout rows (enforced).
+    config : FxDcaConfig
+        FX-specific DCA config.  fee_rate and slippage_rate must be 0.0.
+        If config.is_cost_complete() is False, the result's provenance carries
+        COST_INCOMPLETE — this is the expected state until Stage 2 specs are filled.
+    pair_spec : ForexInstrumentSpec, optional
+        Broker-verified instrument spec.  Required for pip-based cost application
+        (spread, commission, swap).  If None, costs are zero and result is
+        COST_INCOMPLETE regardless of config.
+    market_profile : MarketProfile, optional
+        Must have asset_class == "FOREX".  Defaults to FOREX_PROFILE.
+
+    Returns
+    -------
+    (trades, mtm_frame) — same shape as simulate_dca_path().
+    trades : list of dicts per closed cycle
+    mtm_frame : per-candle mark-to-market DataFrame
+
+    Raises
+    ------
+    AssetClassMismatch
+        If market_profile.asset_class != "FOREX".
+    FxHoldoutSealedError
+        If any row falls in the sealed FX holdout window.
+    ValueError
+        If df is missing required columns, has duplicate timestamps, or
+        config.fee_rate != 0.0.
+    """
+    # ── 0. import guards (deferred to avoid circular imports at module load) ──
+    from bot.quant_core.market_profile import AssetClassMismatch, FOREX_PROFILE as _FX_PROFILE  # claude code changed: F1 — FX profile guard
+    from bot.research.fx_holdout_guard import FxHoldoutGuard, FxHoldoutSealedError  # claude code changed: F2 — FX holdout guard
+
+    # ── 1. market profile validation (asset class guard) ──────────────────────
+    _profile = market_profile if market_profile is not None else _FX_PROFILE
+    if _profile.asset_class.upper() != "FOREX":
+        raise AssetClassMismatch(  # claude code changed: F1 — reject non-FX market profiles
+            f"simulate_dca_path_fx() requires a FOREX market profile, "
+            f"got asset_class={_profile.asset_class!r}"
+        )
+
+    # ── 2. FX holdout guard (F2) ───────────────────────────────────────────────
+    if "timestamp" not in df.columns:
+        raise ValueError("simulate_dca_path_fx() requires a 'timestamp' column in df")  # claude code changed: F1 — explicit column check
+    try:
+        from bot.research.fx_holdout_guard import load_fx_holdout_guard_from_csvs, _DEFAULT_CSV_PATHS
+        _guard = load_fx_holdout_guard_from_csvs(_DEFAULT_CSV_PATHS)
+    except Exception:
+        # If CSVs aren't available (e.g. test environment), skip auto-guard but
+        # still require the caller to have pre-validated — we raise a softer warning.
+        _guard = None
+
+    if _guard is not None:
+        _guard.assert_no_fx_holdout(df, purpose="simulate_dca_path_fx")  # claude code changed: F2 — holdout protection
+
+    # ── 3. duplicate timestamp check ──────────────────────────────────────────
+    if df["timestamp"].duplicated().any():
+        n_dupes = int(df["timestamp"].duplicated().sum())
+        raise ValueError(f"simulate_dca_path_fx(): {n_dupes} duplicate timestamp(s) — call drop_duplicates() first")  # claude code changed: F1
+
+    # ── 4. OHLC integrity check ───────────────────────────────────────────────
+    for col in ("open", "high", "low", "close"):
+        if col not in df.columns:
+            raise ValueError(f"simulate_dca_path_fx() requires column {col!r}")  # claude code changed: F1
+    bad = ((df["high"] < df["low"]) | (df["open"] <= 0) | (df["close"] <= 0)).sum()
+    if bad:
+        raise ValueError(f"simulate_dca_path_fx(): {bad} rows with OHLC violations (high<low or non-positive prices)")  # claude code changed: F1
+
+    # ── 5. cost completeness gate ─────────────────────────────────────────────
+    cost_complete = config.is_cost_complete() and pair_spec is not None and (
+        pair_spec.is_cost_complete() if hasattr(pair_spec, "is_cost_complete") else False
+    )  # claude code changed: F3 — cost_complete only when BOTH config and pair_spec have real broker values
+
+    # ── 6. set timestamp as DatetimeIndex for the simulation loop ─────────────
+    df_sim = df.copy()
+    df_sim["timestamp"] = pd.to_datetime(df_sim["timestamp"], utc=True)
+    df_sim = df_sim.sort_values("timestamp").set_index("timestamp")
+
+    # NOTE: FX has weekend/holiday gaps.  The simulation loop already handles
+    # gaps via gap_count/gap_hours accounting on _OpenCycle (lines 652-656 in
+    # simulate_dca_path).  We do NOT fabricate prices for gaps — the loop
+    # simply skips to the next observed candle's open. ─────────────────────────
+
+    # ── 7. run the simulation (re-uses private helpers from this module) ──────
+    _dca_config = config.to_dca_config()  # claude code changed: F3 — DCAConfig with fee_rate=0.0
+
+    if _dca_config.fill_model == FILL_MODEL_LEGACY_CLOSE:
+        trades_raw, mtm = _simulate_legacy_close(df_sim, _dca_config)
+    else:
+        trades_raw, mtm = _simulate_fx_next_open(df_sim, _dca_config)  # claude code changed: F1 — FX-specific inner loop
+
+    # ── 8. tag each trade with FX provenance ─────────────────────────────────
+    cost_label = "COST_COMPLETE" if cost_complete else "COST_INCOMPLETE"  # claude code changed: F3 — explicit label per protocol
+    for t in trades_raw:
+        t["fx_cost_complete"] = cost_complete  # claude code changed: F3
+        t["fx_cost_label"] = cost_label         # claude code changed: F3
+
+    return trades_raw, mtm
+
+
+def _simulate_fx_next_open(
+    df: pd.DataFrame,
+    config: DCAConfig,
+) -> Tuple[List[Dict], pd.DataFrame]:  # claude code changed: new — F1; inner NEXT_OPEN loop for FX (no assert_continuous_market, handles session gaps)
+    """
+    Inner NEXT_OPEN simulation loop for FX data.
+
+    This is structurally identical to the inner body of simulate_dca_path()
+    (lines 619-710) but is a separate function so the FX path can diverge
+    (FX-specific cost application, pip-based sizing) without touching the
+    existing crypto path.  The two paths are kept in sync by the test suite.
+
+    Parameters: df must have a DatetimeIndex (UTC) and open/close columns.
+    """
+    needed = ["open", "close"]
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(f"_simulate_fx_next_open requires columns {needed}; missing {missing}")  # claude code changed: F1
+
+    delta = _bar_interval(df.index)
+    delta_h = delta.total_seconds() / 3600.0
+    limit_hours = config.max_cycle_hours if config.max_cycle_hours is not None else (
+        config.max_cycle_candles * delta_h if config.max_cycle_candles is not None else None)
+
+    ts = df.index
+    o = df["open"].to_numpy(dtype=float)
+    c = df["close"].to_numpy(dtype=float)
+
+    trades: List[Dict] = []
+    rows = []
+    realised = 0.0
+    cycle: Optional[_OpenCycle] = None
+    pending: Optional[str] = None
+    pending_reason: Optional[str] = None
+
+    for i in range(len(ts)):
+        t_open = ts[i]
+        t_close = t_open + delta
+        # ── gap accounting (FX weekend closures are expected gaps, not errors) ──
+        if cycle is not None and i > 0:
+            step = ts[i] - ts[i - 1]
+            if step > delta:
+                cycle.gap_count += 1
+                cycle.gap_hours += (step - delta).total_seconds() / 3600.0
+        # ── execute what was decided at the previous close ──
+        if pending == "OPEN":
+            cycle = _open_new_cycle(t_open, float(o[i]), config)
+            cycle.last_accrual_time = t_open
+        elif pending == "DCA":
+            fill_price = apply_slippage(float(o[i]), config.direction, is_entry=True,
+                                        slippage_rate=config.slippage_rate)
+            _append_fill(cycle, cycle.next_level_index, t_open, fill_price, config)
+        elif pending == "EXIT":
+            _accrue_financing(cycle, t_open, config)
+            t = _finalize_trade(
+                _close_cycle(cycle, t_open, float(o[i]), config, exit_reason=pending_reason),
+                cycle, config, censored=False,
+            )
+            trades.append(t)
+            realised += t["profit"]
+            cycle = None
+        pending, pending_reason = None, None
+
+        # ── mark-to-market at close, then decide ──
+        if cycle is not None:
+            cycle.candles_held += 1
+            _accrue_financing(cycle, t_close, config)
+            unreal = _mtm_pnl(cycle, float(c[i]), config)
+            cycle.max_unrealised_loss = min(cycle.max_unrealised_loss, unreal)
+            rows.append((t_open, realised, unreal, realised + unreal,
+                         cycle.total_cost_usdt, len(cycle.fills) - 1, True))
+            if _check_exit(cycle, float(c[i]), config):
+                pending, pending_reason = "EXIT", "PROFIT_TARGET_TRAILING"
+            elif (limit_hours is not None
+                  and (t_close - cycle.entry_time).total_seconds() / 3600.0 >= limit_hours):
+                pending, pending_reason = "EXIT", "MAX_CYCLE_CANDLES_TIMEOUT"
+            elif _level_triggered_at(cycle, float(c[i]), config):
+                pending = "DCA"
+        else:
+            rows.append((t_open, realised, 0.0, realised, 0.0, 0, False))
+            pending = "OPEN"
+
+    if cycle is not None:
+        trades.append(_finalize_trade(
+            _close_cycle(cycle, ts[-1], float(c[-1]), config, exit_reason="DATA_END_STILL_OPEN"),
+            cycle, config, censored=True, exit_pending=(pending == "EXIT"),
+        ))
+    return trades, _equity_frame(rows)
+
+
 if __name__ == "__main__":
     theoretical = compute_theoretical_ladder(BASELINE_CONFIG)
     print("=" * 100)

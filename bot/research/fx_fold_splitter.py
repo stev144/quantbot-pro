@@ -24,6 +24,8 @@ from typing import List
 
 import pandas as pd
 
+from bot.research.fx_holdout_guard import FxDataRole  # claude code changed: import role enum for partition labelling
+
 
 # ── Protocol constants (FX-DCA-PROTOCOL-1-A1 Part 4) ────────────────────────
 _HOLDOUT_FRAC = 0.30           # last 30 % → holdout (sealed)
@@ -60,6 +62,26 @@ class FxSplits:
     total_candles: int
     protocol_id: str
 
+    # ── Role accessors (F2 holdout guard integration) ─────────────────────
+    @property
+    def calibration_role(self) -> FxDataRole:  # claude code changed: F2 — explicit role label
+        return FxDataRole.CALIBRATION
+
+    @property
+    def embargo_role(self) -> FxDataRole:  # claude code changed: F2 — explicit role label
+        return FxDataRole.CALIBRATION_EMBARGO
+
+    @property
+    def holdout_role(self) -> FxDataRole:  # claude code changed: F2 — explicit role label
+        return FxDataRole.HOLDOUT
+
+    @property
+    def holdout_start(self) -> "pd.Timestamp":  # claude code changed: F2 — first holdout timestamp
+        """First timestamp in the sealed holdout partition."""
+        if len(self.holdout) == 0:
+            raise ValueError("holdout is empty — cannot determine holdout_start")
+        return pd.to_datetime(self.holdout["timestamp"].iloc[0], utc=True)
+
 
 def make_fx_splits(
     df: pd.DataFrame,
@@ -89,6 +111,15 @@ def make_fx_splits(
     ValueError
         If the DataFrame is too short to produce a valid split.
     """  # claude code changed: new — FX-DCA-PROTOCOL-1-A1 Part 4 deterministic split
+    # F7: reject duplicate timestamps before any splitting (audit finding F7)
+    if "timestamp" not in df.columns:
+        raise ValueError("DataFrame must have a 'timestamp' column")  # claude code changed: F7 — explicit column check
+    if df["timestamp"].duplicated().any():
+        n_dupes = int(df["timestamp"].duplicated().sum())
+        raise ValueError(  # claude code changed: F7 — fail-closed on duplicate timestamps
+            f"DataFrame contains {n_dupes} duplicate timestamp(s). "
+            "Call drop_duplicates() on the source data before splitting."
+        )
     df = df.sort_values("timestamp").reset_index(drop=True)  # defensive sort
     n = len(df)
 
@@ -170,6 +201,23 @@ def make_fx_splits(
         protocol_id=protocol_id,
     )
 
+
+# ── F4: Stouffer warning (2026-10-16 audit finding F4) ───────────────────────
+# If Stouffer's method (scipy.stats.combine_pvalues(..., method="stouffer")) is
+# used to aggregate per-fold p-values into a single combined p-value, the result
+# is INDICATIVE ONLY, NOT a formal statistical test.  Reason: the 5 expanding
+# folds within calibration share an overlapping training set; their test-set
+# outcomes are correlated (earlier folds' test data appears in later folds'
+# training data).  Stouffer's method assumes independent inputs — the
+# anti-conservative bias from correlated folds makes the combined p-value
+# stochastically smaller than it would be under true independence.
+#
+# Permitted use: reporting the combined value as a descriptive summary alongside
+# per-fold p-values, clearly labelled "indicative, correlated folds."
+# Prohibited use: using the combined Stouffer p-value as the primary gate for
+# any go/no-go decision (e.g. "p < 0.05 therefore edge confirmed").  Use the
+# individual fold metrics and the per-fold permutation distribution instead.
+# claude code changed: F4 — pre-emptive Stouffer anti-conservatism warning; added 2026-10-16
 
 def print_split_report(splits: FxSplits, pair: str = "") -> None:
     """Print a human-readable split summary for verification."""  # claude code changed: new — for verify/audit use
