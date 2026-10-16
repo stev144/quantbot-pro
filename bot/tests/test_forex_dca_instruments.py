@@ -421,16 +421,24 @@ class ForexDcaBlockedGateTests(SimpleTestCase):
         with self.assertRaises(AssetClassMismatch):
             assert_continuous_market(fx_like, purpose="test")
 
-    def test_forex_profile_not_canonical_yet(self):  # claude code changed: new
-        """FOREX_PROFILE.require_canonical() raises OwnerDecisionMissing because horizon_basis,
-        financing_source, cost_model and protocol_hash are still owner-decision-pending.
-        This is EXPECTED and CORRECT behaviour — not a bug to fix."""
-        from bot.quant_core.market_profile import FOREX_PROFILE, OwnerDecisionMissing, FX_CALENDAR_UNAVAILABLE
-        with self.assertRaises(OwnerDecisionMissing) as ctx:
-            FOREX_PROFILE.require_canonical("test")
-        self.assertIn(FX_CALENDAR_UNAVAILABLE, str(ctx.exception))
-        # The missing fields are documented owner decisions, not omissions
+    def test_forex_profile_is_canonical(self):  # claude code changed: 2026-10-16 — renamed from test_forex_profile_not_canonical_yet; all four owner decisions (OD-FX-HB-1, OD-FX-FS-1, OD-FX-CM-1, FX-DCA-PROTOCOL-1) are now locked; gate is now OPEN, not blocked
+        """FOREX_PROFILE.require_canonical() no longer raises — all four owner decisions are recorded.
+        This test verifies that the gate is correctly OPEN and all required fields are populated."""
+        from bot.quant_core.market_profile import FOREX_PROFILE, OwnerDecisionMissing
+        # Must not raise — all four decisions are now locked
+        profile = FOREX_PROFILE.require_canonical("test")
+        self.assertIs(profile, FOREX_PROFILE)
+        # All decision fields are populated
         missing = FOREX_PROFILE.missing_decisions()
-        self.assertIn("horizon_basis", missing)
-        self.assertIn("financing_source", missing)
-        self.assertIn("cost_model", missing)
+        self.assertEqual(missing, [], f"Expected no missing decisions, got: {missing}")
+        self.assertTrue(FOREX_PROFILE.canonical_capable)
+        # Key field values match the approved owner decisions
+        self.assertIn("TRADING_CANDLE_COUNT", FOREX_PROFILE.horizon_basis)
+        self.assertIn("OD-FX-HB-1", FOREX_PROFILE.horizon_basis)
+        self.assertIn("MT5_BROKER_STATIC", FOREX_PROFILE.financing_source)
+        self.assertIn("OD-FX-FS-1", FOREX_PROFILE.financing_source)
+        self.assertIn("MT5_BROKER_PUBLISHED", FOREX_PROFILE.cost_model)
+        self.assertIn("OD-FX-CM-1", FOREX_PROFILE.cost_model)
+        # Protocol hash matches the approved FX-DCA-PROTOCOL-1 document
+        self.assertEqual(FOREX_PROFILE.protocol_hash,
+                         "9d2fec9929e7123bd8b6a47d57b142f979013680ef77eeb6d61f45747a8ab54f")  # claude code changed: SHA-256 of FX_DCA_PROTOCOL_2026-10-16.md

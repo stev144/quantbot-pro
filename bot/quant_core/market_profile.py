@@ -331,9 +331,11 @@ def in_universe(profile: "MarketProfile", symbol: str) -> bool:   # claude code 
 FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=fx_new_york_close_calendar(),   # claude code changed: 2026-10-06 — was None
                               gap_max_candles=5,                            # claude code changed: OD-FX-2 (owner-delegated): smallest limit that admits the single broker-wide outage (5 h, 2021-12-02); data-informed, recorded
                               seed_rule="FIRST_TRADING_CANDLE_AT_OR_AFTER_S",   # claude code changed: OD-FX-3 (owner-delegated): strict, = the crypto rule
-                              horizon_basis=None, financing_source=None, cost_model=None,
+                              horizon_basis="TRADING_CANDLE_COUNT (OD-FX-HB-1, 2026-10-16): count only trading candles; weekends/holidays (OD-FX-1) excluded; analogous to GRID_CANDLES_24_7 — one candle = one trading hour",  # claude code changed: 2026-10-16 OD-FX-HB-1 — was None; owner decision
+                              financing_source="MT5_BROKER_STATIC (OD-FX-FS-1, 2026-10-16): ICFundedEvaluations published swap rates as static historical approximation; label STATIC_SWAP_APPROXIMATION; cost_complete requires ForexInstrumentSpec.swap_long/short from Stage 2",  # claude code changed: 2026-10-16 OD-FX-FS-1 — was None; owner decision
+                              cost_model="MT5_BROKER_PUBLISHED (OD-FX-CM-1, 2026-10-16): ICFundedEvaluations published spread + commission; cost_complete requires ForexInstrumentSpec.spread_typical_pips + commission_per_lot from Stage 2",  # claude code changed: 2026-10-16 OD-FX-CM-1 — was None; owner decision
                               universe_rule=FX_UNIVERSE_RULE,               # claude code changed: OD-FX-7 (owner-delegated)
-                              protocol_hash=None)
+                              protocol_hash="9d2fec9929e7123bd8b6a47d57b142f979013680ef77eeb6d61f45747a8ab54f")  # claude code changed: 2026-10-16 FX-DCA-PROTOCOL-1 — SHA-256 of FX_DCA_PROTOCOL_2026-10-16.md; locked before any FX DCA results examined
 
 _PROFILES = {"CRYPTO": CRYPTO_PROFILE, "FOREX": FOREX_PROFILE}
 
