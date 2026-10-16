@@ -452,7 +452,7 @@ def run_fx_fold(
         swap_short_pips=swap_short,
     )
 
-    summary = _summarise_trades(trades, spec)
+    summary = _summarise_trades(trades, spec, mtm=mtm)  # claude code changed: pass mtm for equity stats
 
     return {
         "fold_num": fold_num,
@@ -468,14 +468,65 @@ def run_fx_fold(
     }
 
 
-def _summarise_trades(trades: List[Dict], spec: FxLadderSpec) -> Dict:
-    """Aggregate trade list into a summary dict."""  # claude code changed: new — descriptive summary, no edge claims
+def compute_equity_stats(mtm: pd.DataFrame, trades: List[Dict]) -> Dict:
+    """
+    Compute equity-curve statistics from the per-candle MTM DataFrame.
+
+    The equity column already includes unrealized P&L every candle, so open-at-end
+    positions are naturally included — this is the true economic equity, not just
+    the realised P&L of closed trades.
+
+    Returns
+    -------
+    dict with:
+      final_equity       : equity at the last candle (realised + open-cycle MTM)
+      min_equity         : lowest equity seen during the fold
+      max_drawdown       : largest peak-to-trough drop (negative number; 0 if flat)
+      max_drawdown_pct   : max_drawdown / absolute_peak (fraction; NaN if peak <= 0)
+      open_at_end_count  : number of cycles still open at period end
+      open_at_end_gross  : total gross P&L of open-at-end cycles (unrealised)
+    """  # claude code changed: new — equity curve stats including unrealized open positions
+    if len(mtm) == 0:
+        return {
+            "final_equity": 0.0, "min_equity": 0.0,
+            "max_drawdown": 0.0, "max_drawdown_pct": float("nan"),
+            "open_at_end_count": 0, "open_at_end_gross": 0.0,
+        }
+    eq = mtm["equity"].to_numpy(dtype=float)
+    peak = np.maximum.accumulate(eq)
+    drawdown = eq - peak              # always <= 0
+    max_dd = float(drawdown.min())    # most negative value = worst drawdown
+    abs_peak = float(np.abs(peak).max()) if float(peak.max()) > 0 else float("nan")
+    max_dd_pct = max_dd / abs_peak if not math.isnan(abs_peak) and abs_peak > 0 else float("nan")
+
+    open_end = [t for t in trades if t.get("exit_reason") == "DATA_END_STILL_OPEN"]
+    open_gross = sum(t.get("gross_usdt", 0.0) for t in open_end)
+
+    return {
+        "final_equity": float(eq[-1]),
+        "min_equity": float(eq.min()),
+        "max_drawdown": max_dd,
+        "max_drawdown_pct": max_dd_pct,
+        "open_at_end_count": len(open_end),
+        "open_at_end_gross": open_gross,
+    }  # claude code changed: new — v4 protocol equity stats
+
+
+def _summarise_trades(trades: List[Dict], spec: FxLadderSpec,
+                      mtm: Optional[pd.DataFrame] = None) -> Dict:
+    """Aggregate trade list into a summary dict."""  # claude code changed: updated — accepts mtm for equity stats
     closed = [t for t in trades if t.get("exit_reason") != "DATA_END_STILL_OPEN"]
     total = len(closed)
+    eq_stats = compute_equity_stats(mtm if mtm is not None else pd.DataFrame(), trades)
     if total == 0:
-        return {"total_trades": 0, "win_rate": float("nan"), "avg_profit_usdt": float("nan"),
-                "total_profit_usdt": 0.0, "avg_fills": float("nan"),
-                "avg_candles_held": float("nan"), "cost_complete": False}
+        return {
+            "total_trades": 0, "win_rate": float("nan"),
+            "avg_profit_usdt": float("nan"), "total_profit_usdt": 0.0,
+            "avg_fills": float("nan"), "avg_candles_held": float("nan"),
+            "cost_complete": None,
+            **eq_stats,
+            "pair": spec.pair, "direction": spec.direction,
+        }
     profits = [t["profit_usdt"] for t in closed]
     wins = sum(1 for p in profits if p > 0)
     return {
@@ -487,13 +538,14 @@ def _summarise_trades(trades: List[Dict], spec: FxLadderSpec) -> Dict:
         "avg_fills": float(np.mean([t["fills"] for t in closed])),
         "avg_candles_held": float(np.mean([t["candles_held"] for t in closed])),
         "cost_complete": all(t["cost_complete"] for t in closed),
+        **eq_stats,
         "pair": spec.pair,
         "direction": spec.direction,
     }
 
 
 def print_fold_result(result: Dict) -> None:
-    """Print human-readable fold result."""  # claude code changed: new — readable output for calibration review
+    """Print human-readable fold result including equity/drawdown."""  # claude code changed: updated — equity stats added
     s = result["summary"]
     sp = result["spec"]
     print(f"\n{'='*70}")
@@ -502,15 +554,25 @@ def print_fold_result(result: Dict) -> None:
     print(f"  ATR_ref: {sp.atr_ref:.6f} ({sp.atr_ref/sp.pip_size:.2f} pips)")
     print(f"  Base pips (L2-L7): {', '.join(f'{p:.1f}' for p in sp.base_pips)}")
     print(f"{'='*70}")
-    print(f"  Trades (closed): {s['total_trades']}")
+    print(f"  -- Closed-trade summary --")
+    print(f"  Trades closed   : {s['total_trades']}")
     if s["total_trades"] > 0:
-        print(f"  Win rate        : {s['win_rate']:.1%}")
+        print(f"  Win rate        : {s['win_rate']:.1%}  [NOTE: 100% by construction — no stop-loss]")
         print(f"  Avg profit      : {s['avg_profit_usdt']:.4f} USD")
         print(f"  Median profit   : {s['median_profit_usdt']:.4f} USD")
-        print(f"  Total profit    : {s['total_profit_usdt']:.4f} USD")
+        print(f"  Total realised  : {s['total_profit_usdt']:.4f} USD")
         print(f"  Avg fills/cycle : {s['avg_fills']:.2f}")
-        print(f"  Avg hold (candles): {s['avg_candles_held']:.1f}")
-        print(f"  Cost complete   : {s['cost_complete']}")
+        print(f"  Avg hold        : {s['avg_candles_held']:.0f}h")
+    print(f"  -- Equity curve (realised + unrealised every candle) --")
+    print(f"  Final equity    : {s['final_equity']:+.4f} USD")
+    print(f"  Min equity      : {s['min_equity']:+.4f} USD")
+    dd = s['max_drawdown']
+    dd_pct = s['max_drawdown_pct']
+    dd_pct_s = f"  ({dd_pct:.1%})" if not math.isnan(dd_pct) else ""
+    print(f"  Max drawdown    : {dd:+.4f} USD{dd_pct_s}")
+    open_n = s['open_at_end_count']
+    open_g = s['open_at_end_gross']
+    print(f"  Open at end     : {open_n} cycle(s),  gross MTM = {open_g:+.4f} USD")
     print(f"{'='*70}\n")
 
 

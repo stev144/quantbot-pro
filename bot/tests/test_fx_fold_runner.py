@@ -21,10 +21,11 @@ from django.test import SimpleTestCase
 from bot.research.fx_fold_runner import (
     FxLadderSpec,
     compute_dynamic_drop_pct,
+    compute_equity_stats,
     build_ladder_spec_from_analysis,
     _simulate_data_derived_next_open,
     _summarise_trades,
-)
+)  # claude code changed: added compute_equity_stats import
 
 
 # ── FxLadderSpec ──────────────────────────────────────────────────────────────
@@ -299,3 +300,64 @@ class SummariseTradesTests(SimpleTestCase):  # claude code changed: new test cla
         s = _summarise_trades(trades, spec)
         self.assertEqual(s["total_trades"], 1)  # only the closed trade counted
         self.assertAlmostEqual(s["total_profit_usdt"], 1.0)
+
+
+# ── compute_equity_stats ──────────────────────────────────────────────────────
+
+class ComputeEquityStatsTests(SimpleTestCase):  # claude code changed: new test class
+
+    def _make_mtm(self, equity_values):
+        idx = pd.date_range("2021-01-01", periods=len(equity_values), freq="1h", tz="UTC")
+        return pd.DataFrame({
+            "timestamp": idx,
+            "realised": equity_values,
+            "unrealised": [0.0] * len(equity_values),
+            "equity": equity_values,
+            "in_trade": [True] * len(equity_values),
+        })
+
+    def test_empty_mtm_returns_zeros(self):
+        stats = compute_equity_stats(pd.DataFrame(), [])
+        self.assertEqual(stats["final_equity"], 0.0)
+        self.assertEqual(stats["max_drawdown"], 0.0)
+
+    def test_monotone_rising_no_drawdown(self):
+        mtm = self._make_mtm([0.0, 1.0, 2.0, 3.0])
+        stats = compute_equity_stats(mtm, [])
+        self.assertAlmostEqual(stats["max_drawdown"], 0.0)
+        self.assertAlmostEqual(stats["final_equity"], 3.0)
+
+    def test_drawdown_computed_correctly(self):
+        # equity goes up to 4 then falls to 1 — drawdown = 1-4 = -3
+        mtm = self._make_mtm([0.0, 2.0, 4.0, 3.0, 1.0, 2.0])
+        stats = compute_equity_stats(mtm, [])
+        self.assertAlmostEqual(stats["max_drawdown"], -3.0)
+        self.assertAlmostEqual(stats["min_equity"], 0.0)  # 0 is lower than 1
+
+    def test_drawdown_pct_from_positive_peak(self):
+        mtm = self._make_mtm([0.0, 10.0, 7.0])
+        stats = compute_equity_stats(mtm, [])
+        # max_drawdown = 7-10 = -3, peak = 10, pct = -3/10 = -30%
+        self.assertAlmostEqual(stats["max_drawdown_pct"], -0.30, places=5)
+
+    def test_open_at_end_count_and_gross(self):
+        mtm = self._make_mtm([1.0, 2.0])
+        trades = [
+            {"exit_reason": "PROFIT_TARGET_TRAILING", "gross_usdt": 1.0},
+            {"exit_reason": "DATA_END_STILL_OPEN", "gross_usdt": -5.0},
+            {"exit_reason": "DATA_END_STILL_OPEN", "gross_usdt": -2.0},
+        ]
+        stats = compute_equity_stats(mtm, trades)
+        self.assertEqual(stats["open_at_end_count"], 2)
+        self.assertAlmostEqual(stats["open_at_end_gross"], -7.0)
+
+    def test_summary_includes_equity_stats(self):
+        """_summarise_trades with mtm passes equity stats through."""
+        spec = _eurusd_long_spec()
+        mtm = self._make_mtm([0.0, 1.0, 3.0, 2.0])
+        trades = [{"profit_usdt": 1.0, "fills": 1, "candles_held": 3,
+                   "cost_complete": True, "exit_reason": "PROFIT_TARGET_TRAILING"}]
+        s = _summarise_trades(trades, spec, mtm=mtm)
+        self.assertIn("max_drawdown", s)
+        self.assertIn("final_equity", s)
+        self.assertAlmostEqual(s["final_equity"], 2.0)
