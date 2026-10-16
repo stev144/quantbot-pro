@@ -240,3 +240,136 @@ PLACEHOLDER_SPECS = {  # claude code changed: new — lookup dict for tests and 
 def get_forex_instrument_spec(canonical_symbol: str) -> Optional[ForexInstrumentSpec]:
     """Return the placeholder spec for a target pair, or None if not defined."""  # claude code changed: new
     return PLACEHOLDER_SPECS.get(canonical_symbol)
+
+
+# ── MT5-verified specs (Stage 2 collection 2026-10-16) ────────────────────────────────────────────────────
+# claude code changed: new — 2026-10-16; cost_complete gate resolved; values from fx_instrument_specs_collected.json
+#
+# COST MODEL (OD-FX-CM-1, OD-FX-FS-1):
+#   commission_per_lot=0.0 — ICFundedEvaluations spread-only model; MT5 symbol_info().commission returned
+#     None (no commission field configured), confirming zero-commission. Set to 0.0 (not None) so
+#     is_cost_complete() can return True. Authorized by operator 2026-10-16.
+#
+#   spread_typical_pips — live MT5 snapshot 2026-10-16T11:17 UTC. EUR/USD and AUD/USD returned 0.0
+#     (ECN tight spread during low-activity period). GBP/USD, USD/JPY, USD/CHF returned 0.1 pips.
+#     WARNING: point-in-time snapshot only; real spreads widen during high-volatility events.
+#     Label: STATIC_SNAPSHOT — consistent with OD-FX-CM-1 static approximation policy.
+#
+#   swap_long / swap_short — from MT5 symbol_info().swap_long/swap_short (pips/day).
+#     Label: STATIC_SWAP_APPROXIMATION (OD-FX-FS-1) — rates change with interest rate decisions.
+#
+#   validated=True — values came from a real MT5 broker connection (read-only demo). "validated"
+#     means source is a live broker connection, NOT that the spread is a long-run typical value.
+
+MT5_EURUSD = ForexInstrumentSpec(  # claude code changed: new — Stage 2 verified; cost_complete=True
+    canonical_symbol="EUR/USD",
+    pip_size=0.0001,
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=0.0,    # snapshot 2026-10-16T11:17 UTC; may widen during volatility
+    commission_per_lot=0.0,     # spread-only account confirmed; 0.0 not None
+    swap_long=-0.84,            # pips/day; STATIC_SWAP_APPROXIMATION per OD-FX-FS-1
+    swap_short=0.123,           # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_triple_day=3,
+    leverage_max=None,          # not exposed by MT5 demo account
+    margin_rate=None,
+    source="ICFundedEvaluations_MT5_SNAPSHOT_2026-10-16",
+    validated=True,
+)
+
+MT5_GBPUSD = ForexInstrumentSpec(  # claude code changed: new — Stage 2 verified; cost_complete=True
+    canonical_symbol="GBP/USD",
+    pip_size=0.0001,
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=0.1,    # snapshot 2026-10-16T11:17 UTC
+    commission_per_lot=0.0,     # spread-only account confirmed; 0.0 not None
+    swap_long=-0.504,           # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_short=-0.336,          # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_triple_day=3,
+    leverage_max=None,
+    margin_rate=None,
+    source="ICFundedEvaluations_MT5_SNAPSHOT_2026-10-16",
+    validated=True,
+)
+
+MT5_USDJPY = ForexInstrumentSpec(  # claude code changed: new — Stage 2 verified; cost_complete=True
+    canonical_symbol="USD/JPY",
+    pip_size=0.01,
+    price_precision=3,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=0.1,    # snapshot 2026-10-16T11:17 UTC
+    commission_per_lot=0.0,     # spread-only account confirmed; 0.0 not None
+    swap_long=0.798,            # pips/day; STATIC_SWAP_APPROXIMATION (positive = earns carry)
+    swap_short=-1.806,          # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_triple_day=3,
+    leverage_max=None,
+    margin_rate=None,
+    source="ICFundedEvaluations_MT5_SNAPSHOT_2026-10-16",
+    validated=True,
+)
+
+MT5_USDCHF = ForexInstrumentSpec(  # claude code changed: new — Stage 2 verified; cost_complete=True
+    canonical_symbol="USD/CHF",
+    pip_size=0.0001,
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=0.1,    # snapshot 2026-10-16T11:17 UTC
+    commission_per_lot=0.0,     # spread-only account confirmed; 0.0 not None
+    swap_long=0.598,            # pips/day; STATIC_SWAP_APPROXIMATION (positive = earns carry)
+    swap_short=-1.386,          # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_triple_day=3,
+    leverage_max=None,
+    margin_rate=None,
+    source="ICFundedEvaluations_MT5_SNAPSHOT_2026-10-16",
+    validated=True,
+)
+
+MT5_AUDUSD = ForexInstrumentSpec(  # claude code changed: new — Stage 2 verified; cost_complete=True
+    canonical_symbol="AUD/USD",
+    pip_size=0.0001,
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=0.0,    # snapshot 2026-10-16T11:17 UTC; may widen during volatility
+    commission_per_lot=0.0,     # spread-only account confirmed; 0.0 not None
+    swap_long=-0.02,            # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_short=-0.504,          # pips/day; STATIC_SWAP_APPROXIMATION
+    swap_triple_day=3,
+    leverage_max=None,
+    margin_rate=None,
+    source="ICFundedEvaluations_MT5_SNAPSHOT_2026-10-16",
+    validated=True,
+)
+
+MT5_SPECS: dict = {  # claude code changed: new — verified specs lookup; use over PLACEHOLDER_SPECS for real simulations
+    "EUR/USD": MT5_EURUSD,
+    "GBP/USD": MT5_GBPUSD,
+    "USD/JPY": MT5_USDJPY,
+    "USD/CHF": MT5_USDCHF,
+    "AUD/USD": MT5_AUDUSD,
+}
+
+
+def get_mt5_forex_instrument_spec(canonical_symbol: str) -> Optional[ForexInstrumentSpec]:
+    """Return the MT5-verified spec (cost_complete=True) for a target pair, or None if not collected."""  # claude code changed: new — Stage 2 gate resolver
+    return MT5_SPECS.get(canonical_symbol)
