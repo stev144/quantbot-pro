@@ -523,5 +523,81 @@ def download_all_mt5_symbols(date_from=None, attach_only: bool = False, archive_
     return summary
 
 
+def get_mt5_symbol_info(symbol: str, *, attach_only: bool = True) -> dict:  # claude code changed: new — 2026-10-16, Stage 2 broker spec fetch; attach_only=True uses the already-running terminal (no stored creds needed for a demo already logged in)
+    """
+    Fetch broker instrument specification for one symbol via mt5.symbol_info().
+    Returns a plain dict with every field needed to populate ForexInstrumentSpec:
+      canonical_symbol, spread_pips, commission_per_lot, swap_long_pips,
+      swap_short_pips, swap_triple_day, contract_size, pip_size, price_precision,
+      min_volume, volume_increment, quantity_precision, leverage_max, margin_rate.
+
+    attach_only=True attaches to the already-running terminal without re-logging in
+    (safe for a Read Only / demo terminal open on the desktop). Set False to use
+    the full MT5_LOGIN/PASSWORD/SERVER credential path instead.
+
+    Raises MT5ConnectionError on any failure — never returns partial data silently.
+    All pip/swap values are expressed in PIPS (divided by point*10 for 5-decimal pairs,
+    divided by point for 3-decimal JPY pairs) so the caller doesn't need to know the
+    internal point representation.
+    """
+    mt5 = _attach_running_terminal() if attach_only else connect()  # claude code changed: one attach, one shutdown
+    try:
+        mt5_sym = _to_mt5_symbol(symbol)
+        if not mt5.symbol_select(mt5_sym, True):
+            raise MT5ConnectionError(f"symbol_select({mt5_sym!r}) failed: {mt5.last_error()}")
+
+        info = mt5.symbol_info(mt5_sym)
+        if info is None:
+            raise MT5ConnectionError(f"symbol_info({mt5_sym!r}) returned None: {mt5.last_error()}")
+
+        # pip_size: for 5-decimal pairs (EUR/USD) pip = 0.0001 = point * 10;
+        # for 3-decimal JPY pairs (USD/JPY) pip = 0.01 = point * 10.
+        # MT5's own 'point' is the minimum price change (0.00001 or 0.001).
+        # Convention across all retail brokers: pip = point * 10.
+        pip_size = round(info.point * 10, 10)  # claude code changed: pip = point * 10 is the universal retail convention
+
+        def _to_pips(value_in_points: float) -> float:
+            """Convert a value stored in MT5's internal 'points' to pips."""  # claude code changed: inline helper — avoids silent unit confusion
+            return round(value_in_points / 10.0, 6)
+
+        # Spread: MT5 stores current_spread as an integer count of points.
+        spread_pips = _to_pips(info.spread) if hasattr(info, "spread") else None  # claude code changed: None if field absent (older builds)
+
+        # Swap: MT5 stores swap_long/swap_short in POINTS (same unit as spread).
+        swap_long_pips = _to_pips(info.swap_long) if hasattr(info, "swap_long") else None  # claude code changed: None = unavailable
+        swap_short_pips = _to_pips(info.swap_short) if hasattr(info, "swap_short") else None
+
+        # swap_rollover3days: 0=Sun,1=Mon,...,6=Sat (MT5 convention)
+        swap_triple_day = getattr(info, "swap_rollover3days", None)
+
+        # Commission: MT5 stores commission per lot in account currency (already in USD for USD account).
+        commission_per_lot = getattr(info, "commission", None)
+
+        # Leverage: MT5 stores as an integer (e.g. 30 for 1:30).
+        leverage_max = float(info.leverage) if hasattr(info, "leverage") and info.leverage else None
+        margin_rate = round(1.0 / leverage_max, 8) if leverage_max else None  # claude code changed: 1/leverage
+
+        return {
+            "canonical_symbol": symbol,
+            "mt5_symbol": mt5_sym,
+            "pip_size": pip_size,
+            "price_precision": info.digits,
+            "contract_size": float(info.trade_contract_size),
+            "min_volume": float(info.volume_min),
+            "volume_increment": float(info.volume_step),
+            "quantity_precision": len(str(info.volume_step).rstrip("0").split(".")[-1]) if "." in str(info.volume_step) else 0,
+            "spread_pips": spread_pips,
+            "commission_per_lot": commission_per_lot,
+            "swap_long_pips": swap_long_pips,
+            "swap_short_pips": swap_short_pips,
+            "swap_triple_day": swap_triple_day,
+            "leverage_max": leverage_max,
+            "margin_rate": margin_rate,
+            "source": f"MT5_LIVE_{datetime.now(tz=timezone.utc).strftime('%Y-%m-%d')}",
+        }  # claude code changed: all fields needed by ForexInstrumentSpec — no silent None for required fields
+    finally:
+        mt5.shutdown()  # claude code changed: always release
+
+
 if __name__ == "__main__":
     download_all_mt5_symbols()
