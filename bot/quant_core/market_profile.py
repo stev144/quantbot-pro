@@ -335,7 +335,7 @@ FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=fx_new_york_close_ca
                               financing_source="MT5_BROKER_STATIC (OD-FX-FS-1, 2026-10-16): ICFundedEvaluations published swap rates as static historical approximation; label STATIC_SWAP_APPROXIMATION; cost_complete requires ForexInstrumentSpec.swap_long/short from Stage 2",  # claude code changed: 2026-10-16 OD-FX-FS-1 — was None; owner decision
                               cost_model="MT5_BROKER_PUBLISHED (OD-FX-CM-1, 2026-10-16): ICFundedEvaluations published spread + commission; cost_complete requires ForexInstrumentSpec.spread_typical_pips + commission_per_lot from Stage 2",  # claude code changed: 2026-10-16 OD-FX-CM-1 — was None; owner decision
                               universe_rule=FX_UNIVERSE_RULE,               # claude code changed: OD-FX-7 (owner-delegated)
-                              protocol_hash="23764d2a08b7ad3f507a0a9a564491a7529b2cdcffa1f66521269238ebe7c6c4")  # claude code changed: 2026-10-16 FX-DCA-PROTOCOL-1-A2 — SHA-256 of FX_DCA_PROTOCOL_2026-10-16_v3.md; data-derived pair-specific ladder estimator pre-registered before any excursion results examined
+                              protocol_hash="8ab4a5227866e5f0cd1d3b4075fdbdcbbb019ebdcb976ffcdb0adc90c91d08c2")  # claude code changed: 2026-10-16 FX-DCA-PROTOCOL-1-A3 — SHA-256 of FX_DCA_PROTOCOL_2026-10-16_v4.md; locks computed calibration thresholds (ATR_ref + LONG/SHORT MAE quantiles) from movement analysis; first controlled calibration run now authorised
 
 _PROFILES = {"CRYPTO": CRYPTO_PROFILE, "FOREX": FOREX_PROFILE}
 

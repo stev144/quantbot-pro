@@ -441,4 +441,4 @@ class ForexDcaBlockedGateTests(SimpleTestCase):
         self.assertIn("OD-FX-CM-1", FOREX_PROFILE.cost_model)
         # Protocol hash matches the approved FX-DCA-PROTOCOL-1 document
         self.assertEqual(FOREX_PROFILE.protocol_hash,
-                         "23764d2a08b7ad3f507a0a9a564491a7529b2cdcffa1f66521269238ebe7c6c4")  # claude code changed: updated to SHA-256 of FX_DCA_PROTOCOL_2026-10-16_v3.md (amendment A2: data-derived pair-specific ladder, pre-registered before excursion results)
+                         "8ab4a5227866e5f0cd1d3b4075fdbdcbbb019ebdcb976ffcdb0adc90c91d08c2")  # claude code changed: updated to SHA-256 of FX_DCA_PROTOCOL_2026-10-16_v4.md (amendment A3: locks computed calibration thresholds — ATR_ref + LONG/SHORT MAE quantiles from movement analysis)
