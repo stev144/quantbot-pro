@@ -53,7 +53,7 @@ from bot.quant_core.market_profile import FOREX_PROFILE  # claude code changed: 
 
 # ── protocol constants ───────────────────────────────────────────────────────
 TARGET_PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD"]  # claude code changed: FX-DCA-PROTOCOL-1 Part 2
-MIN_TRADING_CANDLES = 40_000   # protocol minimum per pair
+MIN_TRADING_CANDLES = 37_000   # claude code changed: amended minimum — FX-DCA-PROTOCOL-1-A1 (was 40_000; revised after confirming broker full-history limit ~37,461)
 TARGET_TRADING_CANDLES = 50_000
 HISTORY_DAYS = 2200            # ~6 years; MT5 will return however many it has
 TIMEFRAME = "1h"
@@ -88,7 +88,7 @@ def _validate_data(df: pd.DataFrame, symbol: str, profile) -> dict:
     # 2. OHLC validation per candle
     ohlc_errors = 0
     for _, row in df.iterrows():
-        errs = validate_ohlc_candle(row, instrument=None)
+        errs = validate_ohlc_candle(row)  # claude code changed: fix wrong kwarg (was instrument=, param is spec=)
         if errs:
             ohlc_errors += 1
     if ohlc_errors:
