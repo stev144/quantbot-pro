@@ -945,10 +945,16 @@ DCA_EVIDENCE_LABEL = ("DEVELOPMENT EVIDENCE — PSEUDO_HOLDOUT, NOT CLAIM-ELIGIB
                       "decision lock §3.3; the D-5 calibration gate is closed; any claim needs a D-3 registered family)")
 
 
-def dca_run_provenance(df: pd.DataFrame, config: DCAConfig, *, kind: str, extra: Optional[Dict] = None) -> Dict:   # claude code changed: 2026-10-04 DCA F5/F6 — new
+def dca_run_provenance(df: pd.DataFrame, config: DCAConfig, *, kind: str, extra: Optional[Dict] = None,
+                       instrument_spec=None) -> Dict:   # claude code changed: 2026-10-04 DCA F5/F6 — new; 2026-10-16 Workstream G — instrument_spec param
     """Provenance for a DCA research output: method version, config hash, content data version of exactly the rows
     used, the zones hash, the code state and a deterministic run id, plus the D-8 evidence label. Reuses
-    bot.quant_core.provenance (no second provenance scheme)."""
+    bot.quant_core.provenance (no second provenance scheme).
+
+    instrument_spec: optional ForexInstrumentSpec (or any object with .specification_version and
+    .is_cost_complete()). When provided, records instrument_spec_version and cost_complete in provenance so
+    every forex DCA run carries an explicit cost-completeness declaration — never silently omitted.
+    """   # claude code changed: 2026-10-16 Workstream G — instrument spec version and cost_complete in provenance
     from dataclasses import asdict
     from bot.quant_core import provenance as _prov
     from bot.quant_core.research_zones import ZONES
@@ -961,9 +967,16 @@ def dca_run_provenance(df: pd.DataFrame, config: DCAConfig, *, kind: str, extra:
     run_id = _prov.make_run_id(kind=kind, methodology=DCA_METHODOLOGY_VERSION, config=chash, data=dv.data_version,
                                zones=ZONES.zones_hash(), extra=_prov.config_hash(extra or {}),
                                commit=code.commit, dirty=code.dirty_digest)
-    return {"kind": kind, "methodology_version": DCA_METHODOLOGY_VERSION, "config_hash": chash,
+    prov = {"kind": kind, "methodology_version": DCA_METHODOLOGY_VERSION, "config_hash": chash,
             "data_version": dv.data_version, "zones_hash": ZONES.zones_hash(), "code_commit": code.commit,
             "code_dirty": code.dirty, "run_id": run_id, "evidence_label": DCA_EVIDENCE_LABEL}
+    # claude code changed: 2026-10-16 Workstream G — record instrument spec version and cost completeness
+    if instrument_spec is not None:
+        prov["instrument_spec_version"] = getattr(instrument_spec, "specification_version", "UNKNOWN")
+        prov["instrument_spec_cost_complete"] = (
+            instrument_spec.is_cost_complete() if callable(getattr(instrument_spec, "is_cost_complete", None)) else None
+        )
+    return prov
 
 
 def _block_shuffle_returns(returns: "np.ndarray", block_size: int, rng: "np.random.Generator") -> "np.ndarray":

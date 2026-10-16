@@ -69,3 +69,69 @@ def get_venue_execution_costs(venue_id: str) -> dict:
     return VENUE_EXECUTION_COSTS.get(
         venue_id, {"fee_rate": FEE_RATE, "slippage_rate": SLIPPAGE_RATE}
     )
+
+
+# ── Forex cost profile (Workstream C) ─────────────────────────────────────────────────────────────────────
+# claude code changed: new — 2026-10-16, Workstream C. Additive only: all existing crypto constants and
+# get_venue_execution_costs() are UNCHANGED. A separate, structured forex cost profile that tracks whether
+# all material costs are available. cost_complete=False when any of: spread, commission, or swap rates are
+# unknown — simulations must surface this label rather than silently understate true cost.
+
+from dataclasses import dataclass  # claude code changed: deferred import to avoid changing module header
+from typing import Optional as _Optional  # claude code changed: non-conflicting alias
+
+
+@dataclass(frozen=True)
+class ForexCostProfile:
+    """
+    Structured forex execution cost profile for DCA research simulation.
+
+    All fields default to None = unavailable. cost_complete property returns
+    False when any material cost field is None.
+
+    spread_pips: typical bid/ask spread at market open; broker- and pair-specific.
+    commission_per_lot: round-trip commission in account currency; None = no-commission
+                        account OR unknown (callers must know which — set 0.0 for confirmed
+                        no-commission, not None).
+    slippage_pips: expected execution slippage; secondary cost, may be unknown.
+    swap_long_pips_per_day: daily rollover charge for long positions.
+    swap_short_pips_per_day: daily rollover charge for short positions.
+    """  # claude code changed: new — structured cost profile, replaces ad-hoc dict for forex
+    instrument_id: str
+    spread_pips: _Optional[float] = None
+    commission_per_lot: _Optional[float] = None
+    slippage_pips: _Optional[float] = None
+    swap_long_pips_per_day: _Optional[float] = None
+    swap_short_pips_per_day: _Optional[float] = None
+
+    @property
+    def cost_complete(self) -> bool:  # claude code changed: False when any material cost is unknown — same gate as dca_engine summarize_dca_cycles
+        return (
+            self.spread_pips is not None
+            and self.commission_per_lot is not None
+            and self.swap_long_pips_per_day is not None
+            and self.swap_short_pips_per_day is not None
+        )
+
+
+# claude code changed: placeholder forex cost profiles — None values require real broker data (Stage 2).
+# Additive only; never referenced by existing crypto code paths.
+_FOREX_COST_PROFILES: dict = {}  # populated by register_forex_cost_profile() once real broker data exists
+
+
+def register_forex_cost_profile(profile: ForexCostProfile) -> None:  # claude code changed: new — registration point for when broker data arrives
+    """Register a forex cost profile so get_forex_execution_costs() can find it."""
+    _FOREX_COST_PROFILES[profile.instrument_id] = profile
+
+
+def get_forex_execution_costs(instrument_id: str) -> ForexCostProfile:  # claude code changed: new — Workstream C entry point
+    """
+    Returns the ForexCostProfile for instrument_id, or a placeholder with all costs=None
+    when no real profile has been registered. Never returns None — always a ForexCostProfile,
+    always queryable for cost_complete status. A profile with cost_complete=False signals
+    that the simulation must not claim full cost accuracy.
+    """
+    return _FOREX_COST_PROFILES.get(
+        instrument_id,
+        ForexCostProfile(instrument_id=instrument_id)  # all costs=None → cost_complete=False
+    )

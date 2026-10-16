@@ -143,7 +143,8 @@ def _list_prefixes(prefix: str) -> list:   # pragma: no cover — network
     import re
     out, marker = [], ""
     while True:
-        xml = _get(f"{LISTING_API}?delimiter=/&prefix={prefix}" + (f"&marker={marker}" if marker else "")).decode()
+        from urllib.parse import quote   # claude code changed: 2026-10-07 — the archive holds non-ASCII symbol names
+        xml = _get(f"{LISTING_API}?delimiter=/&prefix={quote(prefix)}" + (f"&marker={quote(marker)}" if marker else "")).decode()
         out += re.findall(r"<Prefix>([^<]+)</Prefix>", xml)[1 if not marker else 0:]
         out += re.findall(r"<Key>([^<]+)</Key>", xml)
         if "<IsTruncated>true</IsTruncated>" not in xml:
@@ -190,7 +191,8 @@ def fetch_month(symbol: str, interval: str, ym: str, cache_dir: Path = ARCHIVE_D
     path = Path(cache_dir) / symbol / interval / f"{symbol}-{interval}-{ym}.csv"
     if not path.exists():
         try:
-            raw = _get(f"{ARCHIVE_BASE}/data/spot/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{ym}.zip")
+            from urllib.parse import quote   # claude code changed: 2026-10-07 — non-ASCII symbol names
+            raw = _get(f"{ARCHIVE_BASE}/data/spot/monthly/klines/{quote(symbol)}/{interval}/{quote(symbol)}-{interval}-{ym}.zip")
         except Exception as e:
             if "404" in str(e):
                 return None

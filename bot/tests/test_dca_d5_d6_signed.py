@@ -108,3 +108,18 @@ class ArchiveParsingTests(SimpleTestCase):
             pit._refuse_sealed_month("2026-10")
         with self.assertRaises(HoldoutSealedError):
             pit.fetch_month("BTCUSDT", "1h", "2027-01")                       # refused before any network call
+
+
+class NonAsciiSymbolTests(SimpleTestCase):   # claude code changed: 2026-10-07 — the archive lists non-ASCII symbol names
+
+    def test_archive_urls_are_percent_encoded(self):
+        from unittest import mock
+        seen = []
+
+        def fake_get(url, timeout=60):
+            url.encode("ascii")                                              # http.client would fail here otherwise
+            seen.append(url)
+            return b"<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
+        with mock.patch.object(pit, "_get", fake_get):
+            self.assertEqual(pit.archive_months("\u5e01\u5b89USDT", "1d"), [])
+        self.assertIn("%E5%B8%81", seen[0])
