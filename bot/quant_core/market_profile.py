@@ -335,7 +335,7 @@ FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=fx_new_york_close_ca
                               financing_source="MT5_BROKER_STATIC (OD-FX-FS-1, 2026-10-16): ICFundedEvaluations published swap rates as static historical approximation; label STATIC_SWAP_APPROXIMATION; cost_complete requires ForexInstrumentSpec.swap_long/short from Stage 2",  # claude code changed: 2026-10-16 OD-FX-FS-1 — was None; owner decision
                               cost_model="MT5_BROKER_PUBLISHED (OD-FX-CM-1, 2026-10-16): ICFundedEvaluations published spread + commission; cost_complete requires ForexInstrumentSpec.spread_typical_pips + commission_per_lot from Stage 2",  # claude code changed: 2026-10-16 OD-FX-CM-1 — was None; owner decision
                               universe_rule=FX_UNIVERSE_RULE,               # claude code changed: OD-FX-7 (owner-delegated)
-                              protocol_hash="4ac85b83b9e45c61a43067e9d6411f0f6acf99c89493f2ae3b3bb49de1f09a2b")  # claude code changed: 2026-10-16 FX-DCA-PROTOCOL-1-A1 — SHA-256 of FX_DCA_PROTOCOL_2026-10-16_v2.md; amendment A1: min candles 40k→37k (broker limit) + 5-fold WF splits; locked before any FX DCA results examined
+                              protocol_hash="23764d2a08b7ad3f507a0a9a564491a7529b2cdcffa1f66521269238ebe7c6c4")  # claude code changed: 2026-10-16 FX-DCA-PROTOCOL-1-A2 — SHA-256 of FX_DCA_PROTOCOL_2026-10-16_v3.md; data-derived pair-specific ladder estimator pre-registered before any excursion results examined
 
 _PROFILES = {"CRYPTO": CRYPTO_PROFILE, "FOREX": FOREX_PROFILE}
 
