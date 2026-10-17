@@ -23,9 +23,18 @@ Limitations (honest per audit F2):
   directly is NOT protected by this guard.  The sealed window is
   2024-12-24 00:00 UTC onward (earliest holdout across all pairs).
 
-Protocol: FX-DCA-PROTOCOL-1-A1, Part 4 (holdout sealed clause).
+V6 holdout (FX-DCA-PROTOCOL-1-A1/A5): data-derived; EUR/USD SHORT holdout
+test consumed 2026-10-17, p=0.0380 SUGGESTIVE.
+
+V7 holdout (FX-DCA-PROTOCOL-1-A6, amendment A6-3): all data after
+2026-10-16 08:00 UTC. Hard-coded as V7_HOLDOUT_START. Cannot be opened
+before 2027-10-16 AND >= 10 closed trades per direction. Use
+make_v7_fx_holdout_guard() to obtain a guard for this window.
+
+Protocol: FX-DCA-PROTOCOL-1-A6 (supersedes A1).
 """
 # claude code changed: new file — 2026-10-16, F2 holdout protection; FxDataRole + FxHoldoutGuard
+# claude code changed: v7/A6-3 — added V7_HOLDOUT_START constant + make_v7_fx_holdout_guard()
 
 from __future__ import annotations
 
@@ -206,3 +215,23 @@ def get_default_fx_holdout_guard(csv_paths: Optional[Dict[str, str]] = None) -> 
     if _DEFAULT_GUARD is None:
         _DEFAULT_GUARD = load_fx_holdout_guard_from_csvs(_DEFAULT_CSV_PATHS)
     return _DEFAULT_GUARD
+
+
+# ── V7 holdout boundary (FX-DCA-PROTOCOL-1-A6, amendment A6-3) ───────────────
+
+V7_HOLDOUT_START = pd.Timestamp("2026-10-16 08:00", tz="UTC")  # claude code changed: v7/A6-3 — hard-coded v7 holdout boundary; do NOT move earlier
+
+
+def make_v7_fx_holdout_guard() -> FxHoldoutGuard:  # claude code changed: v7/A6-3 — factory for the v7 holdout guard
+    """
+    Return an FxHoldoutGuard sealed at the v7 holdout boundary.
+
+    The v7 holdout is all data from 2026-10-16 08:00 UTC onward
+    (FX-DCA-PROTOCOL-1-A6, amendment A6-3). It cannot be opened before
+    2027-10-16 AND >= 10 closed trades per direction have accumulated.
+
+    Use this guard in any script that processes live or freshly fetched
+    FX data — it prevents accidentally reading v7 holdout rows in a
+    research context.
+    """
+    return FxHoldoutGuard(holdout_start=V7_HOLDOUT_START)

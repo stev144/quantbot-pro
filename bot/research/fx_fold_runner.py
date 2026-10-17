@@ -1,6 +1,6 @@
 """
 bot/research/fx_fold_runner.py
-Walk-forward fold runner for FX DCA calibration (FX-DCA-PROTOCOL-1-A3).
+Walk-forward fold runner for FX DCA calibration (FX-DCA-PROTOCOL-1-A6).
 
 Orchestrates: train data -> per-fold ATR_ref + MAE quantiles ->
               data-derived ATR-scaled ladder -> simulate on test data.
@@ -513,9 +513,9 @@ def run_fx_fold(
     trailing_pct: float = 0.005,
     fold_num: int = 0,
     max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
-    apply_v6_gates: bool = False,  # claude code changed: v6/A5 — True activates carry gate (A5-1) + ADX(14)≤25 gate (A5-2)
+    apply_v6_gates: bool = False,  # claude code changed: v6/A5 — True activates carry gate (A5-1) + ADX(14)≤25 gate (A5-2); v7/A6-1 — ADX gate SHORT-only
     holdout_guard=None,  # claude code changed: Phase A F-04 — optional FxHoldoutGuard; when provided, asserts test_df contains no holdout rows
-) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates; Phase A F-04 — added holdout_guard
+) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates; Phase A F-04 — added holdout_guard; v7/A6-1 — ADX gate SHORT-only
     """
     Run one FX walk-forward fold: compute per-fold ladder spec from training rows,
     then simulate on test rows only.
@@ -593,8 +593,8 @@ def run_fx_fold(
         swap_long_pips=swap_long,
         swap_short_pips=swap_short,
         max_cycle_candles=max_cycle_candles,
-        adx_gate=apply_v6_gates,  # claude code changed: v6/A5 A5-2 — pass ADX gate flag through
-    )  # claude code changed: v5/A4 — pass max_cycle_candles; v6/A5 — pass adx_gate
+        adx_gate=(apply_v6_gates and direction == "SHORT"),  # claude code changed: v7/A6-1 — ADX gate SHORT only; LONG uses carry gate (A5-1) only
+    )  # claude code changed: v5/A4 — pass max_cycle_candles; v6/A5 — pass adx_gate; v7/A6-1 — ADX gate SHORT-only
 
     summary = _summarise_trades(trades, spec, mtm=mtm)  # claude code changed: pass mtm for equity stats
 
