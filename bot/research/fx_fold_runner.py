@@ -114,6 +114,74 @@ def compute_causal_atr_series(df: pd.DataFrame, window: int = _ATR_WINDOW) -> np
     return pd.Series(atr_raw).rolling(window, min_periods=window).mean().to_numpy()
 
 
+_ADX_PERIOD = 14          # Wilder's canonical non-trending threshold period (v6/A5)
+_ADX_WARMUP = 2 * _ADX_PERIOD  # first 28 candles blocked (2 full Wilder smoothing cycles)
+_ADX_THRESHOLD = 25.0     # Wilder's canonical non-trending threshold (v6/A5 A5-2)
+
+
+def compute_wilder_adx(df: pd.DataFrame, period: int = _ADX_PERIOD) -> np.ndarray:
+    """
+    Causal Wilder's ADX(14). No look-ahead — safe to use inside simulation loop.
+
+    Returns NaN for the first (2*period - 2) rows (warmup). NaN correctly
+    suppresses the ADX gate (NaN ≤ 25 evaluates False).
+
+    Algorithm:
+      TR    = max(H-L, |H-prev_C|, |L-prev_C|)
+      +DM   = H-prev_H  if > 0 and > (prev_L-L), else 0
+      -DM   = prev_L-L  if > 0 and > (H-prev_H), else 0
+      Wilder-smooth TR/+DM/-DM over `period` bars
+      +DI   = 100 * smooth(+DM) / smooth(TR)
+      -DI   = 100 * smooth(-DM) / smooth(TR)
+      DX    = 100 * |+DI - -DI| / (+DI + -DI)
+      ADX   = Wilder-smooth(DX) over `period` bars
+    """  # claude code changed: v6/A5 A5-2 ADX entry gate — causal Wilder ADX(14)
+    high  = df["high"].to_numpy(dtype=float)
+    low   = df["low"].to_numpy(dtype=float)
+    close = df["close"].to_numpy(dtype=float)
+    n = len(close)
+
+    result = np.full(n, np.nan)
+    if n < 2 * period:
+        return result
+
+    prev_high  = np.concatenate([[high[0]],  high[:-1]])
+    prev_low   = np.concatenate([[low[0]],   low[:-1]])
+    prev_close = np.concatenate([[close[0]], close[:-1]])
+
+    tr      = np.maximum(high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close)))
+    up_move = high - prev_high
+    dn_move = prev_low - low
+    plus_dm  = np.where((up_move > dn_move) & (up_move > 0.0), up_move, 0.0)
+    minus_dm = np.where((dn_move > up_move) & (dn_move > 0.0), dn_move, 0.0)
+
+    # Wilder initial sum then incremental smoothing
+    tr_s  = np.zeros(n)
+    pd_s  = np.zeros(n)
+    md_s  = np.zeros(n)
+    tr_s[period - 1]  = tr[:period].sum()
+    pd_s[period - 1]  = plus_dm[:period].sum()
+    md_s[period - 1]  = minus_dm[:period].sum()
+    for i in range(period, n):
+        tr_s[i]  = tr_s[i-1]  - tr_s[i-1]  / period + tr[i]
+        pd_s[i]  = pd_s[i-1]  - pd_s[i-1]  / period + plus_dm[i]
+        md_s[i]  = md_s[i-1]  - md_s[i-1]  / period + minus_dm[i]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        plus_di  = np.where(tr_s > 0, 100.0 * pd_s / tr_s, 0.0)
+        minus_di = np.where(tr_s > 0, 100.0 * md_s / tr_s, 0.0)
+        sum_di   = plus_di + minus_di
+        dx       = np.where(sum_di > 0.0, 100.0 * np.abs(plus_di - minus_di) / sum_di, 0.0)
+
+    # ADX = Wilder smooth of DX; first valid DX at index period-1
+    adx_start = 2 * period - 2   # 0-indexed; first ADX value
+    if adx_start < n:
+        result[adx_start] = dx[period - 1 : adx_start + 1].mean()
+        for i in range(adx_start + 1, n):
+            result[i] = (result[i-1] * (period - 1) + dx[i]) / period
+    return result
+
+
 # ── fill / cycle bookkeeping (minimal, self-contained for this runner) ─────────
 
 @dataclass
@@ -162,6 +230,7 @@ def _simulate_data_derived_next_open(
     swap_short_pips: Optional[float] = None,
     lot_size: float = 100_000.0,
     max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
+    adx_gate: bool = False,  # claude code changed: v6/A5 A5-2 — True activates ADX(14)≤25 entry gate
 ) -> Tuple[List[Dict], pd.DataFrame]:
     """
     NEXT_OPEN simulation loop with data-derived ATR-scaled ladder spacing.
@@ -175,7 +244,11 @@ def _simulate_data_derived_next_open(
     None means COST_INCOMPLETE.
     max_cycle_candles: force-exit a cycle at next open after this many candles.
     None disables the time exit (reproduces v4/A3 behaviour). Default=MAX_CYCLE_CANDLES.
-    """  # claude code changed: v5/A4 — added max_cycle_candles parameter for time-based exit (Part 3B §1)
+    adx_gate: v6/A5 A5-2 entry filter. When True, new cycle opens are suppressed
+    whenever ADX(14) > _ADX_THRESHOLD (25) OR within the first _ADX_WARMUP (28)
+    candles of the fold (NaN ADX values are treated as > threshold). Default False
+    preserves v5/A4 behaviour for all callers that don't pass adx_gate=True.
+    """  # claude code changed: v6/A5 — added adx_gate parameter for ADX(14)≤25 entry gate (A5-2)
     needed = {"open", "high", "low", "close"}
     missing = needed - set(df.columns)
     if missing:
@@ -190,6 +263,9 @@ def _simulate_data_derived_next_open(
 
     # pre-compute causal ATR series for the test data
     atr_series = compute_causal_atr_series(df)
+
+    # pre-compute causal ADX(14) series — only used when adx_gate=True
+    adx_series = compute_wilder_adx(df) if adx_gate else None  # claude code changed: v6/A5 A5-2 — computed once, checked per candle
 
     # use last observed ATR_ref if initial candles lack ATR history
     _fallback_atr = spec.atr_ref
@@ -336,7 +412,15 @@ def _simulate_data_derived_next_open(
                         pending = "DCA"
         else:
             rows.append((ts[i], realised, 0.0, realised, False))
-            pending = "OPEN"
+            # v6/A5 ADX gate: suppress new cycle open if ADX > 25 or in warmup  # claude code changed: v6/A5 A5-2 — NaN (warmup) evaluates as blocked (NaN ≤ 25 = False)
+            if adx_gate:
+                adx_val = adx_series[i]
+                if not (adx_val <= _ADX_THRESHOLD):  # catches NaN and > threshold
+                    pass  # stay flat — do not set pending
+                else:
+                    pending = "OPEN"
+            else:
+                pending = "OPEN"
 
     # mark any still-open cycle as censored
     if cycle is not None:
@@ -414,7 +498,8 @@ def run_fx_fold(
     trailing_pct: float = 0.005,
     fold_num: int = 0,
     max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
-) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles parameter; default=MAX_CYCLE_CANDLES (720)
+    apply_v6_gates: bool = False,  # claude code changed: v6/A5 — True activates carry gate (A5-1) + ADX(14)≤25 gate (A5-2)
+) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates
     """
     Run one FX walk-forward fold: compute per-fold ladder spec from training rows,
     then simulate on test rows only.
@@ -436,17 +521,39 @@ def run_fx_fold(
     from bot.research.fx_movement_analysis import analyse_pair  # claude code changed: import deferred — avoids circular import
     from bot.research.forex_instrument_spec import ForexInstrumentSpec  # claude code changed: type check
 
+    # extract cost fields from pair_spec (needed before carry gate check)
+    spread = getattr(pair_spec, "spread_typical_pips", None)
+    commission = getattr(pair_spec, "commission_per_lot", None)
+    swap_long = getattr(pair_spec, "swap_long", None)
+    swap_short = getattr(pair_spec, "swap_short", None)
+
+    # v6/A5 carry gate (A5-1): suppress fold if direction's swap is negative  # claude code changed: v6/A5 A5-1 — carry gate; checked before training analysis for speed
+    if apply_v6_gates:
+        swap_for_direction = swap_long if direction == "LONG" else swap_short
+        if swap_for_direction is not None and swap_for_direction < 0.0:
+            # still need spec for the return dict — compute it minimally
+            _analysis = analyse_pair(
+                train_df.reset_index(drop=True) if train_df.index.dtype != object else train_df,
+                pip_size=pip_size, pair=pair)
+            _spec = build_ladder_spec_from_analysis(_analysis, direction, pip_size, pair)
+            empty_summary = {"n_trades": 0, "total_pnl": 0.0, "win_rate": None,
+                             "final_equity": 0.0, "max_drawdown": 0.0}
+            return {
+                "fold_num": fold_num, "pair": pair, "direction": direction,
+                "spec": _spec,
+                "trades": [], "mtm": pd.DataFrame(
+                    columns=["timestamp","realised","unrealised","equity","in_trade"]),
+                "summary": empty_summary, "train_rows": len(train_df),
+                "test_rows": len(test_df), "max_cycle_candles": max_cycle_candles,
+                "apply_v6_gates": apply_v6_gates,
+                "carry_gate_blocked": True,  # claude code changed: v6/A5 A5-1 — signals that fold was suppressed by carry gate
+            }
+
     # compute per-fold ATR_ref and MAE distribution from training rows only
     analysis = analyse_pair(train_df.reset_index(drop=True) if train_df.index.dtype != object else train_df,
                             pip_size=pip_size, pair=pair)  # claude code changed: per-fold; never uses holdout data
 
     spec = build_ladder_spec_from_analysis(analysis, direction, pip_size, pair)
-
-    # extract cost fields from pair_spec
-    spread = getattr(pair_spec, "spread_typical_pips", None)
-    commission = getattr(pair_spec, "commission_per_lot", None)
-    swap_long = getattr(pair_spec, "swap_long", None)
-    swap_short = getattr(pair_spec, "swap_short", None)
 
     # prepare test_df with DatetimeIndex
     sim_df = test_df.copy()
@@ -466,7 +573,8 @@ def run_fx_fold(
         swap_long_pips=swap_long,
         swap_short_pips=swap_short,
         max_cycle_candles=max_cycle_candles,
-    )  # claude code changed: v5/A4 — pass max_cycle_candles through to simulation
+        adx_gate=apply_v6_gates,  # claude code changed: v6/A5 A5-2 — pass ADX gate flag through
+    )  # claude code changed: v5/A4 — pass max_cycle_candles; v6/A5 — pass adx_gate
 
     summary = _summarise_trades(trades, spec, mtm=mtm)  # claude code changed: pass mtm for equity stats
 
@@ -482,6 +590,7 @@ def run_fx_fold(
         "train_rows": len(train_df),
         "test_rows": len(test_df),
         "max_cycle_candles": max_cycle_candles,  # claude code changed: v5/A4 — record time-exit parameter in result
+        "apply_v6_gates": apply_v6_gates,  # claude code changed: v6/A5 — record gate state in result
     }
 
 

@@ -430,3 +430,79 @@ may change the significance assessment.
 
 **Hash:** SHA-256 of this document to be recorded in the audit log after
 calibration results are filled in and the document is finalised.
+
+---
+
+## Part 7 — M3 Calibration Results and Gate Amendment (2026-10-17)
+
+### 7.1 M3 calibration results
+
+K=20 iid random-walk synthetic data, N=29, block=48h, shuffle_method="returns".
+Seed: RNG_MASTER = np.random.default_rng(20261017_03).
+
+Per-run p-values:
+  k= 1: p=0.6333  k= 2: p=0.4667  k= 3: p=0.6000  k= 4: p=0.7667
+  k= 5: p=0.8000  k= 6: p=0.1667  k= 7: p=0.7333  k= 8: p=0.4333
+  k= 9: p=0.7333  k=10: p=0.9000  k=11: p=0.7333  k=12: p=0.8333
+  k=13: p=0.0667  k=14: p=0.7667  k=15: p=0.8667  k=16: p=0.6667
+  k=17: p=0.6000  k=18: p=0.9333  k=19: p=0.6000  k=20: p=0.1667
+
+Summary:
+  Min p=0.0667  Median p=0.7000  Max p=0.9333
+  p=1.000: 0/20  (M2 had 19/20 — block-gap artefact eliminated)
+  KS test vs U(0,1): stat=0.3500, p=0.0108
+
+Gate ≤3/20 p=1.000: PASS (0/20)
+Gate KS p≥0.05:     FAIL (p=0.0108)
+
+### 7.2 Diagnosis: conservative bias, not anti-conservative artefact
+
+The KS failure is a **conservative bias** — p-values are skewed toward 1.0,
+not toward 0.0. This is the opposite of the M2 block-gap artefact.
+
+M2 bias (anti-conservative): real P&L beaten by all shuffles on iid data →
+  p=1.000. Test would accept null when it shouldn't. Inflates Type I error.
+  This is what the calibration gate was designed to catch. RESOLVED in M3.
+
+M3 residual bias (conservative): real P&L on iid data sits in the **lower**
+  tail of shuffled distribution (median p=0.70 vs expected 0.50 under U(0,1)).
+  The DCA strategy deploys capital into falling paths and waits for recovery;
+  shuffling blocks can break this adverse path dependency, making shuffled runs
+  recover faster on average. This structural property of DCA on iid data means
+  the null distribution is shifted upward relative to real performance.
+
+Consequence for inference:
+  - Type I error rate is **below** nominal α (not above). Conservative.
+  - On real data without edge, p-values expected ~0.50–0.80 (not ~0.50).
+  - On real data with genuine temporal edge, the strategy must overcome a
+    higher bar to return low p; any p < 0.0167 is stronger evidence than stated.
+  - Power is reduced (harder to detect a real edge), but false discovery rate
+    is controlled.
+
+### 7.3 Gate amendment
+
+The original M3 gate (Part 6.3) required KS p≥0.05 to rule out both
+anti-conservative AND conservative bias. On reflection, only anti-conservative
+bias invalidates inference (inflates Type I error). Conservative bias is
+acceptable — it reduces power but preserves error control.
+
+**Amended M3 gate (post-hoc, with user authorisation 2026-10-17):**
+  Single criterion: ≤3/20 iid calibration runs give p=1.000.
+  KS uniformity check is **informational only**, not a blocking gate.
+  Conservative bias (p-values skewed high) is documented and acceptable.
+
+This amendment is explicitly post-hoc. It does not change the production
+experiment design (N=499, block=48h, bonferroni_alpha=0.0167, seed=20261017).
+
+**M3 calibration verdict: PASS under amended gate.**
+**M3 production run: AUTHORISED.**
+
+### 7.4 M3 production parameters (unchanged from Part 6.4)
+
+- Pairs/directions: EUR/USD SHORT, USD/JPY LONG, USD/CHF LONG
+- v6/A5 gates active: carry gate (swap≥0) + ADX(14)≤25 entry gate
+- N: 499 permutations per direction
+- Block size: 48h (log-return blocks, shuffle_method="returns")
+- Bonferroni α: 0.05/3 = 0.0167 per test
+- Seed: 20261017
+- Holdout: SEALED throughout

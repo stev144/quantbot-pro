@@ -99,6 +99,100 @@ def block_shuffle_ohlcv(
     return shuffled
 
 
+def block_shuffle_returns(
+    df: pd.DataFrame,
+    block_size: int,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """
+    M3 null model: shuffle log-return blocks rather than price-level blocks.
+
+    Eliminates the BLOCK-GAP ARTEFACT discovered in M2 calibration (2026-10-17):
+    raw OHLCV block shuffle creates discontinuous price jumps at block boundaries
+    that the DCA strategy exploits as artificial fill opportunities, inflating
+    shuffled P&L even on iid data with no temporal structure.
+
+    Algorithm (M3 spec):
+      1. Compute log-returns relative to previous close:
+           r_close[t] = log(close[t] / close[t-1])
+           r_open[t]  = log(open[t]  / close[t-1])
+           r_high[t]  = log(high[t]  / open[t])    (within-candle)
+           r_low[t]   = log(low[t]   / open[t])    (within-candle)
+      2. Divide return series into contiguous blocks of block_size rows.
+      3. Permute block order (identical algorithm to M1/M2).
+      4. Reconstruct price levels continuously from seed = original first close:
+           close_rec = seed * exp(cumsum(r_close_shuffled))
+           open_rec  = prev_close_rec * exp(r_open_shuffled)
+           high_rec  = open_rec * exp(r_high_shuffled)
+           low_rec   = open_rec * exp(r_low_shuffled)
+      Price path is continuous — no artificial gaps at block boundaries.
+      Within-candle OHLC ratios are preserved exactly from the source candle.
+
+    Volume is shuffled block-wise (same block order) to preserve intra-block
+    volume/price co-movement.  DatetimeIndex stays in original chronological
+    position (same convention as block_shuffle_ohlcv).
+    """  # claude code changed: M3 null model — log-return block shuffle to eliminate block-gap artefact
+    n = len(df)
+    if n == 0 or block_size <= 0:
+        return df.copy()
+
+    close = df["close"].to_numpy(dtype=float)
+    open_ = df["open"].to_numpy(dtype=float)
+    high  = df["high"].to_numpy(dtype=float)
+    low   = df["low"].to_numpy(dtype=float)
+
+    # Previous close vector: seed the first element with close[0] so r_close[0]=0
+    prev_close = np.empty(n, dtype=float)
+    prev_close[0] = close[0]
+    prev_close[1:] = close[:-1]
+
+    # Log-returns (all relative to previous close, except within-candle h/l)
+    r_close = np.log(close / prev_close)
+    r_open  = np.log(open_  / prev_close)
+    r_high  = np.log(high   / open_)   # within-candle, ≥0
+    r_low   = np.log(low    / open_)   # within-candle, ≤0
+
+    # Block construction and permutation (same algorithm as block_shuffle_ohlcv)
+    n_blocks = math.ceil(n / block_size)
+    block_bounds = [
+        (i * block_size, min((i + 1) * block_size, n)) for i in range(n_blocks)
+    ]
+    order = rng.permutation(n_blocks)
+    shuffled_positions = np.concatenate([
+        np.arange(start, end) for start, end in (block_bounds[i] for i in order)
+    ])
+
+    # Shuffle return series
+    r_close_s = r_close[shuffled_positions]
+    r_open_s  = r_open[shuffled_positions]
+    r_high_s  = r_high[shuffled_positions]
+    r_low_s   = r_low[shuffled_positions]
+
+    # Reconstruct price levels continuously from seed
+    seed = close[0]
+    rec_close = seed * np.exp(np.cumsum(r_close_s))
+    prev_rec   = np.empty(n, dtype=float)
+    prev_rec[0] = seed
+    prev_rec[1:] = rec_close[:-1]
+    rec_open  = prev_rec * np.exp(r_open_s)
+    rec_high  = rec_open  * np.exp(r_high_s)
+    rec_low   = rec_open  * np.exp(r_low_s)
+
+    # Clip to enforce OHLC consistency against floating-point drift
+    rec_high = np.maximum(rec_high, np.maximum(rec_open, rec_close))
+    rec_low  = np.minimum(rec_low,  np.minimum(rec_open, rec_close))
+    rec_low  = np.maximum(rec_low, seed * 1e-6)   # guard against near-zero from compounding
+
+    result = df.copy()
+    result["open"]  = rec_open
+    result["high"]  = rec_high
+    result["low"]   = rec_low
+    result["close"] = rec_close
+    if "volume" in result.columns:
+        result["volume"] = df["volume"].to_numpy()[shuffled_positions]
+    return result
+
+
 # ── Prepare a fold's test_df for simulation ────────────────────────────────────
 
 def _prepare_sim_df(test_df: pd.DataFrame) -> pd.DataFrame:
@@ -137,13 +231,22 @@ def _run_one_permuted_fold(
     block_size: int,
     rng: np.random.Generator,
     max_cycle_candles: Optional[int] = _DEFAULT_MAX_CYCLE_CANDLES,  # claude code changed: M2 F-M2-2 — explicit, not silently inherited from fx_fold_runner default
+    shuffle_method: str = "returns",  # claude code changed: M3 — "returns" (log-return, no gap artefact) or "levels" (M1/M2, deprecated)
 ) -> Dict:
     """
     Run ONE permuted simulation on a single fold's test data with a fixed spec.
 
     Returns dict with total_realised_pnl and final_equity.
-    """  # claude code changed: new — single-fold inner loop for permutation test
-    shuffled_df = block_shuffle_ohlcv(sim_df, block_size, rng)
+
+    shuffle_method="returns" (default, M3): block_shuffle_returns — eliminates
+        the block-gap artefact that invalidated M1/M2 calibration.
+    shuffle_method="levels" (deprecated, M1/M2): block_shuffle_ohlcv — kept
+        for reference only; produces anti-conservative null on DCA strategies.
+    """  # claude code changed: M3 — routes to block_shuffle_returns by default; "levels" kept for reference
+    if shuffle_method == "returns":
+        shuffled_df = block_shuffle_returns(sim_df, block_size, rng)
+    else:
+        shuffled_df = block_shuffle_ohlcv(sim_df, block_size, rng)
     trades, mtm = _simulate_data_derived_next_open(
         shuffled_df, spec,
         spread_pips=spread,
@@ -231,6 +334,7 @@ def run_fx_calibration_permutation(
     random_seed: Optional[int] = None,
     bonferroni_alpha: float = BONFERRONI_ALPHA_PER_PAIR,  # claude code changed: M2 F-M2-1 — parameterized; M1 default=0.01 (5-pair family); M2/v6 callers pass 0.05/3=0.0167
     max_cycle_candles: Optional[int] = _DEFAULT_MAX_CYCLE_CANDLES,  # claude code changed: M2 F-M2-2 — explicit; permuted folds must match real-fold simulation parameters
+    shuffle_method: str = "returns",  # claude code changed: M3 — "returns" (log-return, M3 default) or "levels" (M1/M2, deprecated)
 ) -> Dict:
     """
     Block-shuffle permutation test for one (pair, direction) across all 5
@@ -308,6 +412,7 @@ def run_fx_calibration_permutation(
                 spread, commission, swap_long, swap_short,
                 block_size, rng,
                 max_cycle_candles=max_cycle_candles,  # claude code changed: M2 F-M2-2 — forwarded explicitly
+                shuffle_method=shuffle_method,  # claude code changed: M3 — forwarded to inner fold runner
             )
             per_fold_permuted_pnl[fold_idx].append(result["total_realised_pnl"])
             per_fold_permuted_feq[fold_idx].append(result["final_equity"])
