@@ -277,6 +277,15 @@ def _simulate_data_derived_next_open(
     if n < 2:
         return [], pd.DataFrame(columns=["timestamp", "realised", "unrealised", "equity", "in_trade"])
 
+    # F-08: swap accrual formula assumes 1h bars (swap_pips_per_h = daily_pips / 24)  # claude code changed: Phase A F-08 — bar-interval guard
+    if n >= 2:
+        _bar_h = (ts[1] - ts[0]).total_seconds() / 3600.0
+        if abs(_bar_h - 1.0) > 0.01:
+            raise ValueError(
+                f"_simulate_data_derived_next_open: expected 1h bars, got {_bar_h:.2f}h — "
+                "swap accrual formula assumes hourly candles (swap_pips_per_h = daily_pips / 24)"
+            )
+
     spread_fraction = (spread_pips or 0.0) * spec.pip_size  # claude code changed: spread cost per unit
     swap_pips_per_h = (
         (swap_long_pips if spec.direction == "LONG" else swap_short_pips) or 0.0
@@ -354,9 +363,9 @@ def _simulate_data_derived_next_open(
             wap = cycle.weighted_avg_price
             qty = cycle.total_qty
             if spec.direction == "LONG":
-                unreal = (close_price - wap) * qty
+                unreal = (close_price - spread_fraction - wap) * qty  # claude code changed: Phase A F-05 — deduct exit spread from liquidation mark
             else:
-                unreal = (wap - close_price) * qty
+                unreal = (wap - (close_price + spread_fraction)) * qty  # claude code changed: Phase A F-05 — add exit spread cost for SHORT
             rows.append((ts[i], realised, unreal, realised + unreal, True))
 
             # profit target + trailing stop
@@ -431,6 +440,12 @@ def _simulate_data_derived_next_open(
             gross = (exit_price - wap) * qty
         else:
             gross = (wap - exit_price) * qty
+        # F-03: apply same cost deductions as the EXIT block so profit_usdt is net, not gross  # claude code changed: Phase A F-03
+        candles_held_cens = n - 1 - cycle.entry_candle
+        swap_pnl_cens = swap_pips_per_h * candles_held_cens * spec.pip_size * qty  # claude code changed: Phase A F-03
+        notional_lots_cens = (cycle.total_cost / wap) / lot_size if lot_size > 0 else 0.0  # claude code changed: Phase A F-03
+        commission_cost_cens = (commission_per_lot or 0.0) * notional_lots_cens * 2  # claude code changed: Phase A F-03
+        profit_cens = gross + swap_pnl_cens - commission_cost_cens  # claude code changed: Phase A F-03
         trades.append({
             "entry_candle": cycle.entry_candle,
             "exit_candle": n - 1,
@@ -441,11 +456,11 @@ def _simulate_data_derived_next_open(
             "wap": wap,
             "fills": len(cycle.fills),
             "total_cost_usdt": cycle.total_cost,
-            "profit_usdt": gross,
+            "profit_usdt": profit_cens,  # claude code changed: Phase A F-03 — net (was gross); censored=True distinguishes from normal exits
             "gross_usdt": gross,
-            "commission_usdt": 0.0,
-            "swap_usdt": 0.0,
-            "candles_held": n - 1 - cycle.entry_candle,
+            "commission_usdt": commission_cost_cens,  # claude code changed: Phase A F-03
+            "swap_pnl_usdt": swap_pnl_cens,  # claude code changed: Phase A F-07 — key harmonised with closed trades (was "swap_usdt")
+            "candles_held": candles_held_cens,
             "exit_reason": "DATA_END_STILL_OPEN",
             "cost_complete": cost_complete,
             "direction": spec.direction,
@@ -499,7 +514,8 @@ def run_fx_fold(
     fold_num: int = 0,
     max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
     apply_v6_gates: bool = False,  # claude code changed: v6/A5 — True activates carry gate (A5-1) + ADX(14)≤25 gate (A5-2)
-) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates
+    holdout_guard=None,  # claude code changed: Phase A F-04 — optional FxHoldoutGuard; when provided, asserts test_df contains no holdout rows
+) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates; Phase A F-04 — added holdout_guard
     """
     Run one FX walk-forward fold: compute per-fold ladder spec from training rows,
     then simulate on test rows only.
@@ -520,6 +536,10 @@ def run_fx_fold(
     """  # claude code changed: new — top-level fold runner; train->spec->simulate->results
     from bot.research.fx_movement_analysis import analyse_pair  # claude code changed: import deferred — avoids circular import
     from bot.research.forex_instrument_spec import ForexInstrumentSpec  # claude code changed: type check
+
+    # F-04: enforce holdout seal before any simulation  # claude code changed: Phase A F-04 — raises FxHoldoutSealedError if caller accidentally passes holdout rows
+    if holdout_guard is not None:
+        holdout_guard.assert_no_fx_holdout(test_df.index if hasattr(test_df, "index") else test_df)
 
     # extract cost fields from pair_spec (needed before carry gate check)
     spread = getattr(pair_spec, "spread_typical_pips", None)
