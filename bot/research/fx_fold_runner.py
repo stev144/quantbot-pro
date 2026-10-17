@@ -35,6 +35,11 @@ _MIN_PIPS = 5.0             # claude code changed: per v3 Step 4
 _MAX_SPACING = 0.25         # claude code changed: per v3 Step 5
 _MULTIPLIERS = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0)   # claude code changed: levels 2-7, per protocol; unchanged from v1
 
+# ── risk-control constants (v5/A4) ────────────────────────────────────────────
+MAX_CYCLE_CANDLES = 720         # claude code changed: v5/A4 — time exit after 30×H=24 candles (30 trading days); see FX_DCA_PROTOCOL_2026-10-16_v5.md Part 3B §1
+_MAX_LEVELS = 7                 # claude code changed: v5/A4 — explicit cap: 1 entry + 6 DCA add-ons; already enforced by len(spec.base_pips); documented here per §2
+_MAX_DEPLOYED_MULTIPLIER = 127  # claude code changed: v5/A4 — 1+2+4+8+16+32+64; max notional = initial_usdt × 127 = 762 USDT at initial_usdt=6
+
 
 @dataclass(frozen=True)
 class FxLadderSpec:
@@ -156,6 +161,7 @@ def _simulate_data_derived_next_open(
     swap_long_pips: Optional[float] = None,
     swap_short_pips: Optional[float] = None,
     lot_size: float = 100_000.0,
+    max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
 ) -> Tuple[List[Dict], pd.DataFrame]:
     """
     NEXT_OPEN simulation loop with data-derived ATR-scaled ladder spacing.
@@ -167,7 +173,9 @@ def _simulate_data_derived_next_open(
     df must have DatetimeIndex (UTC-aware) and columns: open, high, low, close.
     spread_pips / commission_per_lot / swap_*_pips from ForexInstrumentSpec;
     None means COST_INCOMPLETE.
-    """  # claude code changed: new — inner NEXT_OPEN loop with dynamic v3 ladder spacing
+    max_cycle_candles: force-exit a cycle at next open after this many candles.
+    None disables the time exit (reproduces v4/A3 behaviour). Default=MAX_CYCLE_CANDLES.
+    """  # claude code changed: v5/A4 — added max_cycle_candles parameter for time-based exit (Part 3B §1)
     needed = {"open", "high", "low", "close"}
     missing = needed - set(df.columns)
     if missing:
@@ -302,6 +310,12 @@ def _simulate_data_derived_next_open(
                     if close_price >= trail_trigger:
                         pending, pending_exit_reason = "EXIT", "PROFIT_TARGET_TRAILING"
 
+            # time exit check (v5/A4): fires after profit check, before ladder DCA
+            if pending is None and max_cycle_candles is not None:  # claude code changed: v5/A4 — time-based exit per Part 3B §1
+                if (i - cycle.entry_candle) >= max_cycle_candles:  # claude code changed: v5/A4 — candles_held >= MAX_CYCLE_CANDLES
+                    pending = "EXIT"  # claude code changed: v5/A4 — schedules exit at NEXT_OPEN
+                    pending_exit_reason = "TIME_EXIT"  # claude code changed: v5/A4 — distinct label from PROFIT_TARGET_TRAILING
+
             # ladder level trigger check (ATR-scaled)
             if pending is None:
                 lvl_idx = cycle.next_level_idx
@@ -399,7 +413,8 @@ def run_fx_fold(
     profit_activation_pct: float = 0.025,
     trailing_pct: float = 0.005,
     fold_num: int = 0,
-) -> Dict:
+    max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
+) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles parameter; default=MAX_CYCLE_CANDLES (720)
     """
     Run one FX walk-forward fold: compute per-fold ladder spec from training rows,
     then simulate on test rows only.
@@ -450,7 +465,8 @@ def run_fx_fold(
         commission_per_lot=commission,
         swap_long_pips=swap_long,
         swap_short_pips=swap_short,
-    )
+        max_cycle_candles=max_cycle_candles,
+    )  # claude code changed: v5/A4 — pass max_cycle_candles through to simulation
 
     summary = _summarise_trades(trades, spec, mtm=mtm)  # claude code changed: pass mtm for equity stats
 
@@ -465,6 +481,7 @@ def run_fx_fold(
         "summary": summary,
         "train_rows": len(train_df),
         "test_rows": len(test_df),
+        "max_cycle_candles": max_cycle_candles,  # claude code changed: v5/A4 — record time-exit parameter in result
     }
 
 

@@ -20,12 +20,13 @@ from django.test import SimpleTestCase
 
 from bot.research.fx_fold_runner import (
     FxLadderSpec,
+    MAX_CYCLE_CANDLES,
     compute_dynamic_drop_pct,
     compute_equity_stats,
     build_ladder_spec_from_analysis,
     _simulate_data_derived_next_open,
     _summarise_trades,
-)  # claude code changed: added compute_equity_stats import
+)  # claude code changed: added MAX_CYCLE_CANDLES, compute_equity_stats imports
 
 
 # ── FxLadderSpec ──────────────────────────────────────────────────────────────
@@ -361,3 +362,137 @@ class ComputeEquityStatsTests(SimpleTestCase):  # claude code changed: new test 
         self.assertIn("max_drawdown", s)
         self.assertIn("final_equity", s)
         self.assertAlmostEqual(s["final_equity"], 2.0)
+
+
+# ── time-based exit (v5/A4, MAX_CYCLE_CANDLES) ────────────────────────────────
+
+def _flat_df(n: int, price: float = 1.1000) -> pd.DataFrame:
+    """Synthetic OHLCV with flat price — no DCA triggers, no profit target."""  # claude code changed: v5/A4 — helper for time-exit tests
+    idx = pd.date_range("2021-01-01", periods=n, freq="1h", tz="UTC")
+    return pd.DataFrame(
+        {"open": price, "high": price + 0.0001, "low": price - 0.0001,
+         "close": price, "volume": 1000.0},
+        index=idx,
+    )
+
+
+def _spec_no_dca() -> FxLadderSpec:
+    """Spec with very large base_pips so DCA never triggers on flat/mildly adverse prices."""  # claude code changed: v5/A4 — helper
+    return FxLadderSpec(
+        pair="EUR/USD", direction="LONG", pip_size=0.0001,
+        atr_ref=0.00128,
+        base_pips=(9999.0, 9999.0, 9999.0, 9999.0, 9999.0, 9999.0),  # effectively unreachable
+    )
+
+
+class TimeExitTests(SimpleTestCase):  # claude code changed: v5/A4 — tests for MAX_CYCLE_CANDLES time-based exit (Part 3B §1)
+
+    def test_constant_exported(self):
+        """MAX_CYCLE_CANDLES is exported and equals protocol-specified value."""
+        self.assertEqual(MAX_CYCLE_CANDLES, 720)  # claude code changed: v5/A4 — protocol value check
+
+    def test_time_exit_fires_at_max_candles(self):
+        """A cycle open for >= max_cycle_candles candles gets TIME_EXIT."""  # claude code changed: v5/A4
+        limit = 5
+        # Need limit + 3 candles: candle 0 (OPEN pending), 1 (entry fills), 1..limit+1 (held),
+        # limit+2 (TIME_EXIT fires at close), limit+3 (exit executes at open)
+        df = _flat_df(limit + 4)
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(df, spec, max_cycle_candles=limit)
+        closed = [t for t in trades if t["exit_reason"] != "DATA_END_STILL_OPEN"]
+        self.assertTrue(len(closed) >= 1, "Expected at least one closed trade")
+        time_exits = [t for t in closed if t["exit_reason"] == "TIME_EXIT"]
+        self.assertTrue(len(time_exits) >= 1, "Expected at least one TIME_EXIT trade")
+
+    def test_time_exit_not_fired_below_limit(self):
+        """No TIME_EXIT when data ends before limit is reached."""  # claude code changed: v5/A4
+        limit = 500
+        df = _flat_df(50)  # only 50 candles, well below limit
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(df, spec, max_cycle_candles=limit)
+        time_exits = [t for t in trades if t.get("exit_reason") == "TIME_EXIT"]
+        self.assertEqual(len(time_exits), 0, "Should be no TIME_EXIT when data ends before limit")
+
+    def test_max_cycle_candles_none_disables_time_exit(self):
+        """max_cycle_candles=None disables time exit entirely."""  # claude code changed: v5/A4
+        df = _flat_df(1000)
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(df, spec, max_cycle_candles=None)
+        time_exits = [t for t in trades if t.get("exit_reason") == "TIME_EXIT"]
+        self.assertEqual(len(time_exits), 0, "max_cycle_candles=None should disable TIME_EXIT")
+
+    def test_time_exit_trade_is_closed_not_censored(self):
+        """TIME_EXIT produces a closed trade (not DATA_END_STILL_OPEN)."""  # claude code changed: v5/A4
+        limit = 3
+        df = _flat_df(limit + 4)
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(df, spec, max_cycle_candles=limit)
+        time_exits = [t for t in trades if t.get("exit_reason") == "TIME_EXIT"]
+        self.assertTrue(len(time_exits) >= 1)
+        for t in time_exits:
+            self.assertNotIn("censored", t, "TIME_EXIT trade should not be marked censored")
+
+    def test_time_exit_pnl_known_answer_flat_price(self):
+        """With flat price and no costs, TIME_EXIT P&L = 0."""  # claude code changed: v5/A4 — known-answer
+        limit = 4
+        price = 1.1000
+        df = _flat_df(limit + 4, price=price)
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(
+            df, spec,
+            max_cycle_candles=limit,
+            spread_pips=0.0, commission_per_lot=0.0,
+            swap_long_pips=0.0, swap_short_pips=0.0,
+        )
+        time_exits = [t for t in trades if t.get("exit_reason") == "TIME_EXIT"]
+        self.assertTrue(len(time_exits) >= 1)
+        for t in time_exits:
+            self.assertAlmostEqual(t["profit_usdt"], 0.0, places=6,
+                                   msg="Flat price + zero costs → zero P&L on TIME_EXIT")
+
+    def test_time_exit_pnl_known_answer_adverse(self):
+        """TIME_EXIT P&L matches hand-computed value for adverse move."""  # claude code changed: v5/A4 — known-answer
+        # Trace: candle 0 → OPEN pending; candle 1 entry fills at open=1.2000 (entry_candle=1);
+        # candle 4 → i-entry_candle=3=limit → TIME_EXIT pending; candle 5 → exit at open=1.1900.
+        # initial_usdt=6.0, qty=6.0/1.2000=5.0 units, gross=(1.1900-1.2000)*5.0=-0.05 USD
+        limit = 3
+        n = limit + 4   # = 7 candles (0-6)
+        entry_open = 1.2000
+        exit_open = 1.1900
+        opens = [entry_open] * n
+        closes = [entry_open] * n
+        # TIME_EXIT fires at candle 4 (i-entry_candle=3=limit), executes at candle 5's open
+        exit_candle_idx = limit + 2   # = 5 = candle where exit executes at open  # claude code changed: v5/A4 — corrected index
+        for i in range(exit_candle_idx, n):
+            opens[i] = exit_open
+        idx = pd.date_range("2021-01-01", periods=n, freq="1h", tz="UTC")
+        df = pd.DataFrame({
+            "open": opens, "high": [p + 0.0001 for p in opens],
+            "low": [p - 0.0001 for p in opens], "close": closes, "volume": 1000.0,
+        }, index=idx)
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(
+            df, spec, initial_usdt=6.0, max_cycle_candles=limit,
+            spread_pips=0.0, commission_per_lot=0.0,
+            swap_long_pips=0.0, swap_short_pips=0.0,
+        )
+        time_exits = [t for t in trades if t.get("exit_reason") == "TIME_EXIT"]
+        self.assertTrue(len(time_exits) >= 1)
+        t = time_exits[0]
+        expected_qty = 6.0 / entry_open              # 5.0 units
+        expected_gross = (exit_open - entry_open) * expected_qty  # -0.05 USD
+        self.assertAlmostEqual(t["profit_usdt"], expected_gross, places=5)  # claude code changed: v5/A4 — fixed exit candle index
+
+    def test_candles_held_recorded_correctly(self):
+        """candles_held in TIME_EXIT trade matches limit."""  # claude code changed: v5/A4
+        limit = 5
+        df = _flat_df(limit + 4)
+        spec = _spec_no_dca()
+        trades, _ = _simulate_data_derived_next_open(df, spec, max_cycle_candles=limit)
+        time_exits = [t for t in trades if t.get("exit_reason") == "TIME_EXIT"]
+        self.assertTrue(len(time_exits) >= 1)
+        # candles_held for a TIME_EXIT = exit_candle - entry_candle
+        # time exit fires at i where i - entry_candle >= limit, exit happens at i+1
+        # so candles_held = (i+1) - entry_candle >= limit + 1
+        for t in time_exits:
+            self.assertGreaterEqual(t["candles_held"], limit)
