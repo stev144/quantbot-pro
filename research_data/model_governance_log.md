@@ -2631,3 +2631,55 @@ same pattern:
   - Zone S spread: looks stationary (std ≈ 0.12–0.13), explaining the low EG p-values.
   - Full-history spread: structure breaks immediately after zone S ends; spread permanently
     diverges from zone S mean.
+
+---
+
+## 2026-10-17 — INTRADAY FX RESEARCH PROTOCOL v1.0: RISK LIMITS APPROVED + DATA ACQUISITION AUTHORISED
+
+**Date:** 2026-10-17
+**Protocol:** Intraday FX Research Protocol v1.0 (published as Artifact BnVfv3y2Y8zoZkuLhKqEMJ)
+**Owner action:** Explicit approval of proposed risk limits; authorised 5m/15m data acquisition.
+
+### Approved risk limits (Section D, Protocol v1.0)
+
+| Parameter | Approved Value |
+|-----------|---------------|
+| Risk per trade | 1% of equity ($10 on $1,000 account) |
+| Daily loss stop | 3% ($30) |
+| Max peak-to-trough drawdown | 10% ($100) |
+| Max concurrent positions | 1 |
+| Max notional | 3 mini lots (0.3 standard lots) |
+| Max holding: 5m strategy | 4 hours (48 bars) |
+| Max holding: 15m strategy | 8 hours (32 bars) |
+| Overnight exposure | Prohibited |
+| Weekend exposure | Prohibited |
+| DCA / averaging down | Prohibited |
+| Auto-block trigger | Daily loss stop OR drawdown > 10% hit |
+
+These limits are locked and may not be silently changed after viewing strategy results.
+Any modification requires a new governance log entry with explicit owner approval.
+
+### Authorised data acquisition
+
+- Pairs: EUR/USD, GBP/USD, USD/CHF, AUD/USD (USD/JPY excluded per v7/A6-2)
+- Timeframes: 5-minute and 15-minute bars
+- Source: MetaTrader 5 terminal (ICFundedEvaluations demo, same broker as 1h data)
+- Script: `bot/fetch_fx_intraday.py` (new, v8 intraday protocol)
+- MT5 timeframe constants added: `TIMEFRAME_M5`, `TIMEFRAME_M15` (`bot/mt5_data_fetcher.py`)
+- Output: `data/forex/{SYMBOL}_5m.csv`, `data/forex/{SYMBOL}_15m.csv`
+- Holdout protection: `seal_before_write()` (D-8) strips rows after 2026-10-16 08:00 UTC
+
+### Remaining blockers (not yet resolved)
+
+- G1 (PARTIAL): Leverage limit `leverage_max=None` in instrument specs; spread is a snapshot
+  not a distribution; position sizer outputs crypto units, not FX lots.
+- G2/G4 (BLOCKED → pending data): 5m/15m data fetch not yet run; pullback family has
+  no implementation.
+- Protocol not ready to freeze: see five-gate checklist in protocol document.
+
+### What is NOT authorised
+
+- Strategy logic modification or parameter tuning
+- Holdout access (v7 holdout sealed until 2027-10-16 AND ≥10 trades/direction)
+- Live or paper trading
+- Any profitability claim from development-period results alone

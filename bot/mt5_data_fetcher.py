@@ -162,6 +162,8 @@ INTERVAL = "1h"
 # module level, so importing this module never requires the MetaTrader5
 # package to be installed — only actually calling a fetch function does.
 _INTERVAL_TO_MT5_TIMEFRAME_ATTR: Dict[str, str] = {
+    "5m": "TIMEFRAME_M5",   # claude code changed: v8 intraday — added 5m/15m for intraday FX research protocol
+    "15m": "TIMEFRAME_M15", # claude code changed: v8 intraday — added 5m/15m for intraday FX research protocol
     "1h": "TIMEFRAME_H1",
     "4h": "TIMEFRAME_H4",
     "1d": "TIMEFRAME_D1",
