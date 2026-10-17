@@ -39,6 +39,7 @@ from scipy import stats as _scipy_stats
 
 from bot.research.fx_fold_runner import (  # claude code changed: reuse existing simulation; no reimplementation
     FxLadderSpec,
+    MAX_CYCLE_CANDLES as _DEFAULT_MAX_CYCLE_CANDLES,
     _simulate_data_derived_next_open,
     compute_equity_stats,
 )
@@ -56,7 +57,7 @@ if not logger.handlers:
 N_PERMUTATIONS: int = 499             # protocol minimum; smallest p = 1/500 = 0.002  # claude code changed: per protocol Part 5
 BLOCK_SIZE_CANDLES: int = 48          # FX DCA avg hold >>144h (3×48h), so adaptive # claude code changed: per protocol Part 5 BLOCK_SHUFFLE
                                        # ceiling applies for all pairs in this study
-BONFERRONI_ALPHA_PER_PAIR: float = 0.01   # 5 pairs, family-wise α = 0.05           # claude code changed: per protocol Part 5
+BONFERRONI_ALPHA_PER_PAIR: float = 0.01   # M1 default: 5 pairs, family-wise α=0.05; M2/v6 callers must pass bonferroni_alpha=0.05/3=0.0167 explicitly  # claude code changed: M2 audit F-M2-1 — was hardcoded for 5-pair family; now a default, not a universal constant
 N_PAIRS: int = 5                       # EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD # claude code changed: per protocol Part 2
 
 
@@ -135,6 +136,7 @@ def _run_one_permuted_fold(
     swap_short: Optional[float],
     block_size: int,
     rng: np.random.Generator,
+    max_cycle_candles: Optional[int] = _DEFAULT_MAX_CYCLE_CANDLES,  # claude code changed: M2 F-M2-2 — explicit, not silently inherited from fx_fold_runner default
 ) -> Dict:
     """
     Run ONE permuted simulation on a single fold's test data with a fixed spec.
@@ -148,6 +150,7 @@ def _run_one_permuted_fold(
         commission_per_lot=commission,
         swap_long_pips=swap_long,
         swap_short_pips=swap_short,
+        max_cycle_candles=max_cycle_candles,  # claude code changed: M2 F-M2-2 — passed explicitly
     )
     closed = [t for t in trades if t.get("exit_reason") != "DATA_END_STILL_OPEN"]
     total_realised = sum(t["profit_usdt"] for t in closed) if closed else 0.0
@@ -202,8 +205,8 @@ def compute_fdr_bh(p_values: List[float], alpha: float = 0.05) -> List[bool]:
     for rank, (i, p) in enumerate(valid_sorted, start=1):
         if p <= alpha * rank / n:
             reject[i] = True
-    # BH is step-down: once we find the largest k with p_k <= alpha*k/n,
-    # all hypotheses with rank <= k are rejected.
+    # BH is step-up: find the largest k with p_(k) <= alpha*k/n,
+    # then reject all hypotheses with rank <= k.  # claude code changed: M2 F-M2-6 — was "step-down" (wrong label); procedure is step-up; logic was always correct
     last_reject = -1
     for rank, (i, _) in enumerate(valid_sorted, start=1):
         if reject[i]:
@@ -226,6 +229,8 @@ def run_fx_calibration_permutation(
     n_permutations: int = N_PERMUTATIONS,
     block_size: int = BLOCK_SIZE_CANDLES,
     random_seed: Optional[int] = None,
+    bonferroni_alpha: float = BONFERRONI_ALPHA_PER_PAIR,  # claude code changed: M2 F-M2-1 — parameterized; M1 default=0.01 (5-pair family); M2/v6 callers pass 0.05/3=0.0167
+    max_cycle_candles: Optional[int] = _DEFAULT_MAX_CYCLE_CANDLES,  # claude code changed: M2 F-M2-2 — explicit; permuted folds must match real-fold simulation parameters
 ) -> Dict:
     """
     Block-shuffle permutation test for one (pair, direction) across all 5
@@ -302,6 +307,7 @@ def run_fx_calibration_permutation(
                 sim_dfs[fold_idx], specs[fold_idx],
                 spread, commission, swap_long, swap_short,
                 block_size, rng,
+                max_cycle_candles=max_cycle_candles,  # claude code changed: M2 F-M2-2 — forwarded explicitly
             )
             per_fold_permuted_pnl[fold_idx].append(result["total_realised_pnl"])
             per_fold_permuted_feq[fold_idx].append(result["final_equity"])
@@ -336,7 +342,7 @@ def run_fx_calibration_permutation(
     stouffer_z, stouffer_p = _stouffer_combine(per_fold_p)
 
     # Bonferroni significance flag (primary per protocol)
-    bonferroni_sig = overall_p < BONFERRONI_ALPHA_PER_PAIR
+    bonferroni_sig = overall_p < bonferroni_alpha  # claude code changed: M2 F-M2-1 — uses passed bonferroni_alpha, not hardcoded constant
 
     return {
         "pair": pair,
@@ -352,7 +358,7 @@ def run_fx_calibration_permutation(
         "overall_p_value": overall_p,
         "overall_percentile": overall_pct,
         "bonferroni_significant": bonferroni_sig,
-        "bonferroni_alpha": BONFERRONI_ALPHA_PER_PAIR,
+        "bonferroni_alpha": bonferroni_alpha,  # claude code changed: M2 F-M2-1 — reflects actual threshold used, not module constant
         # Secondary: final equity
         "secondary_final_equity_p": secondary_feq_p,
         # Per-fold results
@@ -394,7 +400,7 @@ def print_permutation_verdict(verdict: Dict) -> None:
         verdict["per_fold_percentiles"],
         verdict["real_per_fold_pnl"],
     ), start=1):
-        flag = " *" if p < BONFERRONI_ALPHA_PER_PAIR else ""
+        flag = " *" if p < verdict["bonferroni_alpha"] else ""  # claude code changed: M2 F-M2-1 — uses verdict's actual bonferroni_alpha, not hardcoded constant
         print(f"    Fold {i}: real={real_f:+.4f} USD  beats {pct:.1%}  p={p:.4f}{flag}")
     print(f"\n  Stouffer (INDICATIVE ONLY — folds not independent):")
     print(f"    z = {verdict['stouffer_z']:.3f}   p = {verdict['stouffer_p']:.4f}")
