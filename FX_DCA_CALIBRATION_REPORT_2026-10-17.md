@@ -2,9 +2,9 @@
 
 **Protocol:** FX-DCA-PROTOCOL-1-A5 (v6)  
 **Report date:** 2026-10-17  
-**Status:** COMPLETE — Section 7 uses analytical power estimates (empirical addendum pending)  
+**Status:** COMPLETE — holdout test run 2026-10-17; Section 7 uses analytical power estimates  
 **Author:** Steven Bwenje  
-**Holdout:** SEALED — not accessed at any point in this report  
+**Holdout:** OPENED 2026-10-17 (owner decision) — EUR/USD SHORT, v6, result: SUGGESTIVE (p = 0.0380)  
 
 ---
 
@@ -16,9 +16,16 @@ gate (4/5 folds positive). USD/CHF LONG at v5 (no ADX gate) produces p = 0.162,
 the second-strongest signal, but the ADX gate suppresses it to p = 0.434 under
 v6. USD/JPY LONG (v6) returns p = 0.436 and fails the walk-forward consistency
 gate (3/5 folds positive — INCONSISTENT). No direction passes the Bonferroni
-threshold of α = 0.0167 (3 tests) on calibration data. Power analysis for
-EUR/USD SHORT and USD/CHF LONG is pending (results to be filled in when
-running analyses complete). Holdout remains sealed.
+threshold of α = 0.0167 (3 tests) on calibration data. Power analysis labels
+EUR/USD SHORT UNDERPOWERED (~40% power at α = 0.0167 with available holdout data).
+
+**Holdout result (2026-10-17):** EUR/USD SHORT (v6) was run on the sealed holdout
+(Dec 2024 – Oct 2026, 11,238 candles). Real holdout P&L: +$13.62 (16 closed
+trades). M3 permutation test: **p = 0.0380** (N = 499, seed = 20261017).
+Verdict: **SUGGESTIVE** — beats the 5% threshold but does not reach the Bonferroni
+threshold (p < 0.0167). This constitutes the first out-of-sample evidence for
+EUR/USD SHORT but NOT first canonical edge evidence (which requires p < 0.0167).
+The result is consistent with the UNDERPOWERED label from calibration.
 
 ---
 
@@ -438,9 +445,94 @@ failure would be consistent with the calibration evidence, not conclusive proof
 of no edge. A holdout pass (p < 0.0167) would constitute the first canonical
 edge evidence for this direction.
 
-**Owner decision required to proceed.**
+**Owner decision received 2026-10-17. Holdout test run same day. See Section 10.**
 
 ---
 
-*Report prepared under FX-DCA-PROTOCOL-1-A5. All results are calibration-only.
-Holdout data has not been accessed. No profitability claim is made.*
+## 10. Holdout Test Results — EUR/USD SHORT (v6)
+
+**Authorisation:** Owner decision 2026-10-17, after calibration report committed at f16aa73.  
+**Protocol:** FX-DCA-PROTOCOL-1-A5 (v6). Permutation method: M3, N=499, seed=20261017.  
+**Script:** `holdout_test_eurusd_short.py`
+
+### 10.1 Real Holdout Run
+
+| Item | Value |
+|---|---|
+| Holdout period | 2024-12-24 → 2026-10-16 |
+| Holdout candles | 11,238 |
+| Train candles (full calibration) | 26,175 |
+| Closed trades | **16** |
+| Open cycles at end (excluded per F-03) | 1 (MTM = −$0.0130, informational) |
+| Closed P&L | **+$13.6163 USD** |
+| Per-trade rate | +$0.851/trade |
+
+Per-trade rate in calibration: +$48.33/30 = +$1.61/trade. The holdout rate (+$0.85) is roughly half — consistent with a weakened but still positive signal, and consistent with the UNDERPOWERED prediction (smaller sample, noisy estimate).
+
+Trade detail (exit reason / gross / swap / net / fills):
+
+| Exit | Gross | Swap | Net | Fills |
+|---|---|---|---|---|
+| TIME_EXIT | +0.3333 | +0.0148 | +0.3482 | 3 |
+| TIME_EXIT | +0.4817 | +0.2599 | +0.7417 | 7 |
+| TIME_EXIT | +2.3823 | +0.2476 | +2.6299 | 7 |
+| TIME_EXIT | −0.4784 | +0.0290 | −0.4494 | 4 |
+| TIME_EXIT | +1.8654 | +0.0587 | +1.9241 | 5 |
+| TIME_EXIT | −1.2341 | +0.0589 | −1.1751 | 5 |
+| TIME_EXIT | +1.5621 | +0.0281 | +1.5903 | 4 |
+| TIME_EXIT | −0.0075 | +0.0133 | +0.0058 | 3 |
+| TIME_EXIT | +0.0395 | +0.0283 | +0.0679 | 4 |
+| TIME_EXIT | +3.5568 | +0.0581 | +3.6148 | 5 |
+| TIME_EXIT | −0.0201 | +0.0584 | +0.0383 | 5 |
+| TIME_EXIT | +0.5900 | +0.0131 | +0.6031 | 3 |
+| PROFIT_TARGET_TRAILING | +0.4383 | +0.0039 | +0.4422 | 2 |
+| TIME_EXIT | −0.2957 | +0.0289 | −0.2668 | 4 |
+| TIME_EXIT | +3.0458 | +0.0590 | +3.1047 | 5 |
+| PROFIT_TARGET_TRAILING | +0.3948 | +0.0019 | +0.3968 | 2 |
+
+12/16 closed trades (75%) are positive. Exit mix: 14 TIME_EXIT, 2 PROFIT_TARGET_TRAILING.
+
+### 10.2 Permutation Test
+
+| Item | Value |
+|---|---|
+| N permutations | 499 |
+| Method | M3 block-shuffle log-returns (48h blocks) |
+| Seed | 20261017 |
+| Null mean | −$5.6893 |
+| Null median | −$4.5067 |
+| Null std | $11.9364 |
+| Null normality (Shapiro-Wilk p) | 0.0000 (non-normal) |
+| Real P&L Z-score | **+1.617** |
+| Threshold P&L for p ≤ 0.0167 | +$16.0451 |
+| Gap to threshold | +$2.4288 (real P&L was $2.43 short) |
+| **p-value (M3, N=499)** | **0.0380** |
+| Bonferroni threshold | 0.0167 |
+
+**Null is negatively biased** (median −$4.51 vs expected $0) — the M3 conservative bias confirmed in the holdout null, consistent with calibration null behaviour. This conservatism slightly deflates the Z-score; the un-biased Z would be somewhat higher.
+
+### 10.3 Verdict
+
+**SUGGESTIVE — p = 0.0380 < 0.05 but NOT Bonferroni-significant (threshold p < 0.0167)**
+
+This result:
+- **IS** the first out-of-sample (holdout) evidence for EUR/USD SHORT
+- **IS NOT** first canonical edge evidence (which requires p < 0.0167)
+- **IS** consistent with the calibration UNDERPOWERED label (predicted ~40% power; observed Z = 1.617 vs calibration Z = 1.48 — slightly above prediction)
+- **IS NOT** a basis for profitability claims or live trading authorisation
+
+The strategy is above the noise floor in two independent datasets (calibration and holdout), but the sample size is insufficient to clear the pre-specified Bonferroni bar. A 4.0× data expansion would be needed for 80% power; this is not achievable without a materially longer data collection period or a Bonferroni family reduction (fewer test directions).
+
+### 10.4 Governance Note
+
+This holdout has now been opened and **cannot be re-used as a clean out-of-sample test**. Any further strategy parameter changes require a v7 protocol amendment with a new holdout. The holdout period (Dec 2024 – Oct 2026) is permanently consumed.
+
+**Next steps (pre-specified per protocol):**
+- No live or paper trading is authorised (SUGGESTIVE result, not PASS)
+- A v7 amendment could specify: (a) remove ADX gate for LONG directions and test USD/CHF LONG on new holdout data; (b) reduce Bonferroni family if USD/JPY LONG is permanently dropped; (c) continue accumulating EUR/USD SHORT data until threshold crossing
+- All v7 changes require pre-specification before any new data is examined
+
+---
+
+*Report prepared under FX-DCA-PROTOCOL-1-A5. Holdout opened and tested 2026-10-17.
+No profitability claim is made. SUGGESTIVE result ≠ canonical edge evidence.*
