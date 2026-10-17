@@ -246,7 +246,37 @@ artefact is dominating and the test statistic distribution is biased against
 the real temporal sequence even when no edge exists. In that case, the
 production results (p=1.000) cannot be interpreted as evidence against edge.
 
-**Result:** *(filled after script completes)*
+**Result (recorded 2026-10-17 after script completed):**
+
+| Run k | real P&L | p-value |
+|-------|----------|---------|
+| 1–14, 16–20 | various | **1.0000** |
+| 15 | +6.44 | 0.9667 |
+
+Summary: Min p=0.9667, Median p=1.000, Max p=1.000.
+p < 0.05: 0/20. p > 0.90: 20/20. p=1.000: 19/20.
+KS test vs U(0,1): stat=0.9667, p≈0.0000.
+
+**CALIBRATION FAILURE.** The test returns p=1.000 on iid random-walk data
+where H0 is known to hold by construction. The test is anti-conservative:
+it systematically returns p≈1 even when there is no temporal structure to
+detect. The null model is INVALID.
+
+**Root cause (BLOCK-GAP ARTEFACT):** the block shuffle operates on raw OHLCV
+price levels. At each block boundary in the shuffled sequence, the opening
+price of the arriving block differs discontinuously from the closing price of
+the preceding block. These artificial price gaps do not exist in the real
+data. For a DCA LONG strategy, a downward gap immediately triggers multiple
+DCA level fills at artificially cheap prices, substantially lowering the
+cycle's WAP and making recovery much easier. The shuffled null systematically
+generates these artificial cheap-entry events, producing systematically higher
+P&L than the real sequence — even on iid data with no exploitable temporal
+structure.
+
+**Consequence:** ALL v4/A3 and v5/A4 permutation test results (p=1.000
+uniformly across all 10 tests) CANNOT be interpreted as evidence against
+temporal edge. They measured the block-gap artefact, not the strategy's
+temporal sensitivity. The null model must be replaced.
 
 ### Test 2: Block-size sensitivity
 
@@ -259,7 +289,24 @@ production results (p=1.000) cannot be interpreted as evidence against edge.
 **Expected if result is genuine:** p >> 0.05 across all block sizes.
 **Expected if block size is driving the result:** p varies across the range.
 
-**Result:** *(filled after script completes)*
+**Result (recorded 2026-10-17):**
+
+| Block size | p-value | Beats % |
+|-----------|---------|---------|
+| 12h | 1.0000 | 0.0% |
+| 24h | 1.0000 | 0.0% |
+| 48h | 1.0000 | 0.0% |
+| 96h | 1.0000 | 0.0% |
+| 192h | 1.0000 | 0.0% |
+
+p=1.000 at ALL block sizes. This confirms the block-gap artefact is
+size-invariant — the artefact is present at every tested block size because
+artificial price gaps appear at every block boundary regardless of block size.
+The result is robust to block size choice, but to the wrong answer.
+
+**Combined interpretation of Tests 1 and 2:** the null model (raw-OHLCV
+block shuffle) is invalid. The M2 production run is BLOCKED pending
+replacement of the null model. See Part 6 (M3 specification).
 
 ---
 
@@ -288,18 +335,75 @@ Change "step-down" to "step-up" in `compute_fdr_bh()` docstring.
 
 ---
 
-## Part 5 — Authorised Production Experiment (M2)
+## Part 5 — M2 Production Experiment: BLOCKED
 
-Once:
-1. This document is committed (before reading calibration results)
-2. Code fixes F-M2-1 and F-M2-2 are implemented and tested
-3. Calibration results (Tests 1 and 2) are read and recorded in Part 3
-4. No disqualifying calibration failure is found (see Part 3 thresholds)
+The calibration failure in Part 3 (Test 1: 19/20 iid runs p=1.000; KS p≈0)
+disqualifies the current null model. The M2 production experiment cannot
+proceed. All findings from Parts 1–4 remain on record; the code fixes
+(F-M2-1, F-M2-2, F-M2-6) remain in place as they are independent of the
+null-model problem.
 
-The following production experiment is authorised:
+## Part 6 — M3 Specification: Log-Return Block Shuffle
 
-- **Pairs/directions:** EUR/USD SHORT, USD/JPY LONG, USD/CHF LONG (v6/A5 carry gate)
+### 6.1 Required null-model change
+
+Replace the raw-OHLCV block shuffle with a **log-return block shuffle**:
+
+1. Compute per-candle log-returns for close: `r_t = log(close_t / close_{t-1})`
+2. Compute relative open offset: `o_t = log(open_t / close_{t-1})`
+3. Compute relative high/low: `h_t = log(high_t / open_t)`, `l_t = log(low_t / open_t)`
+4. Divide the return series into contiguous blocks of BLOCK_SIZE rows
+5. Permute the block order (same algorithm as M1/M2)
+6. Reconstruct price levels from the shuffled returns, starting from the
+   REAL first candle's open price: each reconstructed candle's prices are
+   derived from the shuffled return, not the shuffled raw level
+7. Price path is continuous: no artificial gaps at block boundaries
+
+**What is preserved:** within-block return dynamics, volatility structure,
+within-block autocorrelation, the overall return distribution.
+**What is destroyed:** multi-block trend persistence, regime autocorrelation
+operating at frequencies longer than BLOCK_SIZE.
+**What is eliminated:** the block-gap price-level artefact.
+
+### 6.2 Implementation location
+
+New function `block_shuffle_returns(df, block_size, rng)` in
+`bot/research/fx_permutation_test.py`, replacing `block_shuffle_ohlcv()` in
+`_run_one_permuted_fold()`. The old `block_shuffle_ohlcv()` is kept for
+reference but must not be used in production inference.
+
+### 6.3 M3 calibration gate
+
+Before the M3 production run, re-run Test 1 (K=20 synthetic iid, N=29) with
+the log-return shuffle. Pass criterion: ≤3/20 runs give p=1.000 AND KS test
+vs U(0,1) p ≥ 0.05. If the pass criterion is not met, further diagnosis is
+required before any production run.
+
+### 6.4 M3 production experiment (authorised after calibration pass)
+
+Once M3 calibration passes:
+- **Pairs/directions:** EUR/USD SHORT, USD/JPY LONG, USD/CHF LONG (v6/A5)
 - **Parameters:** v6/A5 carry gate + ADX(14)≤25 entry gate + all v5/A4 parameters
+- **N:** 499 permutations
+- **Block size:** 48h (log-return blocks)
+- **Bonferroni α:** 0.05/3 = 0.0167 per test
+- **Seed:** 20261017
+- **Holdout:** SEALED
+
+These M3 results will be the first valid inferential evidence for or against
+the v6/A5 strategy. All v4/A3, v5/A4, and M2 results are superseded for
+inferential purposes; they remain on record as descriptive.
+
+---
+
+## Governance
+
+**M1 results:** INVALIDATED as inferential evidence (block-gap artefact).
+Remain on record as descriptive P&L observations.
+**M2 production:** BLOCKED — calibration failure confirmed.
+**M3:** specification locked in Part 6; requires calibration pass before
+production run.
+**Holdout:** SEALED throughout all M1, M2, M3 work.
 - **N:** 499 permutations
 - **Block size:** 48h
 - **Bonferroni α:** 0.05/3 = 0.0167 per test
