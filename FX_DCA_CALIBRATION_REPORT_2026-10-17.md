@@ -321,69 +321,82 @@ the available data does not support 80% power at the observed effect size.
 
 ---
 
-### 7.2 USD/CHF LONG (v5, no ADX gate, observed p = 0.162)
+### 7.2 USD/CHF LONG (v7/A6-1, no ADX gate for LONG, observed p = 0.162)
 
 **Confirmed real total P&L:** +$40.72 (32 closed trades)
 
+*Empirical null stats from M3 permutation run 2026-10-17 (N=499, block=48h, seed=20261017,
+v7/A6-1 gates — carry gate only for LONG; replaces analytical estimates in original draft).*
+
 | Quantity | Value |
 |---|---|
-| Observed p (M3, v5) | 0.1620 |
-| Real P&L percentile in null | 83.8th |
-| Z_current = Φ⁻¹(0.838) | **+0.99** |
-| Z_target (p = 0.0167) | 2.12 |
-| Gap in Z-score units | 1.13 |
-| k for median p = 0.0167 (threshold crossing) | (2.12/0.99)² = **4.6×** |
-| k for 80% power at α = 0.0167 | ((2.12+0.842)/0.99)² = **8.9×** |
+| Observed p (M3, v7/A6-1) | 0.1620 |
+| Real P&L percentile in null | 84.0th |
+| Empirical null mean | +$13.97 |
+| Empirical null std | $27.38 |
+| Empirical Z_current = (real − null_mean) / null_std | **+0.977** |
+| Z_target (v7: p = 0.025, 2-test family) | 1.960 |
+| Gap in Z-score units | 0.983 |
+| Threshold P&L to reach significance | +$67.63 |
+| Gap to threshold | −$26.90 |
+| k for median p = 0.025 (threshold crossing) | (1.960/0.977)² = **4.0×** |
+| k for 80% power at α = 0.025 | ((1.960+0.842)/0.977)² = **8.2×** |
 | Current calibration test exposure | ~3.0 years |
-| Data needed for threshold crossing | ~13.8 years |
-| Data needed for 80% power | ~26.7 years |
+| Data needed for threshold crossing | ~12.1 years |
+| Data needed for 80% power | ~24.7 years |
 
-**Power at realistic data multipliers:**
+**Power at realistic data multipliers (v7 α = 0.025):**
 
 | Data multiplier | Extra years | Expected Z | Power (%) |
 |---|---|---|---|
-| 1.0× (now) | 0 | 0.99 | 5% |
-| 1.61× (+ holdout) | +1.83 yrs | 1.26 | 10% |
-| 2.0× | +3.0 yrs | 1.40 | 12% |
-| 3.0× | +6.0 yrs | 1.71 | 20% |
-| 4.0× | +9.0 yrs | 1.98 | 30% |
+| 1.0× (now) | 0 | +0.977 | 6% |
+| 1.33× (+ 12mo v7 holdout minimum) | +1.0 yr | +1.128 | 20% |
+| 2.0× | +3.0 yrs | +1.382 | 25% |
+| 3.0× | +6.0 yrs | +1.692 | 35% |
+| 4.0× | +9.0 yrs | +1.954 | 50% |
+| 8.2× | +21.7 yrs | +2.802 | 80% |
 
-**Verdict: OUT OF RANGE.**
+**Verdict: OUT OF RANGE (unchanged from original draft).**
 
-USD/CHF LONG (v5) would require ~8.9× the current calibration data (~27 years)
-to achieve 80% power at α = 0.0167. This is not a feasible data collection
-target. Adding the holdout brings power to only ~10%.
+USD/CHF LONG requires ~8.2× the current calibration data (~25 years) for 80%
+power at the v7 Bonferroni threshold. The v7 family reduction (3 tests → 2)
+eases the threshold from α=0.0167 to α=0.025, cutting the required multiplier
+from 8.9× to 8.2× — a modest improvement that does not change the structural
+conclusion. The 12-month v7 holdout minimum accumulates ~10–11 trades at the
+current rate (~10.7/year) and gives only **20% power** — well below the 80%
+standard for a powered test.
 
-The result is labelled **UNDERPOWERED**. The p = 0.162 signal is notably below
-the M3 null median (~0.70), suggesting some underlying price-reversion
-tendency, but the effect size is too small to reach statistical significance
-with available or reasonably collectible data.
+The p = 0.162 signal sits at the 84th percentile of the M3 null (empirical null
+mean +$13.97 on 32-trade calibration), suggesting some directional tendency, but
+the effect size is too small to reach statistical significance within any
+practically collectible data horizon. USD/CHF LONG remains in the v7 family for
+governance purposes (10 closed-trade minimum tracks accumulation), but **no
+holdout opening is anticipated to be informative** until ~12 years of test
+exposure have accumulated.
 
-**Note on ADX gate:** The H4 investigation shows the ADX gate actively suppresses
-this signal (v6 gives p = 0.434 vs v5 p = 0.162). A pre-specified v7 amendment
-removing the ADX gate for LONG directions would restore the signal to v5 levels,
-but even at p = 0.162 the power analysis shows the direction is structurally
-out of range under the current Bonferroni family (3 tests). USD/CHF LONG is NOT
-recommended as a holdout candidate under the current protocol.
+**ADX gate removal (v7/A6-1):** implemented 2026-10-17 (commit 67170c5). The
+v7 result (p=0.162) is identical to v5 (no ADX gate), confirming that the gate
+removal restores the signal. The v6 result with the gate applied was p=0.434,
+consistent with the H4 finding that the ADX gate suppressed LONG entries.
 
 ---
 
 ### 7.3 Summary
 
-| Direction | p (calibration) | Z_current | 80%-power k | Verdict |
-|---|---|---|---|---|
-| EUR/USD SHORT (v6) | 0.0702 | 1.48 | 4.0× | UNDERPOWERED — holdout recommended |
-| USD/CHF LONG (v5) | 0.1620 | 0.99 | 8.9× | OUT OF RANGE — not a holdout candidate |
-| USD/JPY LONG (v6) | 0.4360 | 0.17 | >>10× | INCONSISTENT + OUT OF RANGE |
+*All values empirical (M3 permutation, N=499, block=48h, seed=20261017). EUR/USD SHORT
+used calibration data; holdout result reported in Section 10. USD/CHF LONG run 2026-10-17.*
 
-**One direction is recommended for holdout test:** EUR/USD SHORT (v6), with the
-explicit caveat that it is labelled UNDERPOWERED and a holdout failure would not
-be conclusive evidence of no edge — it would simply be consistent with the
-current calibration evidence.
+| Direction | p (calib) | Z_current | Null mean | Null std | α (v7) | 80%-power k | Verdict |
+|---|---|---|---|---|---|---|---|
+| EUR/USD SHORT (v7/A6-1) | 0.0702 | +1.48 | −$5.69 | $11.94 | 0.025 | ~2.5× | UNDERPOWERED |
+| USD/CHF LONG (v7/A6-1) | 0.1620 | +0.977 | +$13.97 | $27.38 | 0.025 | 8.2× | OUT OF RANGE |
+| USD/JPY LONG | removed | — | — | — | — | — | DROPPED (v7/A6-2: 3/5 folds inconsistent) |
 
-*Analytical estimates. Empirical null distribution statistics (null mean/std,
-threshold P&L, bootstrap scaling) from the running permutation analyses will be
-appended as Addendum A when complete.*
+**Holdout status (v7):**
+- EUR/USD SHORT: holdout run 2026-10-17, p=0.0380 — SUGGESTIVE (above v7 α=0.025). New holdout accumulating from 2026-10-16 08:00 UTC.
+- USD/CHF LONG: in v7 family; holdout minimum 12 months + ≥10 trades. Expected power at minimum: 20%. Not an informative test until ~12 years test exposure accumulated.
+
+*Addendum A (empirical null stats) is now complete and integrated into Sections 7.1 and 7.2.*
 
 ---
 
