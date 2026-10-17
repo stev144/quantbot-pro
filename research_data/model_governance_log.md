@@ -2565,3 +2565,69 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
   - point_in_time_universe: archive listing and monthly fetch (cached; months ≥ the F month refused); µs/ms timestamp parsing; signed exclusions; top_n_universe_at; build_listing_table implemented.
   - **D-6 look-ahead fix:** trailing_volume_at now counts only candles CLOSED by t. It previously counted the candle opening at t, a full day of future volume for daily data. Pinned by test.
   - Tests: test_dca_d5_d6_signed (10); mutations 3/3 caught.
+
+
+---
+
+## 2026-10-17 — CRYPTO ZONE-S COINTEGRATION SCREEN: CLOSED NEGATIVE (shared-collapse artifact)
+
+**Date:** 2026-10-17
+**Screen identifier:** `crypto_coint_screen_20261017.json` (scratchpad; not committed to repo)
+**Status: CLOSED — NEGATIVE FINDING. Do not move any nominated pair to P&L validation or registration.**
+
+### What was run
+
+Zone S selection screen (2021-11-07 → 2024-03-31, 1h candles, Binance spot).
+Universe: ~150 USDT pairs. Method: Engle-Granger + ADF two-test structure, BH q=0.10 family-wise correction,
+OOS ADF persistence check (S split at midpoint), half-life filter 24–168 h.
+11,026 pairs tested → 5 nominated: AVA_USDT/PUNDIX_USDT, DIA_USDT/FIL_USDT, DIA_USDT/IOTX_USDT,
+DIA_USDT/LPT_USDT, DIA_USDT/ONT_USDT.
+
+### Finding: shared-collapse artifact, not structural cointegration
+
+Visual inspection of spread series and raw price history for both the shortest half-life pair
+(AVA/PUNDIX, 32.8h) and the highest-OOS pair (DIA/ONT, lowest OOS ADF p=0.006) reveals the
+same pattern:
+
+1. **Both assets lost 60–70% of value during zone S** (AVA −70.7%, PUNDIX −57.8%, DIA −62.9%,
+   ONT −66.2%). Zone S = the 2022 crypto bear market. The spread appears stationary because
+   both assets collapsed in parallel, not because a structural long-run equilibrium pulled them
+   together.
+
+2. **Spread explodes after zone S ends.** Post-2024-03 the AVA/PUNDIX spread drifts to +1.25
+   (full history std = 0.24 vs zone S std = 0.12). The DIA/ONT spread reaches +1.5 in 2025.
+   Neither spread returns to the zone S mean after the selection window closes. The relationship
+   does not hold out-of-sample in any meaningful sense.
+
+3. **EG and ADF p-values = 0.000 (numerical underflow) for all 5 pairs.** Extreme test statistics
+   of this kind are a known signature of correlated-trend artifacts (both series share a
+   structural downtrend; the residual looks stationary within a window but reverts to the trend
+   outside it).
+
+4. **DIA appears in 4 of 5 nominated pairs.** DIA Protocol's price trajectory in zone S was
+   proportional to FIL, IOTX, LPT, and ONT — all small-cap alts in a correlated bear market.
+   This is sector correlation, not cointegration.
+
+5. **This replicates the C-01 finding from the prior scan (2026-09-29):** pairs trading
+   "edge" in the crypto bear market is a P&L-measurement artifact. Random walks also produced
+   nominated pairs under similar conditions.
+
+### Governance actions
+
+- All 5 nominated pairs are **DISQUALIFIED**. None shall be moved to DCA/P&L validation,
+  walk-forward testing, or live registration at any future date without a fresh screen on a
+  different zone (non-bear-market window, or detrended prices).
+- The zone S methodology for crypto is assessed **insufficient** to distinguish genuine
+  mean-reversion pairs from correlated-decline artifacts in a sustained bear market period.
+  Any future crypto cointegration screen should apply a detrending or structural-break
+  pre-filter before the EG test, or use a zone that does not coincide with a
+  market-wide drawdown.
+- Zone V and zone F are **untouched**; this finding is based on zone S and full-history
+  spread plots only.
+- Diagnostic evidence: `spread_diagnostic.png` generated 2026-10-17 (scratchpad;
+  not committed). Key outputs:
+  - Price series (log scale): both assets in each pair trend from ~$1–3 to ~$0.07–0.85
+    across zone S.
+  - Zone S spread: looks stationary (std ≈ 0.12–0.13), explaining the low EG p-values.
+  - Full-history spread: structure breaks immediately after zone S ends; spread permanently
+    diverges from zone S mean.
