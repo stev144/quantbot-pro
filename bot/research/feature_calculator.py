@@ -178,6 +178,22 @@ class FeatureCalculator:
             result_df['realized_vol'] = self._calculate_realized_vol(result_df, timeframe=timeframe, asset_class=asset_class)
             result_df['volume_ratio'] = self._calculate_volume_ratio(result_df, asset_class=asset_class)
             
+            # ── STRUCTURAL / MARKET FEATURES (new groups — 2026-10-18) ─────────────────────
+            logger.info(f"Calculating structural features for {symbol}...")
+
+            # Calendar / session features — derived from timestamp only
+            _cal = self._calculate_calendar_features(result_df)
+            result_df['is_asian_session']     = _cal['is_asian_session']        # claude code changed: new — binary; 1 during 00-08 UTC Asian/Tokyo session (lower vol, range-bound)
+            result_df['is_london_session']    = _cal['is_london_session']       # claude code changed: new — binary; 1 during 07-15 UTC London session
+            result_df['is_london_ny_overlap'] = _cal['is_london_ny_overlap']   # claude code changed: new — binary; 1 during 12-15 UTC London-NY overlap (highest FX liquidity)
+            result_df['day_of_week']          = _cal['day_of_week']             # claude code changed: new — 0=Mon…4=Fri; captures weekday structural patterns
+
+            # Mean-reversion structure features — test whether market is currently ranging/reverting
+            result_df['autocorr_lag1']      = self._calculate_autocorr_lag1(result_df)      # claude code changed: new — rolling 48-bar lag-1 autocorr; negative = mean-reverting (good for DCA)
+            result_df['variance_ratio_4']   = self._calculate_variance_ratio(result_df)     # claude code changed: new — VR(4,48): <1 = mean-reverting; >1 = trending; =1 = random walk
+            result_df['range_position_24h'] = self._calculate_range_position_24h(result_df) # claude code changed: new — where close sits in last 24h high-low range (0=bottom, 1=top)
+            result_df['realized_vol_ratio'] = self._calculate_realized_vol_ratio(result_df) # claude code changed: new — current ATR / 30-bar median ATR; continuous analogue of volatility_state
+
             # ── INDICATOR FEATURES (To be statistically tested) ─────────────────────────────
             logger.info(f"Calculating indicator features for {symbol}...")
             
@@ -600,6 +616,137 @@ class FeatureCalculator:
                    pd.Series(np.nan, index=df.index),
                    pd.Series(np.nan, index=df.index))
     
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+    # STRUCTURAL / MARKET FEATURES — 2026-10-18
+    # ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+    def _calculate_calendar_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Derive calendar/session binary flags from the timestamp.
+
+        Handles both 'timestamp' column (raw CSV load) and DatetimeIndex.
+        Returns a DataFrame with columns: is_london_ny_overlap, is_london_session, day_of_week.
+        All NaN when no timestamp information is available.
+        """  # claude code changed: new — 2026-10-18; session and weekday features for FX structural analysis
+        nan_result = pd.DataFrame({
+            'is_london_ny_overlap': pd.Series(np.nan, index=df.index),
+            'is_london_session':    pd.Series(np.nan, index=df.index),
+            'day_of_week':          pd.Series(np.nan, index=df.index),
+        })
+        try:
+            if 'timestamp' in df.columns:
+                ts = pd.to_datetime(df['timestamp'], utc=True)
+            elif isinstance(df.index, pd.DatetimeIndex):
+                ts = df.index.tz_localize('UTC') if df.index.tz is None else df.index
+            else:
+                return nan_result
+
+            hour = ts.dt.hour
+            dow  = ts.dt.dayofweek  # 0=Mon … 6=Sun
+
+            return pd.DataFrame({
+                # Asian/Tokyo session: 00:00-08:59 UTC — lower volatility, range-bound behaviour  # claude code changed: added 2026-10-18
+                'is_asian_session':     ((hour >= 0)  & (hour <= 8)).astype(float),
+                # London session: 07:00-15:59 UTC
+                'is_london_session':    ((hour >= 7)  & (hour <= 15)).astype(float),
+                # London-NY overlap: 12:00-15:59 UTC — highest spot FX liquidity
+                'is_london_ny_overlap': ((hour >= 12) & (hour <= 15)).astype(float),
+                # Weekday (0=Mon … 4=Fri); weekend rows should not appear in 1h FX data
+                'day_of_week':          dow.where(dow <= 4, np.nan).astype(float),
+            }, index=df.index)
+        except Exception as e:
+            logger.debug(f"Error calculating calendar features: {e}")
+            return nan_result
+
+    def _calculate_autocorr_lag1(self, df: pd.DataFrame, window: int = 48) -> pd.Series:
+        """
+        Rolling lag-1 autocorrelation of log close-to-close returns over `window` bars.
+
+        Negative values → mean-reverting (price overshoots and corrects).
+        Positive values → trending (momentum).
+        Near zero      → random walk.
+
+        DCA hypothesis: negative autocorr periods are better entry candidates because
+        adverse moves are more likely to reverse quickly.
+        """  # claude code changed: new — 2026-10-18; mean-reversion structural feature for DCA
+        try:
+            log_ret = np.log(df['close'] / df['close'].shift(1))
+            return log_ret.rolling(window).apply(
+                lambda x: pd.Series(x).autocorr(lag=1), raw=False
+            )
+        except Exception as e:
+            logger.debug(f"Error calculating autocorr_lag1: {e}")
+            return pd.Series(np.nan, index=df.index)
+
+    def _calculate_variance_ratio(
+        self, df: pd.DataFrame, q: int = 4, window: int = 48
+    ) -> pd.Series:
+        """
+        Rolling variance ratio VR(q) = Var(q-period log return) / (q × Var(1-period log return))
+        computed over `window` bars.
+
+        VR < 1 → mean-reverting (variance grows slower than random walk).
+        VR > 1 → trending (variance grows faster than random walk).
+        VR = 1 → random walk (Lo-MacKinlay 1988 null).
+
+        Uses a rolling window; returns NaN during warmup.
+        """  # claude code changed: new — 2026-10-18; variance ratio test per Lo-MacKinlay (1988); faster than R/S Hurst
+        try:
+            log_ret = np.log(df['close'] / df['close'].shift(1))
+            log_ret_q = log_ret.rolling(q).sum()  # q-period log return
+
+            var1 = log_ret.rolling(window).var()
+            varq = log_ret_q.rolling(window).var()
+
+            vr = varq / (q * var1.replace(0, np.nan))
+            return vr.clip(0, 5)  # clip runaway values from near-zero variance
+        except Exception as e:
+            logger.debug(f"Error calculating variance_ratio: {e}")
+            return pd.Series(np.nan, index=df.index)
+
+    def _calculate_range_position_24h(self, df: pd.DataFrame, window: int = 24) -> pd.Series:
+        """
+        Where the current close sits within the rolling `window`-bar high-low range.
+
+        0.0 = close at or below the rolling low (at the bottom of recent range).
+        1.0 = close at or above the rolling high (at the top of recent range).
+
+        DCA LONG hypothesis: entering when range_position_24h is low (<0.3) means
+        price is already near a recent low — less adverse excursion before recovery.
+        """  # claude code changed: new — 2026-10-18; range position feature for DCA entry quality
+        try:
+            rolling_high = df['high'].rolling(window).max()
+            rolling_low  = df['low'].rolling(window).min()
+            span = (rolling_high - rolling_low).replace(0, np.nan)
+            pos  = (df['close'] - rolling_low) / span
+            return pos.clip(0.0, 1.0)
+        except Exception as e:
+            logger.debug(f"Error calculating range_position_24h: {e}")
+            return pd.Series(np.nan, index=df.index)
+
+    def _calculate_realized_vol_ratio(
+        self, df: pd.DataFrame, short_window: int = 14, long_window: int = 30
+    ) -> pd.Series:
+        """
+        Ratio of the current short-window ATR to its own rolling median over `long_window` bars.
+
+        ratio > 1 → vol currently above recent average (expansion).
+        ratio < 1 → vol currently below recent average (compressed/quiet).
+        ratio = 1 → vol at its recent median.
+
+        Continuous analogue of `volatility_state` — same signal, not binned.
+        DCA hypothesis: entering during compressed vol periods means the ladder
+        fills are less likely to be triggered by fast trending moves.
+        """  # claude code changed: new — 2026-10-18; continuous volatility ratio (replaces binned volatility_state for IC testing)
+        try:
+            atr = self._calculate_atr(df, period=short_window)
+            atr_median = atr.rolling(long_window).median()
+            ratio = atr / atr_median.replace(0, np.nan)
+            return ratio.clip(0, 5)
+        except Exception as e:
+            logger.debug(f"Error calculating realized_vol_ratio: {e}")
+            return pd.Series(np.nan, index=df.index)
+
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     # LABELS (Forward returns - what actually happened?)
     # ───────────────────────────────────────────────────────────────────────────────────────────────────

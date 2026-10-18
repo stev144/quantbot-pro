@@ -1,0 +1,568 @@
+{% extends 'base.html' %}
+{% load static feature_intel_extras %}
+{# claude code changed: new — QC-1 Forex DCA Engine dashboard page #}
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" defer></script>
+<style>
+/* ── DCA Engine page-local styles ─────────────────────────────────── */
+
+/* stat row: 3 equal cards */
+.dca-stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+}
+@media (max-width: 700px) { .dca-stat-row { grid-template-columns: 1fr; } }
+
+/* pair accent strip at top of each stat card */
+.dca-card-gbp  { border-top: 3px solid var(--accent); }
+.dca-card-aud  { border-top: 3px solid var(--term-warn, #e8a838); }
+.dca-card-port { border-top: 3px solid var(--term-pos, #3fb87f); }
+
+/* big P&L number */
+.dca-big-pnl {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 10px;
+}
+
+/* 2-col mini stat grid inside a card */
+.dca-mini-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px 12px;
+}
+.dca-mini-item { display: flex; flex-direction: column; gap: 1px; }
+
+/* chart wrapper */
+.dca-chart-box {
+    position: relative;
+    width: 100%;
+}
+.dca-chart-box canvas { max-width: 100%; }
+
+/* perm-test inline summary */
+.dca-perm-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    padding: 12px 16px;
+    border: 1px solid var(--border-0, rgba(255,255,255,.08));
+    border-radius: 6px;
+    margin-bottom: 14px;
+    background: var(--bg-1, rgba(255,255,255,.03));
+}
+.dca-perm-stat { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+.dca-perm-val  { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* protocol param pills */
+.dca-proto-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+}
+.dca-proto-pill {
+    background: var(--bg-1, rgba(255,255,255,.03));
+    border: 1px solid var(--border-0, rgba(255,255,255,.08));
+    border-radius: 4px;
+    padding: 7px 10px;
+}
+.dca-proto-pill .pk { font-size: 10px; color: var(--text-dim, #636c76); margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+.dca-proto-pill .pv { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* per-fold table */
+.dca-fold-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dca-fold-table th { font-weight: 600; text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border-0, rgba(255,255,255,.08)); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim, #636c76); }
+.dca-fold-table td { padding: 5px 8px; border-bottom: 1px solid var(--border-0, rgba(255,255,255,.04)); font-variant-numeric: tabular-nums; }
+.dca-fold-table tr:last-child td { border-bottom: none; }
+.dca-fold-table td.num { text-align: right; }
+
+/* legend dot */
+.dca-dot {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+.dca-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+.dca-legend-item { display: flex; align-items: center; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="dca_engine" %}
+
+<div class="term-body">
+
+{# ── page header ──────────────────────────────────────────────────────────── #}
+<div class="term-section-head" style="margin-bottom:18px">
+    <div>
+        <span class="term-section-title">Forex DCA Engine</span>
+        <span class="term-section-meta" style="margin-left:10px">QC-1 · walk-forward out-of-sample · 5 folds · 2022-02-21 → 2025-02-13</span>
+    </div>
+    <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span class="badge">FX-QC-PROTOCOL-1</span>
+        <span class="badge">LONG only</span>
+        <span class="badge">GBP/JPY · AUD/CAD</span>
+        <span class="badge dim">$6 / cycle</span>
+    </span>
+</div>
+
+{% if error %}
+<div class="unavailable-inline" style="margin-bottom:16px">
+    DCA simulation failed: {{ error }}<br>
+    Check that <code>data/forex/</code> CSVs are present and the research modules are importable.
+</div>
+{% endif %}
+
+{% if results %}
+
+{# ── stat cards ──────────────────────────────────────────────────────────── #}
+<div class="dca-stat-row">
+
+    {# GBP/JPY #}
+    {% with p=results.pairs|get_item:"GBP/JPY" s=results.pairs|get_item:"GBP/JPY"|get_item:"stats" %}
+    <div class="term-section dca-card-gbp" style="padding:14px 16px">
+        <div class="metric-label" style="margin-bottom:6px">
+            <span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY LONG
+            <span class="term-section-meta" style="float:right">{{ s.total_trades }} trades</span>
+        </div>
+        <div class="dca-big-pnl pos">+${{ s.total_pnl }}</div>
+        <div class="dca-mini-grid">
+            <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">${{ s.max_dd }}</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">${{ s.avg_cost }}</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">${{ s.max_cost }}</span></div>
+        </div>
+    </div>
+    {% endwith %}
+
+    {# AUD/CAD #}
+    {% with s=results.pairs|get_item:"AUD/CAD"|get_item:"stats" %}
+    <div class="term-section dca-card-aud" style="padding:14px 16px">
+        <div class="metric-label" style="margin-bottom:6px">
+            <span class="dca-dot" style="background:var(--term-warn, #e8a838)"></span>AUD/CAD LONG
+            <span class="term-section-meta" style="float:right">{{ s.total_trades }} trades</span>
+        </div>
+        <div class="dca-big-pnl pos">+${{ s.total_pnl }}</div>
+        <div class="dca-mini-grid">
+            <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">${{ s.max_dd }}</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">${{ s.avg_cost }}</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">${{ s.max_cost }}</span></div>
+        </div>
+    </div>
+    {% endwith %}
+
+    {# Portfolio #}
+    {% with port=results.portfolio %}
+    <div class="term-section dca-card-port" style="padding:14px 16px">
+        <div class="metric-label" style="margin-bottom:6px">
+            <span class="dca-dot" style="background:var(--term-pos, #3fb87f)"></span>Portfolio
+            <span class="term-section-meta" style="float:right">{{ port.total_trades }} trades</span>
+        </div>
+        <div class="dca-big-pnl pos">+${{ port.total_pnl }}</div>
+        <div class="dca-mini-grid">
+            <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ port.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Initial / cycle</span><span class="metric-value small">$6.00</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Ladder levels</span><span class="metric-value small">7 × DCA</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max / cycle</span><span class="metric-value small">$762</span></div>
+        </div>
+    </div>
+    {% endwith %}
+
+</div>{# /dca-stat-row #}
+
+
+{# ── equity curves ────────────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Cumulative P&amp;L — out-of-sample walk-forward</span>
+        <span class="term-section-meta">per-trade exit dates · vertical bands = folds · USDT</span>
+    </div>
+    <div class="term-section-body">
+        <div class="dca-legend">
+            <span class="dca-legend-item"><span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY</span>
+            <span class="dca-legend-item"><span class="dca-dot" style="background:var(--term-warn,#e8a838)"></span>AUD/CAD</span>
+            <span class="dca-legend-item"><span class="dca-dot" style="background:var(--term-pos,#3fb87f)"></span>Portfolio</span>
+        </div>
+        <div class="dca-chart-box chart-box" style="height:280px">
+            <canvas id="dca-equity-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+
+{# ── fills / capital deployment ───────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Capital deployment — DCA ladder fill depth</span>
+        <span class="term-section-meta">cycles reaching each ladder level · L7 = all $762 deployed</span>
+    </div>
+    <div class="term-section-body">
+        <div class="dca-chart-box chart-box" style="height:200px">
+            <canvas id="dca-fills-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+
+{# ── per-fold breakdown tables ─────────────────────────────────────────────── #}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    {% for pair_key, pair_label, dot_style in pair_table_items %}
+    {% with p=results.pairs|get_item:pair_key %}
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title"><span class="dca-dot" style="{{ dot_style }}"></span>{{ pair_label }} — fold breakdown</span>
+        </div>
+        <div class="term-section-body">
+            <table class="dca-fold-table">
+                <thead>
+                    <tr>
+                        <th>Fold</th><th>Period</th>
+                        <th class="num">Trades</th><th class="num">Win%</th><th class="num">P&amp;L</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fs in p.fold_stats %}
+                    <tr>
+                        <td>F{{ fs.fold }}</td>
+                        <td class="mono" style="font-size:11px">{{ fs.start }}→{{ fs.end }}</td>
+                        <td class="num">{{ fs.trades }}</td>
+                        <td class="num">{{ fs.win_pct }}%</td>
+                        <td class="num {% if fs.pnl >= 0 %}pos{% else %}neg{% endif %}">${{ fs.pnl }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endwith %}
+    {% endfor %}
+</div>
+
+
+{# ── permutation test ─────────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Block-shuffle permutation test (M3)</span>
+        <span class="term-section-meta">post-hoc selection · exploratory only</span>
+    </div>
+    <div class="term-section-body">
+        <div class="dca-perm-row">
+            <div class="dca-perm-stat">
+                <span class="metric-label">p-value</span>
+                <span class="dca-perm-val warn">{{ perm.p_value }}</span>
+            </div>
+            <div class="dca-perm-stat">
+                <span class="metric-label">Beats shuffles</span>
+                <span class="dca-perm-val">{{ perm.beats_pct }}%</span>
+            </div>
+            <div class="dca-perm-stat">
+                <span class="metric-label">N permutations</span>
+                <span class="dca-perm-val">{{ perm.n_perm }}</span>
+            </div>
+            <div class="dca-perm-stat">
+                <span class="metric-label">Block size</span>
+                <span class="dca-perm-val">{{ perm.block_h }}h</span>
+            </div>
+            <div style="flex:1;min-width:200px">
+                <div style="font-size:12px;margin-bottom:3px">
+                    α={{ perm.alpha }} →
+                    {% if perm.significant %}
+                    <span class="pos" style="font-weight:700">SIGNIFICANT</span>
+                    {% else %}
+                    <span class="warn" style="font-weight:700">not significant</span>
+                    {% endif %}
+                </div>
+                <div class="chart-caption mono" style="font-size:11px">Statistic: total realised P&amp;L across 2 pairs × 5 folds · Phipson-Smyth correction</div>
+            </div>
+        </div>
+        {% if perm.post_hoc_warn %}
+        <div class="unavailable-inline">
+            <strong>Post-hoc selection bias.</strong>
+            GBP/JPY and AUD/CAD were selected after observing positive LONG P&amp;L in a 5-pair run.
+            The true false-positive rate is higher than α={{ perm.alpha }} implies.
+            p={{ perm.p_value }} is <em>exploratory</em>, not confirmatory.
+            A pre-registered test on new unseen data is required before treating this as edge evidence.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+
+{# ── protocol parameters ──────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Protocol parameters</span>
+        <span class="term-section-meta">{{ protocol.id }}</span>
+    </div>
+    <div class="term-section-body">
+        <div class="dca-proto-grid">
+            <div class="dca-proto-pill"><div class="pk">Protocol</div><div class="pv">{{ protocol.id }}</div></div>
+            <div class="dca-proto-pill"><div class="pk">Initial / cycle</div><div class="pv">${{ protocol.initial_usdt }}</div></div>
+            <div class="dca-proto-pill"><div class="pk">Max cycle</div><div class="pv">{{ protocol.max_cycle_h }} h</div></div>
+            <div class="dca-proto-pill"><div class="pk">Profit activation</div><div class="pv">{{ protocol.profit_act_pct }}%</div></div>
+            <div class="dca-proto-pill"><div class="pk">Trailing stop</div><div class="pv">{{ protocol.trailing_pct }}%</div></div>
+            <div class="dca-proto-pill"><div class="pk">MAE horizon</div><div class="pv">{{ protocol.mae_horizon }} bars</div></div>
+            <div class="dca-proto-pill"><div class="pk">Ladder levels</div><div class="pv">{{ protocol.ladder_levels }} (DCA)</div></div>
+            <div class="dca-proto-pill"><div class="pk">Multipliers</div><div class="pv" style="font-size:11px">{{ protocol.multipliers }}</div></div>
+            <div class="dca-proto-pill"><div class="pk">Folds</div><div class="pv">{{ protocol.folds }} walk-forward</div></div>
+            <div class="dca-proto-pill"><div class="pk">Embargo</div><div class="pv">{{ protocol.embargo_bars }} bars</div></div>
+        </div>
+    </div>
+</div>
+
+<div class="chart-caption mono" style="text-align:center;padding-block:8px;margin-bottom:20px">
+    Steph Quant Technologies · Research mode · All results out-of-sample walk-forward · Not financial advice
+</div>
+
+{% else %}
+{% if not error %}
+<div class="unavailable-inline">No data available — simulation may still be loading on first request.</div>
+{% endif %}
+{% endif %}{# /if results #}
+
+</div>{# /term-body #}
+
+
+{# ── chart data + rendering ───────────────────────────────────────────────── #}
+<script>
+(function () {
+    // Data injected from view
+    const PAIRS_DATA       = {{ pairs_json|safe }};
+    const PORT_EQUITY      = {{ portfolio_equity_json|safe }};
+    const FOLD_BOUNDS      = {{ fold_boundaries_json|safe }};
+
+    if (!PAIRS_DATA || !PORT_EQUITY) return;  // error path — no data
+
+    // ── theme-aware colour resolution ────────────────────────────────────────
+    function cssVar(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    // ── Chart.js time-series helpers ─────────────────────────────────────────
+    function toPoints(arr) {
+        return arr.map(t => ({ x: t.d, y: t.p }));
+    }
+
+    // ── Build fold annotation boxes ──────────────────────────────────────────
+    function buildAnnotations(bgColors) {
+        const annotations = {};
+        FOLD_BOUNDS.forEach((fb, i) => {
+            annotations['box' + fb.fold] = {
+                type: 'box',
+                xMin: fb.start,
+                xMax: fb.end,
+                backgroundColor: bgColors[i % 2],
+                borderWidth: 0,
+            };
+            annotations['lbl' + fb.fold] = {
+                type: 'label',
+                xValue: fb.start,
+                yValue: 'max',
+                yAdjust: -4,
+                content: 'F' + fb.fold,
+                font: { size: 9 },
+                color: cssVar('--text-dim') || '#636c76',
+            };
+        });
+        return annotations;
+    }
+
+    // ── Equity chart ─────────────────────────────────────────────────────────
+    function buildEquityChart() {
+        const ctx      = document.getElementById('dca-equity-chart');
+        if (!ctx) return;
+        const gbpColor = cssVar('--accent') || '#5b8dc9';
+        const audColor = cssVar('--term-warn') || '#e8a838';
+        const portColor= cssVar('--term-pos')  || '#3fb87f';
+        const fg       = cssVar('--text-0')    || '#e6edf3';
+        const fgDim    = cssVar('--text-dim')   || '#636c76';
+        const gridCol  = cssVar('--border-0')   || 'rgba(255,255,255,0.08)';
+
+        const annotations = buildAnnotations([
+            'rgba(128,128,128,0.05)',
+            'rgba(128,128,128,0.10)',
+        ]);
+
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [
+                    {
+                        label: 'GBP/JPY',
+                        data: toPoints(PAIRS_DATA['GBP/JPY'].equity),
+                        borderColor: gbpColor,
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.1,
+                        order: 2,
+                    },
+                    {
+                        label: 'AUD/CAD',
+                        data: toPoints(PAIRS_DATA['AUD/CAD'].equity),
+                        borderColor: audColor,
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.1,
+                        order: 2,
+                    },
+                    {
+                        label: 'Portfolio',
+                        data: toPoints(PORT_EQUITY),
+                        borderColor: portColor,
+                        backgroundColor: portColor + '18',
+                        fill: 'origin',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.1,
+                        order: 1,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: cssVar('--bg-1') || '#1c2128',
+                        borderColor: gridCol,
+                        borderWidth: 1,
+                        titleColor: fgDim,
+                        bodyColor: fg,
+                        callbacks: {
+                            label: c => c.dataset.label + ': $' + c.parsed.y.toFixed(2)
+                        },
+                    },
+                    annotation: { annotations },
+                },
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: { unit: 'month', displayFormats: { month: 'MMM yy' } },
+                        grid: { color: gridCol, drawTicks: false },
+                        ticks: { color: fgDim, font: { size: 10 } },
+                        border: { color: gridCol },
+                    },
+                    y: {
+                        grid: { color: gridCol },
+                        ticks: {
+                            color: fgDim,
+                            font: { size: 10, family: 'monospace' },
+                            callback: v => '$' + v.toFixed(0),
+                        },
+                        border: { color: gridCol },
+                    },
+                },
+            },
+        });
+    }
+
+    // ── Fills chart ───────────────────────────────────────────────────────────
+    function buildFillsChart() {
+        const ctx = document.getElementById('dca-fills-chart');
+        if (!ctx) return;
+        const gbpColor = cssVar('--accent')     || '#5b8dc9';
+        const audColor = cssVar('--term-warn')  || '#e8a838';
+        const fgDim    = cssVar('--text-dim')   || '#636c76';
+        const gridCol  = cssVar('--border-0')   || 'rgba(255,255,255,0.08)';
+
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['L1  $6', 'L2  $18', 'L3  $42', 'L4  $90', 'L5  $186', 'L6  $378', 'L7  $762'],
+                datasets: [
+                    {
+                        label: 'GBP/JPY',
+                        data: PAIRS_DATA['GBP/JPY'].fills_dist,
+                        backgroundColor: gbpColor + 'cc',
+                        borderColor: gbpColor,
+                        borderWidth: 1,
+                        borderRadius: 3,
+                    },
+                    {
+                        label: 'AUD/CAD',
+                        data: PAIRS_DATA['AUD/CAD'].fills_dist,
+                        backgroundColor: audColor + 'cc',
+                        borderColor: audColor,
+                        borderWidth: 1,
+                        borderRadius: 3,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            color: cssVar('--text-0') || '#e6edf3',
+                            font: { size: 11 },
+                            boxWidth: 12,
+                            padding: 12,
+                        },
+                    },
+                    tooltip: {
+                        backgroundColor: cssVar('--bg-1') || '#1c2128',
+                        borderColor: gridCol,
+                        borderWidth: 1,
+                        bodyColor: cssVar('--text-0') || '#e6edf3',
+                        titleColor: fgDim,
+                    },
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: fgDim, font: { size: 10, family: 'monospace' } },
+                        border: { color: gridCol },
+                    },
+                    y: {
+                        grid: { color: gridCol },
+                        ticks: { color: fgDim, font: { size: 10 } },
+                        title: {
+                            display: true,
+                            text: 'Cycle count',
+                            color: fgDim,
+                            font: { size: 10 },
+                        },
+                        border: { color: gridCol },
+                    },
+                },
+            },
+        });
+    }
+
+    // Wait for deferred scripts to load then render
+    function waitForChartJs(cb, tries) {
+        if (typeof Chart !== 'undefined') { cb(); return; }
+        if ((tries || 0) > 40) return;
+        setTimeout(() => waitForChartJs(cb, (tries || 0) + 1), 150);
+    }
+
+    waitForChartJs(function () {
+        buildEquityChart();
+        buildFillsChart();
+    });
+})();
+</script>
+{% endblock %}
