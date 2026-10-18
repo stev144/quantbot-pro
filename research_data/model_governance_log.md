@@ -3060,3 +3060,64 @@ is too tight for signals that take longer to resolve at hourly resolution.
 - Citing H5 results as evidence of edge
 - Any holdout access
 
+---
+
+## INTRADAY FX PROTOCOL — D-5: PULLBACK STRATEGY PRE-REGISTRATION (H3/H4)
+
+**Date:** 2026-10-18  
+**Decision:** D-5 — pullback family implementation and parameter registration  
+**Hypotheses covered:** H3 (pullback 5m) and H4 (pullback 15m)
+
+### Strategy design rationale
+
+MeanReversionStrategy fires on RANGING regime. The pullback family addresses TRENDING_UP/DOWN
+regimes: enter on a retracement to a key moving average level within a confirmed trend, then
+catch the resumption. This is structurally different from MovingAverageStrategy (which enters
+on EMA crossover without waiting for a retracement).
+
+### Signal logic (PullbackStrategy)
+
+**For BUY (TRENDING_UP regime):**
+1. EMA20 > EMA50 — confirms uptrend structure at two timescales
+2. At least one of the last `pullback_lookback` bars had its close at or below EMA20 — the pullback actually reached the EMA level
+3. Current bar close > EMA20 — price reclaimed above EMA20 (trend resuming)
+4. Confirmation: current close > previous close (momentum direction matches trend)
+5. RSI between `rsi_min` and `rsi_max` — not oversold (would indicate reversal) and not overbought (avoids buying at the top after the pullback)
+6. SL = entry - ATR × atr_multiplier; TP = entry + SL_distance × rr_ratio
+
+**For SELL (TRENDING_DOWN regime):** exact mirror.
+
+**Regime gate:** TRENDING_UP → BUY only; TRENDING_DOWN → SELL only.  
+**No signal on RANGING or HIGH_VOLATILITY.**
+
+### Pre-registered parameters (H3 and H4, same defaults)
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| fast_ema_period | 20 | Standard pullback anchor; consistent with MR's BB period |
+| slow_ema_period | 50 | Trend direction filter |
+| atr_period | 14 | Standard ATR; same as MR |
+| atr_multiplier | 1.5 | Wider than MR (1.0); trending trades need room for noise |
+| rr_ratio | 2.0 | Higher R:R target for momentum trades |
+| pullback_lookback | 5 | 5-bar lookback window for EMA touch |
+| rsi_min | 35 | Lower bound: avoids entries where price is already reversing |
+| rsi_max | 65 | Upper bound: avoids buying at overbought top of pullback |
+| min_candles | 50 | Warmup; same as MR |
+| Spread | 0.5 pips round-trip | Same as H2/H5 |
+| Position sizing | PositionSizer(risk_pct=0.01) | Same as H2/H5 |
+| Initial balance | $1,000 | Same as H2/H5 |
+| SL/TP simulation | Entry-price rebasing (D-9 amendment) | Applied by default in runner |
+
+### Fold structures
+
+**H4 (15m):** Same as D-7 — IS=5,973, OOS=2,986, embargo=67, 5 folds, 49,415 bars available.  
+**H3 (5m):** Exploratory only — 180d of 5m data insufficient for 5-fold walk-forward.
+The H3 run on 5m will be treated as a feasibility/directional check, not a formal hypothesis
+test. H3 result will not be counted against the D-4 Bonferroni family.
+
+### What is NOT authorised
+
+- Parameter changes after viewing any H3 or H4 results
+- Running on other pairs before EUR/USD H4 result is logged
+- Any holdout access
+

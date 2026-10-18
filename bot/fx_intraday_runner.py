@@ -37,6 +37,7 @@ import pandas as pd
 
 from bot.engines.regime_detector import RegimeDetector
 from bot.strategies.mean_reversion_strategy import MeanReversionStrategy
+from bot.strategies.pullback_strategy import PullbackStrategy  # claude code changed: D-5 pullback family
 from bot.risk.position_sizer import PositionSizer
 from bot.research.fx_permutation_test import block_shuffle_returns  # M3 null model
 from bot.research.permutation_stats import compute_permutation_verdict
@@ -118,20 +119,20 @@ def simulate_on_window(
     oos_start: int,
     oos_end: int,
     balance: float = INITIAL_BALANCE,
+    strategy=None,
 ) -> List[Dict]:
-    """
-    Run MR strategy candle-by-candle on df[oos_start:oos_end] (with IS bars
-    before oos_start available as indicator warmup). Returns only trades that
-    OPEN within the OOS window.
-
-    Uses pre-registered D-9 parameters. No parameter fitting.
-    """  # claude code changed: new â€” simulation with FX pip-based costs, OOS-only trade recording
+    “””
+    Run strategy candle-by-candle on df[oos_start:oos_end]. Returns only trades
+    that OPEN within the OOS window. Strategy instance injected by caller;
+    defaults to pre-registered MR defaults for backward compatibility.
+    “””  # claude code changed: strategy injected; supports MR and PullbackStrategy (D-5)
     rd = RegimeDetector()
-    mr = MeanReversionStrategy(
-        rsi_oversold=35, rsi_overbought=65,
-        atr_multiplier=1.0, bb_width_max=6.0,
-        min_candles=50, rr_ratio=1.5,
-    )
+    if strategy is None:
+        strategy = MeanReversionStrategy(
+            rsi_oversold=35, rsi_overbought=65,
+            atr_multiplier=1.0, bb_width_max=6.0,
+            min_candles=50, rr_ratio=1.5,
+        )
     ps = PositionSizer(risk_pct=RISK_PCT)
 
     # Round-trip spread cost per unit (applied at entry + exit each = 0.5Ã--SPREAD_PIPS)
@@ -151,7 +152,7 @@ def simulate_on_window(
         if not in_position:
             # Generate signal on completed bar i
             regime = rd.detect(window)
-            signal = mr.evaluate(window, regime)
+            signal = strategy.evaluate(window, regime)
 
             if signal["signal"] in ("BUY", "SELL") and i + 1 < len(df):
                 # Entry at bar i+1's open (completed-bar discipline)
@@ -163,14 +164,15 @@ def simulate_on_window(
                 # strategy computes sl/tp from signal["entry"] (signal-bar close);
                 # actual entry is next-bar open. Preserve ATR distance, shift anchor.
                 sl_distance = abs(float(signal["entry"]) - float(signal["sl"]))
+                rr = getattr(strategy, "rr_ratio", RR_RATIO)  # strategy-specific R:R  # claude code changed: use strategy.rr_ratio so pullback (2.0) vs MR (1.5) are correct
                 if side == "BUY":
                     entry_price = entry_open + half_spread
                     sl = entry_price - sl_distance
-                    tp = entry_price + sl_distance * RR_RATIO
+                    tp = entry_price + sl_distance * rr
                 else:
                     entry_price = entry_open - half_spread
                     sl = entry_price + sl_distance
-                    tp = entry_price - sl_distance * RR_RATIO
+                    tp = entry_price - sl_distance * rr
 
                 units = ps.calculate(balance, entry_price, sl)
                 if units == 0:
@@ -250,30 +252,31 @@ def simulate_on_window(
 
 # â”€â”€ Walk-forward â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def run_walk_forward(df: pd.DataFrame) -> Tuple[List[Dict], List[Dict]]:
-    """Run 5-fold OOS walk-forward per D-7. Returns (all_trades, fold_summaries)."""  # claude code changed: new
+def run_walk_forward(df: pd.DataFrame, strategy=None) -> Tuple[List[Dict], List[Dict]]:
+    “””Run 5-fold OOS walk-forward. Strategy instance injected by caller.”””  # claude code changed: strategy param
     folds     = make_folds(len(df))
     all_trades: List[Dict] = []
     fold_summaries: List[Dict] = []
 
     for fold in folds:
-        fold_num = fold["fold"]
-        print(f"\n-- Fold {fold_num}/5 --------------------------------------------------")
-        print(f"   IS:  bars {fold['is_start']:,} â€“ {fold['is_end']:,}")
-        print(f"   Embargo: {EMBARGO_BARS} bars")
-        print(f"   OOS: bars {fold['oos_start']:,} â€“ {fold['oos_end']:,}")
+        fold_num = fold[“fold”]
+        print(f”\n-- Fold {fold_num}/5 --------------------------------------------------”)
+        print(f”   IS:  bars {fold[‘is_start’]:,} - {fold[‘is_end’]:,}”)
+        print(f”   Embargo: {EMBARGO_BARS} bars”)
+        print(f”   OOS: bars {fold[‘oos_start’]:,} - {fold[‘oos_end’]:,}”)
 
         # OOS dates
-        oos_df = df.iloc[fold["oos_start"]:fold["oos_end"]]
+        oos_df = df.iloc[fold[“oos_start”]:fold[“oos_end”]]
         if len(oos_df) == 0:
-            print(f"   SKIP â€” empty OOS slice")
+            print(f”   SKIP - empty OOS slice”)
             continue
-        print(f"   OOS dates: {oos_df.iloc[0]['timestamp']} â†’ {oos_df.iloc[-1]['timestamp']}")
+        print(f”   OOS dates: {oos_df.iloc[0][‘timestamp’]} -> {oos_df.iloc[-1][‘timestamp’]}”)
 
         trades = simulate_on_window(
             df,
-            oos_start=fold["oos_start"],
-            oos_end=fold["oos_end"],
+            oos_start=fold[“oos_start”],
+            oos_end=fold[“oos_end”],
+            strategy=strategy,
         )
 
         n  = len(trades)
@@ -316,33 +319,29 @@ def run_permutation_test(
     real_mean_pnl: float,
     real_total_pnl: float,
     n_permutations: int = N_PERMUTATIONS,
+    strategy=None,
 ) -> Dict:
-    """
-    M3 block-shuffle permutation test on the full development window.
-    Block size = 48 bars (48 x 15m = 12h, per D-9 spec).
-    Reuses fx_permutation_test.block_shuffle_returns (no reimplementation).
-    """  # claude code changed: new â€” M3 block permutation test for H2
-    rng = np.random.default_rng(seed=42)  # fixed seed for reproducibility
+    “””M3 block-shuffle permutation test. Strategy injected by caller.”””  # claude code changed: strategy param
+    rng = np.random.default_rng(seed=42)
     shuffled_results: List[Dict] = []
 
     folds = make_folds(len(df))
 
-    print(f"\nPermutation test: N={n_permutations}, block_size={BLOCK_SIZE} bars (12h)...")
+    print(f”\nPermutation test: N={n_permutations}, block_size={BLOCK_SIZE} bars...”)
 
     for perm_i in range(n_permutations):
         if perm_i % 50 == 0:
-            print(f"  Permutation {perm_i}/{n_permutations}...", flush=True)
+            print(f”  Permutation {perm_i}/{n_permutations}...”, flush=True)
 
-        # Shuffle the full df using M3 log-return block shuffle
         shuffled_df = block_shuffle_returns(df, block_size=BLOCK_SIZE, rng=rng)
 
-        # Re-run walk-forward on shuffled data
         perm_trades: List[Dict] = []
         for fold in folds:
             t = simulate_on_window(
                 shuffled_df,
-                oos_start=fold["oos_start"],
-                oos_end=fold["oos_end"],
+                oos_start=fold[“oos_start”],
+                oos_end=fold[“oos_end”],
+                strategy=strategy,
             )
             perm_trades.extend(t)
 
@@ -367,7 +366,7 @@ def run_permutation_test(
 
 # â”€â”€ Results printer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def print_results(all_trades, fold_summaries, verdict, pair, interval="?"):  # claude code changed: new; interval param added 2026-10-18
+def print_results(all_trades, fold_summaries, verdict, pair, interval="?", strategy_label="Strategy"):  # claude code changed: strategy_label param added 2026-10-18
     n_total    = len(all_trades)
     if n_total == 0:
         print("\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
@@ -386,7 +385,7 @@ def print_results(all_trades, fold_summaries, verdict, pair, interval="?"):  # c
         exit_reasons[t["exit_reason"]] = exit_reasons.get(t["exit_reason"], 0) + 1
 
     print("\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
-    print(f"MeanReversionStrategy {interval} {pair} 5-fold OOS walk-forward")  # claude code changed: was hardcoded H2/15m
+    print(f"{strategy_label} {interval} {pair} 5-fold OOS walk-forward")  # claude code changed: uses strategy_label
     print(f"Pre-registered parameters (D-9) â€” no parameter fitting")
     print("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
     print(f"\nOVERALL OOS RESULTS ({N_FOLDS} folds combined):")
@@ -425,19 +424,21 @@ def print_results(all_trades, fold_summaries, verdict, pair, interval="?"):  # c
 
 # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def main():  # claude code changed: new; fold-structure overrides added 2026-10-18 for H5 1h run
-    parser = argparse.ArgumentParser(description="MR walk-forward runner (H2/H5)")
-    parser.add_argument("--pair", default="EUR/USD", help="Protocol pair (default: EUR/USD)")
-    parser.add_argument("--interval", default="15m", help="Timeframe (default: 15m)")
-    parser.add_argument("--no-permtest", action="store_true", help="Skip permutation test")
-    parser.add_argument("--save", action="store_true", help="Save OOS trades to research_data/")
-    parser.add_argument("--is-bars", type=int, default=None, help="Override IS bars (default: D-7 constant)")
-    parser.add_argument("--oos-bars", type=int, default=None, help="Override OOS bars")
-    parser.add_argument("--embargo-bars", type=int, default=None, help="Override embargo bars")
-    parser.add_argument("--max-hold", type=int, default=None, help="Override MAX_HOLD_BARS")
+def main():  # claude code changed: --strategy flag added 2026-10-18 for H4 pullback run
+    parser = argparse.ArgumentParser(description=”Intraday FX walk-forward runner (D-4 family)”)
+    parser.add_argument(“--pair”, default=”EUR/USD”, help=”Protocol pair (default: EUR/USD)”)
+    parser.add_argument(“--interval”, default=”15m”, help=”Timeframe (default: 15m)”)
+    parser.add_argument(“--strategy”, default=”mr”, choices=[“mr”, “pullback”],
+                        help=”Strategy to run: ‘mr’ = MeanReversionStrategy (default), ‘pullback’ = PullbackStrategy”)
+    parser.add_argument(“--no-permtest”, action=”store_true”, help=”Skip permutation test”)
+    parser.add_argument(“--save”, action=”store_true”, help=”Save OOS trades to research_data/”)
+    parser.add_argument(“--is-bars”, type=int, default=None, help=”Override IS bars (default: D-7 constant)”)
+    parser.add_argument(“--oos-bars”, type=int, default=None, help=”Override OOS bars”)
+    parser.add_argument(“--embargo-bars”, type=int, default=None, help=”Override embargo bars”)
+    parser.add_argument(“--max-hold”, type=int, default=None, help=”Override MAX_HOLD_BARS”)
     args = parser.parse_args()
 
-    # Apply fold-structure overrides (for H5 1h; pre-registered in governance log)
+    # Apply fold-structure overrides
     global IS_BARS, OOS_BARS, EMBARGO_BARS, MAX_HOLD_BARS
     if args.is_bars is not None:
         IS_BARS = args.is_bars
@@ -448,44 +449,55 @@ def main():  # claude code changed: new; fold-structure overrides added 2026-10-
     if args.max_hold is not None:
         MAX_HOLD_BARS = args.max_hold
 
-    logging.basicConfig(level=logging.WARNING,
-                        format="%(levelname)s | %(name)s | %(message)s")
+    # Construct strategy instance from pre-registered defaults (D-5)
+    if args.strategy == “pullback”:
+        strategy = PullbackStrategy()
+        strategy_label = “PullbackStrategy”
+    else:
+        strategy = MeanReversionStrategy()
+        strategy_label = “MeanReversionStrategy”
 
-    print(f"\n{'='*63}")
-    print(f"INTRADAY FX WALK-FORWARD â€” H2")
-    print(f"Strategy  : MeanReversionStrategy (pre-registered defaults)")
-    print(f"Pair      : {args.pair}  |  Interval: {args.interval}")
-    print(f"Folds     : {N_FOLDS}  |  IS={IS_BARS} bars  OOS={OOS_BARS} bars  embargo={EMBARGO_BARS}")
-    print(f"D-4 alpha : {BONFERRONI_ALPHA} (5-test Bonferroni)")
-    print(f"D-9 spread: {SPREAD_PIPS} pips round-trip")
-    print(f"{'='*63}")
+    logging.basicConfig(level=logging.WARNING,
+                        format=”%(levelname)s | %(name)s | %(message)s”)
+
+    print(f”\n{‘=’*63}”)
+    print(f”INTRADAY FX WALK-FORWARD”)
+    print(f”Strategy  : {strategy_label} (pre-registered defaults)”)
+    print(f”Pair      : {args.pair}  |  Interval: {args.interval}”)
+    print(f”Folds     : {N_FOLDS}  |  IS={IS_BARS} bars  OOS={OOS_BARS} bars  embargo={EMBARGO_BARS}”)
+    print(f”D-4 alpha : {BONFERRONI_ALPHA} (5-test Bonferroni)”)
+    print(f”D-9 spread: {SPREAD_PIPS} pips round-trip”)
+    print(f”{‘=’*63}”)
 
     df = load_dev_data(pair=args.pair, interval=args.interval)
-    print(f"\nLoaded: {len(df):,} bars  ({df['timestamp'].iloc[0]} to {df['timestamp'].iloc[-1]})")
+    print(f”\nLoaded: {len(df):,} bars  ({df[‘timestamp’].iloc[0]} to {df[‘timestamp’].iloc[-1]})”)
 
     total_needed = N_FOLDS * (IS_BARS + EMBARGO_BARS + OOS_BARS)
     if len(df) < total_needed:
-        print(f"WARNING: only {len(df):,} bars; need {total_needed:,} for {N_FOLDS} complete folds")
+        print(f”WARNING: only {len(df):,} bars; need {total_needed:,} for {N_FOLDS} complete folds”)
 
-    all_trades, fold_summaries = run_walk_forward(df)
+    all_trades, fold_summaries = run_walk_forward(df, strategy=strategy)
 
     n_total   = len(all_trades)
-    mean_pnl  = sum(t["pnl_net"] for t in all_trades) / n_total if n_total > 0 else 0.0
-    total_pnl = sum(t["pnl_net"] for t in all_trades)
+    mean_pnl  = sum(t[“pnl_net”] for t in all_trades) / n_total if n_total > 0 else 0.0
+    total_pnl = sum(t[“pnl_net”] for t in all_trades)
 
     verdict = None
     if not args.no_permtest and n_total > 0:
-        verdict = run_permutation_test(df, real_mean_pnl=mean_pnl, real_total_pnl=total_pnl)
+        verdict = run_permutation_test(df, real_mean_pnl=mean_pnl, real_total_pnl=total_pnl,
+                                       strategy=strategy)
 
-    print_results(all_trades, fold_summaries, verdict, args.pair, interval=args.interval)
+    print_results(all_trades, fold_summaries, verdict, args.pair, interval=args.interval,
+                  strategy_label=strategy_label)
 
     if args.save and all_trades:
-        out_dir = Path("research_data")
+        out_dir = Path(“research_data”)
         out_dir.mkdir(exist_ok=True)
-        hyp_tag = f"MR_{args.interval}_{args.pair.replace('/', '_')}"
-        out_path = out_dir / f"{hyp_tag}_oos_trades.csv"  # claude code changed: was hardcoded H2_MR_15m
+        strat_tag = “Pullback” if args.strategy == “pullback” else “MR”
+        hyp_tag = f”{strat_tag}_{args.interval}_{args.pair.replace(‘/’, ‘_’)}”
+        out_path = out_dir / f”{hyp_tag}_oos_trades.csv”
         pd.DataFrame(all_trades).to_csv(out_path, index=False)
-        print(f"\nOOS trades saved â†’ {out_path}")
+        print(f”\nOOS trades saved -> {out_path}”)
 
 
 if __name__ == "__main__":
