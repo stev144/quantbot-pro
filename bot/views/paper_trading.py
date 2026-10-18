@@ -17,7 +17,7 @@ from django.shortcuts import render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_KEY = "paper_trading_results_v4"  # claude code changed: v4 — 1:30 leverage applied to simulation
+_CACHE_KEY = "paper_trading_results_v5"  # claude code changed: v5 — ranging gate removed, single unrestricted simulation
 _CACHE_TTL = 3600
 
 
@@ -35,17 +35,15 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
             error   = str(exc)
             results = {}
 
-    # build per-pair JSON for JS charts  # claude code changed: added drawdown + fill_dist + capital fields
+    # build per-pair JSON for JS charts  # claude code changed: v5 — single equity/drawdown (no gated/free split)
     pairs_data = {}
     for pair, r in results.items():
         if "error" not in r:
             pairs_data[pair] = {
-                "equity_gated":   r.get("equity_gated",   []),
-                "equity_free":    r.get("equity_free",    []),
-                "drawdown_gated": r.get("drawdown_gated", []),
-                "drawdown_free":  r.get("drawdown_free",  []),
-                "fill_dist":      r.get("fill_dist",      {}),
-                "ladder_depth":   r.get("ladder_depth",   0),
+                "equity":     r.get("equity",    []),
+                "drawdown":   r.get("drawdown",  []),
+                "fill_dist":  r.get("fill_dist", {}),
+                "ladder_depth": r.get("ladder_depth", 0),
             }
 
     pair_list = [p for p in results if "error" not in results[p]]
@@ -64,6 +62,7 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
             if mm:
                 max_margins.append(mm)
     total_max_margin = round(sum(max_margins), 2) if max_margins else None
+    # stats key changed from stats_gated/stats_free to stats (single simulation)
 
     context = {
         "error":             error,

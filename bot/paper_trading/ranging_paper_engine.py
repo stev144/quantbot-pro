@@ -390,29 +390,14 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 and getattr(pair_spec, "swap_long", None) is not None
             )
 
-            # ── run ranging-gated simulation ──────────────────────────────────────
-            trades_gated, equity_gated = _simulate_ranging_gated(
-                df=sim_df,
-                spec=spec,
-                ranging_mask=ranging_mask,
-                initial_usdt=_PAPER_NOTIONAL,   # claude code changed: notional = $100 margin × 30 leverage = $3,000
-                profit_activation_pct=QC1_PROFIT_ACTIVATION,
-                trailing_pct=QC1_TRAILING_PCT,
-                max_cycle_candles=QC1_MAX_CYCLE_CANDLES,
-                spread_fraction=spread_fraction,
-                swap_pips_per_h=swap_pips_per_h,
-                commission_per_lot=commission_lot,
-                lot_size=lot_size,
-                cost_complete=cost_complete,
-                atr_series=atr14,  # reuse 14-bar ATR for dynamic spacing
-            )
-
-            # ── run unrestricted simulation (same period, no regime gate) ─────────
+            # ── unrestricted QC-1 simulation (ranging gate removed) ──────────────
+            # Evidence: ranging gate hurt GBP/JPY (validated pair) by $13K+.
+            # The DCA ladder edge exists across all regimes, not just ranging.  # claude code changed: gate removed
             from bot.research.fx_fold_runner import _simulate_data_derived_next_open  # deferred
-            trades_free_raw, _ = _simulate_data_derived_next_open(
+            trades_raw, _ = _simulate_data_derived_next_open(
                 df=sim_df,
                 spec=spec,
-                initial_usdt=_PAPER_NOTIONAL,   # claude code changed: same notional for direct comparison
+                initial_usdt=_PAPER_NOTIONAL,
                 profit_activation_pct=QC1_PROFIT_ACTIVATION,
                 trailing_pct=QC1_TRAILING_PCT,
                 spread_pips=spread_pips if spread_pips else None,
@@ -422,46 +407,43 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 lot_size=lot_size,
                 max_cycle_candles=QC1_MAX_CYCLE_CANDLES,
             )
-            closed_free = [t for t in trades_free_raw if t.get("exit_reason") != "DATA_END_STILL_OPEN"]
+            closed = [t for t in trades_raw if t.get("exit_reason") != "DATA_END_STILL_OPEN"]
             cum = 0.0
-            equity_free = []
-            for t in sorted(closed_free, key=lambda x: x["exit_time"]):
+            equity = []
+            for t in sorted(closed, key=lambda x: x["exit_time"]):
                 cum += t["profit_usdt"]
-                equity_free.append({"d": str(t["exit_time"])[:10], "p": round(cum, 4)})
+                equity.append({"d": str(t["exit_time"])[:10], "p": round(cum, 4)})
 
             # ── stats ─────────────────────────────────────────────────────────────
-            closed_gated = [t for t in trades_gated if t.get("exit_reason") != "DATA_END_STILL_OPEN"]
-
-            def _stats(closed):
-                if not closed:
+            def _stats(trades):
+                if not trades:
                     return {"total_trades": 0, "wins": 0, "win_pct": 0.0,
                             "total_pnl": 0.0, "max_dd": 0.0, "avg_fills": 0.0}
-                profits   = [t["profit_usdt"] for t in closed]
+                profits   = [t["profit_usdt"] for t in trades]
                 wins      = sum(1 for p in profits if p > 0)
                 cum_arr   = np.cumsum(profits)
                 peak_arr  = np.maximum.accumulate(cum_arr)
                 max_dd    = float((cum_arr - peak_arr).min())
-                avg_fills = float(np.mean([t["fills"] for t in closed]))
+                avg_fills = float(np.mean([t["fills"] for t in trades]))
                 return {
-                    "total_trades": len(closed),
+                    "total_trades": len(trades),
                     "wins":         wins,
-                    "win_pct":      round(wins / len(closed) * 100, 1),
+                    "win_pct":      round(wins / len(trades) * 100, 1),
                     "total_pnl":    round(float(np.sum(profits)), 4),
                     "max_dd":       round(max_dd, 4),
                     "avg_fills":    round(avg_fills, 2),
                 }
 
-            stats_gated = _stats(closed_gated)
-            stats_free  = _stats(closed_free)
+            stats = _stats(closed)
 
-            # fill distribution: how many cycles ended at each fill depth  # claude code changed: new — fill depth chart data
-            ladder_depth = 1 + len(spec.base_pips)   # 1 entry + N DCA levels
+            # fill distribution: cycles per ladder depth
+            ladder_depth = 1 + len(spec.base_pips)
             fill_dist: Dict[int, int] = {}
-            for t in closed_gated:
+            for t in closed:
                 f = int(t["fills"])
                 fill_dist[f] = fill_dist.get(f, 0) + 1
 
-            # drawdown series (relative to running peak)  # claude code changed: new — drawdown chart data
+            # drawdown series (relative to running peak)
             def _drawdown_series(equity_pts: list) -> list:
                 if not equity_pts:
                     return []
@@ -472,8 +454,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                     out.append({"i": i, "p": round(pt["p"] - peak, 4)})
                 return out
 
-            drawdown_gated = _drawdown_series(equity_gated)
-            drawdown_free  = _drawdown_series(equity_free)
+            drawdown = _drawdown_series(equity)
 
             # ranging % of sim data
             ranging_pct = round(float(ranging_mask.mean()) * 100, 1)
@@ -496,25 +477,22 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             max_margin   = PAPER_ENTRY_USDT * (1.0 + sum(all_mults))          # claude code changed: worst-case margin
             max_notional = round(max_margin * PAPER_LEVERAGE, 2)               # claude code changed: worst-case notional
 
-            results[pair] = {
-                "equity_gated":   equity_gated,
-                "equity_free":    equity_free,
-                "drawdown_gated": drawdown_gated,
-                "drawdown_free":  drawdown_free,
+            results[pair] = {   # claude code changed: simplified — single unrestricted simulation, no gated/free split
+                "equity":         equity,
+                "drawdown":       drawdown,
                 "fill_dist":      fill_dist,
                 "ladder_depth":   ladder_depth,
-                "trades_gated":   closed_gated,
-                "stats_gated":    stats_gated,
-                "stats_free":     stats_free,
+                "trades":         closed,
+                "stats":          stats,
                 "ranging_pct":    ranging_pct,
                 "current_regime": current_regime,
                 "validated":      pair in VALIDATED_PAIRS,
                 "current_adx":    round(float(last_adx), 1) if not math.isnan(last_adx) else None,
-                "entry_usdt":     PAPER_ENTRY_USDT,           # claude code changed: margin per cycle
-                "leverage":       int(PAPER_LEVERAGE),       # claude code changed: 1:30
-                "entry_notional": int(_PAPER_NOTIONAL),      # claude code changed: $3,000 per entry
-                "max_margin":     round(max_margin, 2),      # claude code changed: worst-case margin
-                "max_notional":   max_notional,              # claude code changed: worst-case notional
+                "entry_usdt":     PAPER_ENTRY_USDT,
+                "leverage":       int(PAPER_LEVERAGE),
+                "entry_notional": int(_PAPER_NOTIONAL),
+                "max_margin":     round(max_margin, 2),
+                "max_notional":   max_notional,
             }
 
         except Exception as exc:
