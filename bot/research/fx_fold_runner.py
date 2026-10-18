@@ -476,14 +476,16 @@ def build_ladder_spec_from_analysis(
     direction: str,
     pip_size: float,
     pair: str = "",
+    mae_horizon: int = 24,
 ) -> FxLadderSpec:
     """
     Build FxLadderSpec from the output of fx_movement_analysis.analyse_pair().
 
-    Extracts H=24 MAE quantiles (p40/p60/p75/p85/p92/p97) in pip units
-    and the ATR_ref for the given direction.
-    """  # claude code changed: new — converts analyse_pair() output to FxLadderSpec
-    mae_pips = analysis[direction][24]["mae"]["pips"]  # claude code changed: H=24 per v3 Step 2
+    Extracts MAE quantiles (p40/p60/p75/p85/p92/p97) in pip units at the given
+    horizon and the ATR_ref for the given direction.
+    mae_horizon: H value to read from analysis (6 for quick-cycle QC-1, 24 for A3).
+    """  # claude code changed: added mae_horizon param — 2026-10-18; allows H=6 for quick-cycle QC-1 protocol
+    mae_pips = analysis[direction][mae_horizon]["mae"]["pips"]  # claude code changed: use mae_horizon (was hardcoded 24)
     base_pips = (
         mae_pips["p40"],
         mae_pips["p60"],
@@ -515,7 +517,8 @@ def run_fx_fold(
     max_cycle_candles: Optional[int] = MAX_CYCLE_CANDLES,
     apply_v6_gates: bool = False,  # claude code changed: v6/A5 — True activates carry gate (A5-1) + ADX(14)≤25 gate (A5-2); v7/A6-1 — ADX gate SHORT-only
     holdout_guard=None,  # claude code changed: Phase A F-04 — optional FxHoldoutGuard; when provided, asserts test_df contains no holdout rows
-) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates; Phase A F-04 — added holdout_guard; v7/A6-1 — ADX gate SHORT-only
+    mae_horizon: int = 24,  # claude code changed: 2026-10-18 — 24 for A3, 6 for quick-cycle QC-1
+) -> Dict:  # claude code changed: v5/A4 — added max_cycle_candles; v6/A5 — added apply_v6_gates; Phase A F-04 — added holdout_guard; v7/A6-1 — ADX gate SHORT-only; 2026-10-18 — added mae_horizon
     """
     Run one FX walk-forward fold: compute per-fold ladder spec from training rows,
     then simulate on test rows only.
@@ -573,7 +576,7 @@ def run_fx_fold(
     analysis = analyse_pair(train_df.reset_index(drop=True) if train_df.index.dtype != object else train_df,
                             pip_size=pip_size, pair=pair)  # claude code changed: per-fold; never uses holdout data
 
-    spec = build_ladder_spec_from_analysis(analysis, direction, pip_size, pair)
+    spec = build_ladder_spec_from_analysis(analysis, direction, pip_size, pair, mae_horizon=mae_horizon)  # claude code changed: 2026-10-18 — pass mae_horizon
 
     # prepare test_df with DatetimeIndex
     sim_df = test_df.copy()
@@ -611,6 +614,7 @@ def run_fx_fold(
         "test_rows": len(test_df),
         "max_cycle_candles": max_cycle_candles,  # claude code changed: v5/A4 — record time-exit parameter in result
         "apply_v6_gates": apply_v6_gates,  # claude code changed: v6/A5 — record gate state in result
+        "mae_horizon": mae_horizon,  # claude code changed: 2026-10-18 — record MAE horizon used for ladder calibration
     }
 
 

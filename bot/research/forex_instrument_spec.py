@@ -373,3 +373,102 @@ MT5_SPECS: dict = {  # claude code changed: new — verified specs lookup; use o
 def get_mt5_forex_instrument_spec(canonical_symbol: str) -> Optional[ForexInstrumentSpec]:
     """Return the MT5-verified spec (cost_complete=True) for a target pair, or None if not collected."""  # claude code changed: new — Stage 2 gate resolver
     return MT5_SPECS.get(canonical_symbol)
+
+
+# ── Placeholder specs for diversified cross pairs (QC multi-pair portfolio) ──────────────────────────────────
+# claude code changed: new — 2026-10-18; quick-cycle diversified portfolio; no USD in 4 of 5 pairs.
+# Cost fields set to None — MT5 cost collection for cross pairs is pending (Stage 2B).
+# validated=False; is_cost_complete() returns False; all simulations carry cost_complete=False label.
+
+PLACEHOLDER_EURJPY = ForexInstrumentSpec(  # claude code changed: new — QC portfolio cross pair
+    canonical_symbol="EUR/JPY",
+    pip_size=0.01,           # JPY-quoted pair; 3 decimal places in broker quote
+    price_precision=3,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=None,   # broker-specific; not yet collected
+    commission_per_lot=None,
+    swap_long=None,
+    swap_short=None,
+    leverage_max=30.0,
+    margin_rate=1.0 / 30.0,
+    source="PLACEHOLDER_QC_2026-10-18",
+    validated=False,
+)
+
+PLACEHOLDER_GBPJPY = ForexInstrumentSpec(  # claude code changed: new — QC portfolio cross pair
+    canonical_symbol="GBP/JPY",
+    pip_size=0.01,           # JPY-quoted; high-volatility cross
+    price_precision=3,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=None,
+    commission_per_lot=None,
+    swap_long=None,
+    swap_short=None,
+    leverage_max=30.0,
+    margin_rate=1.0 / 30.0,
+    source="PLACEHOLDER_QC_2026-10-18",
+    validated=False,
+)
+
+PLACEHOLDER_AUDCAD = ForexInstrumentSpec(  # claude code changed: new — QC portfolio cross pair
+    canonical_symbol="AUD/CAD",
+    pip_size=0.0001,         # standard 4-decimal-place pair
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=None,
+    commission_per_lot=None,
+    swap_long=None,
+    swap_short=None,
+    leverage_max=30.0,
+    margin_rate=1.0 / 30.0,
+    source="PLACEHOLDER_QC_2026-10-18",
+    validated=False,
+)
+
+PLACEHOLDER_NZDCHF = ForexInstrumentSpec(  # claude code changed: new — QC portfolio cross pair
+    canonical_symbol="NZD/CHF",
+    pip_size=0.0001,
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=None,
+    commission_per_lot=None,
+    swap_long=None,
+    swap_short=None,
+    leverage_max=30.0,
+    margin_rate=1.0 / 30.0,
+    source="PLACEHOLDER_QC_2026-10-18",
+    validated=False,
+)
+
+# Diversified 5-pair QC portfolio: only 1 USD pair; 4 pure crosses with different regional drivers
+QC_PORTFOLIO_SPECS: dict = {  # claude code changed: new — quick-cycle diversified pair set
+    "EUR/USD": MT5_EURUSD,          # EUR/USD — MT5 verified (spread=0, commission=0)
+    "EUR/JPY": PLACEHOLDER_EURJPY,  # cross — ECB/BoJ; no USD
+    "GBP/JPY": PLACEHOLDER_GBPJPY,  # cross — BoE/BoJ; no USD; high volatility
+    "AUD/CAD": PLACEHOLDER_AUDCAD,  # cross — commodity; RBA/BoC; no USD/EUR/GBP/JPY
+    "NZD/CHF": PLACEHOLDER_NZDCHF,  # cross — RBNZ/SNB; risk/safe-haven; no USD/EUR/GBP/JPY/AUD/CAD
+}
+
+QC_PORTFOLIO_CSV_FILES: dict = {  # claude code changed: new — data/forex/ filename for each QC pair
+    "EUR/USD": "EUR_USD_1h.csv",
+    "EUR/JPY": "EUR_JPY_1h.csv",
+    "GBP/JPY": "GBP_JPY_1h.csv",
+    "AUD/CAD": "AUD_CAD_1h.csv",
+    "NZD/CHF": "NZD_CHF_1h.csv",
+}

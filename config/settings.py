@@ -43,7 +43,7 @@ DEBUG = False  # claude code changed: regression fix — value was True despite 
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    "192.168.99.42",   # LAN/phone access on home WiFi; update if IP changes (check with `ipconfig`) — claude code changed: replaces stale multi-IP list + ["*"] wildcard (audit finding C-01)
+    "172.20.10.6",     # LAN/phone access — WiFi/hotspot IP as of 2026-10-18; update if IP changes: run `ipconfig` or `Get-NetIPAddress` to find current WiFi address — claude code changed: updated from stale 192.168.99.42 to current 172.20.10.6
     ".up.railway.app", # Railway deployment wildcard — claude code changed: restored after accidental omission in audit-C-01 fix
 ]  # claude code changed: replaced ["*"] wildcard and stale DHCP IPs with current allowlist (audit finding C-01)
 
