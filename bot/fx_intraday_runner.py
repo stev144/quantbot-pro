@@ -367,7 +367,7 @@ def run_permutation_test(
 
 # â”€â”€ Results printer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def print_results(all_trades, fold_summaries, verdict, pair):  # claude code changed: new
+def print_results(all_trades, fold_summaries, verdict, pair, interval="?"):  # claude code changed: new; interval param added 2026-10-18
     n_total    = len(all_trades)
     if n_total == 0:
         print("\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
@@ -386,7 +386,7 @@ def print_results(all_trades, fold_summaries, verdict, pair):  # claude code cha
         exit_reasons[t["exit_reason"]] = exit_reasons.get(t["exit_reason"], 0) + 1
 
     print("\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
-    print(f"H2: MeanReversionStrategy Â· 15m Â· {pair} Â· 5-fold OOS walk-forward")
+    print(f"MeanReversionStrategy {interval} {pair} 5-fold OOS walk-forward")  # claude code changed: was hardcoded H2/15m
     print(f"Pre-registered parameters (D-9) â€” no parameter fitting")
     print("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
     print(f"\nOVERALL OOS RESULTS ({N_FOLDS} folds combined):")
@@ -425,13 +425,28 @@ def print_results(all_trades, fold_summaries, verdict, pair):  # claude code cha
 
 # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def main():  # claude code changed: new
-    parser = argparse.ArgumentParser(description="H2: MR 15m EUR/USD walk-forward")
+def main():  # claude code changed: new; fold-structure overrides added 2026-10-18 for H5 1h run
+    parser = argparse.ArgumentParser(description="MR walk-forward runner (H2/H5)")
     parser.add_argument("--pair", default="EUR/USD", help="Protocol pair (default: EUR/USD)")
     parser.add_argument("--interval", default="15m", help="Timeframe (default: 15m)")
     parser.add_argument("--no-permtest", action="store_true", help="Skip permutation test")
     parser.add_argument("--save", action="store_true", help="Save OOS trades to research_data/")
+    parser.add_argument("--is-bars", type=int, default=None, help="Override IS bars (default: D-7 constant)")
+    parser.add_argument("--oos-bars", type=int, default=None, help="Override OOS bars")
+    parser.add_argument("--embargo-bars", type=int, default=None, help="Override embargo bars")
+    parser.add_argument("--max-hold", type=int, default=None, help="Override MAX_HOLD_BARS")
     args = parser.parse_args()
+
+    # Apply fold-structure overrides (for H5 1h; pre-registered in governance log)
+    global IS_BARS, OOS_BARS, EMBARGO_BARS, MAX_HOLD_BARS
+    if args.is_bars is not None:
+        IS_BARS = args.is_bars
+    if args.oos_bars is not None:
+        OOS_BARS = args.oos_bars
+    if args.embargo_bars is not None:
+        EMBARGO_BARS = args.embargo_bars
+    if args.max_hold is not None:
+        MAX_HOLD_BARS = args.max_hold
 
     logging.basicConfig(level=logging.WARNING,
                         format="%(levelname)s | %(name)s | %(message)s")
@@ -462,12 +477,13 @@ def main():  # claude code changed: new
     if not args.no_permtest and n_total > 0:
         verdict = run_permutation_test(df, real_mean_pnl=mean_pnl, real_total_pnl=total_pnl)
 
-    print_results(all_trades, fold_summaries, verdict, args.pair)
+    print_results(all_trades, fold_summaries, verdict, args.pair, interval=args.interval)
 
     if args.save and all_trades:
         out_dir = Path("research_data")
         out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / f"H2_MR_15m_{args.pair.replace('/', '_')}_oos_trades.csv"
+        hyp_tag = f"MR_{args.interval}_{args.pair.replace('/', '_')}"
+        out_path = out_dir / f"{hyp_tag}_oos_trades.csv"  # claude code changed: was hardcoded H2_MR_15m
         pd.DataFrame(all_trades).to_csv(out_path, index=False)
         print(f"\nOOS trades saved â†’ {out_path}")
 

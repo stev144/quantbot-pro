@@ -2949,3 +2949,114 @@ sub-break-even before spread and clearly sub-break-even after spread.
 - Any holdout access
 - Citing H2 results as evidence of edge
 
+---
+
+## INTRADAY FX PROTOCOL — H5 PRE-REGISTRATION: MR · 1h · EUR/USD
+
+**Date:** 2026-10-18  
+**Hypothesis:** H5 — MeanReversionStrategy, 1h timeframe, EUR/USD  
+**Registration date:** 2026-10-18 (before any 1h data is processed by the strategy in this run)
+
+### H5 fold structure (1h equivalent of D-7)
+
+Data: `data/forex/EUR_USD_1h.csv` — 33,781 bars, 2021-05-02 to 2026-10-02.
+
+Same real-time IS/OOS/embargo durations as D-7 (88/44/1 trading days), scaled to 1h bars:
+
+| Parameter | Value | Derivation |
+|---|---|---|
+| Folds | 5 | 5 × 3,192 = 15,960 < 33,781 — fits |
+| IS window | 2,112 bars (88 trading days) | 88 × 24 h |
+| OOS window | 1,056 bars (44 trading days) | 44 × 24 h; IS:OOS = 2:1 |
+| Embargo | 24 bars (1 trading day) | 24 × 1 h |
+| Total per fold | 3,192 bars | |
+
+IS:OOS ratio (2:1) and fold count (5) identical to D-7. Strictest defensible choice: no
+inflation of fold count even though 10 folds would fit. Same real-time test duration, same
+IS:OOS ratio — this is the directly comparable benchmark to H2.
+
+### H5 strategy parameters (MeanReversionStrategy defaults, unchanged from D-9)
+
+| Parameter | Value |
+|---|---|
+| rsi_oversold | 35 |
+| rsi_overbought | 65 |
+| atr_multiplier | 1.0 |
+| bb_width_max | 6.0% |
+| min_candles | 50 |
+| rr_ratio | 1.5 |
+| Regime gate | RANGING only |
+| Max holding | 8 bars (8h at 1h) |
+| Spread | 0.5 pips round-trip |
+| Position sizing | PositionSizer(risk_pct=0.01) |
+| Initial balance | $1,000 |
+| SL/TP simulation | Entry-price rebasing (D-9 amendment, applied by default) |
+
+`MAX_HOLD_BARS=8` preserves the same real-time 8h holding limit as D-9's 32 bars at 15m.
+
+### What is NOT authorised
+
+- Parameter changes after viewing H5 results
+- Extending H5 to other pairs without a new governance entry
+- Any holdout access
+- Citing H5 results as evidence of edge unless p < 0.010 (D-4 Bonferroni)
+
+---
+
+## H5: MeanReversionStrategy · 1h · EUR/USD — NEGATIVE
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — H5 not significant. No edge evidence.
+
+### Walk-forward results (H5 fold structure, pre-registered parameters)
+
+| Metric | Value |
+|---|---|
+| OOS trades (5 folds) | 367 (~73/fold; ~0.8/day) |
+| Win rate | 43.1% |
+| Mean net P&L per trade | -$0.18 |
+| Total OOS net P&L | -$67.37 |
+| SL exits | 181 (49.3%) |
+| TP exits | 107 (29.2%) |
+| Timeout exits | 79 (21.5%) |
+
+Per-fold: -$27.67 / +$162.54 / +$36.95 / -$69.48 / -$169.71  
+OOS periods: 2021-09 to 2021-11 / 2022-03 to 2022-05 / 2022-09 to 2022-11 / 2023-03 to 2023-05 / 2023-09 to 2023-11
+
+### Key observation: 21.5% timeout rate
+
+At 1h with MAX_HOLD_BARS=8 (8h), 79/367 trades timed out at close price. This is 16× the
+timeout rate of H2/H2-amended (~1.3%). At 1h, mean-reversion signals require more than 8h
+to resolve cleanly, so trades that are neither stopped out nor hitting TP within 8h exit at
+whatever the close happens to be.
+
+This distorts the P&L: timeout exits can be small wins, small losses, or large losses if the
+trade was moving against us. The 21.5% timeout rate means the realized R:R distribution is
+materially different from the 1.5:1 theoretical R:R — a non-trivial fraction of exits are at
+random prices, not at SL or TP.
+
+Permutation test: not run. Negative mean P&L.
+
+### Interpretation
+
+Folds 1, 4, 5 negative; folds 2, 3 positive. No temporal pattern of improvement — fold 5
+(Sep–Nov 2023) is the worst at -$2.18/trade and 33.3% win rate. No evidence of edge.
+
+The 1h timeframe may be fundamentally poorly matched to the MR strategy's pre-registered
+parameters: signal frequency drops to ~0.8/day (vs. ~4.4/day at 15m), and the 8h max-hold
+is too tight for signals that take longer to resolve at hourly resolution.
+
+### What this means for the protocol
+
+- H5 CLOSED NEGATIVE.
+- H1 (MR, 5m, EUR/USD): exploratory only; 180d of 5m data is insufficient for 5-fold walk-forward.
+- H3/H4 (pullback family, 5m/15m): blocked on D-5 implementation.
+- The full D-4 family (H1–H5) has now been exhausted for MR at its pre-registered defaults.
+  All MR hypotheses with current strategy parameters are closed.
+
+### What is NOT authorised
+
+- Any further H5 parameter changes or re-runs without a new owner decision
+- Citing H5 results as evidence of edge
+- Any holdout access
+
