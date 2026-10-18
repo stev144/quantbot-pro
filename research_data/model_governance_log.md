@@ -3121,3 +3121,64 @@ test. H3 result will not be counted against the D-4 Bonferroni family.
 - Running on other pairs before EUR/USD H4 result is logged
 - Any holdout access
 
+---
+
+## H4: PullbackStrategy · 15m · EUR/USD — NEGATIVE (structural incompatibility)
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — 0 OOS trades generated; strategy structurally incompatible with pair/timeframe regime.  
+**Command:** `python bot/fx_intraday_runner.py --pair EUR/USD --interval 15m --strategy pullback --no-permtest --save`
+
+### Run parameters (as pre-registered under D-5)
+
+| Parameter | Value |
+|---|---|
+| fast_ema_period | 20 |
+| slow_ema_period | 50 |
+| atr_multiplier | 1.5 |
+| rr_ratio | 2.0 |
+| pullback_lookback | 5 |
+| rsi_min / rsi_max | 35 / 65 |
+| Spread | 0.5 pips round-trip |
+| Fold structure | IS=5,973, OOS=2,986, embargo=67, 5 folds |
+| Total bars | 49,415 (2024-10-18 to 2026-10-16, dev window) |
+
+### Result
+
+| Fold | OOS dates | Trades |
+|---|---|---|
+| 1 | 2025-01-17 → 2025-03-03 | 0 |
+| 2 | 2025-05-29 → 2025-07-14 | 0 |
+| 3 | 2025-10-09 → 2025-11-21 | 0 |
+| 4 | 2026-02-20 → 2026-04-06 | 0 |
+| 5 | 2026-07-02 → 2026-08-14 | 0 |
+| **Total** | — | **0** |
+
+### Root cause: regime incompatibility
+
+EUR/USD 15m is classified by RegimeDetector as RANGING 95.4% of the time and HIGH_VOLATILITY
+4.6% of the time. TRENDING_DOWN appeared in 0.02% of bars (1/5,000 sampled); TRENDING_UP in 0%.
+
+PullbackStrategy only fires on TRENDING_UP or TRENDING_DOWN. With near-zero TRENDING bars, the
+strategy has no opportunity to generate signals, regardless of parameter tuning.
+
+This is not a "strategy underperformed" result — it is a structural mismatch between the
+strategy's regime requirements and the pair/timeframe's actual regime distribution under the
+current RegimeDetector thresholds (ADX ≥ 25, EMA spread, ATR ratio, BB width). The RegimeDetector
+was calibrated on crypto data where percentage moves are much larger; EUR/USD 15m pips-level moves
+produce near-zero EMA spread (consistently ~0.01%) which always falls below the TRENDING threshold.
+
+### Implications
+
+- H4 is closed. Zero trades is a valid (negative) result — no evidence of edge was possible.
+- The D-4 Bonferroni family is now exhausted: H1 exploratory, H2 NEGATIVE, H3 exploratory,
+  H4 NEGATIVE (0 trades), H5 NEGATIVE. No hypothesis produced development-period evidence of edge.
+- A future hypothesis testing PullbackStrategy would require either:
+  (a) A different pair/timeframe with confirmed TRENDING regime prevalence, OR
+  (b) A regime detector calibrated for FX percentage scales.
+  Neither can be attempted until a new D-5/D-4 decision is pre-registered.
+- H3 (5m, exploratory) may still be run as a directional feasibility check, but
+  results will not count in the D-4 Bonferroni family regardless.
+
+### H4 CLOSED NEGATIVE.
+
