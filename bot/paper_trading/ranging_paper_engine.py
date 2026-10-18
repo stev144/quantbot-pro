@@ -444,6 +444,27 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             stats_gated = _stats(closed_gated)
             stats_free  = _stats(closed_free)
 
+            # fill distribution: how many cycles ended at each fill depth  # claude code changed: new — fill depth chart data
+            ladder_depth = 1 + len(spec.base_pips)   # 1 entry + N DCA levels
+            fill_dist: Dict[int, int] = {}
+            for t in closed_gated:
+                f = int(t["fills"])
+                fill_dist[f] = fill_dist.get(f, 0) + 1
+
+            # drawdown series (relative to running peak)  # claude code changed: new — drawdown chart data
+            def _drawdown_series(equity_pts: list) -> list:
+                if not equity_pts:
+                    return []
+                peak = 0.0
+                out  = []
+                for i, pt in enumerate(equity_pts):
+                    peak = max(peak, pt["p"])
+                    out.append({"i": i, "p": round(pt["p"] - peak, 4)})
+                return out
+
+            drawdown_gated = _drawdown_series(equity_gated)
+            drawdown_free  = _drawdown_series(equity_free)
+
             # ranging % of sim data
             ranging_pct = round(float(ranging_mask.mean()) * 100, 1)
 
@@ -461,6 +482,10 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             results[pair] = {
                 "equity_gated":   equity_gated,
                 "equity_free":    equity_free,
+                "drawdown_gated": drawdown_gated,    # claude code changed: new
+                "drawdown_free":  drawdown_free,     # claude code changed: new
+                "fill_dist":      fill_dist,         # claude code changed: new — {fills: count}
+                "ladder_depth":   ladder_depth,      # claude code changed: new — max possible fills
                 "trades_gated":   closed_gated,
                 "stats_gated":    stats_gated,
                 "stats_free":     stats_free,
