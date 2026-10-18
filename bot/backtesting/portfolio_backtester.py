@@ -34,7 +34,7 @@ import ccxt           # Exchange connection for data fetching
 
 # Import your existing backtest function — called directly, not wrapped
 from bot.backtesting.backtester import backtest
-from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — forensic audit found this file's own hardcoded 7-symbol default silently substituted a tiny stale universe for the real ~100-coin dynamic one whenever no symbols were explicitly passed (hit by dashboard.py, strategy_research.py, and health_check.py). Same fix pattern already applied to cointegration_engine.py/cross_section_engine.py — symbols_for_asset_class() already inherits fetch_all_symbols.py's own safe fallback (load_universe_symbols() or the legacy list) if the dynamic universe has never been selected, so no separate fallback is needed here.
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX  # claude code changed: new — forensic audit found this file's own hardcoded 7-symbol default silently substituted a tiny stale universe for the real ~100-coin dynamic one whenever no symbols were explicitly passed (hit by dashboard.py, strategy_research.py, and health_check.py). Same fix pattern already applied to cointegration_engine.py/cross_section_engine.py — symbols_for_asset_class() already inherits fetch_all_symbols.py's own safe fallback (load_universe_symbols() or the legacy list) if the dynamic universe has never been selected, so no separate fallback is needed here. ASSET_CLASS_FOREX added for market-agnostic infrastructure audit (2026-10-18)
 
 # Import your existing strategy scorer — same one used on dashboard
 from bot.engines.strategy_scorer import StrategyScorer
@@ -72,6 +72,7 @@ class PortfolioBacktester:
         candle_limit: int = 2000,          # Candles per symbol — 2000 = ~83 days on 1H
         initial_balance: float = 5000.0,   # Starting balance per backtest
         sleep_between: float = 1.0,        # Seconds to sleep between API calls (rate limit safety)
+        asset_class: str = ASSET_CLASS_CRYPTO,  # claude code changed: market-agnostic infrastructure — default CRYPTO preserves all existing callers; FOREX selects FX universe when symbols= omitted
     ):
         # Store exchange instance — used for OHLCV fetching
         self.exchange = exchange
@@ -93,7 +94,12 @@ class PortfolioBacktester:
         # per universe_selector.py) — same count and same fast request
         # profile as before, but never a frozen/stale hand-picked set;
         # it tracks whichever 7 coins are actually most liquid today.
-        self.symbols = symbols or symbols_for_asset_class(ASSET_CLASS_CRYPTO)[:7]
+        # claude code changed: market-agnostic infrastructure — use asset_class to derive default universe.
+        # CRYPTO: top-7 by liquidity (same as before); FOREX: full FX registry (smaller, no :7 slice needed).
+        _default_limit = 7 if asset_class == ASSET_CLASS_CRYPTO else None
+        _universe = symbols_for_asset_class(asset_class)
+        self.symbols = symbols or (_universe[:_default_limit] if _default_limit else _universe)
+        self.asset_class = asset_class  # claude code changed: market-agnostic infrastructure — stored for forwarding to backtest()
 
         self.timeframe       = timeframe        # e.g. "1h"
         self.candle_limit    = candle_limit      # How many candles to fetch per coin
@@ -163,7 +169,7 @@ class PortfolioBacktester:
                 # ── Step 2: Run backtest ───────────────────────
                 # Calls your existing regime-aware backtest() function
                 # Same function used on your dashboard
-                result = backtest(df, initial_balance=self.initial_balance)
+                result = backtest(df, initial_balance=self.initial_balance, asset_class=self.asset_class)  # claude code changed: market-agnostic infrastructure — forward asset_class for correct annualization
 
                 # ── Step 3: Score the result ───────────────────
                 scorer     = StrategyScorer(result)

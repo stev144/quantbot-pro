@@ -47,6 +47,7 @@ from bot.engines.simulation import (
 
 # claude code changed: new import — Kraken Multi-Venue Execution, Step 14.
 from bot.config.execution_costs import get_venue_execution_costs
+from bot.instruments import periods_per_year as _periods_per_year, ASSET_CLASS_CRYPTO as _ASSET_CLASS_CRYPTO  # claude code changed: market-agnostic backtester — asset-class-aware annualization
 
 # ── REGIME-AWARE IMPORTS — unchanged ──────────────────────────
 
@@ -114,6 +115,7 @@ class Backtester:
         allow_unvalidated_strategies: bool = False,
         venue_id: str = "binance",   # claude code changed: new param — Kraken Multi-Venue Execution, Step 14
         journal_recorder=None,   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (opt-in, off by default)
+        asset_class: str = None,   # claude code changed: market-agnostic backtester — None defaults to CRYPTO; FOREX uses 260 trading days/year for Sharpe/Sortino annualization
     ):
         self.journal_recorder = journal_recorder   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
         self._last_fill_refusal = None             # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (why _open_trade_from_signal returned None)
@@ -142,6 +144,16 @@ class Backtester:
         _costs = get_venue_execution_costs(venue_id)
         self.fee_rate = _costs["fee_rate"]
         self.slippage_rate = _costs["slippage_rate"]
+
+        # claude code changed: market-agnostic backtester — asset-class-aware annualization for
+        # Sharpe and Sortino. Default None → CRYPTO (365 days/year, preserving all existing callers).
+        # FOREX → 260 trading days/year via instruments.periods_per_year("1d", asset_class).
+        # "1d" because sharpe_from_returns operates on DAILY MTM returns (daily_mtm_returns() above).
+        _resolved_ac = asset_class if asset_class is not None else _ASSET_CLASS_CRYPTO
+        try:
+            self.periods_per_year = int(_periods_per_year("1d", _resolved_ac))
+        except Exception:
+            self.periods_per_year = PERIODS_PER_YEAR  # safe fallback to module constant
 
         # ── SYSTEM COMPONENTS — each instantiated once before the loop ──
         # PositionSizer — claude code changed: new — the real sizer, same
@@ -915,8 +927,8 @@ class Backtester:
         # 365 periods/year — crypto trades every day), with the textbook downside deviation.
         # The per-trade R ratios are kept under explicit names (r_*_trade_based).
         daily_returns = daily_mtm_returns(pd.Series([e for _, e in self.mtm_points], index=[ts for ts, _ in self.mtm_points]))
-        sharpe = sharpe_from_returns(daily_returns)
-        sortino = sortino_from_returns(daily_returns)
+        sharpe = sharpe_from_returns(daily_returns, periods_per_year=self.periods_per_year)  # claude code changed: market-agnostic backtester — pass asset-class-correct periods_per_year
+        sortino = sortino_from_returns(daily_returns, periods_per_year=self.periods_per_year)  # claude code changed: market-agnostic backtester — same
         r_sharpe_trade = calculate_sharpe_ratio(self.closed_trades, years_elapsed=years_elapsed)
         r_sortino_trade = calculate_sortino_ratio(self.closed_trades, years_elapsed=years_elapsed)
 
@@ -1585,6 +1597,7 @@ def backtest(
     allow_unvalidated_strategies: bool = False,
     venue_id: str = "binance",   # claude code changed: new param — Kraken Multi-Venue Execution, Step 14
     journal_recorder=None,   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change (opt-in, off by default)
+    asset_class: str = None,   # claude code changed: market-agnostic backtester — forwarded to Backtester; None defaults to CRYPTO
 ) -> dict:
     """
     Backward-compatible wrapper.
@@ -1607,4 +1620,5 @@ def backtest(
         allow_unvalidated_strategies=allow_unvalidated_strategies,
         venue_id=venue_id,
         journal_recorder=journal_recorder,   # claude code changed: 2026-10-07 decision journal Phase 1 — observation only, no behaviour change
+        asset_class=asset_class,   # claude code changed: market-agnostic backtester — forwarded
     ).run()

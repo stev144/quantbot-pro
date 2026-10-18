@@ -44,6 +44,12 @@ from bot.research.validated_feature_registry import get_strategy_verdict
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
+# claude code changed: market-agnostic infrastructure — EMA spread display threshold per asset class.
+# Crypto: 0.5% (unchanged); FX threshold is NOT calibrated — displays relative description only.
+# This dict mirrors the convention in regime_detector.py's _ASSET_CLASS_FOREX warning.
+_EMA_SPREAD_DISPLAY_THRESHOLD: float = 0.5  # crypto default
+_ASSET_CLASS_FOREX_NARRATIVE = "FOREX"  # sentinel for FX display path
+
 
 # ============================================================
 # TRADE NARRATIVE RESULT — DATA CLASS
@@ -457,9 +463,9 @@ class TradeNarrativeGenerator:
             f"{'elevated' if atr_ratio > 1.5 else 'normal' if atr_ratio <= 1.2 else 'slightly elevated'} "
             f"(ATR ratio: {atr_ratio:.2f}). "
 
-            # EMA structure
+            # EMA structure — claude code changed: market-agnostic infrastructure — description is relative to asset class; 0.5% threshold only meaningful for crypto
             f"EMA spread was {ema_spread:.2f}% "
-            f"({'wide — strong trend structure' if ema_spread >= 0.5 else 'narrow — weak trend structure'}). "
+            f"({'wide — strong trend structure' if ema_spread >= _EMA_SPREAD_DISPLAY_THRESHOLD else 'narrow — weak trend structure'}). "
 
             # RSI context
             f"RSI was {rsi:.1f} "
@@ -541,8 +547,8 @@ class TradeNarrativeGenerator:
 
         # EMA structure conditions
         ema_spread = float(signal.get("ema_spread_pct", 0))
-        conditions["ema_spread_wide"]   = ema_spread >= 0.5     # Strong trend structure
-        conditions["ema_spread_narrow"] = ema_spread < 0.3      # Ranging structure
+        conditions["ema_spread_wide"]   = ema_spread >= _EMA_SPREAD_DISPLAY_THRESHOLD  # claude code changed: market-agnostic infrastructure — uses module constant not hardcoded 0.5
+        conditions["ema_spread_narrow"] = ema_spread < (_EMA_SPREAD_DISPLAY_THRESHOLD * 0.6)  # claude code changed: market-agnostic infrastructure — proportional to display threshold
 
         return conditions   # Return the complete checklist
 

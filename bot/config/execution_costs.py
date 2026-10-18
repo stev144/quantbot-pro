@@ -114,9 +114,67 @@ class ForexCostProfile:
         )
 
 
-# claude code changed: placeholder forex cost profiles — None values require real broker data (Stage 2).
+# claude code changed: indicative forex cost profiles — market-agnostic infrastructure audit (2026-10-18).
+# Spread values are typical retail figures sourced from publicly published broker pricing pages
+# (OANDA/IG/Forex.com typical spreads, not a specific live feed). commission_per_lot=0.0 reflects
+# no-commission retail spot accounts; if a commission account is used, update the relevant profile.
+# Swap/rollover rates are broker-specific and cannot be reliably estimated without a live account —
+# they are intentionally left None so cost_complete remains False until real values are recorded.
+# This is not a silent default: cost_complete=False propagates to simulations that check it.
 # Additive only; never referenced by existing crypto code paths.
-_FOREX_COST_PROFILES: dict = {}  # populated by register_forex_cost_profile() once real broker data exists
+_FOREX_COST_PROFILES: dict = {}  # populated by register_forex_cost_profile()
+
+
+def _init_indicative_forex_profiles() -> None:
+    """Register indicative profiles for the three most-traded FX pairs.
+    Swap rates are not populated (None) — they require a specific broker contract.
+    cost_complete is therefore False until swap rates are added."""
+    for _profile in [
+        ForexCostProfile(
+            instrument_id="EUR/USD",
+            spread_pips=0.8,          # typical retail; range 0.5-1.2 depending on session
+            commission_per_lot=0.0,   # no-commission retail spot account assumed
+            slippage_pips=0.1,        # conservative estimate; most liquid FX pair
+            swap_long_pips_per_day=None,   # broker-specific; None = cost_complete=False
+            swap_short_pips_per_day=None,  # broker-specific; None = cost_complete=False
+        ),
+        ForexCostProfile(
+            instrument_id="GBP/USD",
+            spread_pips=1.0,
+            commission_per_lot=0.0,
+            slippage_pips=0.1,
+            swap_long_pips_per_day=None,
+            swap_short_pips_per_day=None,
+        ),
+        ForexCostProfile(
+            instrument_id="USD/JPY",
+            spread_pips=0.7,
+            commission_per_lot=0.0,
+            slippage_pips=0.1,
+            swap_long_pips_per_day=None,
+            swap_short_pips_per_day=None,
+        ),
+        ForexCostProfile(
+            instrument_id="GBP/JPY",
+            spread_pips=1.5,
+            commission_per_lot=0.0,
+            slippage_pips=0.2,
+            swap_long_pips_per_day=None,
+            swap_short_pips_per_day=None,
+        ),
+        ForexCostProfile(
+            instrument_id="EUR/JPY",
+            spread_pips=1.0,
+            commission_per_lot=0.0,
+            slippage_pips=0.1,
+            swap_long_pips_per_day=None,
+            swap_short_pips_per_day=None,
+        ),
+    ]:
+        _FOREX_COST_PROFILES[_profile.instrument_id] = _profile
+
+
+_init_indicative_forex_profiles()  # claude code changed: populate at import time
 
 
 def register_forex_cost_profile(profile: ForexCostProfile) -> None:  # claude code changed: new — registration point for when broker data arrives

@@ -30,9 +30,17 @@ import pandas as pd        # DataFrame operations for OHLCV data
 import numpy as np         # Numerical calculations
 import logging             # Structured logging
 from dataclasses import dataclass   # Clean result object structure
+from typing import Optional  # claude code changed: asset_class param — market-agnostic regime infrastructure
 
 # Create logger for this module
 logger = logging.getLogger(__name__)
+
+# claude code changed: market-agnostic regime infrastructure — EMA spread threshold by asset class.
+# FOREX value is intentionally absent: a calibrated FX threshold requires a research-policy decision
+# (the 0.5% crypto default corresponds to mid-cap EMA spread during trends; EUR/USD typical spread is
+# 0.01-0.02%, so the crypto default will never trigger TRENDING on FX — see audit P0-1).
+# Pass an explicit ema_spread_trend_threshold when a calibrated FX value has been approved.
+_ASSET_CLASS_FOREX = "FOREX"
 
 
 # ============================================================
@@ -128,6 +136,7 @@ class RegimeDetector:
         bb_std=2.0,                     # Bollinger Band standard deviations
         bb_narrow_threshold=2.0,        # BB width % below this = ranging/compressed
         min_candles=60,                 # Minimum candles before detection runs
+        asset_class: Optional[str] = None,  # claude code changed: market-agnostic regime infrastructure — passed to enable per-market logging and future calibrated threshold support
     ):
 
         # Store ADX settings
@@ -153,9 +162,25 @@ class RegimeDetector:
         # Minimum data required before any detection can run
         self.min_candles = min_candles
 
+        # claude code changed: market-agnostic regime infrastructure — store asset_class for downstream logging
+        self.asset_class = asset_class
+
+        # claude code changed: market-agnostic regime infrastructure — warn when FX is used with the
+        # default crypto EMA spread threshold. This is not a failure: the detector still runs and
+        # returns valid results, but TRENDING will never fire because EUR/USD EMA spread (~0.01-0.02%)
+        # is far below the 0.5% crypto default. A calibrated FX threshold requires a separate
+        # research-policy decision; pass explicit ema_spread_trend_threshold when approved.
+        if asset_class == _ASSET_CLASS_FOREX and ema_spread_trend_threshold == 0.5:
+            logger.warning(
+                "[RegimeDetector] asset_class=FOREX with uncalibrated EMA spread threshold (0.5%). "
+                "EUR/USD EMA spread is typically 0.01-0.02% — TRENDING regime will never fire. "
+                "Pass explicit ema_spread_trend_threshold when a calibrated FX value is approved."
+            )
+
         # Log initialisation with key thresholds
         logger.info(
             f"[RegimeDetector] Initialised | "
+            f"asset_class: {asset_class or 'unspecified'} | "
             f"ADX threshold: {adx_trend_threshold} | "
             f"ATR extreme: {atr_extreme_multiplier}x | "
             f"EMA spread: {ema_spread_trend_threshold}%"

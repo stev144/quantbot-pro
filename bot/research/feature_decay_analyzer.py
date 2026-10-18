@@ -790,4 +790,16 @@ def run_decay_analysis(
 
 
 if __name__ == "__main__":
-    run_decay_analysis()
+    # claude code changed: market-agnostic infrastructure — --asset-class CLI arg selects symbol universe
+    import argparse as _argparse
+    _p = _argparse.ArgumentParser(description="Feature Decay Analyzer")
+    _p.add_argument(
+        "--asset-class",
+        default=ASSET_CLASS_CRYPTO,
+        choices=[ASSET_CLASS_CRYPTO, "FOREX"],
+        help="Asset class universe to analyse (default: CRYPTO)",
+    )
+    _args = _p.parse_args()
+    from bot.instruments import symbols_for_asset_class as _sfa  # noqa: F811
+    _symbols = [s.replace("/", "_") for s in _sfa(_args.asset_class)]
+    run_decay_analysis(symbols=_symbols)
