@@ -4,6 +4,7 @@
 
 {% block head %}
 <script src="{% static 'js/counters.js' %}"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>{# claude code changed: add chart-theme.js for per-pair equity/drawdown charts #}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" defer></script>
@@ -113,12 +114,12 @@
 <div class="term-section-head" style="margin-bottom:18px">
     <div>
         <span class="term-section-title">Forex DCA Engine</span>
-        <span class="term-section-meta" style="margin-left:10px">QC-1 · walk-forward out-of-sample · 5 folds · 2022-02-21 → 2025-02-13</span>
+        <span class="term-section-meta" style="margin-left:10px">QC-1 · walk-forward out-of-sample · 5 folds + holdout · 2022-02-21 → 2026-10-02</span>{# claude code changed: updated to include holdout period #}
     </div>
     <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="badge">FX-QC-PROTOCOL-1</span>
         <span class="badge">LONG only</span>
-        <span class="badge">GBP/JPY · AUD/CAD</span>
+        <span class="badge">GBP/JPY</span>
         <span class="badge dim">$6 / cycle</span>
     </span>
 </div>
@@ -132,62 +133,50 @@
 
 {% if results %}
 
-{# ── stat cards ──────────────────────────────────────────────────────────── #}
-<div class="dca-stat-row">
-
-    {# GBP/JPY #}
-    {% with p=results.pairs|get_item:"GBP/JPY" s=results.pairs|get_item:"GBP/JPY"|get_item:"stats" %}
-    <div class="term-section dca-card-gbp" style="padding:14px 16px">
-        <div class="metric-label" style="margin-bottom:6px">
-            <span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY LONG
-            <span class="term-section-meta" style="float:right"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades</span>
+{# ── stat card — GBP/JPY solo ────────────────────────────────────────────── #}
+{# claude code changed: AUD/CAD removed after holdout negative; single-pair layout #}
+{% with s=results.pairs|get_item:"GBP/JPY"|get_item:"stats" %}
+<div class="term-section dca-card-gbp" style="padding:16px 20px;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+        <div>
+            <div class="metric-label" style="margin-bottom:6px">
+                <span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY LONG
+                <span class="term-section-meta" style="margin-left:8px"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades · walk-forward out-of-sample</span>
+            </div>
+            <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>
         </div>
-        <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>
-        <div class="dca-mini-grid">
+        <div class="dca-mini-grid" style="min-width:260px">
             <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
             <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">$<span class="stat-number" data-target="{{ s.max_dd }}" data-decimals="2">0.00</span></span></div>
             <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.avg_cost }}" data-decimals="2">0.00</span></span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.max_cost }}" data-decimals="0">0</span></span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max deployed/cycle</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.max_cost }}" data-decimals="0">0</span></span></div>
         </div>
     </div>
-    {% endwith %}
+</div>
+{% endwith %}
 
-    {# AUD/CAD #}
-    {% with s=results.pairs|get_item:"AUD/CAD"|get_item:"stats" %}
-    <div class="term-section dca-card-aud" style="padding:14px 16px">
-        <div class="metric-label" style="margin-bottom:6px">
-            <span class="dca-dot" style="background:var(--term-warn, #e8a838)"></span>AUD/CAD LONG
-            <span class="term-section-meta" style="float:right"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades</span>
-        </div>
-        <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>
-        <div class="dca-mini-grid">
-            <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">$<span class="stat-number" data-target="{{ s.max_dd }}" data-decimals="2">0.00</span></span></div>
-            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.avg_cost }}" data-decimals="2">0.00</span></span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.max_cost }}" data-decimals="0">0</span></span></div>
+
+{# ── per-pair equity + drawdown curves ───────────────────────────────────── #}
+{# claude code changed: add per-pair equity/drawdown charts styled like pairs_performance.html #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title"><span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY — Equity &amp; Drawdown</span>
+        <span class="term-section-meta">cumulative P&amp;L · dollar drawdown · trade index</span>
+    </div>
+    <div class="term-section-body">
+        <div class="two-col">
+            <div>
+                <div class="metric-label" style="margin-bottom:6px">Equity Curve</div>
+                <div class="chart-box"><canvas id="gbpjpyEquityChart"></canvas></div>
+            </div>
+            <div>
+                <div class="metric-label" style="margin-bottom:6px">Drawdown ($)</div>
+                <div class="chart-box"><canvas id="gbpjpyDrawdownChart"></canvas></div>
+            </div>
         </div>
     </div>
-    {% endwith %}
-
-    {# Portfolio #}
-    {% with port=results.portfolio %}
-    <div class="term-section dca-card-port" style="padding:14px 16px">
-        <div class="metric-label" style="margin-bottom:6px">
-            <span class="dca-dot" style="background:var(--term-pos, #3fb87f)"></span>Portfolio
-            <span class="term-section-meta" style="float:right"><span class="stat-number" data-target="{{ port.total_trades }}" data-decimals="0">0</span> trades</span>
-        </div>
-        <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ port.total_pnl }}" data-decimals="2">0.00</span></div>
-        <div class="dca-mini-grid">
-            <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ port.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Initial / cycle</span><span class="metric-value small">$6.00</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Ladder levels</span><span class="metric-value small">7 × DCA</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max / cycle</span><span class="metric-value small">$762</span></div>
-        </div>
-    </div>
-    {% endwith %}
-
-</div>{# /dca-stat-row #}
-
+</div>
+{# claude code changed: AUD/CAD equity/drawdown section removed — holdout negative #}
 
 {# ── equity curves ────────────────────────────────────────────────────────── #}
 <div class="term-section" style="margin-bottom:16px">
@@ -198,9 +187,7 @@
     <div class="term-section-body">
         <div class="dca-legend">
             <span class="dca-legend-item"><span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY</span>
-            <span class="dca-legend-item"><span class="dca-dot" style="background:var(--term-warn,#e8a838)"></span>AUD/CAD</span>
-            <span class="dca-legend-item"><span class="dca-dot" style="background:var(--term-pos,#3fb87f)"></span>Portfolio</span>
-        </div>
+        </div>{# claude code changed: AUD/CAD and Portfolio legend items removed #}
         <div class="dca-chart-box chart-box" style="height:280px">
             <canvas id="dca-equity-chart"></canvas>
         </div>
@@ -240,8 +227,8 @@
                 </thead>
                 <tbody>
                     {% for fs in p.fold_stats %}
-                    <tr>
-                        <td>F{{ fs.fold }}</td>
+                    <tr {% if fs.is_holdout %}style="border-top:2px solid var(--accent,#5b8dc9);font-weight:600"{% endif %}>{# claude code changed: holdout row styled distinctly #}
+                        <td>{% if fs.is_holdout %}<span class="accent" style="font-size:10px;letter-spacing:.5px">OOS</span>{% else %}F{{ fs.fold }}{% endif %}</td>
                         <td class="mono" style="font-size:11px">{{ fs.start }}→{{ fs.end }}</td>
                         <td class="num"><span class="stat-number" data-target="{{ fs.trades }}" data-decimals="0">0</span></td>
                         <td class="num"><span class="stat-number" data-target="{{ fs.win_pct }}" data-decimals="1" data-suffix="%">0%</span></td>
@@ -365,19 +352,21 @@
     function buildAnnotations(bgColors) {
         const annotations = {};
         FOLD_BOUNDS.forEach((fb, i) => {
+            const isHoldout = fb.fold === 6;  // claude code changed: distinguish holdout box
             annotations['box' + fb.fold] = {
                 type: 'box',
                 xMin: fb.start,
                 xMax: fb.end,
-                backgroundColor: bgColors[i % 2],
-                borderWidth: 0,
+                backgroundColor: isHoldout ? 'rgba(91,141,201,0.07)' : bgColors[i % 2],
+                borderWidth: isHoldout ? 1 : 0,
+                borderColor: isHoldout ? 'rgba(91,141,201,0.3)' : 'transparent',
             };
             annotations['lbl' + fb.fold] = {
                 type: 'label',
                 xValue: fb.start,
                 yValue: 'max',
                 yAdjust: -4,
-                content: 'F' + fb.fold,
+                content: fb.fold === 6 ? 'OOS' : 'F' + fb.fold,  // claude code changed: holdout labelled OOS
                 font: { size: 9 },
                 color: cssVar('--text-dim') || '#636c76',
             };
@@ -390,8 +379,7 @@
         const ctx      = document.getElementById('dca-equity-chart');
         if (!ctx) return;
         const gbpColor = cssVar('--accent') || '#5b8dc9';
-        const audColor = cssVar('--term-warn') || '#e8a838';
-        const portColor= cssVar('--term-pos')  || '#3fb87f';
+        // claude code changed: audColor / portColor removed — solo pair
         const fg       = cssVar('--text-0')    || '#e6edf3';
         const fgDim    = cssVar('--text-dim')   || '#636c76';
         const gridCol  = cssVar('--border-0')   || 'rgba(255,255,255,0.08)';
@@ -401,6 +389,7 @@
             'rgba(128,128,128,0.10)',
         ]);
 
+        // claude code changed: AUD/CAD and Portfolio datasets removed — GBP/JPY solo
         new Chart(ctx, {
             type: 'line',
             data: {
@@ -409,32 +398,11 @@
                         label: 'GBP/JPY',
                         data: toPoints(PAIRS_DATA['GBP/JPY'].equity),
                         borderColor: gbpColor,
-                        backgroundColor: 'transparent',
-                        borderWidth: 1.5,
-                        pointRadius: 0,
-                        tension: 0.1,
-                        order: 2,
-                    },
-                    {
-                        label: 'AUD/CAD',
-                        data: toPoints(PAIRS_DATA['AUD/CAD'].equity),
-                        borderColor: audColor,
-                        backgroundColor: 'transparent',
-                        borderWidth: 1.5,
-                        pointRadius: 0,
-                        tension: 0.1,
-                        order: 2,
-                    },
-                    {
-                        label: 'Portfolio',
-                        data: toPoints(PORT_EQUITY),
-                        borderColor: portColor,
-                        backgroundColor: portColor + '18',
+                        backgroundColor: gbpColor + '18',
                         fill: 'origin',
                         borderWidth: 2,
                         pointRadius: 0,
                         tension: 0.1,
-                        order: 1,
                     },
                 ],
             },
@@ -483,10 +451,11 @@
         const ctx = document.getElementById('dca-fills-chart');
         if (!ctx) return;
         const gbpColor = cssVar('--accent')     || '#5b8dc9';
-        const audColor = cssVar('--term-warn')  || '#e8a838';
+        // claude code changed: audColor removed — solo pair
         const fgDim    = cssVar('--text-dim')   || '#636c76';
         const gridCol  = cssVar('--border-0')   || 'rgba(255,255,255,0.08)';
 
+        // claude code changed: AUD/CAD dataset removed — GBP/JPY solo
         new Chart(ctx, {
             type: 'bar',
             data: {
@@ -497,14 +466,6 @@
                         data: PAIRS_DATA['GBP/JPY'].fills_dist,
                         backgroundColor: gbpColor + 'cc',
                         borderColor: gbpColor,
-                        borderWidth: 1,
-                        borderRadius: 3,
-                    },
-                    {
-                        label: 'AUD/CAD',
-                        data: PAIRS_DATA['AUD/CAD'].fills_dist,
-                        backgroundColor: audColor + 'cc',
-                        borderColor: audColor,
                         borderWidth: 1,
                         borderRadius: 3,
                     },
@@ -560,9 +521,84 @@
         setTimeout(() => waitForChartJs(cb, (tries || 0) + 1), 150);
     }
 
+    // ── Per-pair equity + drawdown charts (chart-theme.js style) ─────────────
+    // claude code changed: per-pair charts styled like pairs_performance.html
+    var _pairCharts = {};
+
+    function renderPairCharts() {
+        var neutralColor = themeColor('--neutral');
+        var ddColor      = themeColor('--negative');
+        var scales       = chartCommonScales({ xTitle: 'Trade #' });
+
+        function makeEquityChart(id, equityArr) {
+            _pairCharts[id] = destroyChart(_pairCharts[id]);
+            var ctx = document.getElementById(id);
+            if (!ctx || !equityArr || !equityArr.length) return;
+            var vals = equityArr.map(function(t) { return t.p; });
+            _pairCharts[id] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: vals.map(function(_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Equity ($)',
+                        data: vals,
+                        borderColor: neutralColor,
+                        backgroundColor: chartAreaFill(neutralColor),
+                        fill: true,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } } },
+                    scales: scales,
+                },
+            });
+        }
+
+        function makeDrawdownChart(id, ddArr) {
+            _pairCharts[id] = destroyChart(_pairCharts[id]);
+            var ctx = document.getElementById(id);
+            if (!ctx || !ddArr || !ddArr.length) return;
+            _pairCharts[id] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ddArr.map(function(_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Drawdown ($)',
+                        data: ddArr,
+                        borderColor: ddColor,
+                        backgroundColor: chartAreaFill(ddColor),
+                        fill: true,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } } },
+                    scales: scales,
+                },
+            });
+        }
+
+        makeEquityChart('gbpjpyEquityChart',    PAIRS_DATA['GBP/JPY'].equity);
+        makeDrawdownChart('gbpjpyDrawdownChart', PAIRS_DATA['GBP/JPY'].drawdown);
+        // claude code changed: AUD/CAD chart calls removed
+    }
+
     waitForChartJs(function () {
         buildEquityChart();
         buildFillsChart();
+        renderPairCharts();
+        onThemeChange(renderPairCharts);
     });
 })();
 </script>

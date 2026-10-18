@@ -15,7 +15,8 @@
     ACTIVE SLUGS: dashboard, market_intelligence, research_lab, features,
     strategy_research, strategy_pipeline, pairs_performance, backtesting,
     robustness_analysis, rejected_research, research_archive, portfolio_risk,
-    execution_monitor, pairs_pilot, dca_engine, venue_comparison, system_health
+    execution_monitor, pairs_pilot, dca_engine, venue_comparison, system_health,
+    forex_scanner
 
     claude code changed: new — 'crypto' and 'forex' also highlight their
     respective nav link, though no page passes them today: Crypto shares
@@ -137,8 +138,15 @@
            data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
            href="{% url 'dashboard' %}">Crypto</a>
 
-        <a class="term-nav-link {% if active == 'forex' %}active{% endif %}"
-           href="{% url 'forex_dashboard' %}">Forex</a>
+        {# claude code changed: converted from plain link to dropdown — Scanner added #}
+        <details class="term-nav-group">
+            <summary class="term-nav-link {% if active == 'forex' or active == 'forex_scanner' %}active{% endif %}"
+                     {% if active == 'forex' or active == 'forex_scanner' %}aria-current="page"{% endif %}>Forex</summary>
+            <div class="term-nav-dropdown">
+                <a class="{% if active == 'forex' %}active{% endif %}" href="{% url 'forex_dashboard' %}">Dashboard</a>
+                <a class="{% if active == 'forex_scanner' %}active{% endif %}" href="{% url 'forex_scanner' %}">Market Scanner</a>
+            </div>
+        </details>
 
         {# claude code changed: Research Capabilities Discoverability & Navigation Refactor — #}
         {# was a single top-level <a> straight into the hypothesis-formalization form, with #}

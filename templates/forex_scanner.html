@@ -1,0 +1,364 @@
+{% extends 'base.html' %}
+{% load static %}
+{# claude code changed: new — Forex Market Scanner page #}
+
+{% block head %}
+<script src="{% static 'js/counters.js' %}"></script>
+<style>
+/* ── Forex Scanner page-local styles ──────────────────────────────── */
+
+.scanner-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+    align-items: center;
+}
+.scanner-filter-btn {
+    padding: 5px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border-0, rgba(255,255,255,.08));
+    background: var(--bg-1, rgba(255,255,255,.03));
+    color: var(--text-0, #e6edf3);
+    font-size: 12px;
+    font-family: monospace;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+.scanner-filter-btn:hover,
+.scanner-filter-btn.active {
+    background: var(--accent-dim, rgba(91,141,201,.18));
+    border-color: var(--accent, #5b8dc9);
+    color: var(--accent, #5b8dc9);
+}
+.scanner-filter-btn.f-ranging.active    { border-color: var(--term-pos,#3fb87f); color: var(--term-pos,#3fb87f); background: rgba(63,184,127,.12); }
+.scanner-filter-btn.f-highvol.active   { border-color: var(--term-warn,#e8a838); color: var(--term-warn,#e8a838); background: rgba(232,168,56,.12); }
+.scanner-filter-btn.f-trending.active  { border-color: var(--accent,#5b8dc9); color: var(--accent,#5b8dc9); background: rgba(91,141,201,.12); }
+
+.scanner-search {
+    margin-left: auto;
+    padding: 5px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-0, rgba(255,255,255,.08));
+    background: var(--bg-1, rgba(255,255,255,.03));
+    color: var(--text-0, #e6edf3);
+    font-size: 12px;
+    font-family: monospace;
+    width: 140px;
+    outline: none;
+}
+.scanner-search:focus { border-color: var(--accent,#5b8dc9); }
+
+/* table */
+.scanner-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+.scanner-table th {
+    padding: 7px 10px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim, #636c76);
+    border-bottom: 1px solid var(--border-0, rgba(255,255,255,.08));
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+.scanner-table th:hover { color: var(--text-0, #e6edf3); }
+.scanner-table th.sorted-asc::after  { content: " ↑"; opacity:.7; }
+.scanner-table th.sorted-desc::after { content: " ↓"; opacity:.7; }
+.scanner-table th.num { text-align: right; }
+
+.scanner-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border-0, rgba(255,255,255,.04));
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.scanner-table td.num { text-align: right; }
+.scanner-table tbody tr:hover { background: var(--bg-1, rgba(255,255,255,.03)); }
+.scanner-table tbody tr.ranging-row { background: rgba(63,184,127,.04); }
+.scanner-table tbody tr.ranging-row:hover { background: rgba(63,184,127,.08); }
+
+/* pair name */
+.pair-name {
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+/* regime badge */
+.regime-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    font-family: monospace;
+}
+.regime-RANGING        { background: rgba(63,184,127,.15);  color: var(--term-pos,#3fb87f); }
+.regime-HIGH_VOLATILITY{ background: rgba(232,168,56,.15);  color: var(--term-warn,#e8a838); }
+.regime-TRENDING_UP    { background: rgba(91,141,201,.15);  color: var(--accent,#5b8dc9); }
+.regime-TRENDING_DOWN  { background: rgba(215,81,81,.15);   color: var(--term-neg,#d9534f); }
+
+/* z-score bar */
+.zscore-bar-wrap { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.zscore-bar {
+    width: 48px; height: 6px;
+    background: var(--border-0, rgba(255,255,255,.08));
+    border-radius: 3px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.zscore-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width .3s;
+}
+
+/* ADX meter */
+.adx-meter { display: inline-flex; align-items: center; gap: 6px; }
+.adx-bar-wrap { width: 48px; height: 5px; background: var(--border-0,rgba(255,255,255,.08)); border-radius:3px; overflow:hidden; }
+.adx-fill { height:100%; border-radius:3px; }
+
+/* summary badges top */
+.scanner-summary { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.scanner-sum-badge {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-radius: 5px;
+    border: 1px solid var(--border-0, rgba(255,255,255,.08));
+    background: var(--bg-1, rgba(255,255,255,.03));
+    font-size: 12px;
+}
+.scanner-sum-count { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+
+@media (max-width: 700px) {
+    .scanner-table { font-size: 11px; }
+    .scanner-table th, .scanner-table td { padding: 5px 6px; }
+    .adx-bar-wrap, .zscore-bar { display: none; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="forex_scanner" %}
+
+<div class="term-body">
+
+{# ── page header ─────────────────────────────────────────────────────────── #}
+<div class="term-section-head" style="margin-bottom:14px">
+    <div>
+        <span class="term-section-title">Forex Market Scanner</span>
+        <span class="term-section-meta" style="margin-left:10px">{{ total_pairs }} pairs · 1h candles · regime + volatility + z-score</span>
+    </div>
+    <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span class="badge">ADX-14</span>
+        <span class="badge">ATR-14</span>
+        <span class="badge">Z-score 20</span>
+        <span class="badge dim">data/forex/</span>
+    </span>
+</div>
+
+{# ── regime summary ───────────────────────────────────────────────────────── #}
+<div class="scanner-summary">
+    <div class="scanner-sum-badge" style="border-color:rgba(63,184,127,.3)">
+        <span class="scanner-sum-count" style="color:var(--term-pos,#3fb87f)" id="cnt-ranging">{{ regime_counts.RANGING|default:0 }}</span>
+        <span class="metric-label">Ranging</span>
+    </div>
+    <div class="scanner-sum-badge" style="border-color:rgba(232,168,56,.3)">
+        <span class="scanner-sum-count" style="color:var(--term-warn,#e8a838)" id="cnt-highvol">{{ regime_counts.HIGH_VOLATILITY|default:0 }}</span>
+        <span class="metric-label">High Volatility</span>
+    </div>
+    <div class="scanner-sum-badge" style="border-color:rgba(91,141,201,.3)">
+        <span class="scanner-sum-count" style="color:var(--accent,#5b8dc9)" id="cnt-trending">
+            {% with tu=regime_counts.TRENDING_UP|default:0 td=regime_counts.TRENDING_DOWN|default:0 %}{{ tu|add:td }}{% endwith %}
+        </span>
+        <span class="metric-label">Trending</span>
+    </div>
+    <div class="scanner-sum-badge">
+        <span class="scanner-sum-count">{{ total_pairs }}</span>
+        <span class="metric-label">Total pairs</span>
+    </div>
+</div>
+
+{# ── filter bar ───────────────────────────────────────────────────────────── #}
+<div class="scanner-filter-bar">
+    <button class="scanner-filter-btn active" data-filter="ALL" onclick="setFilter(this,'ALL')">All</button>
+    <button class="scanner-filter-btn f-ranging" data-filter="RANGING" onclick="setFilter(this,'RANGING')">Ranging only</button>
+    <button class="scanner-filter-btn f-highvol" data-filter="HIGH_VOLATILITY" onclick="setFilter(this,'HIGH_VOLATILITY')">High Vol</button>
+    <button class="scanner-filter-btn f-trending" data-filter="TRENDING" onclick="setFilter(this,'TRENDING')">Trending</button>
+    <input class="scanner-search" id="pair-search" type="text" placeholder="Search pair…" oninput="applyFilter()">
+</div>
+
+{# ── table ────────────────────────────────────────────────────────────────── #}
+<div class="term-section" style="overflow-x:auto">
+<table class="scanner-table" id="scanner-table">
+    <thead>
+        <tr>
+            <th onclick="sortTable('pair')">Pair</th>
+            <th onclick="sortTable('regime')">Regime</th>
+            <th class="num" onclick="sortTable('adx')">ADX-14</th>
+            <th class="num" onclick="sortTable('atr_pct')">ATR %</th>
+            <th class="num" onclick="sortTable('atr_ratio')">ATR Ratio</th>
+            <th class="num" onclick="sortTable('zscore')">Z-Score</th>
+            <th class="num" onclick="sortTable('bb_width_pct')">BB Width %</th>
+            <th class="num" onclick="sortTable('ema_spread_pct')">EMA Spread %</th>
+            <th class="num" onclick="sortTable('change_24h')">24h Chg %</th>
+            <th class="num" onclick="sortTable('price')">Price</th>
+            <th onclick="sortTable('last_ts')">Last Bar</th>
+        </tr>
+    </thead>
+    <tbody id="scanner-tbody">
+        {% for row in rows %}
+        <tr class="{% if row.regime == 'RANGING' %}ranging-row{% endif %}" data-regime="{{ row.regime }}" data-pair="{{ row.pair }}">
+            <td><span class="pair-name">{{ row.pair }}</span></td>
+            <td><span class="regime-badge regime-{{ row.regime }}">{{ row.regime_label }}</span></td>
+            <td class="num">
+                {% if row.adx %}
+                <div class="adx-meter">
+                    <span>{{ row.adx }}</span>
+                    <div class="adx-bar-wrap">
+                        <div class="adx-fill" style="width:{% widthratio row.adx 60 100 %}%;background:{% if row.adx < 20 %}var(--term-pos,#3fb87f){% elif row.adx < 25 %}var(--term-warn,#e8a838){% else %}var(--accent,#5b8dc9){% endif %}"></div>
+                    </div>
+                </div>
+                {% else %}—{% endif %}
+            </td>
+            <td class="num">{% if row.atr_pct %}{{ row.atr_pct }}%{% else %}—{% endif %}</td>
+            <td class="num">
+                {% if row.atr_ratio %}
+                <span class="{% if row.atr_ratio > 1.7 %}warn{% elif row.atr_ratio < 0.6 %}pos{% endif %}">{{ row.atr_ratio }}</span>
+                {% else %}—{% endif %}
+            </td>
+            <td class="num">
+                {% if row.zscore is not None %}
+                <span class="{% if row.zscore > 1.5 %}neg{% elif row.zscore < -1.5 %}pos{% endif %}">{{ row.zscore }}</span>
+                {% else %}—{% endif %}
+            </td>
+            <td class="num">{% if row.bb_width_pct %}{{ row.bb_width_pct }}%{% else %}—{% endif %}</td>
+            <td class="num">{% if row.ema_spread_pct %}{{ row.ema_spread_pct }}%{% else %}—{% endif %}</td>
+            <td class="num">
+                {% if row.change_24h is not None %}
+                <span class="{% if row.change_24h > 0 %}pos{% elif row.change_24h < 0 %}neg{% endif %}">
+                    {% if row.change_24h > 0 %}+{% endif %}{{ row.change_24h }}%
+                </span>
+                {% else %}—{% endif %}
+            </td>
+            <td class="num mono" style="font-size:11px">{{ row.price }}</td>
+            <td class="mono" style="font-size:11px;color:var(--text-dim,#636c76)">{{ row.last_ts }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div class="chart-caption mono" style="text-align:center;padding-block:10px;margin-top:8px">
+    Steph Quant Technologies · Ranging pairs sorted first · ADX&lt;20 = ranging · ADX&gt;25 = trending · ATR ratio &gt;1.7 = high volatility
+</div>
+
+</div>{# /term-body #}
+
+<script>
+// ── Scanner: filter + sort ────────────────────────────────────────────────
+var _activeFilter = 'ALL';
+var _sortCol      = 'regime_order';
+var _sortDir      = 1;  // 1=asc, -1=desc
+
+var ROWS = {{ rows_json|safe }};
+var _filtered = ROWS.slice();
+
+// Render on page load so JS controls the table from the start
+document.addEventListener('DOMContentLoaded', function() { renderRows(); });
+
+function setFilter(btn, filter) {
+    document.querySelectorAll('.scanner-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _activeFilter = filter;
+    applyFilter();
+}
+
+function applyFilter() {
+    var search = (document.getElementById('pair-search').value || '').toUpperCase();
+    _filtered = ROWS.filter(function(r) {
+        var regimeOk = _activeFilter === 'ALL'
+            || r.regime === _activeFilter
+            || (_activeFilter === 'TRENDING' && (r.regime === 'TRENDING_UP' || r.regime === 'TRENDING_DOWN'));
+        var searchOk = !search || r.pair.replace('/', '').includes(search) || r.pair.includes(search);
+        return regimeOk && searchOk;
+    });
+    renderRows();
+}
+
+function sortTable(col) {
+    var th = event.currentTarget;
+    document.querySelectorAll('.scanner-table th').forEach(function(h) {
+        h.classList.remove('sorted-asc','sorted-desc');
+    });
+    if (_sortCol === col) {
+        _sortDir = -_sortDir;
+    } else {
+        _sortCol = col;
+        _sortDir = 1;
+    }
+    th.classList.add(_sortDir === 1 ? 'sorted-asc' : 'sorted-desc');
+    _filtered.sort(function(a, b) {
+        var av = a[col], bv = b[col];
+        if (av === null || av === undefined) return 1;
+        if (bv === null || bv === undefined) return -1;
+        if (typeof av === 'string') return av.localeCompare(bv) * _sortDir;
+        return (av - bv) * _sortDir;
+    });
+    renderRows();
+}
+
+function zscorePct(z) {
+    if (z === null || z === undefined) return 50;
+    return Math.min(100, Math.max(0, Math.round(((z + 3) / 6) * 100)));
+}
+
+function renderRows() {
+    var tbody = document.getElementById('scanner-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = _filtered.map(function(r) {
+        var regimeLabel = r.regime.toLowerCase().replace(/_/g, ' ');
+        var rowCls = r.regime === 'RANGING' ? 'ranging-row' : '';
+
+        var adxHtml = r.adx !== null
+            ? '<div class="adx-meter"><span>' + r.adx + '</span><div class="adx-bar-wrap"><div class="adx-fill" style="width:' + Math.min(100, Math.round(r.adx/60*100)) + '%;background:' + (r.adx < 20 ? 'var(--term-pos,#3fb87f)' : r.adx < 25 ? 'var(--term-warn,#e8a838)' : 'var(--accent,#5b8dc9)') + '"></div></div></div>'
+            : '—';
+
+        var atrRatioCls = r.atr_ratio > 1.7 ? 'warn' : r.atr_ratio < 0.6 ? 'pos' : '';
+        var zCls = r.zscore > 1.5 ? 'neg' : r.zscore < -1.5 ? 'pos' : '';
+        var zpct = zscorePct(r.zscore);
+        var zHtml = r.zscore !== null
+            ? '<div class="zscore-bar-wrap"><span class="' + zCls + '">' + r.zscore + '</span><div class="zscore-bar"><div class="zscore-fill" style="width:' + zpct + '%;background:' + (r.zscore >= 0 ? 'var(--accent,#5b8dc9)' : 'var(--term-pos,#3fb87f)') + '"></div></div></div>'
+            : '—';
+
+        var chgCls = r.change_24h > 0 ? 'pos' : r.change_24h < 0 ? 'neg' : '';
+        var chgSign = r.change_24h > 0 ? '+' : '';
+        var chgHtml = r.change_24h !== null ? '<span class="' + chgCls + '">' + chgSign + r.change_24h + '%</span>' : '—';
+
+        return '<tr class="' + rowCls + '" data-regime="' + r.regime + '" data-pair="' + r.pair + '">'
+            + '<td><span class="pair-name">' + r.pair + '</span></td>'
+            + '<td><span class="regime-badge regime-' + r.regime + '">' + regimeLabel + '</span></td>'
+            + '<td class="num">' + adxHtml + '</td>'
+            + '<td class="num">' + (r.atr_pct !== null ? r.atr_pct + '%' : '—') + '</td>'
+            + '<td class="num"><span class="' + atrRatioCls + '">' + (r.atr_ratio !== null ? r.atr_ratio : '—') + '</span></td>'
+            + '<td class="num">' + zHtml + '</td>'
+            + '<td class="num">' + (r.bb_width_pct !== null ? r.bb_width_pct + '%' : '—') + '</td>'
+            + '<td class="num">' + (r.ema_spread_pct !== null ? r.ema_spread_pct + '%' : '—') + '</td>'
+            + '<td class="num">' + chgHtml + '</td>'
+            + '<td class="num mono" style="font-size:11px">' + r.price + '</td>'
+            + '<td class="mono" style="font-size:11px;color:var(--text-dim,#636c76)">' + r.last_ts + '</td>'
+            + '</tr>';
+    }).join('');
+}
+</script>
+{% endblock %}

@@ -43,7 +43,8 @@ DEBUG = False  # claude code changed: regression fix — value was True despite 
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    "172.20.10.6",     # LAN/phone access — WiFi/hotspot IP as of 2026-10-18; update if IP changes: run `ipconfig` or `Get-NetIPAddress` to find current WiFi address — claude code changed: updated from stale 192.168.99.42 to current 172.20.10.6
+    "172.16.23.184",   # LAN/phone access — WiFi IP as of 2026-10-18; update if IP changes: run Get-NetIPAddress -AddressFamily IPv4 — claude code changed: updated from stale 172.20.10.6 to current 172.16.23.184
+    "192.168.137.1",   # Windows Mobile Hotspot interface — lets phone connect via hotspot too — claude code changed: added
     ".up.railway.app", # Railway deployment wildcard — claude code changed: restored after accidental omission in audit-C-01 fix
 ]  # claude code changed: replaced ["*"] wildcard and stale DHCP IPs with current allowlist (audit finding C-01)
 

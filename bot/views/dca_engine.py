@@ -2,13 +2,13 @@
 """
 Django view for the Forex DCA Engine walk-forward results page.
 
-Runs QC-1 (FX-QC-PROTOCOL-1) across GBP/JPY and AUD/CAD LONG, 5 walk-forward
-folds, then builds equity curves, per-fold stats, and fills distributions.
-Results are cached 1 hour — the simulation takes ~30 s on first load.
+Runs QC-1 (FX-QC-PROTOCOL-1) on GBP/JPY LONG only (AUD/CAD dropped after
+holdout evaluation returned negative P&L), 5 walk-forward folds.
+Results are cached 1 hour — the simulation takes ~15 s on first load.
 
 Permutation-test summary (N=499, block=48h, post-hoc) is a baked-in constant;
 it does not re-run on page load.
-"""
+"""  # claude code changed: AUD/CAD dropped — holdout negative; GBP/JPY solo
 
 import json
 import logging
@@ -22,7 +22,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _ROOT      = Path(__file__).resolve().parents[2]
-_CACHE_KEY = "dca_engine_results_v1"
+_CACHE_KEY = "dca_engine_results_v4"  # claude code changed: v4 — holdout appended as fold 6 (OOS)
 _CACHE_TTL = 3600  # 1 hour
 
 _PERM_RESULT = {
@@ -61,9 +61,9 @@ def _build_results():
         QC1_MAE_HORIZON, QC1_INITIAL_USDT,
     )
     from bot.research.forex_instrument_spec import QC_PORTFOLIO_SPECS, QC_PORTFOLIO_CSV_FILES
-    from bot.research.fx_fold_splitter import make_fx_splits
+    from bot.research.fx_fold_splitter import make_fx_splits, FxFold
 
-    PAIRS = ["GBP/JPY", "AUD/CAD"]
+    PAIRS = ["GBP/JPY"]  # claude code changed: AUD/CAD dropped — holdout negative
     pair_results = {}
 
     for pair in PAIRS:
@@ -72,7 +72,17 @@ def _build_results():
         df        = pd.read_csv(_ROOT / "data" / "forex" / csv_file, parse_dates=["timestamp"])
         splits    = make_fx_splits(df)
 
-        # --- single pass over all folds ---
+        # --- single pass over calibration folds + holdout as fold 6 ---
+        # Holdout consumed 2026-10-18 (GBP/JPY +$9.55); appended as fold 6 so the
+        # equity curve extends to 2026-10-02 instead of truncating at the cal boundary.
+        holdout_fold = FxFold(  # claude code changed: v4 — synthetic fold for consumed holdout
+            fold_num=6,
+            train=splits.calibration,
+            embargo=splits.calibration_embargo,
+            test=splits.holdout,
+        )
+        all_folds = list(splits.folds) + [holdout_fold]
+
         equity_pts      = []   # {"d": "YYYY-MM-DD", "p": cumPnl}
         fold_boundaries = []
         fold_stats      = []
@@ -80,7 +90,7 @@ def _build_results():
         all_costs       = []
         cum_pnl         = 0.0
 
-        for fold in splits.folds:
+        for fold in all_folds:
             result = run_multipair_fold(
                 pair=pair, csv_file=csv_file,
                 pair_spec=pair_spec, pip_size=pair_spec.pip_size,
@@ -107,14 +117,16 @@ def _build_results():
                 fills_dist[lvl] += 1
                 all_costs.append(t.get("total_cost_usdt", 0.0))
 
+            fold_label = "Holdout (OOS)" if fold.fold_num == 6 else str(fold.fold_num)
             fold_stats.append({
-                "fold":    fold.fold_num,
+                "fold":    fold_label,
                 "start":   fold_start,
                 "end":     fold_end,
                 "trades":  len(closed),
                 "wins":    fold_wins,
                 "win_pct": round(fold_wins / len(closed) * 100, 1) if closed else 0.0,
                 "pnl":     round(fold_pnl, 4),
+                "is_holdout": fold.fold_num == 6,  # claude code changed: flag for template styling
             })
 
         total = sum(s["trades"] for s in fold_stats)
@@ -125,8 +137,16 @@ def _build_results():
         rm     = np.maximum.accumulate(eq_arr)
         max_dd = float((eq_arr - rm).min())
 
+        # Dollar drawdown from running equity peak
+        drawdown_pts = []
+        peak_eq = 0.0
+        for t in equity_pts:
+            peak_eq = max(peak_eq, t["p"])
+            drawdown_pts.append(round(peak_eq - t["p"], 4))
+
         pair_results[pair] = {
             "equity":          equity_pts,
+            "drawdown":        drawdown_pts,
             "fold_boundaries": fold_boundaries,
             "fold_stats":      fold_stats,
             "stats": {
@@ -141,22 +161,10 @@ def _build_results():
             "fills_dist": fills_dist,
         }
 
-    # Portfolio equity: merge both pairs sorted by exit date
-    all_deltas = []
-    for pair in PAIRS:
-        prev = 0.0
-        for t in pair_results[pair]["equity"]:
-            all_deltas.append({"d": t["d"], "delta": t["p"] - prev})
-            prev = t["p"]
-    all_deltas.sort(key=lambda x: x["d"])
-    cum_port    = 0.0
-    port_equity = []
-    for t in all_deltas:
-        cum_port += t["delta"]
-        port_equity.append({"d": t["d"], "p": round(cum_port, 4)})
-
-    port_total = sum(pair_results[p]["stats"]["total_trades"] for p in PAIRS)
-    port_wins  = sum(pair_results[p]["stats"]["wins"]         for p in PAIRS)
+    # Solo pair — portfolio equity = GBP/JPY equity directly  # claude code changed: simplified for solo pair
+    port_equity = pair_results["GBP/JPY"]["equity"]
+    port_total  = pair_results["GBP/JPY"]["stats"]["total_trades"]
+    port_wins   = pair_results["GBP/JPY"]["stats"]["wins"]
 
     return {
         "pairs":             pair_results,
@@ -193,6 +201,7 @@ def dca_engine(request):
         pairs_json            = json.dumps({
             p: {
                 "equity":     results["pairs"][p]["equity"],
+                "drawdown":   results["pairs"][p]["drawdown"],  # claude code changed: add flat drawdown for per-pair charts
                 "fold_stats": results["pairs"][p]["fold_stats"],
                 "fills_dist": results["pairs"][p]["fills_dist"],
             }
@@ -215,7 +224,6 @@ def dca_engine(request):
         # pre-built list so the template's fold-table loop avoids custom filters
         "pair_table_items": [
             ("GBP/JPY", "GBP/JPY", "background:var(--accent)"),
-            ("AUD/CAD", "AUD/CAD", "background:var(--term-warn,#e8a838)"),
-        ],
+        ],  # claude code changed: AUD/CAD removed
     }
     return render(request, "dca_engine.html", context)

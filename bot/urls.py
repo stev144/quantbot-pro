@@ -21,6 +21,7 @@ from bot.views.execution_monitor import execution_monitor
 from bot.views.pairs_pilot import pairs_pilot   # claude code changed: new — Pairs Pilot live monitor page
 from bot.views.dca_engine import dca_engine     # claude code changed: new — QC-1 Forex DCA Engine dashboard
 from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
+from bot.views.forex_scanner import forex_scanner         # claude code changed: new — Forex Market Scanner
 from bot.views.system_health import system_health
 
 # claude code changed: regrouped into the RESEARCH -> MEASUREMENT ->
@@ -42,6 +43,7 @@ urlpatterns = [
     # page directly (no market/research dashboard existed); this is
     # Forex's equivalent of the EXECUTIVE dashboard above.
     path('forex/', forex_dashboard, name='forex_dashboard'),
+    path('forex/scanner/', forex_scanner, name='forex_scanner'),   # claude code changed: new — Forex Market Scanner
 
     # ---- ACADEMY ----
     # claude code changed: new — one include() line, per the approved
