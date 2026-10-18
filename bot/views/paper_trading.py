@@ -17,7 +17,7 @@ from django.shortcuts import render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_KEY = "paper_trading_results_v2"  # claude code changed: v2 — added fill_dist/drawdown fields
+_CACHE_KEY = "paper_trading_results_v3"  # claude code changed: v3 — scaled to $100/cycle entry capital
 _CACHE_TTL = 3600
 
 
@@ -35,7 +35,7 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
             error   = str(exc)
             results = {}
 
-    # build per-pair JSON for JS charts  # claude code changed: added drawdown + fill_dist
+    # build per-pair JSON for JS charts  # claude code changed: added drawdown + fill_dist + capital fields
     pairs_data = {}
     for pair, r in results.items():
         if "error" not in r:
@@ -50,10 +50,23 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
 
     pair_list = [p for p in results if "error" not in results[p]]
 
+    # aggregate capital stats for page header  # claude code changed: new — capital summary
+    entry_usdt   = None
+    max_capitals = []
+    for r in results.values():
+        if "error" not in r:
+            entry_usdt = r.get("entry_usdt")
+            mc = r.get("max_capital")
+            if mc:
+                max_capitals.append(mc)
+    total_max_exposure = round(sum(max_capitals), 2) if max_capitals else None
+
     context = {
-        "error":       error,
-        "results":     results,
-        "pair_list":   pair_list,
-        "pairs_json":  json.dumps(pairs_data),
+        "error":              error,
+        "results":            results,
+        "pair_list":          pair_list,
+        "pairs_json":         json.dumps(pairs_data),
+        "entry_usdt":         entry_usdt,           # claude code changed: new
+        "total_max_exposure": total_max_exposure,   # claude code changed: new — sum across all pairs
     }
     return render(request, "paper_trading.html", context)

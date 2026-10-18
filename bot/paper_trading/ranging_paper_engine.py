@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 # ── G5: paper-only sentinel ───────────────────────────────────────────────────
 IS_PAPER_ONLY = True   # claude code changed: never set to False — simulation only
 
+# ── paper capital (separate from QC-1 calibration constant $6) ───────────────
+# QC1_INITIAL_USDT=$6 is the calibration unit used to size the ladder spec.
+# PAPER_ENTRY_USDT is the realistic per-cycle entry size used for P&L display.
+# P&L scales linearly: win rate, fill distribution, and drawdown % are unchanged.
+PAPER_ENTRY_USDT = 100.0   # claude code changed: realistic per-cycle entry ($100 vs QC-1 $6)
+
 _ROOT = Path(__file__).resolve().parents[2]
 
 # ── QC-1 constants (mirrors fx_multipair_runner.py) ───────────────────────────
@@ -320,9 +326,9 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
     )
     from bot.research.fx_movement_analysis import analyse_pair
     from bot.research.fx_multipair_runner import (
-        QC1_INITIAL_USDT, QC1_PROFIT_ACTIVATION, QC1_TRAILING_PCT,
+        QC1_PROFIT_ACTIVATION, QC1_TRAILING_PCT,
         QC1_MAX_CYCLE_CANDLES, QC1_MAE_HORIZON,
-    )
+    )  # claude code changed: removed QC1_INITIAL_USDT — paper uses PAPER_ENTRY_USDT ($100) not $6
 
     VALIDATED_PAIRS = {"GBP/JPY"}   # G5: only QC-1 holdout-positive pair
     DIRECTION = "LONG"
@@ -385,7 +391,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 df=sim_df,
                 spec=spec,
                 ranging_mask=ranging_mask,
-                initial_usdt=QC1_INITIAL_USDT,
+                initial_usdt=PAPER_ENTRY_USDT,   # claude code changed: realistic capital ($100 vs $6)
                 profit_activation_pct=QC1_PROFIT_ACTIVATION,
                 trailing_pct=QC1_TRAILING_PCT,
                 max_cycle_candles=QC1_MAX_CYCLE_CANDLES,
@@ -402,7 +408,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             trades_free_raw, _ = _simulate_data_derived_next_open(
                 df=sim_df,
                 spec=spec,
-                initial_usdt=QC1_INITIAL_USDT,
+                initial_usdt=PAPER_ENTRY_USDT,   # claude code changed: same realistic capital for direct comparison
                 profit_activation_pct=QC1_PROFIT_ACTIVATION,
                 trailing_pct=QC1_TRAILING_PCT,
                 spread_pips=spread_pips if spread_pips else None,
@@ -479,13 +485,18 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             else:
                 current_regime = "RANGING"
 
+            # ── capital metadata ──────────────────────────────────────────────
+            # max capital if all 7 fills triggered: entry + sum(entry * mult for mult in multipliers)
+            all_mults   = list(spec.multipliers) if spec.multipliers else []
+            max_capital = PAPER_ENTRY_USDT * (1.0 + sum(all_mults))   # claude code changed: new — worst-case capital per pair
+
             results[pair] = {
                 "equity_gated":   equity_gated,
                 "equity_free":    equity_free,
-                "drawdown_gated": drawdown_gated,    # claude code changed: new
-                "drawdown_free":  drawdown_free,     # claude code changed: new
-                "fill_dist":      fill_dist,         # claude code changed: new — {fills: count}
-                "ladder_depth":   ladder_depth,      # claude code changed: new — max possible fills
+                "drawdown_gated": drawdown_gated,
+                "drawdown_free":  drawdown_free,
+                "fill_dist":      fill_dist,
+                "ladder_depth":   ladder_depth,
                 "trades_gated":   closed_gated,
                 "stats_gated":    stats_gated,
                 "stats_free":     stats_free,
@@ -493,6 +504,8 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 "current_regime": current_regime,
                 "validated":      pair in VALIDATED_PAIRS,
                 "current_adx":    round(float(last_adx), 1) if not math.isnan(last_adx) else None,
+                "entry_usdt":     PAPER_ENTRY_USDT,          # claude code changed: new — per-cycle entry capital
+                "max_capital":    round(max_capital, 2),     # claude code changed: new — worst-case deployment
             }
 
         except Exception as exc:
