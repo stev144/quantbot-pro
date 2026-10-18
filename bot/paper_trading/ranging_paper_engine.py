@@ -41,11 +41,15 @@ logger = logging.getLogger(__name__)
 # ── G5: paper-only sentinel ───────────────────────────────────────────────────
 IS_PAPER_ONLY = True   # claude code changed: never set to False — simulation only
 
-# ── paper capital (separate from QC-1 calibration constant $6) ───────────────
-# QC1_INITIAL_USDT=$6 is the calibration unit used to size the ladder spec.
-# PAPER_ENTRY_USDT is the realistic per-cycle entry size used for P&L display.
-# P&L scales linearly: win rate, fill distribution, and drawdown % are unchanged.
-PAPER_ENTRY_USDT = 100.0   # claude code changed: realistic per-cycle entry ($100 vs QC-1 $6)
+# ── paper capital ─────────────────────────────────────────────────────────────
+# PAPER_ENTRY_USDT : margin committed per cycle entry (what the trader puts in).
+# PAPER_LEVERAGE   : broker leverage applied — qty = (margin × leverage) / price.
+# The simulation receives the notional (margin × leverage) as initial_usdt so
+# WAP, gross P&L, and commission math remain internally consistent.
+# Win rates, fill distribution, and drawdown % are unaffected by capital scale.
+PAPER_ENTRY_USDT  = 100.0   # claude code changed: margin per cycle entry
+PAPER_LEVERAGE    = 30.0    # claude code changed: 1:30 EU retail max (ESMA); matched to ForexInstrumentSpec.leverage_max
+_PAPER_NOTIONAL   = PAPER_ENTRY_USDT * PAPER_LEVERAGE   # $3,000 per entry fill
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -391,7 +395,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 df=sim_df,
                 spec=spec,
                 ranging_mask=ranging_mask,
-                initial_usdt=PAPER_ENTRY_USDT,   # claude code changed: realistic capital ($100 vs $6)
+                initial_usdt=_PAPER_NOTIONAL,   # claude code changed: notional = $100 margin × 30 leverage = $3,000
                 profit_activation_pct=QC1_PROFIT_ACTIVATION,
                 trailing_pct=QC1_TRAILING_PCT,
                 max_cycle_candles=QC1_MAX_CYCLE_CANDLES,
@@ -408,7 +412,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             trades_free_raw, _ = _simulate_data_derived_next_open(
                 df=sim_df,
                 spec=spec,
-                initial_usdt=PAPER_ENTRY_USDT,   # claude code changed: same realistic capital for direct comparison
+                initial_usdt=_PAPER_NOTIONAL,   # claude code changed: same notional for direct comparison
                 profit_activation_pct=QC1_PROFIT_ACTIVATION,
                 trailing_pct=QC1_TRAILING_PCT,
                 spread_pips=spread_pips if spread_pips else None,
@@ -486,9 +490,11 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 current_regime = "RANGING"
 
             # ── capital metadata ──────────────────────────────────────────────
-            # max capital if all 7 fills triggered: entry + sum(entry * mult for mult in multipliers)
-            all_mults   = list(spec.multipliers) if spec.multipliers else []
-            max_capital = PAPER_ENTRY_USDT * (1.0 + sum(all_mults))   # claude code changed: new — worst-case capital per pair
+            # max_margin  = total margin committed if all fills trigger
+            # max_notional = max_margin × leverage (what the broker controls)
+            all_mults    = list(spec.multipliers) if spec.multipliers else []
+            max_margin   = PAPER_ENTRY_USDT * (1.0 + sum(all_mults))          # claude code changed: worst-case margin
+            max_notional = round(max_margin * PAPER_LEVERAGE, 2)               # claude code changed: worst-case notional
 
             results[pair] = {
                 "equity_gated":   equity_gated,
@@ -504,8 +510,11 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 "current_regime": current_regime,
                 "validated":      pair in VALIDATED_PAIRS,
                 "current_adx":    round(float(last_adx), 1) if not math.isnan(last_adx) else None,
-                "entry_usdt":     PAPER_ENTRY_USDT,          # claude code changed: new — per-cycle entry capital
-                "max_capital":    round(max_capital, 2),     # claude code changed: new — worst-case deployment
+                "entry_usdt":     PAPER_ENTRY_USDT,           # claude code changed: margin per cycle
+                "leverage":       int(PAPER_LEVERAGE),       # claude code changed: 1:30
+                "entry_notional": int(_PAPER_NOTIONAL),      # claude code changed: $3,000 per entry
+                "max_margin":     round(max_margin, 2),      # claude code changed: worst-case margin
+                "max_notional":   max_notional,              # claude code changed: worst-case notional
             }
 
         except Exception as exc:

@@ -22,7 +22,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _ROOT      = Path(__file__).resolve().parents[2]
-_CACHE_KEY = "dca_engine_results_v5"  # claude code changed: v5 — P&L scaled to $100/cycle display capital
+_CACHE_KEY = "dca_engine_results_v6"  # claude code changed: v6 — 1:30 leverage applied to display scaling
 _CACHE_TTL = 3600  # 1 hour
 
 _PERM_RESULT = {
@@ -35,15 +35,20 @@ _PERM_RESULT = {
     "post_hoc_warn": True,
 }
 
-# QC-1 calibration runs at $6/cycle; display is scaled to $100/cycle so P&L is
-# realistic. Scale factor = 100/6 ≈ 16.67. Win rates and fill distributions unchanged.
+# QC-1 calibration runs at $6/cycle (notional, no leverage).
+# Display applies $100 margin × 1:30 leverage = $3,000 notional per entry.
+# Scale factor = 3000/6 = 500. Win rates and fill distributions unchanged.
 _QC1_ENTRY_USDT     = 6.0    # claude code changed: QC-1 calibration constant (do not change)
-_DISPLAY_ENTRY_USDT = 100.0  # claude code changed: display capital — matches Paper Trader PAPER_ENTRY_USDT
-_DISPLAY_SCALE      = _DISPLAY_ENTRY_USDT / _QC1_ENTRY_USDT  # ≈ 16.667
+_DISPLAY_MARGIN     = 100.0  # claude code changed: margin per cycle entry
+_LEVERAGE           = 30.0   # claude code changed: 1:30 EU retail max; matches ForexInstrumentSpec.leverage_max
+_DISPLAY_NOTIONAL   = _DISPLAY_MARGIN * _LEVERAGE   # $3,000 per entry
+_DISPLAY_SCALE      = _DISPLAY_NOTIONAL / _QC1_ENTRY_USDT  # 500.0
 
 _PROTOCOL = {
     "id":             "FX-QC-PROTOCOL-1",
-    "initial_usdt":   int(_DISPLAY_ENTRY_USDT),   # claude code changed: display capital $100
+    "initial_usdt":   int(_DISPLAY_MARGIN),      # claude code changed: $100 margin per entry
+    "leverage":       int(_LEVERAGE),            # claude code changed: 1:30
+    "notional":       int(_DISPLAY_NOTIONAL),    # claude code changed: $3,000 notional per entry
     "max_cycle_h":    72,
     "profit_act_pct": 0.5,
     "trailing_pct":   0.2,
@@ -52,11 +57,12 @@ _PROTOCOL = {
     "multipliers":    "1 · 2 · 4 · 8 · 16 · 32 · 64×",
     "folds":          5,
     "embargo_bars":   48,
-    "max_deployed":   12700,  # claude code changed: $100 × (1+2+4+8+16+32+64) = $12,700
+    "max_margin":     12700,    # claude code changed: $100 × (1+2+4+8+16+32+64) = $12,700 margin
+    "max_notional":   381000,   # claude code changed: $12,700 × 30 = $381,000 notional (worst-case)
 }
 
-# Cumulative capital deployed at each ladder level ($100 initial)
-_LEVEL_CAPITAL = [100, 300, 700, 1500, 3100, 6300, 12700]  # claude code changed: scaled from $6 to $100 entry
+# Cumulative NOTIONAL deployed at each ladder level ($100 margin × 30 leverage)
+_LEVEL_CAPITAL = [3000, 9000, 21000, 45000, 93000, 189000, 381000]  # claude code changed: notional per level
 
 
 # ── data build (single pass per pair per fold) ────────────────────────────────

@@ -17,7 +17,7 @@ from django.shortcuts import render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_KEY = "paper_trading_results_v3"  # claude code changed: v3 — scaled to $100/cycle entry capital
+_CACHE_KEY = "paper_trading_results_v4"  # claude code changed: v4 — 1:30 leverage applied to simulation
 _CACHE_TTL = 3600
 
 
@@ -50,23 +50,29 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
 
     pair_list = [p for p in results if "error" not in results[p]]
 
-    # aggregate capital stats for page header  # claude code changed: new — capital summary
+    # aggregate capital stats for page header  # claude code changed: leverage-aware capital summary
     entry_usdt   = None
-    max_capitals = []
+    leverage     = None
+    entry_notional = None
+    max_margins  = []
     for r in results.values():
         if "error" not in r:
-            entry_usdt = r.get("entry_usdt")
-            mc = r.get("max_capital")
-            if mc:
-                max_capitals.append(mc)
-    total_max_exposure = round(sum(max_capitals), 2) if max_capitals else None
+            entry_usdt     = r.get("entry_usdt")
+            leverage       = r.get("leverage")
+            entry_notional = r.get("entry_notional")
+            mm = r.get("max_margin")
+            if mm:
+                max_margins.append(mm)
+    total_max_margin = round(sum(max_margins), 2) if max_margins else None
 
     context = {
-        "error":              error,
-        "results":            results,
-        "pair_list":          pair_list,
-        "pairs_json":         json.dumps(pairs_data),
-        "entry_usdt":         entry_usdt,           # claude code changed: new
-        "total_max_exposure": total_max_exposure,   # claude code changed: new — sum across all pairs
+        "error":             error,
+        "results":           results,
+        "pair_list":         pair_list,
+        "pairs_json":        json.dumps(pairs_data),
+        "entry_usdt":        entry_usdt,        # claude code changed: margin per cycle
+        "leverage":          leverage,          # claude code changed: 30
+        "entry_notional":    entry_notional,    # claude code changed: $3,000
+        "total_max_margin":  total_max_margin,  # claude code changed: sum of max margin across all pairs
     }
     return render(request, "paper_trading.html", context)

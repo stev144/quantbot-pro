@@ -199,7 +199,7 @@
 <div class="term-section" style="margin-bottom:16px">
     <div class="term-section-head">
         <span class="term-section-title">Capital deployment — DCA ladder fill depth</span>
-        <span class="term-section-meta">cycles reaching each ladder level · L7 = all $12,700 deployed ($100 entry)</span>
+        <span class="term-section-meta">cycles reaching each ladder level · L7 = $381,000 notional ($12,700 margin · 1:30)</span>
     </div>
     <div class="term-section-body">
         <div class="dca-chart-box chart-box" style="height:200px">
@@ -302,7 +302,9 @@
     <div class="term-section-body">
         <div class="dca-proto-grid">
             <div class="dca-proto-pill"><div class="pk">Protocol</div><div class="pv">{{ protocol.id }}</div></div>
-            <div class="dca-proto-pill"><div class="pk">Initial / cycle</div><div class="pv">${{ protocol.initial_usdt }}</div></div>
+            <div class="dca-proto-pill"><div class="pk">Margin / cycle</div><div class="pv">${{ protocol.initial_usdt }}</div></div>
+            <div class="dca-proto-pill"><div class="pk">Leverage</div><div class="pv">1:{{ protocol.leverage }}</div></div>
+            <div class="dca-proto-pill"><div class="pk">Notional / entry</div><div class="pv">${{ protocol.notional }}</div></div>
             <div class="dca-proto-pill"><div class="pk">Max cycle</div><div class="pv">{{ protocol.max_cycle_h }} h</div></div>
             <div class="dca-proto-pill"><div class="pk">Profit activation</div><div class="pv">{{ protocol.profit_act_pct }}%</div></div>
             <div class="dca-proto-pill"><div class="pk">Trailing stop</div><div class="pv">{{ protocol.trailing_pct }}%</div></div>
@@ -459,7 +461,7 @@
         new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['L1  $100', 'L2  $300', 'L3  $700', 'L4  $1,500', 'L5  $3,100', 'L6  $6,300', 'L7  $12,700'],  // claude code changed: scaled to $100 entry
+                labels: ['L1  $3K', 'L2  $9K', 'L3  $21K', 'L4  $45K', 'L5  $93K', 'L6  $189K', 'L7  $381K'],  // claude code changed: notional at 1:30 leverage on $100 margin
                 datasets: [
                     {
                         label: 'GBP/JPY',

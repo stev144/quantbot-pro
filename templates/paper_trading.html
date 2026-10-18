@@ -74,8 +74,8 @@
     <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <span class="badge">ADX ≤ 25 = entry</span>
         <span class="badge">ATR ratio ≤ 1.7 = entry</span>
-        <span class="badge dim">LONG · ${{ entry_usdt|default:"100" }}/cycle entry · 72h exit</span>
-        {% if total_max_exposure %}<span class="badge dim">max exposure ${{ total_max_exposure }} (all 5 pairs full ladder)</span>{% endif %}
+        <span class="badge dim">LONG · ${{ entry_usdt|default:"100" }} margin · 1:{{ leverage|default:"30" }} leverage · ${{ entry_notional|default:"3000" }} notional/entry</span>
+        {% if total_max_margin %}<span class="badge dim">max margin ${{ total_max_margin }} (5 pairs full ladder)</span>{% endif %}
     </span>
 </div>
 
@@ -90,7 +90,7 @@
             <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G1 · Software</span>IS_PAPER_ONLY=True · clean package · deferred imports</div>
             <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G2 · Math</span>verbatim copy of validated QC-1 fill / exit / commission / swap formulas</div>
             <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G3 · Stats</span>causal ADX-14 + ATR-14/50 · no candle sees future price to classify itself</div>
-            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G4 · Quant-real</span>spread from ForexInstrumentSpec · ${{ entry_usdt|default:"100" }} entry / ladder scales linearly · 72h time exit</div>
+            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G4 · Quant-real</span>spread from ForexInstrumentSpec · ${{ entry_usdt|default:"100" }} margin × 1:{{ leverage|default:"30" }} = ${{ entry_notional|default:"3000" }} notional · 72h time exit</div>
             <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G5 · Governance</span>exploratory — ranging gate NOT in QC-1 protocol · no live deployment signal</div>
         </div>
     </div>
@@ -133,8 +133,9 @@
 
         {# capital context row #}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:10px;color:var(--text-dim,#636c76);font-family:monospace">
-            <span>entry ${{ r.entry_usdt|default:"100" }}</span>
-            {% if r.max_capital %}<span>max exposure ${{ r.max_capital }} (all fills)</span>{% endif %}
+            <span>${{ r.entry_usdt|default:"100" }} margin</span>
+            <span>× 1:{{ r.leverage|default:"30" }} = ${{ r.entry_notional|default:"3000" }} notional/entry</span>
+            {% if r.max_margin %}<span>max margin ${{ r.max_margin }} · max notional ${{ r.max_notional }}</span>{% endif %}
         </div>
 
         {# gated vs free stats comparison #}
@@ -219,13 +220,12 @@
         EUR/JPY shows a large improvement with the gate.
         GBP/JPY — the only VALIDATED pair — performs worse with the gate,
         suggesting the QC-1 strategy captures edge in <em>all</em> regimes, not just ranging.
-        P&amp;L shown at ${{ entry_usdt|default:"100" }}/cycle entry; max ladder deployment per pair
-        shown on each card.
+        P&amp;L shown at ${{ entry_usdt|default:"100" }} margin × 1:{{ leverage|default:"30" }} leverage (${{ entry_notional|default:"3000" }} notional/entry).
         The fill-depth charts show how deeply each pair uses the DCA ladder on average.</p>
         <p><strong style="color:var(--text-0,#e6edf3)">Governance (G5):</strong>
         The ranging gate was NOT pre-registered in QC-1's protocol.  Results are
         exploratory — a post-hoc modification on the same data.  GBP/JPY holdout consumed 2026-10-18.
-        Account currency: USD. P&amp;L scales linearly with entry capital; win rate and drawdown % unchanged.</p>
+        Account currency: USD.</p>
     </div>
 </div>
 
