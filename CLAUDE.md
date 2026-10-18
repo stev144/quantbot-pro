@@ -28,6 +28,7 @@ python manage.py test bot                   # 190+ tests in bot/tests/ (a packag
 python bot/core/dry_run_test.py             # run BEFORE ever starting the live bot — smoke-tests every component
 python bot/core/bot_runner.py               # starts the live loop (defaults to DRY_RUN = True — see below)
 python bot/fetch_all_symbols.py             # populates data/*.csv used by the research pipeline
+python manage.py refresh_forex_data --attach   # incremental MT5 refresh for the scanner (appends new 1h candles, clears scanner cache); schedule hourly via Task Scheduler
 python bot/run_research_all.py              # runs feature calc + validation across all symbols in data/
 ```
 
