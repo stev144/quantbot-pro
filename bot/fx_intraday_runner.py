@@ -1,6 +1,6 @@
-"""
+﻿"""
 bot/fx_intraday_runner.py
-Walk-forward feasibility run: H2 — MeanReversionStrategy, 15m, EUR/USD.
+Walk-forward feasibility run: H2 â€” MeanReversionStrategy, 15m, EUR/USD.
 
 Governance references:
   D-7 confirmed 2026-10-18: 5 folds, IS=5973 bars, OOS=2986 bars, embargo=67.
@@ -15,9 +15,9 @@ Usage:
 
 Cost model: spread 0.5 pips round-trip per trade (conservative; snapshot was 0.0 pips).
 P&L: (exit - entry) x units, in USD (EUR/USD quote = USD; direct, no conversion needed).
-USD/CHF note: P&L would be in CHF without conversion — this script is EUR/USD only.
+USD/CHF note: P&L would be in CHF without conversion â€” this script is EUR/USD only.
 """
-# claude code changed: new file — intraday FX walk-forward runner; H2 MR 15m EUR/USD;
+# claude code changed: new file â€” intraday FX walk-forward runner; H2 MR 15m EUR/USD;
 # D-7/D-4/D-9 confirmed 2026-10-18; pre-registered parameters; no parameter fitting.
 
 import argparse
@@ -44,28 +44,28 @@ from bot.research.fx_holdout_guard import V7_HOLDOUT_START  # claude code change
 
 logger = logging.getLogger(__name__)
 
-# ── D-7 locked fold structure ──────────────────────────────────────────────────
+# â”€â”€ D-7 locked fold structure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 N_FOLDS        = 5
 IS_BARS        = 5_973   # 88 trading days x ~67.9 bars/day
 OOS_BARS       = 2_986   # 44 trading days x ~67.9 bars/day
 EMBARGO_BARS   = 67      # 1 trading day
 
-# ── D-9 registered parameters (must not change without new pre-registration) ──
+# â”€â”€ D-9 registered parameters (must not change without new pre-registration) â”€â”€
 SPREAD_PIPS     = 0.5    # round-trip cost; conservative; snapshot was 0.0
 PIP_SIZE        = 0.0001 # EUR/USD pip size
 INITIAL_BALANCE = 1_000.0
 MAX_HOLD_BARS   = 32     # 8h at 15m (approved risk limits)
 RISK_PCT        = 0.01   # 1% per trade
 
-# ── D-4 Bonferroni alpha ───────────────────────────────────────────────────────
+# â”€â”€ D-4 Bonferroni alpha â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 BONFERRONI_ALPHA = 0.010   # 5-test family
 
-# ── Permutation test spec (D-9) ────────────────────────────────────────────────
+# â”€â”€ Permutation test spec (D-9) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 N_PERMUTATIONS = 499
 BLOCK_SIZE     = 48        # 48 x 15m = 12h blocks
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# â”€â”€ Data loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def load_dev_data(pair: str = "EUR/USD", interval: str = "15m") -> pd.DataFrame:
     """Load development-period data. All rows are pre-holdout (fetched with V7 seal)."""  # claude code changed: new
@@ -75,7 +75,7 @@ def load_dev_data(pair: str = "EUR/USD", interval: str = "15m") -> pd.DataFrame:
         raise FileNotFoundError(f"Data file not found: {path}")
     df = pd.read_csv(path)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    # Verify seal — all rows must be before V7_HOLDOUT_START
+    # Verify seal â€” all rows must be before V7_HOLDOUT_START
     if (df["timestamp"] >= V7_HOLDOUT_START).any():
         n_bad = int((df["timestamp"] >= V7_HOLDOUT_START).sum())
         raise ValueError(f"D-8 seal violation: {n_bad} rows at/after holdout boundary in {path.name}")
@@ -86,10 +86,10 @@ def load_dev_data(pair: str = "EUR/USD", interval: str = "15m") -> pd.DataFrame:
     return df
 
 
-# ── Fold splitter ─────────────────────────────────────────────────────────────
+# â”€â”€ Fold splitter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def make_folds(n_bars: int) -> List[Dict]:
-    """Build fold boundaries per D-7. Returns list of dicts with is/oos slices."""  # claude code changed: new — D-7 locked structure
+    """Build fold boundaries per D-7. Returns list of dicts with is/oos slices."""  # claude code changed: new â€” D-7 locked structure
     folds = []
     for k in range(N_FOLDS):
         offset = k * (IS_BARS + EMBARGO_BARS + OOS_BARS)
@@ -98,7 +98,7 @@ def make_folds(n_bars: int) -> List[Dict]:
         oos_start = is_end + EMBARGO_BARS
         oos_end   = oos_start + OOS_BARS
         if oos_end > n_bars:
-            logger.warning(f"Fold {k+1}: OOS end ({oos_end}) exceeds data length ({n_bars}) — truncating")
+            logger.warning(f"Fold {k+1}: OOS end ({oos_end}) exceeds data length ({n_bars}) â€” truncating")
             oos_end = n_bars
         folds.append({
             "fold":      k + 1,
@@ -110,7 +110,7 @@ def make_folds(n_bars: int) -> List[Dict]:
     return folds
 
 
-# ── Trade simulator ──────────────────────────────────────────────────────────
+# â”€â”€ Trade simulator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def simulate_on_window(
     df: pd.DataFrame,
@@ -124,7 +124,7 @@ def simulate_on_window(
     OPEN within the OOS window.
 
     Uses pre-registered D-9 parameters. No parameter fitting.
-    """  # claude code changed: new — simulation with FX pip-based costs, OOS-only trade recording
+    """  # claude code changed: new â€” simulation with FX pip-based costs, OOS-only trade recording
     rd = RegimeDetector()
     mr = MeanReversionStrategy(
         rsi_oversold=35, rsi_overbought=65,
@@ -133,7 +133,7 @@ def simulate_on_window(
     )
     ps = PositionSizer(risk_pct=RISK_PCT)
 
-    # Round-trip spread cost per unit (applied at entry + exit each = 0.5×SPREAD_PIPS)
+    # Round-trip spread cost per unit (applied at entry + exit each = 0.5Ã--SPREAD_PIPS)
     half_spread = (SPREAD_PIPS / 2) * PIP_SIZE  # price units per side
 
     trades = []
@@ -184,7 +184,7 @@ def simulate_on_window(
                 in_position = True
 
         else:
-            # Check exit on bar i (may be in OOS or just past it — close out cleanly)
+            # Check exit on bar i (may be in OOS or just past it â€” close out cleanly)
             candle    = df.iloc[i]
             side      = pos["side"]
             bars_held = i - pos["entry_bar"]
@@ -244,7 +244,7 @@ def simulate_on_window(
     return trades
 
 
-# ── Walk-forward ──────────────────────────────────────────────────────────────
+# â”€â”€ Walk-forward â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_walk_forward(df: pd.DataFrame) -> Tuple[List[Dict], List[Dict]]:
     """Run 5-fold OOS walk-forward per D-7. Returns (all_trades, fold_summaries)."""  # claude code changed: new
@@ -254,17 +254,17 @@ def run_walk_forward(df: pd.DataFrame) -> Tuple[List[Dict], List[Dict]]:
 
     for fold in folds:
         fold_num = fold["fold"]
-        print(f"\n── Fold {fold_num}/5 ──────────────────────────────────────")
-        print(f"   IS:  bars {fold['is_start']:,} – {fold['is_end']:,}")
+        print(f"\n-- Fold {fold_num}/5 --------------------------------------------------")
+        print(f"   IS:  bars {fold['is_start']:,} â€“ {fold['is_end']:,}")
         print(f"   Embargo: {EMBARGO_BARS} bars")
-        print(f"   OOS: bars {fold['oos_start']:,} – {fold['oos_end']:,}")
+        print(f"   OOS: bars {fold['oos_start']:,} â€“ {fold['oos_end']:,}")
 
         # OOS dates
         oos_df = df.iloc[fold["oos_start"]:fold["oos_end"]]
         if len(oos_df) == 0:
-            print(f"   SKIP — empty OOS slice")
+            print(f"   SKIP â€” empty OOS slice")
             continue
-        print(f"   OOS dates: {oos_df.iloc[0]['timestamp']} → {oos_df.iloc[-1]['timestamp']}")
+        print(f"   OOS dates: {oos_df.iloc[0]['timestamp']} â†’ {oos_df.iloc[-1]['timestamp']}")
 
         trades = simulate_on_window(
             df,
@@ -305,7 +305,7 @@ def run_walk_forward(df: pd.DataFrame) -> Tuple[List[Dict], List[Dict]]:
     return all_trades, fold_summaries
 
 
-# ── Permutation test ──────────────────────────────────────────────────────────
+# â”€â”€ Permutation test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_permutation_test(
     df: pd.DataFrame,
@@ -317,7 +317,7 @@ def run_permutation_test(
     M3 block-shuffle permutation test on the full development window.
     Block size = 48 bars (48 x 15m = 12h, per D-9 spec).
     Reuses fx_permutation_test.block_shuffle_returns (no reimplementation).
-    """  # claude code changed: new — M3 block permutation test for H2
+    """  # claude code changed: new â€” M3 block permutation test for H2
     rng = np.random.default_rng(seed=42)  # fixed seed for reproducibility
     shuffled_results: List[Dict] = []
 
@@ -361,12 +361,12 @@ def run_permutation_test(
     return verdict
 
 
-# ── Results printer ───────────────────────────────────────────────────────────
+# â”€â”€ Results printer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def print_results(all_trades, fold_summaries, verdict, pair):  # claude code changed: new
     n_total    = len(all_trades)
     if n_total == 0:
-        print("\n═══════════════════════════════════════════════════════════")
+        print("\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
         print("RESULT: 0 OOS trades generated. Strategy did not fire.")
         return
 
@@ -381,10 +381,10 @@ def print_results(all_trades, fold_summaries, verdict, pair):  # claude code cha
     for t in all_trades:
         exit_reasons[t["exit_reason"]] = exit_reasons.get(t["exit_reason"], 0) + 1
 
-    print("\n═══════════════════════════════════════════════════════════════")
-    print(f"H2: MeanReversionStrategy · 15m · {pair} · 5-fold OOS walk-forward")
-    print(f"Pre-registered parameters (D-9) — no parameter fitting")
-    print("═══════════════════════════════════════════════════════════════")
+    print("\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+    print(f"H2: MeanReversionStrategy Â· 15m Â· {pair} Â· 5-fold OOS walk-forward")
+    print(f"Pre-registered parameters (D-9) â€” no parameter fitting")
+    print("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
     print(f"\nOVERALL OOS RESULTS ({N_FOLDS} folds combined):")
     print(f"  Trades:          {n_total}")
     print(f"  Win rate:        {win_rate:.1%}")
@@ -416,10 +416,10 @@ def print_results(all_trades, fold_summaries, verdict, pair):  # claude code cha
             print(f"  NOTE: This is development-period evidence only. Holdout sealed.")
         else:
             print(f"  H2 not significant at alpha={BONFERRONI_ALPHA}.")
-    print("═══════════════════════════════════════════════════════════════")
+    print("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def main():  # claude code changed: new
     parser = argparse.ArgumentParser(description="H2: MR 15m EUR/USD walk-forward")
@@ -433,7 +433,7 @@ def main():  # claude code changed: new
                         format="%(levelname)s | %(name)s | %(message)s")
 
     print(f"\n{'='*63}")
-    print(f"INTRADAY FX WALK-FORWARD — H2")
+    print(f"INTRADAY FX WALK-FORWARD â€” H2")
     print(f"Strategy  : MeanReversionStrategy (pre-registered defaults)")
     print(f"Pair      : {args.pair}  |  Interval: {args.interval}")
     print(f"Folds     : {N_FOLDS}  |  IS={IS_BARS} bars  OOS={OOS_BARS} bars  embargo={EMBARGO_BARS}")
@@ -442,7 +442,7 @@ def main():  # claude code changed: new
     print(f"{'='*63}")
 
     df = load_dev_data(pair=args.pair, interval=args.interval)
-    print(f"\nLoaded: {len(df):,} bars  ({df['timestamp'].iloc[0]} → {df['timestamp'].iloc[-1]})")
+    print(f"\nLoaded: {len(df):,} bars  ({df['timestamp'].iloc[0]} to {df['timestamp'].iloc[-1]})")
 
     total_needed = N_FOLDS * (IS_BARS + EMBARGO_BARS + OOS_BARS)
     if len(df) < total_needed:
@@ -465,7 +465,7 @@ def main():  # claude code changed: new
         out_dir.mkdir(exist_ok=True)
         out_path = out_dir / f"H2_MR_15m_{args.pair.replace('/', '_')}_oos_trades.csv"
         pd.DataFrame(all_trades).to_csv(out_path, index=False)
-        print(f"\nOOS trades saved → {out_path}")
+        print(f"\nOOS trades saved â†’ {out_path}")
 
 
 if __name__ == "__main__":

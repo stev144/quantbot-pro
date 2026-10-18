@@ -2764,3 +2764,65 @@ to any data. Post-hoc parameter changes are prohibited.
 - Any inspection of the v7 holdout data
 - Live or paper trading
 - Citing H2 results as evidence of edge unless p < 0.010 at the primary statistic
+
+---
+
+## H2: MeanReversionStrategy · 15m · EUR/USD — NEGATIVE
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — H2 not significant. No edge evidence from development data.
+
+### Walk-forward results (D-7 fold structure, pre-registered parameters D-9)
+
+| Metric | Value |
+|---|---|
+| OOS trades (5 folds) | 975 (~4.4/day; signal frequency is healthy) |
+| Win rate | 43.2% |
+| Avg win | +3.24 |
+| Avg loss | -0.24 |
+| Realized R:R | 1.293 |
+| Pre-registered theoretical R:R | 1.500 |
+| Break-even R:R at 43.2% win rate | 1.315 |
+| Mean net P&L per trade | -/usr/bin/bash.10 |
+| Total OOS net P&L | -7.74 |
+| Exit breakdown | SL=550 (56.4%), TP=412 (42.3%), Timeout=13 (1.3%) |
+
+Per-fold: -4.88 / +6.46 / -37.07 / +24.68 / -16.93  
+Inconsistent across folds; no temporal pattern of improvement.
+
+### Root cause (G3 finding)
+
+Win rate (43.2%) is above the theoretical break-even for 1.5:1 R:R (40%). The strategy would be
+profitable IF it achieved the pre-registered R:R. It does not.
+
+The realized R:R is 1.293, not 1.500. Root cause: the strategy computes SL and TP from the signal
+bar''s close price. The actual entry is at the NEXT bar''s open. In mean reversion, price often
+continues its move one bar further before reversing — so the next-bar open is frequently worse
+than the signal close. This widens the SL distance and narrows the TP distance, reducing the
+realized price R:R from 1.500 to a mean of 1.420. After spread costs the P&L R:R is 1.293.
+
+Break-even gap: 1.293 realized vs. 1.315 required = 0.022 shortfall. Structurally
+negative across all pairs for which this implementation applies.
+
+### Permutation test
+
+Not run — with a negative mean P&L, the permutation test would only confirm p >> 0.010. A
+permutation test cannot rescue a negative-expectation result. Skipped per owner decision
+(2026-10-18).
+
+### What this means for the protocol
+
+- H2 is CLOSED NEGATIVE for EUR/USD. Governs this pair at default parameters.
+- The same R:R slippage affects GBP/USD, AUD/USD, and (with conversion caveat) USD/CHF — running
+  those pairs without addressing the root cause would be uninformative repetition.
+- The R:R issue IS fixable: rebasing SL/TP from the actual entry price (next-bar open estimate)
+  rather than the signal close would restore the theoretical R:R. That fix requires a new
+  pre-registration entry (protocol amendment) before any re-run.
+- H5 (1h benchmark) is unaffected by this finding — it uses a different runner (fx_fold_runner.py)
+  designed for the 1h DCA strategy and does not share this implementation.
+
+### What is NOT authorised
+
+- Citing this as a positive result under any reframing
+- Running the same parameters on other pairs without addressing the root cause
+- Any holdout access
