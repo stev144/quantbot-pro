@@ -8,6 +8,21 @@ exist to stop a rejected pair (or its parameters) from being silently reused.
 
 ---
 
+## FULL_LADDER_STOP_RULE — PRE-REGISTERED 2026-10-18
+
+**Date:** 2026-10-18
+**Status:** PRE-REGISTERED — threshold not chosen; no implementation until test window closes 2027-01-17.
+**Scope:** GBP/JPY LONG only (QC-1 validated pair)
+**Full document:** `FULL_LADDER_STOP_RULE_PRE_REGISTRATION_2026-10-18.md`
+
+Full-ladder loss scan found 7 cycles across 5 QC pairs where all 7 fills triggered
+and TIME_EXIT still closed at a loss (worst: AUD/CAD −$9,127; GBP/JPY −$6,371 BOJ event).
+Pre-registered a stop rule: close any 7-fill cycle if unrealised loss exceeds K × entry_notional.
+Threshold candidates K ∈ {1.0, 1.5, 2.0, 2.5}. Selection criterion and 90-day test
+window fully specified in the document above. No historical data may be used to choose K.
+
+---
+
 ## AVAX_USDT / ATOM_USDT — REJECTED
 
 **Date:** 2026-08-02
