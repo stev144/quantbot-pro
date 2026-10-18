@@ -17,7 +17,7 @@ from django.shortcuts import render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_KEY = "paper_trading_results_v1"  # claude code changed: new cache key
+_CACHE_KEY = "paper_trading_results_v2"  # claude code changed: v2 — added fill_dist/drawdown fields
 _CACHE_TTL = 3600
 
 

@@ -238,12 +238,12 @@ function destroySafe(id) {
 }
 
 function renderPTCharts() {
-    var posColor   = themeColor('--term-pos');
-    var negColor   = themeColor('--term-neg');
+    var posColor   = themeColor('--positive');   // claude code changed: was --term-pos (undefined), use real var
+    var negColor   = themeColor('--negative');   // claude code changed: was --term-neg (undefined), use real var
     var accentColor= themeColor('--accent');
     var neutralColor = themeColor('--neutral');
-    var borderColor  = themeColor('--border-0') || 'rgba(255,255,255,0.08)';
-    var textDim      = themeColor('--text-dim')  || '#636c76';
+    var borderColor  = themeColor('--border')  || 'rgba(255,255,255,0.08)';
+    var textDim      = themeColor('--text-dim') || '#636c76';
 
     var baseScaleOpts = {
         x: { grid: { color: borderColor }, ticks: { color: textDim, font: { size: 9 } } },
@@ -273,7 +273,7 @@ function renderPTCharts() {
                     datasets: [{
                         label: 'Cycles',
                         data: counts,
-                        backgroundColor: accentColor.replace(')', ',0.55)').replace('rgb','rgba'),
+                        backgroundColor: chartAreaFill(accentColor),
                         borderColor: accentColor,
                         borderWidth: 1,
                         borderRadius: 2,
