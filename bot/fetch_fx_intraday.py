@@ -63,8 +63,15 @@ logger = logging.getLogger(__name__)
 
 PROTOCOL_PAIRS = ["EUR/USD", "GBP/USD", "USD/CHF", "AUD/USD"]
 TIMEFRAMES = ["5m", "15m"]
-HISTORY_DAYS = 1825   # 5 years — matches existing MT5 1h convention
 OUTPUT_DIR = Path("data/forex")
+
+# claude code changed: v8 intraday — broker history limits confirmed empirically 2026-10-18:
+# 5m: max ~180 days before copy_rates_range returns Invalid params
+# 15m: max ~730 days (2 years, ~49k bars per pair) — sufficient for walk-forward folds
+HISTORY_DAYS_BY_INTERVAL = {
+    "5m":  180,   # broker limit: ~180d; sufficient for feasibility, not full walk-forward
+    "15m": 730,   # broker limit: ~730d; ~2 years, usable for multi-fold walk-forward
+}
 
 
 def _intraday_filename(symbol: str, interval: str) -> str:
@@ -79,13 +86,13 @@ def fetch_intraday(attach_only: bool = False, dry_run: bool = False) -> dict:  #
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(tz=timezone.utc)
-    date_from = now - timedelta(days=HISTORY_DAYS)
 
     print("\n" + "=" * 72)
     print("INTRADAY FX DATA FETCH — v8 protocol (5m and 15m)")
     print(f"Pairs     : {', '.join(PROTOCOL_PAIRS)}")
     print(f"Timeframes: {', '.join(TIMEFRAMES)}")
-    print(f"History   : {date_from.date()} → {now.date()} ({HISTORY_DAYS} days)")
+    for tf, days in HISTORY_DAYS_BY_INTERVAL.items():
+        print(f"History   : {tf} → {days} days (broker limit)")
     print(f"Mode      : {'DRY RUN — no files written' if dry_run else 'LIVE — writing to data/forex/'}")
     print("=" * 72)
 
@@ -93,7 +100,8 @@ def fetch_intraday(attach_only: bool = False, dry_run: bool = False) -> dict:  #
         for symbol in PROTOCOL_PAIRS:
             for interval in TIMEFRAMES:
                 fname = _intraday_filename(symbol, interval)
-                est_bars = int(HISTORY_DAYS * 24 * (60 // int(interval.rstrip("m"))))
+                days = HISTORY_DAYS_BY_INTERVAL[interval]
+                est_bars = int(days * 24 * (60 // int(interval.rstrip("m"))))
                 print(f"  [DRY RUN] {symbol} {interval} → data/forex/{fname}  (~{est_bars:,} bars)")
         return {}
 
@@ -116,6 +124,8 @@ def fetch_intraday(attach_only: bool = False, dry_run: bool = False) -> dict:  #
                 print(f"\n[{symbol} {interval}]")
                 try:
                     timeframe = _mt5_timeframe(mt5, interval)
+                    days = HISTORY_DAYS_BY_INTERVAL[interval]  # claude code changed: per-interval broker limit
+                    date_from = now - timedelta(days=days)
                     rates = mt5.copy_rates_range(mt5_symbol, timeframe, date_from, now)
 
                     if rates is None or len(rates) == 0:

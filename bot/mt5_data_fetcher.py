@@ -308,12 +308,19 @@ def connect() -> "object":
     if not mt5.initialize(**init_kwargs):
         raise MT5ConnectionError(f"mt5.initialize() failed: {mt5.last_error()}")
 
-    authorized = mt5.login(
-        login=int(creds["login"]), password=creds["password"], server=creds["server"],
-    )
-    if not authorized:
-        mt5.shutdown()
-        raise MT5ConnectionError(f"mt5.login() failed for server={creds['server']!r}: {mt5.last_error()}")
+    # claude code changed: v8 intraday — if the terminal is already logged in (e.g. user opened
+    # it manually), mt5.login() returns False with (1, 'Success'). Check account_info() first;
+    # skip login if already authenticated so we don't disconnect a live session.
+    already_connected = mt5.account_info() is not None
+    if already_connected:
+        logger.info(f"[mt5_data_fetcher] Terminal already authenticated — skipping mt5.login()")
+    else:
+        authorized = mt5.login(
+            login=int(creds["login"]), password=creds["password"], server=creds["server"],
+        )
+        if not authorized:
+            mt5.shutdown()
+            raise MT5ConnectionError(f"mt5.login() failed for server={creds['server']!r}: {mt5.last_error()}")
 
     logger.info(f"[mt5_data_fetcher] Connected — server={creds['server']}, login={creds['login']}")
     return mt5
