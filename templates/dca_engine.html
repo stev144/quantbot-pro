@@ -3,6 +3,7 @@
 {# claude code changed: new — QC-1 Forex DCA Engine dashboard page #}
 
 {% block head %}
+<script src="{% static 'js/counters.js' %}"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" defer></script>
@@ -139,14 +140,14 @@
     <div class="term-section dca-card-gbp" style="padding:14px 16px">
         <div class="metric-label" style="margin-bottom:6px">
             <span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY LONG
-            <span class="term-section-meta" style="float:right">{{ s.total_trades }} trades</span>
+            <span class="term-section-meta" style="float:right"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades</span>
         </div>
-        <div class="dca-big-pnl pos">+${{ s.total_pnl }}</div>
+        <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>
         <div class="dca-mini-grid">
             <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">${{ s.max_dd }}</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">${{ s.avg_cost }}</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">${{ s.max_cost }}</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">$<span class="stat-number" data-target="{{ s.max_dd }}" data-decimals="2">0.00</span></span></div>
+            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.avg_cost }}" data-decimals="2">0.00</span></span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.max_cost }}" data-decimals="0">0</span></span></div>
         </div>
     </div>
     {% endwith %}
@@ -156,14 +157,14 @@
     <div class="term-section dca-card-aud" style="padding:14px 16px">
         <div class="metric-label" style="margin-bottom:6px">
             <span class="dca-dot" style="background:var(--term-warn, #e8a838)"></span>AUD/CAD LONG
-            <span class="term-section-meta" style="float:right">{{ s.total_trades }} trades</span>
+            <span class="term-section-meta" style="float:right"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades</span>
         </div>
-        <div class="dca-big-pnl pos">+${{ s.total_pnl }}</div>
+        <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>
         <div class="dca-mini-grid">
             <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">${{ s.max_dd }}</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">${{ s.avg_cost }}</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">${{ s.max_cost }}</span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">$<span class="stat-number" data-target="{{ s.max_dd }}" data-decimals="2">0.00</span></span></div>
+            <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.avg_cost }}" data-decimals="2">0.00</span></span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max deployed</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.max_cost }}" data-decimals="0">0</span></span></div>
         </div>
     </div>
     {% endwith %}
@@ -173,9 +174,9 @@
     <div class="term-section dca-card-port" style="padding:14px 16px">
         <div class="metric-label" style="margin-bottom:6px">
             <span class="dca-dot" style="background:var(--term-pos, #3fb87f)"></span>Portfolio
-            <span class="term-section-meta" style="float:right">{{ port.total_trades }} trades</span>
+            <span class="term-section-meta" style="float:right"><span class="stat-number" data-target="{{ port.total_trades }}" data-decimals="0">0</span> trades</span>
         </div>
-        <div class="dca-big-pnl pos">+${{ port.total_pnl }}</div>
+        <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ port.total_pnl }}" data-decimals="2">0.00</span></div>
         <div class="dca-mini-grid">
             <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ port.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
             <div class="dca-mini-item"><span class="metric-label">Initial / cycle</span><span class="metric-value small">$6.00</span></div>
@@ -242,9 +243,9 @@
                     <tr>
                         <td>F{{ fs.fold }}</td>
                         <td class="mono" style="font-size:11px">{{ fs.start }}→{{ fs.end }}</td>
-                        <td class="num">{{ fs.trades }}</td>
-                        <td class="num">{{ fs.win_pct }}%</td>
-                        <td class="num {% if fs.pnl >= 0 %}pos{% else %}neg{% endif %}">${{ fs.pnl }}</td>
+                        <td class="num"><span class="stat-number" data-target="{{ fs.trades }}" data-decimals="0">0</span></td>
+                        <td class="num"><span class="stat-number" data-target="{{ fs.win_pct }}" data-decimals="1" data-suffix="%">0%</span></td>
+                        <td class="num {% if fs.pnl >= 0 %}pos{% else %}neg{% endif %}">$<span class="stat-number" data-target="{{ fs.pnl }}" data-decimals="2">0.00</span></td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -266,19 +267,19 @@
         <div class="dca-perm-row">
             <div class="dca-perm-stat">
                 <span class="metric-label">p-value</span>
-                <span class="dca-perm-val warn">{{ perm.p_value }}</span>
+                <span class="dca-perm-val warn"><span class="stat-number" data-target="{{ perm.p_value }}" data-decimals="3">0.000</span></span>
             </div>
             <div class="dca-perm-stat">
                 <span class="metric-label">Beats shuffles</span>
-                <span class="dca-perm-val">{{ perm.beats_pct }}%</span>
+                <span class="dca-perm-val"><span class="stat-number" data-target="{{ perm.beats_pct }}" data-decimals="1" data-suffix="%">0.0%</span></span>
             </div>
             <div class="dca-perm-stat">
                 <span class="metric-label">N permutations</span>
-                <span class="dca-perm-val">{{ perm.n_perm }}</span>
+                <span class="dca-perm-val"><span class="stat-number" data-target="{{ perm.n_perm }}" data-decimals="0">0</span></span>
             </div>
             <div class="dca-perm-stat">
                 <span class="metric-label">Block size</span>
-                <span class="dca-perm-val">{{ perm.block_h }}h</span>
+                <span class="dca-perm-val"><span class="stat-number" data-target="{{ perm.block_h }}" data-decimals="0">0</span>h</span>
             </div>
             <div style="flex:1;min-width:200px">
                 <div style="font-size:12px;margin-bottom:3px">
