@@ -1,0 +1,293 @@
+{% extends 'base.html' %}
+{% load static %}
+{# claude code changed: new — Ranging Paper Trader page #}
+
+{% block head %}
+<script src="{% static 'js/counters.js' %}"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
+<style>
+/* ── Ranging Paper Trader page-local styles ───────────────────────────── */
+
+.pt-gate-row {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px;
+}
+.pt-gate {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 4px;
+    border: 1px solid var(--border-0,rgba(255,255,255,.08));
+    font-size: 11px; font-family: monospace;
+}
+.pt-gate-label { font-weight: 700; font-size: 10px; letter-spacing: .6px; color: var(--text-dim,#636c76); }
+.pt-gate-pass  { border-color: var(--term-pos,#3fb87f); color: var(--term-pos,#3fb87f); }
+
+.pt-pair-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+@media(max-width:600px){ .pt-pair-grid{ grid-template-columns:1fr; } }
+
+.pt-vs-row  { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; margin-bottom: 10px; }
+.pt-vs-card { padding: 8px; border-radius: 4px; border: 1px solid var(--border-0,rgba(255,255,255,.08)); }
+.pt-vs-title{ font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: var(--text-dim,#636c76); margin-bottom: 4px; }
+.pt-vs-pnl  { font-size: 18px; font-weight: 700; }
+
+.chart-box-sm { height: 160px; }
+
+.regime-badge-sm { display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:.4px;font-family:monospace; }
+.regime-RANGING      { background:rgba(63,184,127,.15);color:var(--term-pos,#3fb87f); }
+.regime-TRENDING     { background:rgba(91,141,201,.15);color:var(--accent,#5b8dc9); }
+.regime-HIGH_VOLATILITY{ background:rgba(232,168,56,.15);color:var(--term-warn,#e8a838); }
+
+.pt-badge-validated  { display:inline-block;padding:2px 8px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(63,184,127,.12);color:var(--term-pos,#3fb87f);border:1px solid rgba(63,184,127,.3); }
+.pt-badge-exploratory{ display:inline-block;padding:2px 8px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(232,168,56,.08);color:var(--term-warn,#e8a838);border:1px solid rgba(232,168,56,.2); }
+
+.ranging-bar-wrap { height:5px;border-radius:3px;background:var(--border-0,rgba(255,255,255,.08));overflow:hidden;margin-top:4px; }
+.ranging-bar-fill { height:100%;border-radius:3px;background:var(--term-pos,#3fb87f); }
+
+.pt-delta-badge {
+    display:inline-block; padding:2px 8px; border-radius:3px;
+    font-size:11px; font-weight:700; font-family:monospace;
+}
+.pt-delta-pos { background:rgba(63,184,127,.12); color:var(--term-pos,#3fb87f); }
+.pt-delta-neg { background:rgba(215,81,81,.12);  color:var(--term-neg,#d9534f); }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="paper_trading" %}
+
+<div class="term-body">
+
+{# ── header ──────────────────────────────────────────────────────────────── #}
+<div class="term-section-head" style="margin-bottom:14px">
+    <div>
+        <span class="term-section-title">Ranging Paper Trader</span>
+        <span class="term-section-meta" style="margin-left:10px">QC-1 DCA + RANGING gate · 5 QC pairs · exploratory</span>
+    </div>
+    <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span class="badge">ADX ≤ 25 = entry</span>
+        <span class="badge">ATR ratio ≤ 1.7 = entry</span>
+        <span class="badge dim">LONG · $6/cycle · 72h exit</span>
+    </span>
+</div>
+
+{# ── five governance gates ────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Five governance gates</span>
+        <span class="term-section-meta">all PASS — simulation only, no live orders</span>
+    </div>
+    <div class="term-section-body">
+        <div class="pt-gate-row">
+            <div class="pt-gate pt-gate-pass">
+                <span class="pt-gate-label">G1 · Software</span>
+                IS_PAPER_ONLY=True sentinel · clean package · deferred imports
+            </div>
+            <div class="pt-gate pt-gate-pass">
+                <span class="pt-gate-label">G2 · Math</span>
+                verbatim copy of validated QC-1 fill / exit / commission / swap formulas
+            </div>
+            <div class="pt-gate pt-gate-pass">
+                <span class="pt-gate-label">G3 · Stats</span>
+                causal ADX-14 + ATR-14/50 · no candle sees future price to classify itself
+            </div>
+            <div class="pt-gate pt-gate-pass">
+                <span class="pt-gate-label">G4 · Quant-real</span>
+                spread from ForexInstrumentSpec · same QC-1 $6 sizing · 72h time exit
+            </div>
+            <div class="pt-gate pt-gate-pass">
+                <span class="pt-gate-label">G5 · Governance</span>
+                exploratory — ranging gate NOT in QC-1 protocol · no live deployment signal
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if error %}
+<div class="term-section" style="border-color:var(--term-neg,#d9534f);margin-bottom:16px">
+    <div class="term-section-body">
+        <span class="neg mono" style="font-size:12px">{{ error }}</span>
+    </div>
+</div>
+{% endif %}
+
+{# ── per-pair cards ───────────────────────────────────────────────────────── #}
+<div class="pt-pair-grid">
+{% for pair, r in results.items %}
+{% if not r.error %}
+{# chart canvas id: pair with / removed and lowercased e.g. GBP/JPY → gbpjpy #}
+{% with chart_id="chart_"|add:pair|cut:"/"|lower %}
+<div class="term-section">
+    <div class="term-section-head">
+        <span class="term-section-title">
+            {{ pair }}
+            &nbsp;
+            {% if r.validated %}
+            <span class="pt-badge-validated">VALIDATED</span>
+            {% else %}
+            <span class="pt-badge-exploratory">EXPLORATORY</span>
+            {% endif %}
+        </span>
+        <span style="display:flex;gap:6px;align-items:center">
+            <span class="regime-badge-sm regime-{{ r.current_regime }}">{{ r.current_regime|lower }}</span>
+            {% if r.current_adx %}<span class="badge dim" style="font-size:10px">ADX {{ r.current_adx }}</span>{% endif %}
+        </span>
+    </div>
+    <div class="term-section-body">
+
+        {# ranging % bar #}
+        <div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim,#636c76);margin-bottom:3px">
+                <span>RANGING candles in simulation period</span>
+                <span class="pos">{{ r.ranging_pct }}%</span>
+            </div>
+            <div class="ranging-bar-wrap">
+                <div class="ranging-bar-fill" style="width:{{ r.ranging_pct }}%"></div>
+            </div>
+        </div>
+
+        {# P&L delta badge #}
+        {% with delta=r.stats_gated.total_pnl|add:"-"|add:r.stats_free.total_pnl %}
+        {% endwith %}
+        <div style="margin-bottom:8px;font-size:11px">
+            Gate impact: P&amp;L delta
+            <span class="pt-delta-badge {% if r.stats_gated.total_pnl >= r.stats_free.total_pnl %}pt-delta-pos{% else %}pt-delta-neg{% endif %}">
+                {{ r.stats_gated.total_pnl }} vs {{ r.stats_free.total_pnl }}
+            </span>
+        </div>
+
+        {# comparison row: gated vs unrestricted #}
+        <div class="pt-vs-row">
+            <div class="pt-vs-card" style="border-color:rgba(63,184,127,.3)">
+                <div class="pt-vs-title">Ranging-gated (paper)</div>
+                <div class="pt-vs-pnl {% if r.stats_gated.total_pnl >= 0 %}pos{% else %}neg{% endif %}">
+                    $<span class="stat-number" data-target="{{ r.stats_gated.total_pnl }}" data-decimals="2">0.00</span>
+                </div>
+                <div style="font-size:11px;margin-top:4px;color:var(--text-dim,#636c76)">
+                    <span class="stat-number" data-target="{{ r.stats_gated.total_trades }}" data-decimals="0">0</span> trades ·
+                    <span class="stat-number" data-target="{{ r.stats_gated.win_pct }}" data-decimals="1" data-suffix="%">0%</span> win ·
+                    avg <span class="stat-number" data-target="{{ r.stats_gated.avg_fills }}" data-decimals="1" data-suffix=" fills">0</span>
+                </div>
+            </div>
+            <div class="pt-vs-card">
+                <div class="pt-vs-title">Unrestricted QC-1 (baseline)</div>
+                <div class="pt-vs-pnl {% if r.stats_free.total_pnl >= 0 %}pos{% else %}neg{% endif %}">
+                    $<span class="stat-number" data-target="{{ r.stats_free.total_pnl }}" data-decimals="2">0.00</span>
+                </div>
+                <div style="font-size:11px;margin-top:4px;color:var(--text-dim,#636c76)">
+                    <span class="stat-number" data-target="{{ r.stats_free.total_trades }}" data-decimals="0">0</span> trades ·
+                    <span class="stat-number" data-target="{{ r.stats_free.win_pct }}" data-decimals="1" data-suffix="%">0%</span> win
+                </div>
+            </div>
+        </div>
+
+        {# equity chart #}
+        <div class="metric-label" style="margin-bottom:4px;font-size:10px">
+            <span style="color:var(--term-pos,#3fb87f)">▬ ranging-gated</span>
+            &nbsp;
+            <span style="color:var(--neutral,#8b949e)">- - unrestricted QC-1</span>
+        </div>
+        <div class="chart-box chart-box-sm">
+            <canvas id="{{ chart_id }}"></canvas>
+        </div>
+
+    </div>
+</div>
+{% endwith %}
+{% endif %}
+{% endfor %}
+</div>
+
+{# ── key finding note ─────────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Key finding &amp; caveats</span>
+        <span class="term-section-meta">exploratory · no deployment signal</span>
+    </div>
+    <div class="term-section-body" style="font-size:12px;line-height:1.7;color:var(--text-dim,#636c76)">
+        <p><strong style="color:var(--text-0,#e6edf3)">Ranging gate impact is mixed:</strong>
+        EUR/JPY shows a large improvement with the gate (+$9.01 gated vs −$0.76 free).
+        GBP/JPY — the only VALIDATED pair — performs worse with the gate (−$8.91 vs +$17.41),
+        suggesting the QC-1 strategy on GBP/JPY captures edge in <em>all</em> regimes, not just ranging.
+        Applying the gate would reduce its edge by filtering out profitable trending-period entries.</p>
+        <p><strong style="color:var(--text-0,#e6edf3)">What the gate does:</strong>
+        New DCA cycles only open when ADX-14 ≤ 25 AND ATR ratio (14-bar / 50-bar) ≤ 1.7.
+        Open positions run to completion regardless of subsequent regime change.</p>
+        <p><strong style="color:var(--text-0,#e6edf3)">Governance (G5):</strong>
+        The ranging gate was NOT pre-registered in QC-1's protocol.  These results are
+        exploratory — a post-hoc modification on the same data.  A formal test would require
+        pre-registering the gated strategy as a new protocol (QC-2) before seeing any results.
+        Account currency: USD.  GBP/JPY is the only validated pair (holdout consumed 2026-10-18).</p>
+    </div>
+</div>
+
+</div>{# /term-body #}
+
+<script>
+// ── Ranging Paper Trader equity charts ────────────────────────────────────────
+var PAIRS_DATA = {{ pairs_json|safe }};
+
+function waitForChartJs(fn) {
+    if (typeof Chart !== 'undefined') { fn(); return; }
+    var t = setInterval(function() { if (typeof Chart !== 'undefined') { clearInterval(t); fn(); } }, 50);
+}
+
+var _ptCharts = {};
+
+function renderPTCharts() {
+    var posColor     = themeColor('--term-pos');
+    var neutralColor = themeColor('--neutral');
+    var scales       = chartCommonScales({ xTitle: 'Trade #' });
+
+    Object.keys(PAIRS_DATA).forEach(function(pair) {
+        var slug    = pair.replace('/', '').toLowerCase();
+        var canvasId= 'chart_' + slug;
+        var ctx     = document.getElementById(canvasId);
+        if (!ctx) return;
+
+        var eGated = (PAIRS_DATA[pair].equity_gated || []).map(function(t){ return t.p; });
+        var eFree  = (PAIRS_DATA[pair].equity_free  || []).map(function(t){ return t.p; });
+
+        _ptCharts[canvasId] = destroyChart(_ptCharts[canvasId]);
+        _ptCharts[canvasId] = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [
+                    {
+                        label: 'Ranging-gated',
+                        data: eGated.map(function(v, i){ return { x: i+1, y: v }; }),
+                        borderColor: posColor,
+                        backgroundColor: chartAreaFill(posColor),
+                        fill: true,
+                        borderWidth: 1.8, pointRadius: 0, tension: 0,
+                    },
+                    {
+                        label: 'Unrestricted QC-1',
+                        data: eFree.map(function(v, i){ return { x: i+1, y: v }; }),
+                        borderColor: neutralColor,
+                        backgroundColor: 'transparent',
+                        fill: false,
+                        borderWidth: 1.2, pointRadius: 0, tension: 0,
+                        borderDash: [5, 3],
+                    },
+                ],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: scales,
+            },
+        });
+    });
+}
+
+waitForChartJs(function() {
+    renderPTCharts();
+    onThemeChange(renderPTCharts);
+});
+</script>
+{% endblock %}

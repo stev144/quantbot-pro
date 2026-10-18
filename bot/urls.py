@@ -20,6 +20,7 @@ from bot.views.portfolio_risk import portfolio_risk
 from bot.views.execution_monitor import execution_monitor
 from bot.views.pairs_pilot import pairs_pilot   # claude code changed: new — Pairs Pilot live monitor page
 from bot.views.dca_engine import dca_engine     # claude code changed: new — QC-1 Forex DCA Engine dashboard
+from bot.views.paper_trading import paper_trading  # claude code changed: new — Ranging Paper Trader
 from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
 from bot.views.forex_scanner import forex_scanner         # claude code changed: new — Forex Market Scanner
 from bot.views.system_health import system_health
@@ -87,6 +88,7 @@ urlpatterns = [
     path('execution/', execution_monitor, name='execution_monitor'),
     path('execution/pairs-pilot/', pairs_pilot, name='pairs_pilot'),   # claude code changed: new — Pairs Pilot live monitor page
     path('execution/dca-engine/', dca_engine, name='dca_engine'),     # claude code changed: new — QC-1 Forex DCA Engine dashboard
+    path('execution/paper-trading/', paper_trading, name='paper_trading'),  # claude code changed: new — Ranging Paper Trader
     path('execution/venues/', venue_comparison, name='venue_comparison'),   # claude code changed: new — Venue Comparison page
 
     # ---- SYSTEM ----
