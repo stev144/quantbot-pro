@@ -2683,3 +2683,84 @@ Any modification requires a new governance log entry with explicit owner approva
 - Holdout access (v7 holdout sealed until 2027-10-16 AND ≥10 trades/direction)
 - Live or paper trading
 - Any profitability claim from development-period results alone
+
+---
+
+## INTRADAY FX PROTOCOL — DECISIONS D-7, D-4, D-9 CONFIRMED
+
+**Date:** 2026-10-18
+
+### D-7: Walk-forward fold structure — LOCKED
+
+Applies to: 15m EUR/USD (primary arm, H2). Confirmed parameters:
+
+| Parameter | Value | Derivation |
+|---|---|---|
+| Folds | 5 | Fits within 49,415 bars (728 calendar days) |
+| IS window | 5,973 bars (88 trading days) | ~4 months per fold |
+| OOS window | 2,986 bars (44 trading days) | ~2 months per fold; IS:OOS = 2:1 |
+| Embargo | 67 bars (1 trading day) | Standard gap between IS end and OOS start |
+| Total per fold | 9,026 bars | 5 x 9,026 = 45,130 < 49,415 — fits |
+
+5m arm is exploratory only (180 days available — insufficient for 5-fold walk-forward at this IS:OOS ratio).
+
+### D-4: Bonferroni family size — LOCKED
+
+5-test Bonferroni family (H1–H5). Rationale for 5-test over 4-test: H5 (1h benchmark)
+will be run and its result observed; including it in the family prevents ex-post cherry-picking
+of whether to count it. Per delegated-strictness rule, the strictest option is chosen.
+
+| Hypothesis | Description | alpha_per_test |
+|---|---|---|
+| H1 | MR, 5m, EUR/USD | 0.010 |
+| H2 | MR, 15m, EUR/USD | 0.010 |
+| H3 | Momentum/Pullback, 5m | 0.010 |
+| H4 | Momentum/Pullback, 15m | 0.010 |
+| H5 | MR, 1h benchmark | 0.010 |
+
+Family-wise alpha = 0.050. Per-test alpha = 0.010 (Bonferroni). A result is only
+evidence of edge if p < 0.010.
+
+H3 and H4 remain blocked (no pullback implementation). H1 is exploratory only (180d 5m data).
+
+### D-9: Candidate registry — REGISTERED
+
+Pre-registration for H2 (primary 15m run). Parameters are the current defaults from
+MeanReversionStrategy.__init__() — not tuned, not selected from any data.
+
+**Strategy:** MeanReversionStrategy  
+**Hypothesis:** H2 (MR, 15m, EUR/USD)  
+**Registration date:** 2026-10-18 (before any 15m data is processed by the strategy)
+
+| Parameter | Pre-registered value | Source |
+|---|---|---|
+| rsi_oversold | 35 | MeanReversionStrategy default |
+| rsi_overbought | 65 | MeanReversionStrategy default |
+| atr_multiplier | 1.0 | MeanReversionStrategy default |
+| bb_width_max | 6.0% | MeanReversionStrategy default |
+| min_candles | 50 | MeanReversionStrategy default |
+| rr_ratio | 1.5 | MeanReversionStrategy default |
+| Regime gate | RANGING only | StrategyRouter routing rule |
+| Max holding | 32 bars (8h at 15m) | Approved risk limits |
+| Spread assumption | 0.5 pips round-trip | Conservative; snapshot was 0.0 |
+| Position sizing | PositionSizer(risk_pct=0.01) | risk.py DEFAULT_RISK_PCT |
+| Initial balance | ,000 | Protocol account size |
+
+**Selection rule:** These parameters are fixed. Any change requires a new pre-registration
+entry in this log with a written justification BEFORE the changed parameters are applied
+to any data. Post-hoc parameter changes are prohibited.
+
+**Permutation test spec (H2):**
+- Method: M3 block-shuffle of log-returns (reusing fx_permutation_test.block_shuffle_returns)
+- Block size: 48 bars (48 x 15m = 12 hours)
+- N permutations: 499
+- Test statistic: mean net P&L per OOS trade (USD, cost-adjusted)
+- Secondary statistic: total OOS P&L
+- Significance threshold: p < 0.010 (D-4 5-test Bonferroni)
+
+### What is NOT authorised
+
+- Parameter changes to MeanReversionStrategy without a new pre-registration entry
+- Any inspection of the v7 holdout data
+- Live or paper trading
+- Citing H2 results as evidence of edge unless p < 0.010 at the primary statistic
