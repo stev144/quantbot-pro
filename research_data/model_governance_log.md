@@ -2826,3 +2826,126 @@ permutation test cannot rescue a negative-expectation result. Skipped per owner 
 - Citing this as a positive result under any reframing
 - Running the same parameters on other pairs without addressing the root cause
 - Any holdout access
+
+---
+
+## INTRADAY FX PROTOCOL — D-9 AMENDMENT: H2 SIMULATION FIX (REBASE SL/TP FROM ENTRY PRICE)
+
+**Date:** 2026-10-18  
+**Amendment type:** Simulation-layer correction — does not change MeanReversionStrategy defaults  
+**Pre-registration scope:** H2 re-run (MR, 15m, EUR/USD) with corrected entry-price rebasing
+
+### Justification
+
+H2 NEGATIVE root cause (documented above): `MeanReversionStrategy` computes SL and TP from
+the signal bar's close. The simulation enters at the NEXT bar's open. The gap between
+signal-close and entry-open is frequently adverse in mean reversion (price continues one bar
+before reversing), which widens SL distance and narrows TP distance. Realized R:R = 1.293 vs.
+pre-registered 1.500. The pre-registered R:R of 1.5 was never achievable with the original
+simulation because the simulation measured R:R from the wrong anchor.
+
+This is a simulation-layer arithmetic error, not a strategy failure. The fix is:
+compute SL distance from `signal["sl"]` vs. `signal["entry"]` (the strategy's own ATR ×
+multiplier), then rebase that distance from the actual `entry_price` (next-bar open ± spread).
+
+### What changes in the runner (bot/fx_intraday_runner.py)
+
+**Before:**
+```python
+sl = float(signal["sl"])   # strategy-computed level relative to signal close
+tp = float(signal["tp"])   # strategy-computed level relative to signal close
+```
+
+**After:**
+```python
+sl_distance = abs(float(signal["entry"]) - float(signal["sl"]))  # ATR x multiplier
+# BUY: entry_price - sl_distance / TP: entry_price + sl_distance * rr_ratio
+# SELL: entry_price + sl_distance / TP: entry_price - sl_distance * rr_ratio
+```
+
+`RR_RATIO = 1.5` is added as a named constant (already in D-9 as `rr_ratio`).
+`signal["entry"]` is confirmed in the fixed-key contract (CLAUDE.md) and is the
+signal-bar close — the strategy's own anchor for its SL/TP computation.
+
+### What does NOT change
+
+- All D-9 registered strategy parameters are unchanged (rsi_oversold, rsi_overbought,
+  atr_multiplier, bb_width_max, min_candles, rr_ratio, spread, risk_pct, max_hold)
+- MeanReversionStrategy itself is not modified (the strategy is correct; the simulation's
+  anchoring was wrong)
+- D-7 fold structure (5 folds, IS/OOS/embargo) is unchanged
+- D-4 Bonferroni alpha (0.010) is unchanged
+- This amendment applies only to the simulation runner, not to live execution
+
+### What is authorised
+
+- One re-run of H2 (MR, 15m, EUR/USD) with this rebasing fix applied
+- The result replaces the H2 NEGATIVE entry above as the current H2 verdict
+- If the re-run is also NEGATIVE, no further H2 parameter or logic changes are permitted
+  without a new owner decision and a fully documented amendment entry
+
+### What is NOT authorised
+
+- Any change to strategy parameters to improve the result
+- Retroactively running other pairs before H2-amended result is logged
+- Any holdout access
+
+---
+
+## H2 AMENDED: MeanReversionStrategy · 15m · EUR/USD — NEGATIVE (re-run after D-9 amendment)
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — H2 not significant after SL/TP rebasing fix. H2 is CLOSED NEGATIVE.
+
+### Context
+
+Re-run with the D-9 amendment (above): SL/TP rebased from actual entry price instead of
+signal-bar close. All D-9 strategy parameters unchanged. Fold structure unchanged (D-7).
+
+### Walk-forward results
+
+| Metric | Original H2 | H2 Amended (this run) |
+|---|---|---|
+| OOS trades (5 folds) | 975 | 994 |
+| Win rate | 43.2% | 41.1% |
+| Mean net P&L per trade | -$0.10 | -$0.25 |
+| Total OOS net P&L | -$97.74 | -$251.37 |
+| SL exits | 550 (56.4%) | 582 (58.6%) |
+| TP exits | 412 (42.3%) | 399 (40.1%) |
+| Timeout exits | 13 (1.3%) | 13 (1.3%) |
+
+Per-fold: -$81.20 / +$24.91 / -$165.98 / +$100.84 / -$129.95
+
+### Why the amended run is worse, not better
+
+The SL was rebased up by `half_spread` (0.000025 per unit) relative to the original.
+This made the SL marginally easier to hit: SL-exit fraction rose from 56.4% → 58.6%.
+Win rate fell from 43.2% → 41.1% — barely above the 40% theoretical break-even for 1.5:1 R:R,
+but below it once spread costs erode the realized R:R below 1.5.
+
+The rebasing correctly maintains the 1.5:1 R:R ratio at the price level, but the strategy
+fundamentally cannot generate wins at a rate high enough to be profitable after spread.
+This is a win-rate problem, not a simulation-anchoring problem.
+
+### Final interpretation
+
+Both simulation approaches (signal-anchored and entry-anchored) produce negative expectancy.
+The failure mode is structural: at 41–43% win rate and 1.5:1 R:R, this strategy is marginally
+sub-break-even before spread and clearly sub-break-even after spread.
+
+### Governance actions
+
+- **H2 is CLOSED NEGATIVE.** No further re-runs or parameter adjustments are authorised
+  without a new owner decision and fully documented amendment entry.
+- The same win-rate problem governs GBP/USD, AUD/USD, USD/CHF — running those pairs in
+  either simulation mode would be uninformative.
+- Permutation test: not run. Negative mean P&L — permutation test would only confirm
+  p >> 0.010.
+
+### What is NOT authorised
+
+- Any further H2 parameter changes or re-runs without a new owner decision
+- Running H2 on other pairs with current parameters
+- Any holdout access
+- Citing H2 results as evidence of edge
+

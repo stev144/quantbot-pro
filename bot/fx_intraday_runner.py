@@ -56,6 +56,7 @@ PIP_SIZE        = 0.0001 # EUR/USD pip size
 INITIAL_BALANCE = 1_000.0
 MAX_HOLD_BARS   = 32     # 8h at 15m (approved risk limits)
 RISK_PCT        = 0.01   # 1% per trade
+RR_RATIO        = 1.5    # registered rr_ratio; used to rebase TP from entry price (D-9 amendment 2026-10-18)
 
 # â”€â”€ D-4 Bonferroni alpha â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 BONFERRONI_ALPHA = 0.010   # 5-test family
@@ -158,15 +159,18 @@ def simulate_on_window(
                 entry_open = float(df.iloc[entry_bar]["open"])
                 side       = signal["signal"]
 
-                # Adjust entry/SL/TP for spread at entry
+                # D-9 amendment 2026-10-18: rebase SL/TP from actual entry price.
+                # strategy computes sl/tp from signal["entry"] (signal-bar close);
+                # actual entry is next-bar open. Preserve ATR distance, shift anchor.
+                sl_distance = abs(float(signal["entry"]) - float(signal["sl"]))
                 if side == "BUY":
-                    entry_price = entry_open + half_spread  # we pay spread on buy
-                    sl = float(signal["sl"])
-                    tp = float(signal["tp"])
+                    entry_price = entry_open + half_spread
+                    sl = entry_price - sl_distance
+                    tp = entry_price + sl_distance * RR_RATIO
                 else:
-                    entry_price = entry_open - half_spread  # we pay spread on sell
-                    sl = float(signal["sl"])
-                    tp = float(signal["tp"])
+                    entry_price = entry_open - half_spread
+                    sl = entry_price + sl_distance
+                    tp = entry_price - sl_distance * RR_RATIO
 
                 units = ps.calculate(balance, entry_price, sl)
                 if units == 0:
