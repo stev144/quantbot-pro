@@ -149,8 +149,9 @@ class Command(BaseCommand):
                         new_df[col] = pd.to_numeric(new_df[col], errors="coerce")
                     new_df.dropna(subset=["open", "high", "low", "close"], inplace=True)
 
-                    # ── merge with existing ─────────────────────────────────────
-                    if not full and filepath.exists():
+                    # ── merge with existing — always, even on --full  # claude code changed: bug fix: --full controls fetch window, not whether to merge; replacing instead of merging lost pre-broker-history-limit rows
+                    existing_full = None
+                    if filepath.exists():
                         existing_full = pd.read_csv(filepath, parse_dates=["timestamp"])
                         combined = pd.concat([existing_full, new_df], ignore_index=True)
                     else:
@@ -160,7 +161,7 @@ class Command(BaseCommand):
                     combined.sort_values("timestamp", inplace=True)
                     combined.reset_index(drop=True, inplace=True)
 
-                    added = len(combined) - (len(existing_full) if (not full and filepath.exists()) else 0)
+                    added = len(combined) - (len(existing_full) if existing_full is not None else 0)
                     if added <= 0 and not full:
                         skip_count += 1
                         self.stdout.write(f"  {symbol:12s}  no new candles")
