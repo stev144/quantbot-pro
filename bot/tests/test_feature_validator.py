@@ -537,3 +537,76 @@ class SharpeContributionAnnualizationTest(SimpleTestCase):
         v = FeatureValidator(min_observations=30, alpha=0.05, random_seed=1, timeframe="1h", asset_class=ASSET_CLASS_US_EQUITY)
         raw = v.validate_all_features_raw(self._make_df(), forward_return_col="forward_return_4h")
         self.assertFalse(raw.empty)
+
+
+# claude code changed: new — market-agnostic refactor Phase 5 tests.
+# Three behavioral properties of the changes made to feature_validator.py
+# in this refactor: (1) FOREX asset class uses the correct low threshold,
+# (2) a feature with FX-scale quartile spread passes economic significance
+# when asset_class="FOREX" but fails when asset_class=None, and (3) the
+# df-mutation bug is fixed — caller's DataFrame must not gain a
+# market_regime column after validate_all_features_institutional().
+from bot.instruments import ASSET_CLASS_FOREX  # noqa: E402
+
+
+class MarketAgnosticThresholdTest(SimpleTestCase):
+    """Phase 5 — economic significance threshold is asset-class-aware."""
+
+    def test_forex_validator_uses_lower_threshold(self):
+        v_forex = FeatureValidator(asset_class=ASSET_CLASS_FOREX)
+        v_crypto = FeatureValidator()
+        self.assertLess(v_forex.economic_significance_threshold, v_crypto.economic_significance_threshold)
+        self.assertAlmostEqual(v_forex.economic_significance_threshold, 0.0002)
+
+    def test_no_asset_class_preserves_crypto_default_threshold(self):
+        v = FeatureValidator()
+        self.assertAlmostEqual(v.economic_significance_threshold, ECONOMIC_SIGNIFICANCE_THRESHOLD)
+
+    def test_fx_scale_spread_passes_economic_significance_for_forex_not_crypto(self):
+        """A FX-realistic quartile spread (~0.001, i.e. 10 bps) passes when
+        asset_class='FOREX' (threshold 2 bps) but fails when asset_class=None
+        (threshold 50 bps). This is the core behavioral property the refactor
+        exists to fix."""
+        rng = np.random.default_rng(7)
+        n = 2000
+        # Force quartile_spread ≈ 0.001: high-quartile feature → +0.001 return,
+        # low-quartile feature → −0.001 return. Achieved by making feature rank
+        # strongly predictive with a small return magnitude.
+        feature = rng.normal(0, 1, n)
+        # FX-scale return: std ≈ 0.001 (1 pip / 100), tight but real signal
+        returns = feature * 0.001 + rng.normal(0, 0.0001, n)
+        df = pd.DataFrame({"fx_feature": feature, "forward_return_1h": returns})
+
+        v_fx = FeatureValidator(min_observations=10, alpha=0.05, random_seed=1, asset_class=ASSET_CLASS_FOREX)
+        v_default = FeatureValidator(min_observations=10, alpha=0.05, random_seed=1)
+
+        raw_fx = v_fx.validate_all_features_raw(df, forward_return_col="forward_return_1h")
+        raw_default = v_default.validate_all_features_raw(df, forward_return_col="forward_return_1h")
+
+        row_fx = raw_fx[raw_fx["feature"] == "fx_feature"].iloc[0]
+        row_default = raw_default[raw_default["feature"] == "fx_feature"].iloc[0]
+
+        # claude code changed: column is "econ_significant" in _results_to_dataframe() (line 1134)
+        self.assertTrue(bool(row_fx["econ_significant"]),
+                        "FX-scale spread must pass economic significance for FOREX asset class")
+        self.assertFalse(bool(row_default["econ_significant"]),
+                         "FX-scale spread must fail economic significance for the default (crypto) threshold")
+
+
+class NoCallerMutationTest(SimpleTestCase):
+    """Phase 5 — validate_all_features_institutional() must not mutate caller's DataFrame."""
+
+    def test_caller_df_unchanged_after_institutional_validation(self):
+        rng = np.random.default_rng(99)
+        n = 500
+        df = pd.DataFrame({
+            "feat_a": rng.normal(0, 1, n),
+            "forward_return_4h": rng.normal(0, 0.01, n),
+        })
+        cols_before = set(df.columns)
+
+        v = FeatureValidator(min_observations=30, alpha=0.05, random_seed=1)
+        v.validate_all_features_institutional(df, forward_return_col="forward_return_4h")
+
+        self.assertEqual(set(df.columns), cols_before,
+                         "validate_all_features_institutional() must not add columns to caller's DataFrame")

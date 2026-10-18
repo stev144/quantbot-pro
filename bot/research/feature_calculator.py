@@ -127,8 +127,9 @@ class FeatureCalculator:
     # MAIN METHOD: Calculate all features for a dataframe
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     
-    def calculate_all_features(self, df: pd.DataFrame, symbol: str = "UNKNOWN", 
-                              timeframe: str = "1h") -> pd.DataFrame:
+    def calculate_all_features(self, df: pd.DataFrame, symbol: str = "UNKNOWN",
+                              timeframe: str = "1h",
+                              asset_class: Optional[str] = None) -> pd.DataFrame:  # claude code changed: market-agnostic refactor — explicit asset_class overrides registry lookup; None falls back to registry as before
         """
         Calculate all features for every candle in dataframe.
         
@@ -159,7 +160,7 @@ class FeatureCalculator:
         # asset_class=None — _calculate_realized_vol() falls back to the
         # legacy constant in that case, loudly logged, never silent.
         instrument = get_instrument(symbol)
-        asset_class = instrument.asset_class if instrument else None
+        asset_class = asset_class if asset_class is not None else (instrument.asset_class if instrument else None)  # claude code changed: explicit param takes precedence; registry is fallback
 
         try:
             # Make a copy to avoid modifying original

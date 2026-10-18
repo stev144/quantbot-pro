@@ -362,3 +362,76 @@ class AdxRegressionTest(SimpleTestCase):
         nan_pct = result["adx"].isna().mean() * 100
         self.assertLess(nan_pct, 5.0, "adx should only be NaN during its own warmup period, not throughout")
         self.assertTrue((result["adx"].dropna() >= 0).all() and (result["adx"].dropna() <= 100).all())
+
+
+# claude code changed: new — market-agnostic refactor Phase 5.
+# calculate_all_features() now accepts an explicit asset_class param that
+# overrides the instrument registry lookup. Tests verify that (a) the
+# override is respected when set, (b) the registry lookup still works when
+# the override is absent, and (c) the existing realized_vol annualization
+# tests still hold through the override path.
+from bot.instruments import ASSET_CLASS_FOREX, ASSET_CLASS_CRYPTO  # noqa: E402 — after class defs for readability
+
+
+class ExplicitAssetClassOverrideTest(SimpleTestCase):
+    """Phase 5 — calculate_all_features(..., asset_class=...) explicit override."""
+
+    def _make_df(self, n=150, seed=55):
+        rng = np.random.default_rng(seed)
+        close = 100 * np.exp(np.cumsum(rng.normal(0, 0.001, n)))
+        return pd.DataFrame({
+            "open": close, "high": close * 1.001, "low": close * 0.999,
+            "close": close, "volume": rng.uniform(1000, 5000, n),
+        })
+
+    def test_explicit_forex_asset_class_uses_correct_annualization(self):
+        """Passing asset_class='FOREX' for a symbol not in the registry must
+        use FOREX annualization (260×24 = 6,240 for 1h), not the legacy 252
+        fallback. Verified by comparing realized_vol absolute values: the FX
+        annualization factor is 6,240/252 ≈ 24.8× larger → sqrt ratio ≈ 4.98."""
+        df = self._make_df()
+        calc = FeatureCalculator(min_data_required=100)
+
+        result_forex = calc.calculate_all_features(df.copy(), symbol="UNKNOWN_FX", timeframe="1h",
+                                                   asset_class=ASSET_CLASS_FOREX)  # claude code changed: explicit override
+        result_legacy = calc.calculate_all_features(df.copy(), symbol="UNKNOWN_FX", timeframe="1h")
+
+        ratio = (result_forex["realized_vol"].dropna() / result_legacy["realized_vol"].dropna()).iloc[-1]
+        expected_ratio = np.sqrt(6240 / 252)
+        self.assertAlmostEqual(ratio, expected_ratio, places=4,
+                               msg="explicit FOREX asset_class must change realized_vol annualization vs None fallback")
+
+    def test_explicit_override_takes_precedence_over_registry(self):
+        """When both a registered symbol AND an explicit asset_class are supplied,
+        the explicit value wins — the result must match an explicit-only run,
+        not the registry-derived one."""
+        df = self._make_df()
+        calc = FeatureCalculator(min_data_required=100)
+
+        # BTC/USDT is in the registry as CRYPTO; override it with FOREX
+        with_override = calc.calculate_all_features(df.copy(), symbol="BTC/USDT", timeframe="1h",
+                                                    asset_class=ASSET_CLASS_FOREX)
+        forex_explicit = calc.calculate_all_features(df.copy(), symbol="UNKNOWN", timeframe="1h",
+                                                     asset_class=ASSET_CLASS_FOREX)
+
+        pd.testing.assert_series_equal(
+            with_override["realized_vol"].dropna(), forex_explicit["realized_vol"].dropna(),
+            check_names=False,
+            obj="explicit asset_class=FOREX must override BTC/USDT registry lookup",
+        )
+
+    def test_no_override_preserves_registry_behaviour(self):
+        """No asset_class param → registry lookup still used; result is
+        identical to the existing behavior before this refactor."""
+        df = self._make_df()
+        calc = FeatureCalculator(min_data_required=100)
+
+        without_override = calc.calculate_all_features(df.copy(), symbol="BTC/USDT", timeframe="1h")
+        crypto_explicit = calc.calculate_all_features(df.copy(), symbol="BTC/USDT", timeframe="1h",
+                                                      asset_class=ASSET_CLASS_CRYPTO)
+
+        pd.testing.assert_series_equal(
+            without_override["realized_vol"].dropna(), crypto_explicit["realized_vol"].dropna(),
+            check_names=False,
+            obj="no asset_class override must match explicit CRYPTO (registry result)",
+        )
