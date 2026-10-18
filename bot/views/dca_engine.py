@@ -22,7 +22,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _ROOT      = Path(__file__).resolve().parents[2]
-_CACHE_KEY = "dca_engine_results_v4"  # claude code changed: v4 — holdout appended as fold 6 (OOS)
+_CACHE_KEY = "dca_engine_results_v5"  # claude code changed: v5 — P&L scaled to $100/cycle display capital
 _CACHE_TTL = 3600  # 1 hour
 
 _PERM_RESULT = {
@@ -35,9 +35,15 @@ _PERM_RESULT = {
     "post_hoc_warn": True,
 }
 
+# QC-1 calibration runs at $6/cycle; display is scaled to $100/cycle so P&L is
+# realistic. Scale factor = 100/6 ≈ 16.67. Win rates and fill distributions unchanged.
+_QC1_ENTRY_USDT     = 6.0    # claude code changed: QC-1 calibration constant (do not change)
+_DISPLAY_ENTRY_USDT = 100.0  # claude code changed: display capital — matches Paper Trader PAPER_ENTRY_USDT
+_DISPLAY_SCALE      = _DISPLAY_ENTRY_USDT / _QC1_ENTRY_USDT  # ≈ 16.667
+
 _PROTOCOL = {
     "id":             "FX-QC-PROTOCOL-1",
-    "initial_usdt":   6.0,
+    "initial_usdt":   int(_DISPLAY_ENTRY_USDT),   # claude code changed: display capital $100
     "max_cycle_h":    72,
     "profit_act_pct": 0.5,
     "trailing_pct":   0.2,
@@ -46,10 +52,11 @@ _PROTOCOL = {
     "multipliers":    "1 · 2 · 4 · 8 · 16 · 32 · 64×",
     "folds":          5,
     "embargo_bars":   48,
-    "max_deployed":   762,
+    "max_deployed":   12700,  # claude code changed: $100 × (1+2+4+8+16+32+64) = $12,700
 }
 
-_LEVEL_CAPITAL = [6, 18, 42, 90, 186, 378, 762]  # cumulative per level L1..L7
+# Cumulative capital deployed at each ladder level ($100 initial)
+_LEVEL_CAPITAL = [100, 300, 700, 1500, 3100, 6300, 12700]  # claude code changed: scaled from $6 to $100 entry
 
 
 # ── data build (single pass per pair per fold) ────────────────────────────────
@@ -144,19 +151,31 @@ def _build_results():
             peak_eq = max(peak_eq, t["p"])
             drawdown_pts.append(round(peak_eq - t["p"], 4))
 
+        # ── scale P&L to display capital ($100/cycle) ────────────────────────
+        # Simulation ran at QC-1 $6; multiply all dollar values by _DISPLAY_SCALE.
+        # Trade counts, win rates, and fill distributions are unaffected.  # claude code changed: new scaling
+        scaled_equity = [{"d": pt["d"], "p": round(pt["p"] * _DISPLAY_SCALE, 2)} for pt in equity_pts]
+        scaled_dd     = [round(v * _DISPLAY_SCALE, 2) for v in drawdown_pts]
+        for fs in fold_stats:
+            fs["pnl"] = round(fs["pnl"] * _DISPLAY_SCALE, 2)
+        scaled_pnl    = round(pnl * _DISPLAY_SCALE, 2)
+        scaled_max_dd = round(max_dd * _DISPLAY_SCALE, 2)
+        scaled_avg_c  = round(float(np.mean(all_costs)) * _DISPLAY_SCALE, 2) if all_costs else 0.0
+        scaled_max_c  = round(float(np.max(all_costs))  * _DISPLAY_SCALE, 2) if all_costs else 0.0
+
         pair_results[pair] = {
-            "equity":          equity_pts,
-            "drawdown":        drawdown_pts,
+            "equity":          scaled_equity,
+            "drawdown":        scaled_dd,
             "fold_boundaries": fold_boundaries,
             "fold_stats":      fold_stats,
             "stats": {
                 "total_trades": total,
                 "wins":         wins,
                 "win_pct":      round(wins / total * 100, 1) if total else 0.0,
-                "total_pnl":    round(pnl, 4),
-                "max_dd":       round(max_dd, 4),
-                "avg_cost":     round(float(np.mean(all_costs)), 2) if all_costs else 0.0,
-                "max_cost":     round(float(np.max(all_costs)), 2)  if all_costs else 0.0,
+                "total_pnl":    scaled_pnl,
+                "max_dd":       scaled_max_dd,
+                "avg_cost":     scaled_avg_c,
+                "max_cost":     scaled_max_c,
             },
             "fills_dist": fills_dist,
         }
