@@ -38,7 +38,7 @@ import django; django.setup()
 
 import pandas as pd
 from bot.mt5_data_fetcher import mt5_server_time_to_utc, MT5_CLOCK_LABEL
-from bot.quant_core.research_zones import seal_before_write
+from bot.research.fx_holdout_guard import V7_HOLDOUT_START  # claude code changed: D-8 fix — v7 FX boundary
 from bot.instruments import write_provenance_marker
 
 OUTPUT_DIR = Path("data/forex")
@@ -120,9 +120,11 @@ def convert(input_path: str, pair: str, interval: str) -> None:  # claude code c
     output_path = OUTPUT_DIR / output_name
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"Applying v7 holdout seal …")
-    df = seal_before_write(df, output_path)
-    print(f"  {len(df):,} bars after seal (rows after 2026-10-16 08:00 UTC stripped)")
+    print(f"Applying v7 FX holdout seal …")  # claude code changed: D-8 fix — v7 FX boundary, not crypto zone F
+    ts_col = pd.to_datetime(df["timestamp"], utc=True)
+    n_sealed = int((ts_col >= V7_HOLDOUT_START).sum())
+    df = df[ts_col < V7_HOLDOUT_START].reset_index(drop=True)
+    print(f"  {len(df):,} bars after seal ({n_sealed} rows at/after {V7_HOLDOUT_START.isoformat()} stripped)")
 
     df.to_csv(output_path, index=False)
     print(f"Saved → {output_path}")

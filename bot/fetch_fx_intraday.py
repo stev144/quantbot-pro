@@ -54,7 +54,7 @@ from bot.mt5_data_fetcher import (
     mt5_server_time_to_utc,
 )
 from bot.forex_data_fetcher import detect_gaps
-from bot.quant_core.research_zones import seal_before_write
+from bot.research.fx_holdout_guard import V7_HOLDOUT_START  # claude code changed: D-8 fix — use v7 FX boundary, not crypto zone F
 from bot.instruments import write_provenance_marker
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,16 @@ def fetch_intraday(attach_only: bool = False, dry_run: bool = False) -> dict:  #
                     other_gaps = [g for g in gaps if not g["likely_weekend"]]
 
                     filepath = OUTPUT_DIR / _intraday_filename(symbol, interval)
-                    df = seal_before_write(df, filepath)   # claude code changed: D-8 holdout seal
+
+                    # claude code changed: D-8 fix — FX intraday uses v7 FX holdout boundary
+                    # (2026-10-16 08:00 UTC), NOT the crypto zone F boundary (2026-10-04).
+                    # seal_before_write() was stripping 12 extra days of valid research data.
+                    ts_col = pd.to_datetime(df["timestamp"], utc=True)
+                    n_sealed = int((ts_col >= V7_HOLDOUT_START).sum())
+                    if n_sealed:
+                        logger.warning(f"v7 FX holdout seal: {n_sealed} row(s) at/after "
+                                       f"{V7_HOLDOUT_START.isoformat()} stripped from {filepath.name}")
+                    df = df[ts_col < V7_HOLDOUT_START].reset_index(drop=True)
 
                     df.to_csv(filepath, index=False)
 
