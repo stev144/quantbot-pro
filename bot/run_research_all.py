@@ -14,6 +14,8 @@
 #   5. Symbol passed to feature calculator  → symbol name passed correctly for logging
 #   6. Validated features count             → reads from 'feature' column, not broken list comp
 
+import argparse
+import functools
 import os
 import pandas as pd
 from pathlib import Path
@@ -22,7 +24,7 @@ from multiprocessing import Pool
 from bot.research.feature_calculator import FeatureCalculator
 from bot.research.feature_validator import FeatureValidator, apply_family_wide_correction
 from bot.research.feature_stability_analyzer import FeatureStabilityAnalyzer   # claude code changed: new — Phase B (P1-4)
-from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — universe expansion mission
+from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX  # claude code changed: ASSET_CLASS_FOREX added for market-agnostic FX run
 
 # ── Symbols ───────────────────────────────────────────────────────────────────
 
@@ -36,13 +38,26 @@ from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claud
 # processed the 30 newly-added symbols' data at all. Now derived from the
 # single instrument registry, converted to this module's pre-existing
 # underscore convention.
-SYMBOLS = [
-    s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)
-]
+# claude code changed: FX run uses the 5 DCA pairs only (EUR/USD, GBP/USD,
+# USD/JPY, USD/CHF, AUD/USD) — these are the pairs with MT5 history, locked
+# calibration thresholds, and active protocol; family-wide correction is
+# scoped to this set, not all 58 registered FX symbols.
+_FX_DCA_PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD"]
+
+
+def _symbols_for(asset_class: str):
+    return (
+        _FX_DCA_PAIRS if asset_class == ASSET_CLASS_FOREX
+        else [s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)]
+    )
+
+
+# Default (used when imported by tests or other modules — not the CLI path)
+SYMBOLS = _symbols_for(ASSET_CLASS_CRYPTO)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _load_csv(symbol: str) -> pd.DataFrame:
+def _load_csv(symbol: str, asset_class: str = ASSET_CLASS_CRYPTO) -> pd.DataFrame:
     """
     Load symbol CSV and return a clean DataFrame ready for the feature calculator.
 
@@ -53,7 +68,9 @@ def _load_csv(symbol: str) -> pd.DataFrame:
     fetch_all_symbols.py saves wth a plain 'timestamp' column, so we set it as
     the index here to match what data_fetcher would return natively.
     """
-    csv_file = f'data/{symbol}_1h.csv'
+    # claude code changed: FX data lives in data/forex/; crypto in data/
+    csv_file = (f'data/forex/{symbol}_1h.csv' if asset_class == ASSET_CLASS_FOREX
+                else f'data/{symbol}_1h.csv')
     df = pd.read_csv(csv_file)
 
     # Parse timestamp and set as index (feature calculator is happy either way,
@@ -142,7 +159,7 @@ def _apply_stability_gate(corrected_df: pd.DataFrame, stability_summary: pd.Data
 
 # ── Per-symbol worker ─────────────────────────────────────────────────────────
 
-def process_single_symbol(symbol: str) -> dict:
+def process_single_symbol(symbol: str, asset_class: str = ASSET_CLASS_CRYPTO) -> dict:  # claude code changed: asset_class param so workers don't rely on module-level global (Windows multiprocessing spawns fresh processes)
     """
     Per-symbol research pipeline — the PARALLEL half only.
     Called in parallel for all symbols via multiprocessing.Pool.
@@ -175,7 +192,7 @@ def process_single_symbol(symbol: str) -> dict:
     try:
         # ── STEP 1: Read CSV ──────────────────────────────────────────────────
         print(f'\n[{symbol}] STEP 1: Read CSV')
-        df = _load_csv(symbol)
+        df = _load_csv(symbol, asset_class=asset_class)
         print(f'  ✓ Loaded {len(df):,} candles')
 
         if len(df) < 200:
@@ -192,6 +209,7 @@ def process_single_symbol(symbol: str) -> dict:
             df,
             symbol=symbol,
             timeframe='1h',
+            asset_class=asset_class if asset_class != ASSET_CLASS_CRYPTO else None,  # claude code changed: pass FX asset_class; None preserves crypto behavior
         )
         feature_cols = [
             c for c in df_features.columns
@@ -206,8 +224,10 @@ def process_single_symbol(symbol: str) -> dict:
         # Reset index so timestamp is saved as a plain column
         df_features.reset_index().to_csv(obs_file, index=False)
         from bot.quant_core import provenance as _prov   # claude code changed: 2026-10-05 — provenance (input: this symbol's file)
+        _csv_input = (f'data/forex/{symbol}_1h.csv' if asset_class == ASSET_CLASS_FOREX  # claude code changed: FX path
+                      else f'data/{symbol}_1h.csv')
         _prov.write_research_output_provenance(obs_file, kind="FEATURE_OBSERVATIONS", producer="bot.run_research_all.process_single_symbol",
-                                               inputs=_prov.input_files_fingerprint([f'data/{symbol}_1h.csv']),
+                                               inputs=_prov.input_files_fingerprint([_csv_input]),
                                                config={"symbol": symbol})
         print(f'  ✓ Saved to: {obs_file}')
 
@@ -217,7 +237,8 @@ def process_single_symbol(symbol: str) -> dict:
         #
         # FIX 2: was 'foward_return_4h' (typo) — correct column is 'forward_return_4h'
         print(f'\n[{symbol}] STEP 4: Validate features (raw pass)')
-        validator = FeatureValidator(min_observations=30, alpha=0.05)
+        validator = FeatureValidator(min_observations=30, alpha=0.05,
+                                     asset_class=asset_class if asset_class != ASSET_CLASS_CRYPTO else None)  # claude code changed: use local param not module global (Windows spawn safety)
         raw_results_df = validator.validate_all_features_raw(
             df_features,
             forward_return_col='forward_return_4h',   # FIX: typo corrected
@@ -262,8 +283,22 @@ def process_single_symbol(symbol: str) -> dict:
 
 if __name__ == '__main__':
 
+    # claude code changed: argparse MUST be inside __main__ — if it were at module
+    # level it would run in every Windows spawn-worker re-import (sys.argv is
+    # different there) and cause -1073740022 STATUS_HEAP_CORRUPTION.
+    _parser = argparse.ArgumentParser(description='Run full research pipeline for a symbol universe')
+    _parser.add_argument(
+        '--asset-class',
+        default=ASSET_CLASS_CRYPTO,
+        choices=[ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX],
+        help='Which universe to process (default: CRYPTO)',
+    )
+    _args = _parser.parse_args()
+    ASSET_CLASS = _args.asset_class  # local; not overwriting module-level SYMBOLS
+    SYMBOLS = _symbols_for(ASSET_CLASS)
+
     print('\n' + '=' * 80)
-    print(f'RUNNING RESEARCH FOR {len(SYMBOLS)} SYMBOLS SIMULTANEOUSLY')
+    print(f'RUNNING RESEARCH FOR {len(SYMBOLS)} SYMBOLS  [asset_class={ASSET_CLASS}]')  # claude code changed: show asset_class in header
     print('=' * 80)
     print(f'\nSymbols : {", ".join(SYMBOLS)}')
     print(f'Running all {len(SYMBOLS)} in parallel (one CPU core per symbol)')
@@ -272,8 +307,11 @@ if __name__ == '__main__':
     Path('research_data').mkdir(exist_ok=True)
 
     # ── Run all symbols in parallel (raw pass only — no correction yet) ──────
+    # claude code changed: functools.partial binds asset_class so pool workers
+    # receive it without relying on a module-level global (Windows spawn safety)
+    _worker = functools.partial(process_single_symbol, asset_class=ASSET_CLASS)
     with Pool(processes=min(20, os.cpu_count())) as pool:
-        results = pool.map(process_single_symbol, SYMBOLS)
+        results = pool.map(_worker, SYMBOLS)
 
     # ── Family-wide multiple-testing correction ───────────────────────────────
     # claude code changed: new — Phase B (P1-2). Runs ONCE, sequentially, in
@@ -293,11 +331,15 @@ if __name__ == '__main__':
 
     # Save the pooled file — the auditable record of exactly what the
     # family-wide correction was actually run across.
-    pooled_path = 'research_data/all_symbols_validated_features_pooled.csv'
+    # claude code changed: separate pooled file per asset class so FX run doesn't overwrite crypto results
+    _ac_suffix = "_fx" if ASSET_CLASS == ASSET_CLASS_FOREX else ""
+    pooled_path = f'research_data/all_symbols_validated_features_pooled{_ac_suffix}.csv'
     pooled_corrected.to_csv(pooled_path, index=False)
     # claude code changed: 2026-10-05 — provenance; the family-wide correction makes every output depend on every symbol
     from bot.quant_core import provenance as _prov
-    _inputs = _prov.input_files_fingerprint([f'data/{s}_1h.csv' for s in sorted(raw_by_symbol)])
+    # claude code changed: FX data lives in data/forex/; crypto in data/
+    _csv_dir = 'data/forex' if ASSET_CLASS == ASSET_CLASS_FOREX else 'data'
+    _inputs = _prov.input_files_fingerprint([f'{_csv_dir}/{s}_1h.csv' for s in sorted(raw_by_symbol)])
     _code = _prov.code_state()
     _cfg = {"symbols": sorted(raw_by_symbol), "family_alpha": 0.05}
     _prov.write_research_output_provenance(pooled_path, kind="FEATURE_VALIDATION_POOLED", producer="bot.run_research_all",
