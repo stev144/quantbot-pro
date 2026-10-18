@@ -29,7 +29,11 @@
     <div class="unavailable-inline" style="margin-bottom:16px">
         Live pair health unavailable: {{ health_snapshot_reason }} — the metrics below still reflect real TradeRecord history, but no NORMAL/DEGRADED/INVALIDATED status can be shown until the bot writes a fresh heartbeat.
     </div>
-    {% endif %}
+    {% elif health_snapshot_stale %}
+    <div class="unavailable-inline" style="margin-bottom:16px">
+        &#x23F0; Health data is stale: {{ health_snapshot_reason }} — statuses below reflect the last bot heartbeat, not current live state.
+    </div>
+    {% endif %}{# claude code changed: show stale health with warning banner rather than hiding statuses entirely #}
 
     {% for p in pairs %}
     <div class="term-section" style="margin-bottom:20px">
@@ -38,15 +42,15 @@
             <span style="display:flex; align-items:center; gap:8px">
                 {% if p.health %}
                     {% if p.health.state == "NORMAL" %}
-                    <span class="badge pos">&#x1F7E2; NORMAL</span>
+                    <span class="badge pos">&#x1F7E2; NORMAL{% if p.health.is_stale %} (stale){% endif %}</span>
                     {% elif p.health.state == "DEGRADED" %}
-                    <span class="badge warn">&#x1F7E1; DEGRADED</span>
+                    <span class="badge warn">&#x1F7E1; DEGRADED{% if p.health.is_stale %} (stale){% endif %}</span>
                     {% else %}
-                    <span class="badge neg">&#x1F534; INVALIDATED</span>
+                    <span class="badge neg">&#x1F534; INVALIDATED{% if p.health.is_stale %} (stale){% endif %}</span>
                     {% endif %}
                 {% else %}
                     <span class="badge dim">HEALTH UNKNOWN</span>
-                {% endif %}
+                {% endif %}{# claude code changed: show stale health with (stale) label #}
                 <span class="term-section-meta">source: TradeRecord (strategy=PairsTrading_{{ p.pair_name }})</span>
             </span>
         </div>

@@ -97,7 +97,11 @@ def get_pairs_pilot_state():
             # template, matches this project's convention of keeping
             # arithmetic out of templates.
             if health is not None:
-                health = dict(health, beta_drift_pct=health["beta_drift_ratio"] * 100)
+                health = dict(
+                    health,
+                    beta_drift_pct=health["beta_drift_ratio"] * 100,
+                    is_stale=health_snapshot.get("stale", False),  # claude code changed: surface staleness to template
+                )
         else:
             health = None
 
@@ -122,5 +126,6 @@ def get_pairs_pilot_state():
         "execution_mode": display_mode,              # claude code changed: Post-audit Phase 1 — the single mode every number on the page comes from
         "other_mode_counts": other_mode_counts,      # claude code changed: Post-audit Phase 1 — rows of other modes, not shown in the curves
         "health_snapshot_available": health_snapshot["available"],
+        "health_snapshot_stale": health_snapshot.get("stale", False),  # claude code changed: show stale data with warning rather than hiding it
         "health_snapshot_reason": health_snapshot.get("reason"),  # claude code changed: surfaced so the template can explain WHY health is missing (item 20: never silently show nothing)
     }

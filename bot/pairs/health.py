@@ -251,23 +251,29 @@ def write_health_snapshot(results: Dict[str, PairHealthResult]) -> None:
 def read_health_snapshot() -> dict:
     """Called by the dashboard (a separate process from the live bot —
     see module docstring). Returns {"available": False, "reason": ...}
-    if the bot has never written a snapshot, or if the snapshot is too
-    old to trust (item 20: fail closed on stale data rather than show a
-    last-known-good state as if it were live)."""
+    only when the file is absent or unreadable. When the file exists but
+    is older than SNAPSHOT_STALE_AFTER_SECONDS the data is returned with
+    stale=True so the dashboard can show last-known health with a clear
+    staleness warning rather than hiding the status entirely."""  # claude code changed: show stale health rather than hiding it
     if not os.path.exists(HEALTH_SNAPSHOT_PATH):
-        return {"available": False, "reason": "no health snapshot found — the pairs bot may not have run since this feature was added, or is not currently running"}
+        return {"available": False, "stale": False, "reason": "no health snapshot found — the pairs bot may not have run since this feature was added, or is not currently running"}
     try:
         with open(HEALTH_SNAPSHOT_PATH, "r", encoding="utf-8") as f:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        return {"available": False, "reason": f"health snapshot unreadable: {e}"}
+        return {"available": False, "stale": False, "reason": f"health snapshot unreadable: {e}"}
 
     written_at = datetime.fromisoformat(payload["written_at"])
     age_seconds = (datetime.now(timezone.utc) - written_at).total_seconds()
-    if age_seconds > SNAPSHOT_STALE_AFTER_SECONDS:
-        return {
-            "available": False,
-            "reason": f"health snapshot is stale ({age_seconds/3600:.1f}h old, last written {written_at.isoformat()}) — the pairs bot may be stopped or hung",
-        }
-
-    return {"available": True, "written_at": payload["written_at"], "age_seconds": age_seconds, "pairs": payload["pairs"]}
+    stale = age_seconds > SNAPSHOT_STALE_AFTER_SECONDS  # claude code changed: stale flag instead of hiding data
+    return {
+        "available": True,
+        "stale": stale,
+        "written_at": payload["written_at"],
+        "age_seconds": age_seconds,
+        "reason": (
+            f"snapshot is {age_seconds / 3600:.1f}h old (last written {written_at.strftime('%Y-%m-%d %H:%M UTC')}) — bot may be stopped"
+            if stale else None
+        ),
+        "pairs": payload["pairs"],
+    }
