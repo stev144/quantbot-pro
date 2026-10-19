@@ -303,6 +303,75 @@ def _simulate_ranging_gated(
 
 # ── main engine entry point ───────────────────────────────────────────────────
 
+def _build_mtm_equity(
+    trades_raw: list,
+    sim_df: pd.DataFrame,
+    spread_fraction: float,
+) -> Tuple[List[Dict], float]:  # claude code changed: new — daily MTM equity inc. open-cycle unrealised
+    """
+    Build a daily mark-to-market equity series.
+
+    For each calendar day (last 1h close of that day):
+      mtm = realised_pnl_from_closed_cycles + unrealised_pnl_of_open_cycle
+
+    Unrealised = (bid_close - wap) × qty, where bid_close = close - spread_fraction
+    and qty = total_cost_usdt / wap.  WAP uses the cycle's final value throughout
+    (approximation; accurate for cycles with few fills, conservative otherwise).
+
+    Returns (mtm_pts [{d, p}], max_dd_dollars).
+    Exposes intra-cycle drawdown that is invisible to the closed-trade-only curve.
+    """
+    # Sort all trades by entry time (sequential — no overlapping cycles)
+    all_sorted = sorted(trades_raw, key=lambda t: pd.Timestamp(t["entry_time"]))
+
+    # One equity point per calendar day at the day's last close
+    daily = sim_df["close"].resample("1D").last().dropna()
+
+    trade_idx = 0
+    realised  = 0.0
+    mtm_pts: List[Dict] = []
+    peak    = None
+    max_dd  = 0.0
+
+    for day_ts, close_px in daily.items():
+        day_date = day_ts.normalize()
+
+        # Advance closed trades whose exit date is on or before today
+        while trade_idx < len(all_sorted):
+            t = all_sorted[trade_idx]
+            if t.get("exit_reason") == "DATA_END_STILL_OPEN":
+                break   # still open — do not add to realised
+            if pd.Timestamp(t["exit_time"]).normalize() <= day_date:
+                realised += float(t["profit_usdt"])
+                trade_idx += 1
+            else:
+                break
+
+        # Unrealised P&L for any cycle open on this day
+        unrealised = 0.0
+        if trade_idx < len(all_sorted):
+            t = all_sorted[trade_idx]
+            if pd.Timestamp(t["entry_time"]).normalize() <= day_date:
+                wap        = float(t["wap"])
+                total_cost = float(t.get("total_cost_usdt", 0.0))
+                if wap > 0 and total_cost > 0:
+                    qty        = total_cost / wap
+                    bid        = float(close_px) - spread_fraction   # sell at bid (conservative)
+                    unrealised = (bid - wap) * qty
+
+        mtm = realised + unrealised
+        if peak is None:
+            peak = mtm
+        peak  = max(peak, mtm)
+        dd    = mtm - peak
+        if dd < max_dd:
+            max_dd = dd
+
+        mtm_pts.append({"d": str(day_ts)[:10], "p": round(mtm, 4)})
+
+    return mtm_pts, round(max_dd, 4)
+
+
 def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main entry point
     """
     Run ranging-gated QC-1 simulation for every QC_PORTFOLIO_SPECS pair (LONG).
@@ -412,11 +481,16 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             _raw_open = next(
                 (t for t in trades_raw if t.get("exit_reason") == "DATA_END_STILL_OPEN"), None
             )
+
+            # MTM equity: daily realised + open-cycle unrealised  # claude code changed: replaces closed-only curve
+            equity, max_dd_mtm = _build_mtm_equity(trades_raw, sim_df, spread_fraction)
+
+            # Closed-only equity kept as reference (no intra-cycle drawdown)  # claude code changed: reference only
+            equity_settled: list = []
             cum = 0.0
-            equity = []
             for t in sorted(closed, key=lambda x: x["exit_time"]):
                 cum += t["profit_usdt"]
-                equity.append({"d": str(t["exit_time"])[:10], "p": round(cum, 4)})
+                equity_settled.append({"d": str(t["exit_time"])[:10], "p": round(cum, 4)})
 
             # ── stats ─────────────────────────────────────────────────────────────
             def _stats(trades):
@@ -439,6 +513,9 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 }
 
             stats = _stats(closed)
+            # Promote max_dd to MTM-based; preserve closed-only as max_dd_settled  # claude code changed: MTM DD
+            stats["max_dd_settled"] = stats["max_dd"]   # closed-trade-only (understates true DD)
+            stats["max_dd"]         = max_dd_mtm        # true peak-to-trough incl. open cycles
 
             # fill distribution: cycles per ladder depth
             ladder_depth = 1 + len(spec.base_pips)
@@ -458,7 +535,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                     out.append({"i": i, "p": round(pt["p"] - peak, 4)})
                 return out
 
-            drawdown = _drawdown_series(equity)
+            drawdown = _drawdown_series(equity)   # claude code changed: now MTM-based equity
 
             # ranging % of sim data
             ranging_pct = round(float(ranging_mask.mean()) * 100, 1)
@@ -493,7 +570,8 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             )
 
             results[pair] = {   # claude code changed: simplified — single unrestricted simulation, no gated/free split
-                "equity":         equity,
+                "equity":         equity,           # MTM daily (realised + open-cycle unrealised)
+                "equity_settled": equity_settled,   # closed-trade-only (reference; understates DD)
                 "drawdown":       drawdown,
                 "fill_dist":      fill_dist,
                 "ladder_depth":   ladder_depth,
