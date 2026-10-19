@@ -535,7 +535,10 @@ class FeatureValidator:
         exclude_cols = {
             'symbol', 'timeframe', 'timestamp', 'market_regime',
             'close', 'open', 'high', 'low', 'volume',
-            'realized_vol', 'adx'
+            'realized_vol',  # still excluded: FX 1h annualization factor unresolved in bot/instruments.py (FOREX/1h not registered); value is wrong for FX data
+            # adx was excluded here before 2026-10-19 because it was silently all-NaN (dtype bug in _calculate_adx that
+            # assigned int64 Series and then failed boolean-mask assignment under pandas>=2.x — fixed in feature_calculator.py).
+            # ADX now produces real values; exclusion removed so it is tested like every other indicator.  # claude code changed: removed 'adx' from exclude_cols — dtype bug fixed, ADX now valid
         }
         # claude code changed: was an enumerated set of specific horizons
         # (forward_return_1h/4h/24h, win_1h/4h/24h) that didn't cover every

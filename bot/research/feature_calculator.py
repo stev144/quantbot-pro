@@ -215,7 +215,13 @@ class FeatureCalculator:
             result_df['macd'] = macd
             result_df['macd_signal'] = signal
             result_df['macd_histogram'] = histogram
-            
+
+            # ── DCA STRATEGY FEATURES (primary regime/entry inputs — not previously validated) ──
+            logger.info(f"Calculating DCA strategy features for {symbol}...")
+
+            result_df['z_score'] = self._calculate_z_score(result_df)  # claude code changed: new — 20-bar z-score of close; used in forex scanner for entry timing; was never in the validation pipeline
+            result_df['ema_spread_pct'] = self._calculate_ema_spread_pct(result_df)  # claude code changed: new — (ema_12 - ema_26) / close; captures same signal as regime detection's EMA spread; was never in the validation pipeline
+
             # ── LABELS (Forward returns - what happened next?) ─────────────────────────────
             logger.info(f"Calculating labels for {symbol}...")
             
@@ -616,6 +622,48 @@ class FeatureCalculator:
                    pd.Series(np.nan, index=df.index),
                    pd.Series(np.nan, index=df.index))
     
+    def _calculate_z_score(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
+        """
+        Rolling z-score of close price over `period` bars.
+
+        z = (close - rolling_mean) / rolling_std
+
+        0 = price at its recent mean; +2 / -2 = 2-sigma deviation.
+        Used by the forex scanner to identify ranging-entry quality.
+        Positive z → price extended above mean (worse LONG entry).
+        Negative z → price below mean (better LONG entry for DCA).
+        """  # claude code changed: new — 20-bar z-score; primary scanner signal; was never computed in the feature pipeline
+        try:
+            mean = df['close'].rolling(period).mean()
+            std  = df['close'].rolling(period).std()
+            return ((df['close'] - mean) / std.replace(0, np.nan)).clip(-5, 5)
+        except Exception as e:
+            logger.debug(f"Error calculating z_score: {e}")
+            return pd.Series(np.nan, index=df.index)
+
+    def _calculate_ema_spread_pct(self, df: pd.DataFrame) -> pd.Series:
+        """
+        Percentage spread between EMA-12 and EMA-26, normalised by close price.
+
+        ema_spread_pct = (ema_12 - ema_26) / close
+
+        Positive → fast EMA above slow EMA (upward momentum).
+        Negative → fast EMA below slow EMA (downward momentum).
+        Near zero → EMAs converging (regime boundary).
+
+        The RegimeDetector uses an equivalent EMA spread signal to separate
+        TRENDING from RANGING; testing this feature directly measures whether
+        that signal has predictive power for DCA cycle outcomes.
+        """  # claude code changed: new — EMA spread as % of price; analogue of regime detector's EMA spread input; was never in the validation pipeline
+        try:
+            ema12 = self._calculate_ema(df['close'], EMA_FAST)
+            ema26 = self._calculate_ema(df['close'], EMA_SLOW)
+            spread = (ema12 - ema26) / df['close'].replace(0, np.nan)
+            return spread.clip(-0.05, 0.05)
+        except Exception as e:
+            logger.debug(f"Error calculating ema_spread_pct: {e}")
+            return pd.Series(np.nan, index=df.index)
+
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     # STRUCTURAL / MARKET FEATURES — 2026-10-18
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -628,7 +676,8 @@ class FeatureCalculator:
         Returns a DataFrame with columns: is_london_ny_overlap, is_london_session, day_of_week.
         All NaN when no timestamp information is available.
         """  # claude code changed: new — 2026-10-18; session and weekday features for FX structural analysis
-        nan_result = pd.DataFrame({
+        nan_result = pd.DataFrame({  # claude code changed: added is_asian_session — was missing from fallback dict, causing KeyError when DatetimeIndex path failed
+            'is_asian_session':     pd.Series(np.nan, index=df.index),
             'is_london_ny_overlap': pd.Series(np.nan, index=df.index),
             'is_london_session':    pd.Series(np.nan, index=df.index),
             'day_of_week':          pd.Series(np.nan, index=df.index),
@@ -637,7 +686,11 @@ class FeatureCalculator:
             if 'timestamp' in df.columns:
                 ts = pd.to_datetime(df['timestamp'], utc=True)
             elif isinstance(df.index, pd.DatetimeIndex):
-                ts = df.index.tz_localize('UTC') if df.index.tz is None else df.index
+                # claude code changed: was `ts = df.index` (a DatetimeIndex) — DatetimeIndex has no
+                # `.dt` accessor; `.dt.hour` raised AttributeError, caught silently, returned nan_result.
+                # Wrapping in a Series gives back the `.dt` accessor the rest of this method expects.
+                _idx = df.index.tz_localize('UTC') if df.index.tz is None else df.index
+                ts = pd.Series(_idx, index=df.index)
             else:
                 return nan_result
 

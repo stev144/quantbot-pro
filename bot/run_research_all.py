@@ -38,11 +38,13 @@ from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, ASSET_C
 # processed the 30 newly-added symbols' data at all. Now derived from the
 # single instrument registry, converted to this module's pre-existing
 # underscore convention.
-# claude code changed: FX run uses the 5 DCA pairs only (EUR/USD, GBP/USD,
-# USD/JPY, USD/CHF, AUD/USD) — these are the pairs with MT5 history, locked
-# calibration thresholds, and active protocol; family-wide correction is
-# scoped to this set, not all 58 registered FX symbols.
-_FX_DCA_PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD"]
+# claude code changed: updated 2026-10-19 — was the original 5 calibration
+# pairs (EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD); those pairs are
+# obsolete. Active QC portfolio is now EUR_USD, EUR_JPY, GBP_JPY, EUR_CAD,
+# NZD_CHF (GBP/JPY QC-1 pass 2026-10-18; EUR/CAD QC-2 nominee 2026-10-19;
+# AUD/CAD dropped QC-1). Family-wide correction scoped to the live portfolio,
+# not dead pairs.
+_FX_DCA_PAIRS = ["EUR_USD", "EUR_JPY", "GBP_JPY", "EUR_CAD", "NZD_CHF"]
 
 
 def _symbols_for(asset_class: str):
