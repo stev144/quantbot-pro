@@ -4,6 +4,8 @@
 
 {% block head %}
 <script src="{% static 'js/counters.js' %}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
 <style>
 /* ── Forex Scanner page-local styles ──────────────────────────────── */
 
@@ -139,6 +141,126 @@
     font-size: 12px;
 }
 .scanner-sum-count { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+
+/* ── position detail modal ───────────────────────────────────────────── */
+.pos-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+.pos-overlay.open { display: flex; }
+.pos-modal {
+    background: var(--bg-0, #0d1117);
+    border: 1px solid var(--border-0, rgba(255,255,255,.1));
+    border-radius: 8px;
+    width: 860px;
+    max-width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+.pos-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px 12px;
+    border-bottom: 1px solid var(--border-0, rgba(255,255,255,.08));
+    position: sticky; top: 0;
+    background: var(--bg-0, #0d1117);
+    z-index: 1;
+}
+.pos-modal-title { font-size: 16px; font-weight: 700; font-family: monospace; }
+.pos-modal-close {
+    width: 28px; height: 28px;
+    border-radius: 4px;
+    border: 1px solid var(--border-0, rgba(255,255,255,.1));
+    background: none;
+    color: var(--text-dim, #636c76);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+.pos-modal-close:hover { color: var(--text-0, #e6edf3); background: var(--bg-1, rgba(255,255,255,.04)); }
+.pos-modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+.pos-open-card {
+    background: var(--bg-1, rgba(255,255,255,.02));
+    border: 1px solid rgba(91,141,201,.25);
+    border-radius: 6px;
+    padding: 12px 16px;
+    display: flex; flex-wrap: wrap; gap: 20px; align-items: center;
+}
+.pos-open-field { display: flex; flex-direction: column; gap: 2px; }
+.pos-open-label { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim, #636c76); }
+.pos-open-value { font-size: 14px; font-weight: 600; font-family: monospace; }
+.pos-stats-row {
+    display: flex; flex-wrap: wrap; gap: 10px;
+}
+.pos-stat-tile {
+    flex: 1 1 100px;
+    padding: 8px 12px;
+    background: var(--bg-1, rgba(255,255,255,.02));
+    border: 1px solid var(--border-0, rgba(255,255,255,.06));
+    border-radius: 5px;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.pos-stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim, #636c76); }
+.pos-stat-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pos-charts-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+@media (max-width: 600px) { .pos-charts-row { grid-template-columns: 1fr; } }
+.pos-chart-wrap {
+    background: var(--bg-1, rgba(255,255,255,.02));
+    border: 1px solid var(--border-0, rgba(255,255,255,.06));
+    border-radius: 5px;
+    padding: 10px 12px;
+}
+.pos-chart-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--text-dim, #636c76); margin-bottom: 8px; font-weight: 600;
+}
+.pos-chart-wrap canvas { max-height: 180px; }
+.pos-equity-wrap {
+    grid-column: 1 / -1;
+    background: var(--bg-1, rgba(255,255,255,.02));
+    border: 1px solid var(--border-0, rgba(255,255,255,.06));
+    border-radius: 5px;
+    padding: 10px 12px;
+}
+.pos-equity-wrap canvas { max-height: 160px; }
+.pos-trades-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+}
+.pos-trades-table th {
+    padding: 5px 8px;
+    text-align: left;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--text-dim, #636c76);
+    border-bottom: 1px solid var(--border-0, rgba(255,255,255,.08));
+}
+.pos-trades-table th.num, .pos-trades-table td.num { text-align: right; }
+.pos-trades-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-0, rgba(255,255,255,.03));
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.exit-TIME_EXIT       { color: var(--text-dim, #636c76); }
+.exit-PROFIT_TARGET   { color: var(--term-pos, #3fb87f); }
+.exit-DATA_END        { color: var(--term-warn, #e8a838); }
 
 /* position badge */
 .pos-badge {
@@ -301,6 +423,105 @@
 
 </div>{# /term-body #}
 
+{# ── position detail modal ─────────────────────────────────────────────────── #}
+{# claude code changed: new — clickable position modal with equity/DD/fill charts #}
+<div class="pos-overlay" id="pos-overlay" onclick="if(event.target===this)closePositionModal()">
+  <div class="pos-modal" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+    <div class="pos-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="pos-modal-title" id="pm-title">—</span>
+        <span id="pm-validated-badge" style="display:none;font-size:10px;padding:2px 7px;border-radius:3px;background:rgba(63,184,127,.15);color:var(--term-pos,#3fb87f);font-weight:600;font-family:monospace">VALIDATED</span>
+      </div>
+      <button class="pos-modal-close" onclick="closePositionModal()" aria-label="Close">✕</button>
+    </div>
+    <div class="pos-modal-body">
+
+      <div class="pos-open-card">
+        <div class="pos-open-field">
+          <span class="pos-open-label">Entry Date</span>
+          <span class="pos-open-value" id="pm-entry-dt">—</span>
+        </div>
+        <div class="pos-open-field">
+          <span class="pos-open-label">Entry Price</span>
+          <span class="pos-open-value" id="pm-entry-price">—</span>
+        </div>
+        <div class="pos-open-field">
+          <span class="pos-open-label">WAP</span>
+          <span class="pos-open-value" id="pm-wap">—</span>
+        </div>
+        <div class="pos-open-field">
+          <span class="pos-open-label">Ladder Level</span>
+          <span class="pos-open-value" id="pm-fills">—</span>
+        </div>
+        <div class="pos-open-field">
+          <span class="pos-open-label">Unrealized P&amp;L</span>
+          <span class="pos-open-value" id="pm-pnl">—</span>
+        </div>
+      </div>
+
+      <div class="pos-stats-row">
+        <div class="pos-stat-tile">
+          <span class="pos-stat-label">Total Trades</span>
+          <span class="pos-stat-value" id="pm-total-trades">—</span>
+        </div>
+        <div class="pos-stat-tile">
+          <span class="pos-stat-label">Win Rate</span>
+          <span class="pos-stat-value" id="pm-win-pct">—</span>
+        </div>
+        <div class="pos-stat-tile">
+          <span class="pos-stat-label">Total P&amp;L</span>
+          <span class="pos-stat-value" id="pm-total-pnl">—</span>
+        </div>
+        <div class="pos-stat-tile">
+          <span class="pos-stat-label">Max Drawdown</span>
+          <span class="pos-stat-value" id="pm-max-dd">—</span>
+        </div>
+        <div class="pos-stat-tile">
+          <span class="pos-stat-label">Avg Fills</span>
+          <span class="pos-stat-value" id="pm-avg-fills">—</span>
+        </div>
+      </div>
+
+      <div class="pos-equity-wrap">
+        <div class="pos-chart-title">P&amp;L Equity Curve ($3,000 notional)</div>
+        <canvas id="pm-equity-canvas"></canvas>
+      </div>
+
+      <div class="pos-charts-row">
+        <div class="pos-chart-wrap">
+          <div class="pos-chart-title">Drawdown Curve</div>
+          <canvas id="pm-dd-canvas"></canvas>
+        </div>
+        <div class="pos-chart-wrap">
+          <div class="pos-chart-title">Ladder Exhaustion (Fill Distribution)</div>
+          <canvas id="pm-fills-canvas"></canvas>
+        </div>
+      </div>
+
+      <div>
+        <div class="pos-chart-title" style="margin-bottom:8px">Recent Trades (last 30)</div>
+        <div style="overflow-x:auto">
+          <table class="pos-trades-table">
+            <thead>
+              <tr>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th class="num">Fills</th>
+                <th class="num">Entry Price</th>
+                <th class="num">WAP</th>
+                <th class="num">P&amp;L $</th>
+                <th>Exit Reason</th>
+              </tr>
+            </thead>
+            <tbody id="pm-trades-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Scanner: filter + sort ────────────────────────────────────────────────
 var _activeFilter = 'ALL';
@@ -392,7 +613,9 @@ function renderRows() {
                     + ' <span class="' + pnlCls + '">' + pnlSign + '$' + r.pos_pnl + '</span></div>';
         }
 
-        return '<tr class="' + rowCls + '" data-regime="' + r.regime + '" data-pair="' + r.pair + '">'
+        // claude code changed: position rows are clickable to open detail modal
+        var rowClick = r.has_position ? ' onclick="openPositionModal(\'' + r.pair.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')" style="cursor:pointer"' : '';
+        return '<tr class="' + rowCls + '"' + rowClick + ' data-regime="' + r.regime + '" data-pair="' + r.pair + '">'
             + '<td><span class="pair-name">' + r.pair + '</span></td>'
             + '<td><span class="regime-badge regime-' + r.regime + '">' + regimeLabel + '</span></td>'
             + '<td class="num">' + adxHtml + '</td>'
@@ -408,5 +631,235 @@ function renderRows() {
             + '</tr>';
     }).join('');
 }
+
+// ── Position detail modal ─────────────────────────────────────────────────
+// claude code changed: new — open/close modal; Chart.js equity/DD/fill charts
+var SIM_DATA = {{ sim_data_json|safe }};
+var _pmCharts = {};   // keyed by canvas id — destroyed on close
+
+function destroyCharts() {
+    Object.keys(_pmCharts).forEach(function(k) {
+        try { _pmCharts[k].destroy(); } catch(e) {}
+    });
+    _pmCharts = {};
+}
+
+function _makeChart(canvasId, config) {
+    var ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    if (_pmCharts[canvasId]) { try { _pmCharts[canvasId].destroy(); } catch(e) {} }
+    _pmCharts[canvasId] = new Chart(ctx, config);
+}
+
+function _computeDrawdown(equity) {
+    // returns [{d, p}] where p is cumulative drawdown in $ from running peak
+    var dd = [];
+    var peak = -Infinity;
+    equity.forEach(function(pt) {
+        if (pt.p > peak) peak = pt.p;
+        dd.push({ d: pt.d, p: pt.p - peak });
+    });
+    return dd;
+}
+
+function _chartColors() {
+    // detect dark/light from body or root
+    return { eq: '#5b8dc9', dd: '#d9534f', grid: 'rgba(255,255,255,0.05)', tick: '#636c76' };
+}
+
+function openPositionModal(pair) {
+    var d = SIM_DATA[pair];
+    if (!d) return;
+    var op = d.open_position;
+    var stats = d.stats || {};
+    var c = _chartColors();
+
+    // header
+    document.getElementById('pm-title').textContent = pair;
+    var vbadge = document.getElementById('pm-validated-badge');
+    vbadge.style.display = d.validated ? 'inline-block' : 'none';
+
+    // open position card
+    if (op) {
+        document.getElementById('pm-entry-dt').textContent    = op.entry_time || '—';
+        document.getElementById('pm-entry-price').textContent = op.entry_price != null ? op.entry_price.toFixed(5) : '—';
+        document.getElementById('pm-wap').textContent         = op.wap != null ? op.wap.toFixed(5) : '—';
+        document.getElementById('pm-fills').textContent       = op.fills != null ? 'L' + op.fills : '—';
+        var pnlEl = document.getElementById('pm-pnl');
+        var pnl   = op.profit_usdt != null ? op.profit_usdt : null;
+        if (pnl !== null) {
+            pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+            pnlEl.style.color = pnl >= 0 ? 'var(--term-pos,#3fb87f)' : 'var(--term-neg,#d9534f)';
+        } else {
+            pnlEl.textContent = '—';
+            pnlEl.style.color = '';
+        }
+    }
+
+    // stats tiles
+    document.getElementById('pm-total-trades').textContent = stats.total_trades != null ? stats.total_trades : '—';
+    document.getElementById('pm-win-pct').textContent      = stats.win_pct     != null ? stats.win_pct.toFixed(1) + '%' : '—';
+    var tpnl = stats.total_pnl != null ? stats.total_pnl : null;
+    var tpnlEl = document.getElementById('pm-total-pnl');
+    if (tpnl !== null) {
+        tpnlEl.textContent = (tpnl >= 0 ? '+' : '') + '$' + tpnl.toFixed(2);
+        tpnlEl.style.color = tpnl >= 0 ? 'var(--term-pos,#3fb87f)' : 'var(--term-neg,#d9534f)';
+    } else { tpnlEl.textContent = '—'; tpnlEl.style.color = ''; }
+    var mdd = stats.max_dd != null ? stats.max_dd : null;
+    var mddEl = document.getElementById('pm-max-dd');
+    if (mdd !== null) {
+        mddEl.textContent = '$' + mdd.toFixed(2);
+        mddEl.style.color = mdd < 0 ? 'var(--term-neg,#d9534f)' : '';
+    } else { mddEl.textContent = '—'; mddEl.style.color = ''; }
+    document.getElementById('pm-avg-fills').textContent   = stats.avg_fills   != null ? stats.avg_fills.toFixed(1) : '—';
+
+    // equity chart
+    var equity = d.equity || [];
+    destroyCharts();
+    if (equity.length > 1) {
+        _makeChart('pm-equity-canvas', {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'P&L ($)',
+                    data: equity.map(function(pt) { return { x: pt.d, y: pt.p }; }),
+                    borderColor: c.eq,
+                    backgroundColor: 'rgba(91,141,201,.08)',
+                    fill: true,
+                    tension: 0.2,
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    pointHoverRadius: 3,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: true,
+                animation: false,
+                scales: {
+                    x: { type: 'time', time: { unit: 'month' }, ticks: { color: c.tick, maxTicksLimit: 8 }, grid: { color: c.grid } },
+                    y: { ticks: { color: c.tick, callback: function(v) { return '$' + v.toFixed(0); } }, grid: { color: c.grid } }
+                },
+                plugins: { legend: { display: false }, tooltip: { callbacks: {
+                    title: function(items) { return items[0].raw.x; },
+                    label: function(item) { return '$' + item.raw.y.toFixed(2); }
+                }}}
+            }
+        });
+
+        // drawdown chart
+        var ddData = _computeDrawdown(equity);
+        _makeChart('pm-dd-canvas', {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Drawdown ($)',
+                    data: ddData.map(function(pt) { return { x: pt.d, y: pt.p }; }),
+                    borderColor: c.dd,
+                    backgroundColor: 'rgba(217,83,79,.08)',
+                    fill: true,
+                    tension: 0.2,
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    pointHoverRadius: 3,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: true,
+                animation: false,
+                scales: {
+                    x: { type: 'time', time: { unit: 'month' }, ticks: { color: c.tick, maxTicksLimit: 6 }, grid: { color: c.grid } },
+                    y: { ticks: { color: c.tick, callback: function(v) { return '$' + v.toFixed(0); } }, grid: { color: c.grid } }
+                },
+                plugins: { legend: { display: false }, tooltip: { callbacks: {
+                    title: function(items) { return items[0].raw.x; },
+                    label: function(item) { return '$' + item.raw.y.toFixed(2); }
+                }}}
+            }
+        });
+    }
+
+    // fill distribution bar chart (ladder exhaustion)
+    var fd = d.fill_dist || {};
+    var depth = d.ladder_depth || 7;
+    var fillLabels = [], fillCounts = [], fillColors = [];
+    var red = [215,81,81], green = [63,184,127];
+    for (var lv = 1; lv <= depth; lv++) {
+        fillLabels.push('L' + lv);
+        fillCounts.push(fd[String(lv)] || 0);
+        // interpolate green→red as level increases
+        var t = (lv - 1) / Math.max(depth - 1, 1);
+        var r2 = Math.round(green[0] + t * (red[0] - green[0]));
+        var g2 = Math.round(green[1] + t * (red[1] - green[1]));
+        var b2 = Math.round(green[2] + t * (red[2] - green[2]));
+        fillColors.push('rgba(' + r2 + ',' + g2 + ',' + b2 + ',.75)');
+    }
+    _makeChart('pm-fills-canvas', {
+        type: 'bar',
+        data: {
+            labels: fillLabels,
+            datasets: [{
+                label: 'Cycles',
+                data: fillCounts,
+                backgroundColor: fillColors,
+                borderRadius: 3,
+                borderWidth: 0,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: true,
+            animation: false,
+            scales: {
+                x: { ticks: { color: c.tick }, grid: { display: false } },
+                y: { ticks: { color: c.tick, precision: 0 }, grid: { color: c.grid } }
+            },
+            plugins: { legend: { display: false }, tooltip: { callbacks: {
+                label: function(item) { return item.raw + ' cycle' + (item.raw !== 1 ? 's' : ''); }
+            }}}
+        }
+    });
+
+    // recent trades table
+    var tbody = document.getElementById('pm-trades-tbody');
+    var trades = d.recent_trades || [];
+    if (!trades.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-dim,#636c76);padding:12px">No closed trades</td></tr>';
+    } else {
+        tbody.innerHTML = trades.slice().reverse().map(function(t) {
+            var pnl   = t.profit_usdt != null ? parseFloat(t.profit_usdt) : null;
+            var pnlHtml = pnl !== null
+                ? '<span class="' + (pnl >= 0 ? 'pos-pnl-pos' : 'pos-pnl-neg') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span>'
+                : '—';
+            var reason = (t.exit_reason || '').replace('DATA_END_STILL_OPEN','DATA_END');
+            var reasonCls = 'exit-' + reason.replace(/\s/g,'_');
+            var wap = t.wap != null ? parseFloat(t.wap).toFixed(5) : '—';
+            var ep  = t.entry_price != null ? parseFloat(t.entry_price).toFixed(5) : '—';
+            var xp  = t.exit_price  != null ? parseFloat(t.exit_price).toFixed(5)  : '—';
+            return '<tr>'
+                + '<td>' + (t.entry_time ? String(t.entry_time).slice(0,10) : '—') + '</td>'
+                + '<td>' + (t.exit_time  ? String(t.exit_time).slice(0,10)  : '—') + '</td>'
+                + '<td class="num">' + (t.fills != null ? 'L' + t.fills : '—') + '</td>'
+                + '<td class="num">' + ep + '</td>'
+                + '<td class="num">' + wap + '</td>'
+                + '<td class="num">' + pnlHtml + '</td>'
+                + '<td><span class="' + reasonCls + '">' + reason + '</span></td>'
+                + '</tr>';
+        }).join('');
+    }
+
+    // show overlay
+    document.getElementById('pos-overlay').classList.add('open');
+    document.body.style.overflow = 'hidden';
+}
+
+function closePositionModal() {
+    document.getElementById('pos-overlay').classList.remove('open');
+    document.body.style.overflow = '';
+    destroyCharts();
+}
+
+// ESC key closes modal
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closePositionModal();
+});
 </script>
 {% endblock %}

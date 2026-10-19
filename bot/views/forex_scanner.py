@@ -25,8 +25,9 @@ _FOREX_DIR = _ROOT / "data" / "forex"
 _CACHE_KEY = "forex_scanner_v1"
 _CACHE_TTL = 1800   # 30 minutes
 
-_POS_CACHE_KEY = "paper_positions_v1"   # written here; also readable by other views
-_POS_CACHE_TTL = 3600                   # 1 hour
+_SIM_CACHE_KEY = "paper_sim_v1"   # full simulation results per pair (equity, trades, stats, open_position)
+_SIM_CACHE_TTL = 3600             # 1 hour
+_POS_CACHE_KEY = _SIM_CACHE_KEY   # alias kept for backward compat
 _CANDLES   = 200    # candles loaded per pair for indicator computation
 _ZSCORE_W  = 20     # z-score lookback window
 _ATR_W     = 14
@@ -251,30 +252,51 @@ def _build_scanner_data() -> list[dict]:
     return rows
 
 
-def _get_paper_positions() -> dict:  # claude code changed: new — paper position cache reader
+def _get_paper_sim() -> dict:  # claude code changed: new — full simulation results per active pair
     """
-    Return {pair: position_dict} for pairs with an active paper cycle.
+    Return {pair: sim_dict} for all QC_PORTFOLIO_SPECS pairs.
 
-    Reads from cache if warm; runs run_ranging_paper_simulation() on miss (slow first
-    load ~5-15 s).  A 5-minute negative cache prevents tight retry loops on errors.
+    sim_dict keys: equity, fill_dist, stats, recent_trades, open_position, validated,
+                   ladder_depth.
+    Reads from cache if warm; runs run_ranging_paper_simulation() on miss.
     """
-    cached = cache.get(_POS_CACHE_KEY)
+    cached = cache.get(_SIM_CACHE_KEY)
     if cached is not None:
         return cached
     try:
         from bot.paper_trading.ranging_paper_engine import run_ranging_paper_simulation
-        sim = run_ranging_paper_simulation()
-        pos = {
-            pair: r["open_position"]
-            for pair, r in sim.items()
-            if r.get("open_position")
-        }
+        full = run_ranging_paper_simulation()
+        sim = {}
+        for pair, r in full.items():
+            if "error" in r:
+                continue
+            trades = r.get("trades", [])
+            recent = sorted(trades, key=lambda t: t.get("exit_time", ""))[-30:]
+            sim[pair] = {
+                "equity":        r.get("equity", []),
+                "fill_dist":     r.get("fill_dist", {}),
+                "stats":         r.get("stats", {}),
+                "recent_trades": recent,
+                "open_position": r.get("open_position"),
+                "validated":     r.get("validated", False),
+                "ladder_depth":  r.get("ladder_depth", 7),
+            }
     except Exception as exc:
-        logger.warning("forex_scanner: positions fetch failed: %s", exc)
-        cache.set(_POS_CACHE_KEY, {}, 300)   # negative cache — 5 min
+        logger.warning("forex_scanner: sim fetch failed: %s", exc)
+        cache.set(_SIM_CACHE_KEY, {}, 300)   # negative cache — 5 min
         return {}
-    cache.set(_POS_CACHE_KEY, pos, _POS_CACHE_TTL)
-    return pos
+    cache.set(_SIM_CACHE_KEY, sim, _SIM_CACHE_TTL)
+    return sim
+
+
+def _get_paper_positions() -> dict:  # claude code changed: thin wrapper over _get_paper_sim
+    """Return {pair: open_position_dict} for pairs with an active paper cycle."""
+    sim = _get_paper_sim()
+    return {
+        pair: data["open_position"]
+        for pair, data in sim.items()
+        if data.get("open_position")
+    }
 
 
 # ── view ──────────────────────────────────────────────────────────────────────
@@ -286,7 +308,12 @@ def forex_scanner(request):  # claude code changed: new — Forex Market Scanner
         cache.set(_CACHE_KEY, rows, _CACHE_TTL)
 
     # Inject paper positions — shallow-copy each row to avoid mutating cached dicts  # claude code changed: new
-    positions = _get_paper_positions()
+    sim_data  = _get_paper_sim()
+    positions = {
+        pair: data["open_position"]
+        for pair, data in sim_data.items()
+        if data.get("open_position")
+    }
     display_rows = []
     for row in rows:
         r = dict(row)
@@ -308,11 +335,19 @@ def forex_scanner(request):  # claude code changed: new — Forex Market Scanner
         regime_counts[r["regime"]] = regime_counts.get(r["regime"], 0) + 1
     open_count = sum(1 for r in display_rows if r["has_position"])
 
+    # Full sim data for chart modal — only pairs that have an open position  # claude code changed: new
+    sim_data_json = json.dumps({
+        pair: data
+        for pair, data in sim_data.items()
+        if data.get("open_position")
+    })
+
     context = {
         "rows":          display_rows,
         "rows_json":     json.dumps(display_rows),
         "regime_counts": regime_counts,
         "total_pairs":   len(display_rows),
         "open_count":    open_count,
+        "sim_data_json": sim_data_json,
     }
     return render(request, "forex_scanner.html", context)
