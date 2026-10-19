@@ -156,6 +156,8 @@ from typing import Dict, List, Optional, Tuple  # Type annotations
 import numpy as np                              # Numerical operations — core of Kalman math
 import pandas as pd                             # DataFrame operations
 from scipy import stats                         # Spearman IC, OLS initialisation
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.research_zones import ZONES   # claude code changed: D-8
 from statsmodels.regression.linear_model import OLS    # OLS for hedge ratio seed
 from statsmodels.tools import add_constant             # Adds intercept column to OLS
 
@@ -168,6 +170,11 @@ from statsmodels.tools import add_constant             # Adds intercept column t
 from bot.research.cointegration_engine import TRAINING_WINDOW as _DEFAULT_TRAINING_WINDOW_CANDLES
 from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX, get_instrument  # claude code changed: Data-Layer Audit migration (F.3) — see DATA_LAYER_ARCHITECTURE_AUDIT.md
 from bot.research.data_access import load_ohlcv_via_provider  # claude code changed: Data-Layer Audit migration (F.3)
+from bot.quant_core.kalman import CanonicalKalman   # claude code changed: Stage 2D Rev B — the one Kalman recursion shared with live
+from bot.quant_core.protocol import CANONICAL, CanonicalProtocol   # claude code changed: Stage 2D Rev B — protocol values come from one versioned source
+from bot.quant_core.seed import causal_init, seed_from_research, seed_id, write_seed   # claude code changed: Stage 2D Rev B step 6 (D9); C6 causal init; D-4 lineage id
+from bot.quant_core import provenance as _prov   # claude code changed: Stage 2D Rev B D-4/D-5 — content data version + canonical dataset manifest
+from bot.quant_core.protocol import METHODOLOGY_VERSION as _METHODOLOGY_VERSION   # claude code changed: Stage 2D Rev B D-4
 
 warnings.filterwarnings('ignore')               # Suppress statsmodels convergence warnings
 
@@ -339,34 +346,34 @@ def load_pair_config(
 # These values are calibrated for 1h crypto candles and a ~120h half-life pair
 # If β is jumping erratically: reduce PROCESS_NOISE_BETA
 # If β is not tracking a genuine shift: increase PROCESS_NOISE_BETA
-PROCESS_NOISE_BETA:      float = 1e-5   # How much β changes per candle on average
-PROCESS_NOISE_ALPHA:     float = 1e-5   # How much α changes per candle on average
+PROCESS_NOISE_BETA:      float = CANONICAL.q_beta   # How much β changes per candle on average  # claude code changed: Stage 2D Rev B — was a literal 1e-5; now from the canonical protocol (same value)
+PROCESS_NOISE_ALPHA:     float = CANONICAL.q_alpha  # How much α changes per candle on average  # claude code changed: Stage 2D Rev B — was a literal 1e-5
 
 # Observation noise — how much measurement uncertainty in each price observation
 # For liquid crypto assets on Binance, prices are highly accurate
 # This value is calibrated to the typical hourly price variance of AVAX
-OBSERVATION_NOISE:       float = 1e-3   # Variance of log-price observation error
+OBSERVATION_NOISE:       float = CANONICAL.r        # Variance of log-price observation error  # claude code changed: Stage 2D Rev B — was a literal 1e-3
 
 # Warmup period — number of candles before trusting the Kalman estimates
 # The filter needs time to converge from its initial state to a stable estimate
 # During warmup, the filter runs but outputs are marked as not-yet-reliable
 # 168 hours = 7 days — sufficient for the filter to converge for our pair
-WARMUP_CANDLES:          int   = 168    # 7 days of 1h candles
+WARMUP_CANDLES:          int   = CANONICAL.warmup_candles   # 7 days of 1h candles  # claude code changed: Stage 2D Rev B — was a literal 168
 
 # Z-score rolling window for dynamic spread normalisation
 # Must match the window used in cointegration_engine.py for fair comparison
 # 504 hours = 3 weeks — stable enough for crypto's volatility profile
-ZSCORE_WINDOW:           int   = 504    # 3 weeks
+ZSCORE_WINDOW:           int   = CANONICAL.z_window_candles   # 3 weeks  # claude code changed: Stage 2D Rev B — was a literal 504
 
 # Minimum observations for z-score to be valid
-ZSCORE_MIN_PERIODS:      int   = 168    # 1 week minimum
+ZSCORE_MIN_PERIODS:      int   = CANONICAL.z_min_valid   # 1 week minimum  # claude code changed: Stage 2D Rev B — was a literal 168
 
 # claude code changed: new block — extracted the bare 5.0 winsor literal into a named constant
 # Winsorisation cap applied to kalman_zscore and ols_zscore (see _calculate_zscore)
 # Values beyond ±5 std are almost certainly data errors or exchange anomalies
 # NOTE: any EXIT_ZSCORE_STOPLOSS (entry_exit_engine.py) set close to this limit
 # will rarely fire, since |z| > ZSCORE_WINSOR_LIMIT is structurally impossible
-ZSCORE_WINSOR_LIMIT:     float = 5.0    # claude code changed: single named source of truth for both clip() calls below
+ZSCORE_WINSOR_LIMIT:     float = CANONICAL.z_clip   # claude code changed: single named source of truth for both clip() calls below; Stage 2D Rev B — was a literal 5.0
 
 # Forward return horizons for IC testing
 # These match the labels in cointegration_engine.py for direct comparison
@@ -725,6 +732,87 @@ class KalmanFilterEngine:
         logger.info(f"  Forward horizons : {list(self.horizons.keys())}")
 
 
+    def protocol(self) -> CanonicalProtocol:   # claude code changed: Stage 2D Rev B — this engine's parameters as a versioned protocol (the defaults equal CANONICAL, so the config hash matches live)
+        return CANONICAL.with_overrides(q_beta=self.qb, q_alpha=self.qa, r=self.R,
+                                        warmup_candles=self.warmup, z_window_candles=self.zscore_window,
+                                        z_min_valid=self.zscore_min_p, z_clip=ZSCORE_WINSOR_LIMIT)
+
+    def run_canonical(self, price_a: pd.Series, price_b: pd.Series,
+                      protocol: Optional[CanonicalProtocol] = None, output_dir=None) -> pd.DataFrame:   # claude code changed: Stage 2D Rev B C6 — new
+        """Canonical (STAGE2D-REVB) research state with CAUSAL initialisation.
+
+        Grid-align the pair, fit θ₀ on the init window (the first L grid
+        candles) ONLY, and run the filter from the next grid candle. Rows of
+        the init window are not part of the output: they carry no filter
+        state. The static OLS spread/z columns are set to NaN — their only
+        source here would be cointegration_pairs.csv's full-span fit, which is
+        look-ahead; a causal static baseline needs the selection zone (BLOCKED).
+        Fails closed (ProtocolValueMissing) while L is unset.
+        """
+        protocol = protocol or self.protocol()
+        aligned = self._align_prices(price_a, price_b)
+        ZONES.assert_no_sealed_data(aligned.index, purpose=f"run_canonical {self.pair_name}")   # claude code changed: D-8 — sealed forward holdout
+        # claude code changed: 2026-10-04 asset-agnostic — the canonical state may only run under a COMPLETE market
+        # profile (FX: FX_CALENDAR_UNAVAILABLE until Decision 5's owner rules exist), and the 24/7 crypto rules
+        # refuse session-traded data that arrives under an unregistered name. Crypto behaviour is otherwise unchanged.
+        from bot.quant_core.market_profile import assert_continuous_market, profile_for_pair
+        market = profile_for_pair(self.symbol_a, self.symbol_b).require_canonical(f"run_canonical {self.pair_name}")
+        if market.calendar.is_continuous:
+            assert_continuous_market(aligned.dropna().index, purpose=f"run_canonical {self.pair_name}")
+        log_a, log_b = self._to_log_prices(aligned)
+        init = causal_init(log_a, log_b, protocol)
+        k = log_a.index.get_loc(init.seed_timestamp)
+        la, lb = log_a.iloc[k:], log_b.iloc[k:]
+        state = KalmanState(theta=init.theta0.copy(), P=np.eye(2) * protocol.p0_scale)
+        results = self._run_filter(la, lb, state, protocol=protocol)
+        results = self._calculate_dynamic_spread(results, la, lb)
+        results["ols_spread"] = np.nan
+        results = self._calculate_dynamic_zscore(results)
+        results["ols_zscore"] = np.nan
+        results["is_training_window"] = False    # the causal seed has no fitted span inside the output
+        results["close_a"] = aligned["price_a"].iloc[k:].to_numpy()
+        results["close_b"] = aligned["price_b"].iloc[k:].to_numpy()
+        # claude code changed: Stage 2D Rev B D-5 — content data version of exactly
+        # what this run consumed: each leg's close on the aligned grid range.
+        dv = _prov.data_version(
+            {self.symbol_a: aligned[["price_a"]].dropna().rename(columns={"price_a": "close"}),
+             self.symbol_b: aligned[["price_b"]].dropna().rename(columns={"price_b": "close"})},
+            timeframe="1h", columns=["close"], start=aligned.index[0], end=aligned.index[-1])
+        self.data_version_record = dv
+        self.seed_record = seed_from_research(self.pair_name, init, log_a.index,
+                                              int(results["is_observed"].sum()), protocol, data_version=dv.data_version)
+        self.canonical_protocol = protocol
+        if output_dir is not None:
+            logger.info(f"  Saved Kalman seed  : {write_seed(self.seed_record, output_dir)}")
+            logger.info(f"  Saved canonical Kalman dataset: {self.write_canonical_dataset(results, output_dir)}")
+        return results
+
+    def write_canonical_dataset(self, results: pd.DataFrame, output_dir) -> Path:   # claude code changed: Stage 2D Rev B D-4 — new
+        """Write a run_canonical() result as a CANONICAL Kalman dataset:
+        <output_dir>/canonical/<A>_<B>_kalman.csv plus its provenance sidecar
+        (kind KALMAN_STATE; methodology, protocol hash, data version, run id,
+        artifact digest, and the full seed record as lineage). A separate
+        sub-folder, so a legacy <A>_<B>_kalman.csv is never overwritten.
+        EntryExitEngine(rule_set="CANONICAL") accepts only such datasets."""
+        if getattr(self, "seed_record", None) is None:
+            raise ValueError("write_canonical_dataset needs a run_canonical() result (no causal seed record)")
+        out = Path(output_dir) / "canonical"
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / f"{self.symbol_a}_{self.symbol_b}_kalman.csv"
+        results.rename_axis("timestamp").reset_index().to_csv(path, index=False)
+        seed = self.seed_record
+        code = _prov.code_state()
+        prov = _prov.OutputProvenance(
+            kind="KALMAN_STATE", status=_prov.CANONICAL, methodology_version=_METHODOLOGY_VERSION,
+            protocol_hash=self.canonical_protocol.config_hash(), data_version=seed.data_version,
+            run_id=_prov.make_run_id(kind="KALMAN_STATE", seed=seed_id(seed), data=seed.data_version,
+                                     protocol=self.canonical_protocol.config_hash(), commit=code.commit, dirty=code.dirty_digest),
+            producer="bot.research.kalman_filter_engine.run_canonical", artifact_sha256=_prov.file_sha256(path),
+            code_commit=code.commit, code_dirty=code.dirty,
+            extra={"seed": dict(seed.__dict__), "seed_id": seed_id(seed), "data": self.data_version_record.as_dict()})
+        _prov.write_provenance(path, prov)
+        return path
+
     # ─────────────────────────────────────────────────────────────────────────
     # PUBLIC: run()
     # ─────────────────────────────────────────────────────────────────────────
@@ -821,6 +909,11 @@ class KalmanFilterEngine:
         # ── Step 5: Run Kalman filter sequentially ────────────────────────────
         # This is the core computation — updates β and α at every candle
         kalman_results = self._run_filter(log_a, log_b, initial_state)
+        # claude code changed: Stage 2D Rev B C6 — the step-6 seed record that was
+        # written here was REMOVED: this legacy path seeds candle 0 with an OLS
+        # fitted on the first ~10,000 candles (look-ahead), so it must never
+        # become a canonical seed. Canonical seeds come only from run_canonical().
+        self.seed_record = None
 
         # ── Step 6: Calculate dynamic spread ─────────────────────────────────
         # spread_t = log(AVAX_t) - α_t - β_t × log(ATOM_t)
@@ -1024,6 +1117,7 @@ class KalmanFilterEngine:
         self,
         price_a: pd.Series,
         price_b: pd.Series,
+        calendar=None,   # claude code changed: 2026-10-04 asset-agnostic — None = the unchanged 24/7 hourly grid; a SessionCalendar = its trading grid (closure hours are not rows, Decision 5 A)
     ) -> pd.DataFrame:
         """
         Align AVAX and ATOM to a shared timestamp grid.
@@ -1043,40 +1137,46 @@ class KalmanFilterEngine:
 
         logger.info("Step 2: Aligning AVAX and ATOM price series...")
 
-        # Combine into a wide DataFrame — outer join first to see all timestamps
-        aligned = pd.concat(
-            [price_a.rename("price_a"), price_b.rename("price_b")],
-            axis=1,
-            join="outer",
-        )
-
-        aligned.sort_index(inplace=True)
-
-        # Forward-fill small gaps (exchange downtime up to 2 consecutive candles)
-        # This is the same approach used in cross_section_engine.py
-        # Limit=2 means only fill if the gap is at most 2 hours
-        gaps_before = aligned.isna().sum().sum()
-        gaps_after  = aligned.isna().sum().sum()
-
-        if gaps_before > 0:
-            logger.info(
-                f"  Forward-filled {gaps_before - gaps_after} "
-                f"cells (max gap: 2 candles)"
-            )
-
-        # Drop any remaining NaN — only timestamps where both assets have prices
-        before_inner = len(aligned)
-        aligned.dropna(inplace=True)
-        after_inner  = len(aligned)
-
-        if before_inner - after_inner > 0:
-            logger.info(
-                f"  Dropped {before_inner - after_inner} rows "
-                f"where one asset had no price"
-            )
+        # claude code changed: Stage 2D Rev B step 5 (D6/D7/D8) — was an outer
+        # join followed by dropna(), which silently COMPRESSED every missing
+        # hour into one Kalman step. The pair now lives on the complete hourly
+        # grid between the first and last candle where both legs are observed;
+        # a candle missing on either leg stays a NaN row, which the canonical
+        # filter treats as a prediction-only step (gap ≤ g_max) or a state
+        # invalidation + re-seed (gap > g_max). Nothing is filled.
+        legs = {}                                                       # claude code changed: Stage 2D Rev B
+        for name, ser in (("price_a", price_a), ("price_b", price_b)):  # claude code changed: Stage 2D Rev B
+            ser = ser.sort_index()                                      # claude code changed: Stage 2D Rev B — out-of-order input is reordered, then checked
+            idx = pd.DatetimeIndex(ser.index)                           # claude code changed: Stage 2D Rev B
+            if (idx != idx.floor("h")).any():                           # claude code changed: Stage 2D Rev B — unexpected interval
+                raise ValueError(f"{name}: timestamps are not on hour boundaries (1h open-time grid required)")
+            dup = idx.duplicated(keep=False)                            # claude code changed: Stage 2D Rev B
+            if dup.any():                                               # claude code changed: Stage 2D Rev B
+                d = ser[dup]
+                if (d.groupby(level=0).nunique(dropna=False) > 1).any():   # claude code changed: Stage 2D Rev B — conflicting duplicate candle → fail closed
+                    raise ValueError(f"{name}: conflicting duplicate candles (e.g. {d.index[0]})")
+                ser = ser[~idx.duplicated(keep="first")]                # claude code changed: Stage 2D Rev B — identical duplicates are harmless
+                logger.info(f"  {name}: removed {int(dup.sum()) - d.index.nunique()} identical duplicate candle(s)")
+            legs[name] = ser                                            # claude code changed: Stage 2D Rev B
+        aligned = pd.concat([legs["price_a"].rename("price_a"), legs["price_b"].rename("price_b")],   # claude code changed: Stage 2D Rev B
+                            axis=1, join="outer")
+        both = aligned.dropna().index                                   # claude code changed: Stage 2D Rev B — only to locate the common span
+        if len(both) == 0:
+            raise ValueError("Insufficient aligned data: the two legs share no candle")
+        if calendar is None or calendar.is_continuous:                  # claude code changed: 2026-10-04 asset-agnostic — crypto line below unchanged
+            grid = pd.date_range(both[0], both[-1], freq="h", tz=both.tz)   # claude code changed: Stage 2D Rev B — complete hourly grid
+        else:                                                           # claude code changed: 2026-10-04 asset-agnostic — session calendar: scheduled closures excluded from the grid
+            from bot.quant_core.market_profile import assert_no_closure_rows
+            assert_no_closure_rows(aligned.dropna(how="all").index, calendar, purpose="align prices")
+            grid = calendar.trading_grid(both[0], both[-1])
+        aligned = aligned.reindex(grid)                                 # claude code changed: Stage 2D Rev B — missing hours stay NaN rows
+        n_missing = int(aligned.isna().any(axis=1).sum())               # claude code changed: Stage 2D Rev B
+        if n_missing:
+            logger.info(f"  {n_missing} grid candle(s) missing on at least one leg — kept as gaps (no fill, no compression)")
+        self.n_missing_grid_candles = n_missing                         # claude code changed: Stage 2D Rev B — recorded for run metadata
 
         # Validate we have enough data for the Kalman filter to converge
-        if len(aligned) < self.warmup + 500:
+        if int(aligned.notna().all(axis=1).sum()) < self.warmup + 500:   # claude code changed: Stage 2D Rev B — count OBSERVED candles, not grid rows
             raise ValueError(
                 f"Insufficient aligned data: {len(aligned)} rows. "
                 f"Need at least {self.warmup + 500} for the Kalman filter "
@@ -1210,6 +1310,7 @@ class KalmanFilterEngine:
         log_a:         pd.Series,
         log_b:         pd.Series,
         initial_state: KalmanState,
+        protocol: Optional[CanonicalProtocol] = None,   # claude code changed: Stage 2D Rev B C6 — run_canonical passes the protocol it seeds under
     ) -> pd.DataFrame:
         """
         Run the Kalman filter sequentially through all candles.
@@ -1258,122 +1359,43 @@ class KalmanFilterEngine:
             f"({len(log_a):,} candles)..."
         )
 
-        # ── Pre-allocate result arrays for performance ─────────────────────────
-        # Pre-allocation is much faster than appending to lists in a 50,000 row loop
-        n               = len(log_a)
-        kalman_beta     = np.full(n, np.nan)     # Dynamic hedge ratio per candle
-        kalman_alpha    = np.full(n, np.nan)     # Dynamic intercept per candle
-        pred_error      = np.full(n, np.nan)     # Innovation (prediction error)
-        beta_uncert     = np.full(n, np.nan)     # Uncertainty in beta estimate
-        alpha_uncert    = np.full(n, np.nan)     # Uncertainty in alpha estimate
-        kalman_gain_b   = np.full(n, np.nan)     # Kalman gain for beta (diagnostics)
-        kalman_beta_pred  = np.full(n, np.nan)   # Pre-update hedge ratio (leakage-free)
-        kalman_alpha_pred = np.full(n, np.nan)   # Pre-update intercept (leakage-free)
+        # claude code changed: Stage 2D Rev B steps 3–5 — the hand-written
+        # recursion that lived here is replaced by the ONE canonical filter
+        # (bot/quant_core/kalman.py) that live also uses. Same equations
+        # (prior, innovation, S, gain, posterior, Joseph covariance), plus the
+        # D8 gap policy on the hourly grid: a NaN row is a prediction-only
+        # step (P += Q); a run longer than g_max invalidates the state and the
+        # next observed candle re-seeds with θ₀, P₀ and restarts warmup.
+        protocol = protocol or self.protocol()                       # claude code changed: Stage 2D Rev B — engine params as a versioned protocol
+        kf = CanonicalKalman(initial_state.theta.copy(), protocol)   # claude code changed: Stage 2D Rev B — P₀ = p0_scale·I, identical to _initialise_state
+        n = len(log_a)                                               # claude code changed: Stage 2D Rev B
+        cols = {k: np.full(n, np.nan) for k in (                     # claude code changed: Stage 2D Rev B — every quantity both sides must expose
+            "kalman_beta", "kalman_alpha", "prediction_error", "beta_uncertainty", "alpha_uncertainty",
+            "kalman_gain_beta", "kalman_gain_alpha", "innovation_variance", "kalman_beta_pred",
+            "kalman_alpha_pred", "beta_uncertainty_prior", "filtered_residual")}
+        observed = np.zeros(n, dtype=bool)                           # claude code changed: Stage 2D Rev B
+        state_valid = np.zeros(n, dtype=bool)                        # claude code changed: Stage 2D Rev B
+        in_warmup = np.zeros(n, dtype=bool)                          # claude code changed: Stage 2D Rev B
+        segment = np.zeros(n, dtype=int)                             # claude code changed: Stage 2D Rev B
+        for t, (xa, xb) in enumerate(zip(log_a.to_numpy(dtype=float), log_b.to_numpy(dtype=float))):   # claude code changed: Stage 2D Rev B
+            st = kf.step(xa, xb)                                     # claude code changed: Stage 2D Rev B
+            cols["kalman_beta_pred"][t], cols["kalman_alpha_pred"][t] = st.theta_prior   # claude code changed: Stage 2D Rev B
+            cols["beta_uncertainty_prior"][t] = st.P_prior[0, 0]     # claude code changed: Stage 2D Rev B
+            cols["kalman_beta"][t], cols["kalman_alpha"][t] = st.theta_post   # claude code changed: Stage 2D Rev B — θ(t|t)
+            cols["beta_uncertainty"][t] = st.P_post[0, 0]            # claude code changed: Stage 2D Rev B — posterior variance (D1)
+            cols["alpha_uncertainty"][t] = st.P_post[1, 1]           # claude code changed: Stage 2D Rev B
+            cols["prediction_error"][t] = st.innovation              # claude code changed: Stage 2D Rev B — NaN on a missing candle
+            cols["innovation_variance"][t] = st.innovation_variance  # claude code changed: Stage 2D Rev B — S
+            cols["kalman_gain_beta"][t], cols["kalman_gain_alpha"][t] = st.gain   # claude code changed: Stage 2D Rev B
+            cols["filtered_residual"][t] = st.filtered_residual      # claude code changed: Stage 2D Rev B
+            observed[t], state_valid[t] = st.observed, st.state_valid   # claude code changed: Stage 2D Rev B
+            in_warmup[t], segment[t] = st.in_warmup, st.segment      # claude code changed: Stage 2D Rev B
 
-        # ── State transition matrix F (identity — state drifts slowly) ────────
-        # F = [[1, 0], [0, 1]]
-        # This says: beta and alpha at t+1 are approximately equal to
-        # beta and alpha at t, plus small Gaussian noise Q
-        F = np.eye(2)
-
-        # ── Process noise covariance Q ─────────────────────────────────────────
-        # Controls how fast we allow β and α to change per candle
-        # Q = [[qb, 0], [0, qa]] — diagonal means β and α drift independently
-        Q = np.array([
-            [self.qb, 0.0  ],    # Beta can drift by sqrt(qb) per candle on average
-            [0.0,     self.qa],  # Alpha can drift by sqrt(qa) per candle on average
-        ])
-
-        # ── Observation noise R ────────────────────────────────────────────────
-        # Scalar — how much variance in individual log-price observations
-        R = self.R
-
-        # ── Initialise filter state ────────────────────────────────────────────
-        theta = initial_state.theta.copy()   # [beta, alpha] — current estimate
-        P     = initial_state.P.copy()       # 2×2 covariance — current uncertainty
-
-        log_a_arr = log_a.values    # Convert to numpy array for speed
-        log_b_arr = log_b.values    # (avoids pandas overhead in the loop)
-
-        # ── Sequential update loop ─────────────────────────────────────────────
-        for t in range(n):
-
-            # ── PREDICTION STEP ───────────────────────────────────────────────
-            # Predict where the state will be at time t based on state at t-1
-            # Since F = identity, prediction = previous state (state drifts slowly)
-            # The uncertainty grows by Q (we become slightly less certain each step
-            # because the true state may have changed a tiny bit)
-            theta_pred = F @ theta              # Predicted state (= theta since F=I)
-            P_pred     = F @ P @ F.T + Q        # Predicted covariance (grows by Q)
-
-            # Store the pre-update state immediately — this is the state as
-            # it existed BEFORE seeing this candle's AVAX price, and is what
-            # the tradeable spread must use instead of the posterior theta
-            kalman_beta_pred[t]  = theta_pred[0]
-            kalman_alpha_pred[t] = theta_pred[1]
-
-            # ── OBSERVATION AT TIME t ─────────────────────────────────────────
-            # y_t = log(AVAX price at time t) — what we observe
-            y_t = log_a_arr[t]
-
-            # H_t = [log(ATOM_t), 1] — design matrix at this timestamp
-            # The observation model says: log(AVAX) = β × log(ATOM) + α + noise
-            # So H × θ = [log(ATOM), 1] × [β, α]ᵀ = β×log(ATOM) + α
-            H_t = np.array([log_b_arr[t], 1.0])
-
-            # ── UPDATE STEP ───────────────────────────────────────────────────
-            # How wrong was our prediction?
-            innovation = y_t - H_t @ theta_pred      # Prediction error (e_t)
-
-            # How uncertain is that prediction error?
-            # S = H × P × Hᵀ + R
-            S = H_t @ P_pred @ H_t + R               # Innovation variance (scalar)
-
-            # Kalman gain: how much should we trust the new observation?
-            # K = P × Hᵀ / S
-            # High K: trust new observation (observation noise is small)
-            # Low K: trust the prediction (state uncertainty is small)
-            K = P_pred @ H_t / S                     # 2D Kalman gain vector
-
-            # Update the state estimate using the innovation
-            # θ_{t|t} = θ_{t|t-1} + K × innovation
-            theta = theta_pred + K * innovation
-
-            # Update the covariance — we become more certain after the observation
-            # P_{t|t} = (I - K × H) × P_{t|t-1}
-            I = np.eye(2)
-            KH = np.outer(K, H_t)
-            
-            P = (
-                (I - KH)
-                @ P_pred
-                @ (I - KH).T
-                + np.outer(K, K) * R      
-                
-            )
-
-            # ── Store results for this candle ──────────────────────────────────
-            kalman_beta[t]   = theta[0]              # Updated β
-            kalman_alpha[t]  = theta[1]              # Updated α
-            pred_error[t]    = innovation            # Prediction error
-            beta_uncert[t]   = P[0, 0]              # Uncertainty in β
-            alpha_uncert[t]  = P[1, 1]              # Uncertainty in α
-            kalman_gain_b[t] = K[0]                 # Kalman gain for β
-
-        # ── Build result DataFrame ─────────────────────────────────────────────
-        results = pd.DataFrame(index=log_a.index)
-
-        results["kalman_beta"]       = kalman_beta    # Dynamic hedge ratio
-        results["kalman_alpha"]      = kalman_alpha   # Dynamic intercept
-        results["prediction_error"]  = pred_error     # Innovation (model health)
-        results["beta_uncertainty"]  = beta_uncert    # Confidence in β
-        results["alpha_uncertainty"] = alpha_uncert   # Confidence in α
-        results["kalman_gain_beta"]  = kalman_gain_b  # Diagnostic: Kalman gain
-        results["kalman_beta_pred"]  = kalman_beta_pred    # Leakage-free hedge ratio — use this for the tradeable spread
-        results["kalman_alpha_pred"] = kalman_alpha_pred   # Leakage-free intercept — use this for the tradeable spread
-        results["is_warmup"]         = (              # True during first N candles
-            np.arange(n) < self.warmup
-        )
+        results = pd.DataFrame(cols, index=log_a.index)              # claude code changed: Stage 2D Rev B
+        results["is_observed"] = observed                            # claude code changed: Stage 2D Rev B
+        results["state_valid"] = state_valid                         # claude code changed: Stage 2D Rev B
+        results["kalman_segment"] = segment                          # claude code changed: Stage 2D Rev B — increments at every re-seed
+        results["is_warmup"] = in_warmup | ~state_valid              # claude code changed: Stage 2D Rev B — was arange(n) < warmup; now per (re)seed segment, and an invalid state never signals
         # claude code changed: new — look-ahead-bias fix (see module import
         # comment and __init__). is_warmup only ever covered the Kalman
         # filter's OWN convergence (168 candles) — it never covered the
@@ -1534,15 +1556,16 @@ class KalmanFilterEngine:
         logger.info("Step 7: Calculating dynamic z-score...")
 
         # ── Kalman dynamic z-score ─────────────────────────────────────────────
-        rolling_mean = results["kalman_spread"].rolling(
-            window=self.zscore_window,
-            min_periods=self.zscore_min_p,
-        ).mean()
-
-        rolling_std = results["kalman_spread"].rolling(
-            window=self.zscore_window,
-            min_periods=self.zscore_min_p,
-        ).std()
+        # claude code changed: Stage 2D Rev B — rolling windows are now per
+        # Kalman state segment (a re-seed after a gap > g_max restarts the z
+        # history, D8) and run over the hourly grid, where a missing candle
+        # occupies its slot as NaN (bot/quant_core/kalman.CanonicalZScore
+        # computes the identical quantity online for live).
+        _seg = results["kalman_segment"] if "kalman_segment" in results else pd.Series(0, index=results.index)   # claude code changed: Stage 2D Rev B
+        _roll = results["kalman_spread"].groupby(_seg.to_numpy()).rolling(   # claude code changed: Stage 2D Rev B — was an unsegmented rolling
+            window=self.zscore_window, min_periods=self.zscore_min_p)
+        rolling_mean = _roll.mean().droplevel(0).reindex(results.index)   # claude code changed: Stage 2D Rev B
+        rolling_std = _roll.std().droplevel(0).reindex(results.index)     # claude code changed: Stage 2D Rev B
 
         # Z-score: (spread - rolling mean) / rolling std
         results["kalman_zscore"] = (
@@ -1564,10 +1587,10 @@ class KalmanFilterEngine:
         # Percentile rank: where is today's spread in the 3-week distribution?
         # 0 = cheapest AVAX relative to ATOM in 3 weeks (long AVAX signal)
         # 100 = most expensive AVAX relative to ATOM (short AVAX signal)
-        results["kalman_pct_rank"] = results["kalman_spread"].rolling(
+        results["kalman_pct_rank"] = results["kalman_spread"].groupby(_seg.to_numpy()).rolling(   # claude code changed: Stage 2D Rev B — per segment, like the z-score
             window=self.zscore_window,
             min_periods=self.zscore_min_p,
-        ).rank(pct=True) * 100
+        ).rank(pct=True).droplevel(0).reindex(results.index) * 100   # claude code changed: Stage 2D Rev B
 
         # ── OLS static z-score (baseline comparison) ──────────────────────────
         ols_mean = results["ols_spread"].rolling(
@@ -1891,7 +1914,26 @@ class KalmanFilterEngine:
 
         # ── 1. Main Kalman feature output ─────────────────────────────────────
         main_path = out_path / f"{pair_slug}_kalman.csv"
-        results.reset_index().to_csv(main_path, index=False)
+        results.rename_axis("timestamp").reset_index().to_csv(main_path, index=False)   # claude code changed: 2026-10-03 — name the timestamp column explicitly (as write_canonical_dataset does); an unnamed index was written as "index", which EntryExitEngine cannot join to real leg prices
+        # claude code changed: 2026-10-03 F-03 — this (legacy) writer's state was seeded by an
+        # OLS over the first N candles and applied from candle 0 (look-ahead). Record that in a
+        # LEGACY provenance sidecar so no consumer can mistake it for a causal seed. Best-effort:
+        # a provenance failure never breaks the legacy run it describes.
+        try:
+            import dataclasses as _dc
+            _lp = _prov.legacy_provenance(main_path, kind="KALMAN_STATE", producer="kalman_filter_engine.run")
+            _prov.write_provenance(main_path, _dc.replace(_lp, extra={
+                "seed_method": "LEGACY_OLS_FIRST_N",
+                "seed_window_candles": int(self.pair_config.get("training_window_candles") or 0),
+                "seed_beta": float(self.pair_config.get("ols_beta", float("nan"))),
+                "seed_alpha": float(self.pair_config.get("ols_alpha", float("nan"))),
+                "seed_lookahead": True,
+                "finding": "F-03 (FULL_RESEARCH_PIPELINE_FIVE_GATE_AUDIT_2026-10-03.md)",
+            }))
+        except OSError:
+            pass
+        if getattr(self, "seed_record", None) is not None:   # claude code changed: Stage 2D Rev B step 6 (D9)
+            logger.info(f"  Saved Kalman seed  : {write_seed(self.seed_record, out_path)}")
         logger.info(f"\n  Saved main output  : {main_path}")
         logger.info(f"    Rows: {len(results):,}  Columns: {len(results.columns)}")
         logger.info(
@@ -2070,6 +2112,7 @@ class KalmanParameterAnalyzer:
                             "qa":        qa,
                             "ic":        round(float(ic), 6),
                             "pvalue":    round(float(pv), 6),
+                            "pvalue_basis": IID_PVALUE_BASIS,   # claude code changed: F-02 — analytic IID p on overlapping/serially dependent labels; descriptive only
                             "n_obs":     int(valid.sum()),
                             "beta_std":  round(
                                 float(output.loc[~output["is_warmup"],

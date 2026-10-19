@@ -1,0 +1,17 @@
+{% comment %}
+   claude code changed: new partial — Post-CRRP Task 4 (dashboard evidence
+   protection). Renders the evidence status of the data shown on a page or
+   panel, from bot/research/evidence_registry.py. Include with
+   ev=<status dict>. A non-CANONICAL status is shown as a prominent banner so a
+   legacy, superseded or invalidated result can never read as current evidence.
+{% endcomment %}
+{% if ev %}
+<div class="term-panel" role="note" style="margin-bottom:14px; border-left:3px solid {% if ev.class == 'INVALIDATED' %}var(--negative){% elif ev.class == 'CANONICAL' %}var(--positive){% else %}var(--warning){% endif %}">
+    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <span class="badge {{ ev.css }}">EVIDENCE: {{ ev.label }}</span>
+        <span class="text-dim mono" style="font-size:11px">{{ ev.reset_point }}</span>
+        {% if not ev.is_current_evidence %}<span class="text-secondary" style="font-size:12px">Not current evidence — shown for historical provenance only.</span>{% endif %}
+    </div>
+    <div class="chart-caption" style="margin-top:6px">{{ ev.reason }}{% if ev.ref %} (governance report {{ ev.ref }}){% endif %}</div>
+</div>
+{% endif %}

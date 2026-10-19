@@ -23,10 +23,12 @@ python manage.py migrate                    # required after touching bot/journa
 python manage.py health_check               # bot/management/commands/health_check.py — system health CLI
 python manage.py health_check --verbose --module backtester --limit 200
 python manage.py deep_health_check          # 5-layer structural/functional/behavioural/integration/drift audit
+python manage.py deep_health_check --level L1   # five-gate Deep Health: L0 infra, L1 known answers (~1 s), L2 integrity (~1 min), all
 python manage.py test bot                   # 190+ tests in bot/tests/ (a package, not the old bot/tests.py stub) — see Testing below
 python bot/core/dry_run_test.py             # run BEFORE ever starting the live bot — smoke-tests every component
 python bot/core/bot_runner.py               # starts the live loop (defaults to DRY_RUN = True — see below)
 python bot/fetch_all_symbols.py             # populates data/*.csv used by the research pipeline
+python manage.py refresh_forex_data --attach   # incremental MT5 refresh for the scanner (appends new 1h candles, clears scanner cache); schedule hourly via Task Scheduler
 python bot/run_research_all.py              # runs feature calc + validation across all symbols in data/
 ```
 
@@ -110,6 +112,8 @@ Offline, CLI-driven, not wired into Django. Rough flow: `fetch_all_symbols.py` �
 ### Health checks (`bot/management/commands/`)
 
 `health_check` and `deep_health_check` are Django management commands, not pytest suites. `deep_health_check` explicitly does 5 layers: structural (imports/methods exist) → functional (runs without crashing) → behavioural (mathematically correct output) → integration (full data→regime→structure→signal→filter→sizer pipeline) → statistical drift (values still in historically sane ranges). When asked to verify the system still works end-to-end, run these rather than inventing new ad-hoc checks.
+
+**Deep Health** (`bot/deep_health/`, `deep_health_check --level L0|L1|L2|all`, shown on `/system/health/`) is the primary health view: deterministic, offline, read-only known-answer / invariant / look-ahead-mutation checks organised by the five gates (G1 software … G5 research integrity), statuses PASS/PARTIAL/FAIL/BLOCKED/UNKNOWN/N/A aggregated worst-of. L0 keeps the old `get_system_health()` import checks; L0+L1 run on every page load; L2 (causal mutations, calibration runs, the DB-free canonical suites re-run in-process) is CLI-only and shown only when its report matches the current code state. Components waiting on owner decisions (OPEN-36 calibration margins, D-4, D-5, D-6, walk-forward fold boundaries, OD-FX) report BLOCKED with the reason — by design. Plan: `DEEP_HEALTH_PLAN_2026-10-07.md`; tests: `bot/tests/test_deep_health_gates.py`.
 
 ## Notable repo quirks
 

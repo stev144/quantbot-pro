@@ -92,6 +92,9 @@ def run_pair_through_ladder(
     n_permutations: int = 100,
 ) -> PairLadderResult:
     """
+    LEGACY ladder (claude code changed: 2026-10-04 — legacy Kalman seed F-03, z-timing null F-05, per-fold legacy
+    walk-forward; kept for reproducibility only — the evidence path is run_pair_canonical() below).
+
     Run exactly one CANDIDATE pair through kalman_filter_engine.py ->
     permutation_test_engine.py -> walk_forward_engine.py, in that order,
     stopping at the first stage that doesn't pass and recording why —
@@ -255,3 +258,123 @@ if __name__ == "__main__":
         python -m bot.research.cointegration_pipeline_runner
     """
     run_cointegration_family()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: 2026-10-04 (step 3) — CANONICAL PAIR LADDER. run_pair_through_ladder() above is the
+# LEGACY ladder (legacy Kalman seed F-03, z-timing permutation null F-05, per-fold legacy walk-forward) and is
+# kept only so historical runs stay reproducible. run_pair_canonical() is the evidence path:
+#
+#   1 data        closes truncated to the END OF ZONE V; any sealed-holdout candle is refused (D-8)
+#   2 Kalman      KalmanFilterEngine.run_canonical — causal seed at the S start, L = 1000 (REVB-4)
+#   3 financing   RECORDED perpetual funding for both legs (borrow row); missing → stop, BORROW_UNAVAILABLE
+#   4 lifecycle   EntryExitEngine(rule_set="CANONICAL") — d = 1, H = 24, costs + funding
+#   5 endpoint    D-3 primary endpoint: net mean return per trade on label-complete ZONE-V decisions
+#   6 null        D-4 Step-17 null — gated: refused until its calibration artifact passes (stage BLOCKED)
+#   7 walk-fwd    canonical_walk_forward — fold boundaries are an owner parameter (None → stage BLOCKED)
+#   8 verdict     D-7 ladder; a single pair without a confirmed D-3 family is capped at OBSERVATION
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+CANONICAL_LADDER_VERSION = "QBP-PAIR-LADDER-CANON-1"
+
+
+def run_pair_canonical(symbol_a: str, symbol_b: str, close_a, close_b, *, output_dir: str,
+                       funding_dir: str = "data", fold_edges=None, run_null: bool = True, null_seed: int = 0) -> Dict:
+    import functools
+    import pandas as pd
+    from bot.quant_core.funding import load_funding_series
+    from bot.quant_core.research_zones import ZONES
+    from bot.quant_core.verdict_ladder import LadderEvidence, ladder_level
+    from bot.research.entry_exit_engine import EntryExitEngine
+    from bot.research.pairs_step17_null import (Step17NotCalibrated, canonical_net_mean_return_per_trade,
+                                                step17_null_test, zone_v_label_complete)
+    from bot.research.walk_forward_engine import canonical_walk_forward
+
+    pair = f"{symbol_a}/{symbol_b}"
+    out = {"version": CANONICAL_LADDER_VERSION, "pair": pair, "stages": {}, "stopped_at": None}
+    stages = out["stages"]
+
+    # 1 — data
+    for s in (close_a, close_b):
+        ZONES.assert_no_sealed_data(s.index, purpose=f"canonical pair ladder {pair}")
+    ca, cb = close_a[close_a.index <= ZONES.V1], close_b[close_b.index <= ZONES.V1]
+    stages["data"] = {"status": "OK", "last_candle": str(min(ca.index[-1], cb.index[-1]))}
+
+    # 1b — market profile (claude code changed: 2026-10-04 asset-agnostic). Every later stage applies one asset
+    # class's market rules; an incomplete profile (FX: FX_CALENDAR_UNAVAILABLE) stops here — not negative evidence.
+    from bot.quant_core.market_profile import AssetClassMismatch, OwnerDecisionMissing, profile_for_pair
+    try:
+        profile_for_pair(symbol_a, symbol_b).require_canonical(f"canonical pair ladder {pair}")
+    except (OwnerDecisionMissing, AssetClassMismatch) as e:
+        stages["market"] = {"status": "BLOCKED", "reason": str(e)}
+        out["stopped_at"] = "market"
+        return out
+
+    # 2 — canonical Kalman
+    try:
+        eng = KalmanFilterEngine(pair_name=pair, symbol_a=symbol_a, symbol_b=symbol_b, ols_beta=1.0, ols_alpha=0.0)
+        eng.run_canonical(ca, cb, output_dir=output_dir)
+        stages["kalman"] = {"status": "OK", "seed_timestamp": eng.seed_record.seed_timestamp,
+                            "protocol_hash": eng.canonical_protocol.config_hash()}
+    except Exception as e:
+        stages["kalman"] = {"status": "REFUSED", "reason": str(e)}
+        out["stopped_at"] = "kalman"
+        return out
+
+    # 3 — recorded funding (fail closed)
+    try:
+        fin = {"funding_rates_a": load_funding_series(symbol_a, funding_dir),
+               "funding_rates_b": load_funding_series(symbol_b, funding_dir)}
+        stages["financing"] = {"status": "OK", "source": "recorded perpetual funding"}
+    except FileNotFoundError as e:
+        stages["financing"] = {"status": "BORROW_UNAVAILABLE", "reason": str(e)}
+        out["stopped_at"] = "financing"
+        return out
+
+    # 4 — canonical lifecycle
+    kc = Path(output_dir) / "canonical" / f"{symbol_a}_{symbol_b}_kalman.csv"
+    ee = EntryExitEngine(pair_name=pair, symbol_a=symbol_a, symbol_b=symbol_b, output_dir=output_dir,
+                         rule_set="CANONICAL", **fin)
+    trade_log, summary, _ = ee.run(kalman_csv=str(kc))
+    row = summary.iloc[0]
+    stages["lifecycle"] = {"status": "OK", "n_trades": int(len(trade_log)), "provenance_status": row["provenance_status"],
+                           "borrow_status": row["borrow_status"], "cost_complete": bool(row["cost_complete"])}
+
+    # 5 — D-3 endpoint on label-complete zone-V decisions
+    v = zone_v_label_complete(trade_log)
+    endpoint = float(v["net_pnl_pct"].astype(float).mean()) if len(v) else None
+    stages["endpoint_zone_v"] = {"status": "OK" if len(v) else "NO_TRADES", "n_trades": int(len(v)),
+                                 "net_mean_return_per_trade": endpoint}
+
+    # 6 — Step-17 null (gated)
+    null_p = None
+    if run_null:
+        try:
+            stat = functools.partial(canonical_net_mean_return_per_trade, pair_name=pair, symbol_a=symbol_a,
+                                     symbol_b=symbol_b, **fin)
+            r = step17_null_test(ca, cb, stat, seed=null_seed, canonical=True)
+            stages["step17_null"] = r
+            null_p = r.get("p_value")
+        except Step17NotCalibrated as e:
+            stages["step17_null"] = {"status": "BLOCKED", "reason": str(e)}
+    else:
+        stages["step17_null"] = {"status": "NOT_RUN"}
+
+    # 7 — canonical walk-forward
+    if fold_edges is None:
+        stages["walk_forward"] = {"status": "BLOCKED", "reason": "fold boundaries are an owner parameter (D-8: inside S ∪ V)"}
+    else:
+        stages["walk_forward"] = canonical_walk_forward(trade_log, fold_edges)
+
+    # 8 — D-7 ladder (missing inputs cap, never assumed)
+    cost_complete = bool(row["cost_complete"])
+    level, reasons = ladder_level(LadderEvidence(
+        effect_observed=(endpoint > 0) if endpoint is not None else None,
+        dependence_aware_test=True if null_p is not None else None,
+        family_confirmed=None,                 # only the D-3 registry's Holm confirmation can set this
+        net_positive_after_costs=((endpoint > 0) if (endpoint is not None and cost_complete) else None),
+        cost_complete=cost_complete,
+        causal_execution_d1=True,              # the canonical lifecycle fills at d = 1
+        passes_validation_zone=None, capacity_checked=None, provenance_complete=None, forward_holdout_passed=None))
+    out["verdict"] = {"level": level, "reasons": reasons}
+    return out

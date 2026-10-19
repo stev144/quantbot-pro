@@ -1,0 +1,371 @@
+{
+ "registry": "evidence_registry",
+ "reset_point": "CRRP-2026-10-02",
+ "source_report": "PRE_PHASE3_RESEARCH_GOVERNANCE_REPORT_2026-10-02.md",
+ "rules": {
+  "default_for_unregistered": "UNVERIFIED",
+  "canonical_result_requires": [
+   "run_id",
+   "methodology_version",
+   "protocol_hash",
+   "data_fingerprint",
+   "code_commit",
+   "sample_period",
+   "universe",
+   "parameters",
+   "costs"
+  ],
+  "missing_provenance_value": "MISSING",
+  "note": "Provenance is recorded only where the artifact itself records it. Nothing is invented; absent fields are MISSING."
+ },
+ "artifacts": [
+  {
+   "pattern": "crrp_retest_2026-10-02/*",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "pairs_crrp_retest.py",
+   "reason": "Post-CRRP descriptive re-test of the 10 previously approved pairs: corrected fixed-quantity P&L, Stage 2D lifecycle (CANONICAL_UNCERTIFIED), Engle–Granger/MacKinnon, shifted-leg controls. Not canonical: legacy OLS seed (init window L BLOCKED), borrow cost not modelled, exposed history, pairs selected on this data, no permutation p-value."
+  },
+  {
+   "pattern": "permutation_test/*/permutation_verdict.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.1, §2.4",
+   "reason": "Pairs permutation null keeps the real spread while shuffling z (computed from it): rejects for any pair, related or not (C-03). P&L is the Kalman innovation, not position P&L (C-01). B=100 (floor 0.0099)."
+  },
+  {
+   "pattern": "permutation_test/*",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Pairs permutation outputs: C-01 P&L identity and C-03 null."
+  },
+  {
+   "pattern": "permutation_test_ols/*",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Pairs permutation outputs (OLS variant): C-01/C-03."
+  },
+  {
+   "pattern": "walk_forward/walk_forward_leaderboard.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.1, §2.5",
+   "reason": "Built on C-01 pairs P&L; walk-forward boundary overlap without purge (M-03); legacy rule set (H-05)."
+  },
+  {
+   "pattern": "walk_forward/*",
+   "class": "INVALIDATED",
+   "ref": "§2.5",
+   "reason": "Pairs walk-forward outputs: C-01, M-03."
+  },
+  {
+   "pattern": "*_equity_curve.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Pairs equity from Kalman-innovation P&L (C-01): on independent random walks the same formula shows +1.2–1.5%/trade; true fixed-quantity P&L ≈ −cost."
+  },
+  {
+   "pattern": "*_trade_log.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Pairs trade P&L from the Kalman innovation (C-01)."
+  },
+  {
+   "pattern": "*_strategy_summary.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Pairs summary statistics from C-01 P&L."
+  },
+  {
+   "pattern": "portfolio_7pair/*",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "7-pair portfolio built on C-01 P&L; the 'pass' (50 shuffles) used the C-03 null."
+  },
+  {
+   "pattern": "slippage_stress/*",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Cost stress applied to a phantom gross edge (C-01)."
+  },
+  {
+   "pattern": "dodo_fida_slippage_stress/*",
+   "class": "INVALIDATED",
+   "ref": "§2.1",
+   "reason": "Cost stress applied to a phantom gross edge (C-01)."
+  },
+  {
+   "pattern": "cointegration_pairs.csv",
+   "class": "SUPERSEDED",
+   "ref": "§2.2",
+   "reason": "Dickey-Fuller p-values on estimated residuals (anti-conservative, H-03); written 2026-09-28, before the Engle–Granger/MacKinnon fix (458ac14, 2026-10-01). Its 'untouched holdout' ADF is a pseudo-holdout (Decision Lock C4). Re-run under Stage 2D zone S (owner-blocked)."
+  },
+  {
+   "pattern": "*_cointegration.csv",
+   "class": "SUPERSEDED",
+   "ref": "§2.2",
+   "reason": "Legacy DF-residual cointegration output (H-03)."
+  },
+  {
+   "pattern": "forex_cointegration_pairs*.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.2",
+   "reason": "0 candidates under an anti-conservative legacy screen; FX calendar BLOCKED — not negative evidence (Decision Lock FX)."
+  },
+  {
+   "pattern": "*_kalman.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.3",
+   "reason": "Kalman filter state is descriptive. Any IC/'STRONG KEEP' built on spread_forward labels is INVALIDATED (C-02: IC 0.39–0.43 on random walks by construction)."
+  },
+  {
+   "pattern": "*_kalman_LAG1h.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.3",
+   "reason": "As *_kalman.csv (C-02 for any IC claim)."
+  },
+  {
+   "pattern": "*_kalman_half_life.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.3",
+   "reason": "Descriptive legacy half-lives; earlier calibrations shown wrong by the log's own 'foundational correction'."
+  },
+  {
+   "pattern": "kalman_diagnostics.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.3",
+   "reason": "Descriptive filter diagnostics."
+  },
+  {
+   "pattern": "kalman_beta_trajectory.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.3",
+   "reason": "Descriptive β path."
+  },
+  {
+   "pattern": "pca_*.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.10",
+   "reason": "Look-ahead: PCA means/std/correlation/loadings estimated on the ENTIRE history, residual IC measured on the same history (pca_engine.py run_pca_engine). B=100 floor."
+  },
+  {
+   "pattern": "forex_pca_*.csv",
+   "class": "INVALIDATED",
+   "ref": "§2.10",
+   "reason": "Same full-sample PCA look-ahead as crypto."
+  },
+  {
+   "pattern": "forex_cross_sectional_family_verdict.json",
+   "class": "INVALIDATED",
+   "ref": "§2.4, §2.10",
+   "reason": "Every configuration's p = 0.047619 = 1/21 (≈20 permutations = the floor): 'significant'/'passes FDR' is an artifact of p_floor < 0.05; top_k chosen after a 4-way sweep. Descriptively: mean net 1.9e-5/period, hit 50.3%, Sharpe 0.375, cost drag 32.5%.",
+   "provenance": {
+    "run_id": "MISSING",
+    "methodology_version": "MISSING",
+    "protocol_hash": "MISSING",
+    "data_fingerprint": "1cb67b0993989aa807cfa6aaf2efb451f28e90dd47f0e3de88cf01f4cc39ca82",
+    "code_commit": "MISSING",
+    "sample_period": "MISSING",
+    "universe": "58 FX assets",
+    "parameters": "cs_rank, rebalance 24, top_k {1,3,5,10}",
+    "costs": "cost_rate 0.0001616"
+   }
+  },
+  {
+   "pattern": "*_cross_section.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.10",
+   "reason": "Cross-sectional features (descriptive). Ranking verdicts: economic negative stands; statistical negative uninformative (low permutation resolution)."
+  },
+  {
+   "pattern": "cross_sectional_checkpoints/*",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.10",
+   "reason": "Cross-sectional run checkpoints: crypto RESEARCH_NEGATIVE (economics), FX survivor INVALIDATED."
+  },
+  {
+   "pattern": "*_contagion.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.10",
+   "reason": "Contagion features; 0 KEEP is 'edge not established', not 'no edge' (validator p-floor, H-12)."
+  },
+  {
+   "pattern": "contagion_validation/*",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.10",
+   "reason": "Validator output under H-12 (p-floor vs BH): negative statistically uninformative."
+  },
+  {
+   "pattern": "hypothesis_7_*.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.6",
+   "reason": "Analytic IID p-values (0.0, n=43,750) on overlapping hourly labels (M-04-type inflation); IC magnitude descriptive."
+  },
+  {
+   "pattern": "*_validated_features.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.6",
+   "reason": "Validator labels under H-12 and IID p-values on overlapping labels; built from observation files with an all-empty ADX. IC magnitudes descriptive; significance labels are not evidence."
+  },
+  {
+   "pattern": "validated_features_institutional.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.6",
+   "reason": "As *_validated_features.csv."
+  },
+  {
+   "pattern": "temporal/*",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.6",
+   "reason": "Full-history stability/decay/regime breakdown on legacy inputs (descriptive)."
+  },
+  {
+   "pattern": "*_observations.csv",
+   "class": "SUPERSEDED",
+   "ref": "§2.6",
+   "reason": "July files with an all-empty ADX (feature-calculator bug since fixed); rebuilt files are staged for the Phase 6 swap."
+  },
+  {
+   "pattern": "observations.csv",
+   "class": "SUPERSEDED",
+   "ref": "§2.6",
+   "reason": "Merged legacy observations (same inputs)."
+  },
+  {
+   "pattern": "frozen_candidate_registry_2026-09-20.json",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.1",
+   "reason": "Pre-Stage-2D rules; 108 post-freeze candles exposed before the 09-28 rewrite. Never Stage 2D evidence, never a holdout (Decision Lock C4)."
+  },
+  {
+   "pattern": "order_book_depth_measurement.csv",
+   "class": "LEGACY_DESCRIPTIVE",
+   "ref": "§2.12",
+   "reason": "Real point-in-time order-book measurement — usable as a dated observation, not a stationary cost."
+  },
+  {
+   "pattern": "scan_150_2026-09-30/*",
+   "class": "UNVERIFIED",
+   "ref": "§2.12",
+   "reason": "Data download and universe selection only; the scan was halted — no results exist."
+  },
+  {
+   "pattern": "_governance/data_manifest_CRRP-2026-10-02.json",
+   "class": "CANONICAL",
+   "kind": "governance_record",
+   "ref": "§4",
+   "reason": "Data-lineage record of the reset point (SHA-256 of 446 price files). A record, not a research result."
+  },
+  {
+   "pattern": "_governance/dca_calibration_CRRP-2026-10-02.json",
+   "class": "UNVERIFIED",
+   "ref": "Task 5",
+   "reason": "Methodological calibration on synthetic data. Becomes CANONICAL only when re-run at the committed reset point (code commit pending). Never evidence about any market."
+  },
+  {
+   "pattern": "_governance/inference_calibration_2026-10-03.json",
+   "class": "UNVERIFIED",
+   "ref": "F-02 remediation",
+   "reason": "Synthetic size/power calibration of candidate dependence-aware tests. Methodological only (no market claim); becomes CANONICAL when re-run at a committed code version."
+  }
+ ],
+ "governance_log_sections": [
+  {
+   "title_prefix": "AVAX_USDT / ATOM_USDT",
+   "class": "LEGACY_DESCRIPTIVE",
+   "reason": "Rejection stands; reached with an invalid (acceptance-biased) method (C-01/C-03). Not statistical evidence."
+  },
+  {
+   "title_prefix": "DOT_USDT / LINK_USDT",
+   "class": "LEGACY_DESCRIPTIVE",
+   "reason": "Rejection stands; method invalid (C-01/C-03)."
+  },
+  {
+   "title_prefix": "DODO_USDT / FIDA_USDT",
+   "class": "LEGACY_DESCRIPTIVE",
+   "reason": "Rejection stands; corrected fixed-quantity P&L confirms the direction (−0.29%/trade, PF 0.62)."
+  },
+  {
+   "title_prefix": "Structural bias audit",
+   "class": "INVALIDATED",
+   "reason": "Built on Kalman-innovation P&L (C-01)."
+  },
+  {
+   "title_prefix": "Why entry_ic won't move",
+   "class": "INVALIDATED",
+   "reason": "C-01 P&L and C-02 spread-label IC."
+  },
+  {
+   "title_prefix": "P&L normalisation bug found and fixed",
+   "class": "INVALIDATED",
+   "reason": "The 'fix' still measured the Kalman innovation (C-01)."
+  },
+  {
+   "title_prefix": "First entry-depth-scaled exit design attempt",
+   "class": "INVALIDATED",
+   "reason": "C-01/C-03."
+  },
+  {
+   "title_prefix": "Second exit design attempt",
+   "class": "INVALIDATED",
+   "reason": "C-01/C-03."
+  },
+  {
+   "title_prefix": "Third design attempt",
+   "class": "INVALIDATED",
+   "reason": "C-01/C-03."
+  },
+  {
+   "title_prefix": "Fourth design attempt",
+   "class": "INVALIDATED",
+   "reason": "C-01/C-03."
+  },
+  {
+   "title_prefix": "Fifth design attempt",
+   "class": "INVALIDATED",
+   "reason": "C-01/C-03."
+  },
+  {
+   "title_prefix": "Sixth design attempt",
+   "class": "INVALIDATED",
+   "reason": "C-01/C-03."
+  },
+  {
+   "title_prefix": "Foundational correction",
+   "class": "INVALIDATED",
+   "reason": "Half-life recalibration of a pipeline whose P&L identity was wrong (C-01)."
+  },
+  {
+   "title_prefix": "Pipeline-wide audit",
+   "class": "INVALIDATED",
+   "reason": "Contains the 8th/9th design 'strongest result', the 7-pair portfolio, leg-overlap/slippage checks and 'edge survives FIDA's real cost' — all on C-01 P&L with the C-03 null. Its sub-entries on FX cointegration screens (LEGACY) and the order-book measurement (LEGACY, dated) are descriptive only."
+  },
+  {
+   "title_prefix": "Contagion Engine",
+   "class": "LEGACY_DESCRIPTIVE",
+   "reason": "RESEARCH_NEGATIVE = 'edge not established', not 'no edge' (validator p-floor, H-12)."
+  },
+  {
+   "title_prefix": "CANONICAL RESEARCH RESET POINT",
+   "class": "CANONICAL",
+   "kind": "governance_record",
+   "reason": "The reset-point supersession notice itself (a governance record, not a research result)."
+  }
+ ],
+ "research_lab_experiments": {
+  "rule": "Every experiment created before 2026-10-02 is pre-reset: no methodology version, protocol hash or code commit is recorded.",
+  "pre_reset_default": {
+   "class": "UNVERIFIED",
+   "reason": "Pre-CRRP experiment without methodology version / protocol hash / code commit; validator weaknesses (H-12, M-04) apply. Re-run before citing."
+  },
+  "pre_reset_overrides": [
+   {
+    "capability_id": "cointegration_pairs_research",
+    "verdicts": [
+     "PARTIALLY_SUPPORTED",
+     "SUPPORTED",
+     "STATISTICALLY_SUPPORTED"
+    ],
+    "class": "INVALIDATED",
+    "reason": "Pairs evidence on the legacy pipeline: Kalman-innovation P&L (C-01), C-03 permutation null, DF-residual p-values (H-03)."
+   }
+  ]
+ }
+}

@@ -15,10 +15,14 @@ from bot.views.pairs_performance import pairs_performance   # claude code change
 from bot.views.backtesting_view import backtesting
 from bot.views.robustness_analysis import robustness_analysis
 from bot.views.research_archive import rejected_research, research_archive
+from bot.views.decision_journal import decision_journal, decision_journal_run, decision_journal_decision, decision_journal_analytics, decision_journal_annotate   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
 from bot.views.portfolio_risk import portfolio_risk
 from bot.views.execution_monitor import execution_monitor
 from bot.views.pairs_pilot import pairs_pilot   # claude code changed: new — Pairs Pilot live monitor page
+from bot.views.dca_engine import dca_engine     # claude code changed: new — QC-1 Forex DCA Engine dashboard
+from bot.views.paper_trading import paper_trading  # claude code changed: new — Ranging Paper Trader
 from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
+from bot.views.forex_scanner import forex_scanner         # claude code changed: new — Forex Market Scanner
 from bot.views.system_health import system_health
 
 # claude code changed: regrouped into the RESEARCH -> MEASUREMENT ->
@@ -40,6 +44,7 @@ urlpatterns = [
     # page directly (no market/research dashboard existed); this is
     # Forex's equivalent of the EXECUTIVE dashboard above.
     path('forex/', forex_dashboard, name='forex_dashboard'),
+    path('forex/scanner/', forex_scanner, name='forex_scanner'),   # claude code changed: new — Forex Market Scanner
 
     # ---- ACADEMY ----
     # claude code changed: new — one include() line, per the approved
@@ -72,11 +77,18 @@ urlpatterns = [
     path('research/robustness/', robustness_analysis, name='robustness_analysis'),
     path('research/rejected/', rejected_research, name='rejected_research'),
     path('research/archive/', research_archive, name='research_archive'),
+    path('research/journal/', decision_journal, name='decision_journal'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+    path('research/journal/<str:run_id>/analytics/', decision_journal_analytics, name='decision_journal_analytics'),   # claude code changed: 2026-10-07 Phase 4 — analytics page
+    path('research/journal/<str:run_id>/', decision_journal_run, name='decision_journal_run'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+    path('research/journal/<str:run_id>/<uuid:decision_id>/', decision_journal_decision, name='decision_journal_decision'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
+    path('research/journal/<str:run_id>/<uuid:decision_id>/annotate/', decision_journal_annotate, name='decision_journal_annotate'),   # claude code changed: 2026-10-07 Phase 5 — human annotations (staff-only)
 
     # ---- RISK & EXECUTION ----
     path('portfolio/', portfolio_risk, name='portfolio_risk'),
     path('execution/', execution_monitor, name='execution_monitor'),
     path('execution/pairs-pilot/', pairs_pilot, name='pairs_pilot'),   # claude code changed: new — Pairs Pilot live monitor page
+    path('execution/dca-engine/', dca_engine, name='dca_engine'),     # claude code changed: new — QC-1 Forex DCA Engine dashboard
+    path('execution/paper-trading/', paper_trading, name='paper_trading'),  # claude code changed: new — Ranging Paper Trader
     path('execution/venues/', venue_comparison, name='venue_comparison'),   # claude code changed: new — Venue Comparison page
 
     # ---- SYSTEM ----

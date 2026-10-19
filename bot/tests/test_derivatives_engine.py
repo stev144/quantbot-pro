@@ -102,7 +102,8 @@ class ForwardReturnCorrectnessTest(SimpleTestCase):
     def test_forward_return_matches_hand_computed_value(self):
         ohlcv = pd.DataFrame({
             "timestamp": pd.date_range("2024-01-01", periods=MIN_CANDLES + 10, freq="1h", tz="UTC"),
-            "open": 100.0, "high": 101.0, "low": 99.0,
+            "open": [99.5 + 1.1 * i for i in range(MIN_CANDLES + 10)],   # claude code changed: D-1 — distinct opens
+            "high": 101.0, "low": 99.0,
             "close": [100.0 + i for i in range(MIN_CANDLES + 10)],
             "volume": 1000.0,
         })
@@ -110,7 +111,8 @@ class ForwardReturnCorrectnessTest(SimpleTestCase):
         enriched = engine.calculate_all(ohlcv, None, None)
 
         row = enriched.iloc[100]
-        expected_2h = enriched.iloc[102]["close"] / row["close"] - 1
+        # claude code changed: owner decision D-1 — fill at the next bar's open: open[103]/open[101] − 1
+        expected_2h = enriched.iloc[103]["open"] / enriched.iloc[101]["open"] - 1
         self.assertAlmostEqual(row["forward_return_2h"], expected_2h, places=10)
 
     def test_last_rows_of_forward_return_are_nan(self):
@@ -166,7 +168,8 @@ class DerivativesICReporterTest(SimpleTestCase):
     def test_report_runs_and_returns_sane_shape(self):
         ohlcv = pd.DataFrame({
             "timestamp": pd.date_range("2024-01-01", periods=MIN_CANDLES + 10, freq="1h", tz="UTC"),
-            "open": 100.0, "high": 101.0, "low": 99.0,
+            "open": 100.0 + np.cumsum(np.random.default_rng(2).normal(size=MIN_CANDLES + 10)),   # claude code changed: D-1 — labels come from opens; constant opens gave an all-zero label (IC undefined)
+            "high": 101.0, "low": 99.0,
             "close": 100.0 + np.cumsum(np.random.default_rng(0).normal(size=MIN_CANDLES + 10)),
             "volume": 1000.0,
         })

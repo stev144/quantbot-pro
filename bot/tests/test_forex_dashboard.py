@@ -19,7 +19,8 @@ class ForexDashboardViewTest(TestCase):
         resp = self.client.get(reverse("forex_dashboard"), {"symbol": "EUR/USD"})
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "EUR/USD")
-        self.assertContains(resp, "yahoo_finance")
+        from bot.instruments import get_instrument   # claude code changed: 2026-10-06 — was a hard-coded "yahoo_finance"
+        self.assertContains(resp, get_instrument("EUR/USD").venue)
 
     def test_no_symbol_param_defaults_to_a_real_registered_symbol(self):
         resp = self.client.get(reverse("forex_dashboard"))
@@ -73,7 +74,11 @@ class ForexDashboardViewTest(TestCase):
         html = resp.content.decode()
         if "cross_section_engine.py has not been run" in html:
             self.skipTest("no research_data/forex/*_cross_section.csv on this machine")
-        self.assertIn("Cross-Sectional Opportunities", html)
+        # claude code changed: 2026-10-05 — heading renamed (was "Cross-Sectional Opportunities": a descriptive
+        # relative-value reading, not opportunities); the reading must also state its single common timestamp.
+        self.assertIn("Cross-Sectional Relative Value", html)
+        self.assertNotIn("Cross-Sectional Opportunities", html)
+        self.assertIn("UTC", html.split("Cross-Sectional Relative Value", 1)[1][:600])   # "as of <timestamp> UTC"
         self.assertNotIn("cross_section_engine.py has not been run", html)
 
     def test_research_hypothesis_form_posts_to_the_existing_research_lab_endpoint(self):

@@ -89,7 +89,9 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-from __future__ import annotations              # Modern type hints in Python 3.8+
+from __future__ import annotations
+from bot.quant_core.provenance import write_legacy_provenance   # claude code changed: Stage 2D Rev B G-1 — LEGACY sidecars: this engine runs pre-Stage-2D (legacy) methodology
+              # Modern type hints in Python 3.8+
 
 import logging                                  # Structured logging — same format as every other module
 import math                                     # claude code changed: new — math.isfinite() guards against a non-cointegrated pair's inf/nan half-life
@@ -592,6 +594,8 @@ class PermutationTestEngine:
         verdict["win_rate_significant"] = (not pd.isna(verdict.get("win_rate_p_value", np.nan))
                                             and verdict["win_rate_p_value"] < (1 - SIGNIFICANCE_PERCENTILE))
 
+        verdict["null_validity"] = ("LEGACY — the z-timing shuffle keeps the cross-asset relationship, so it cannot "
+                                    "test a pairs edge (F-05). Canonical pairs null: bot.research.pairs_step17_null (D-4)")   # claude code changed: step 3
         verdict["edge_appears_real"] = bool(
             verdict["sharpe_significant"] and verdict["win_rate_significant"]
             and verdict["real_entry_ic_meaningfully_positive"]
@@ -612,6 +616,8 @@ class PermutationTestEngine:
         pd.DataFrame([{**{"pair_name": pair_name}, **real, **verdict}]).to_csv(
             pair_dir / "permutation_verdict.csv", index=False
         )
+        write_legacy_provenance(pair_dir / "permutation_verdict.csv", kind="PERMUTATION_VERDICT",   # claude code changed: Stage 2D Rev B G-1
+                                producer="bot.research.permutation_test_engine")
         logger.info(f"\n  Saved permutation results : {pair_dir / 'permutation_results.csv'}")
         logger.info(f"  Saved verdict              : {pair_dir / 'permutation_verdict.csv'}")
 

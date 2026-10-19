@@ -113,7 +113,9 @@
 # IMPORTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-from __future__ import annotations              # Modern type hints in Python 3.8+
+from __future__ import annotations
+from bot.quant_core.provenance import write_legacy_provenance   # claude code changed: Stage 2D Rev B G-1 — LEGACY sidecars: this engine runs pre-Stage-2D (legacy) methodology
+              # Modern type hints in Python 3.8+
 
 import logging                                  # Structured logging — same format as every other module
 import re                                       # Used to pull a pair label out of a Kalman CSV filename
@@ -137,7 +139,7 @@ from scipy import stats                         # linregress for half-life (OU) 
 from bot.research.entry_exit_engine import (
     EntryExitEngine,                            # The Missing-Piece-4 simulator we reuse per fold
     STRATEGY_CAPITAL_USDT,                      # Default capital, kept consistent with Missing Piece 4
-    KELLY_SAFETY_FRACTION,                      # Default quarter-Kelly safety factor
+    # claude code changed: Stage 2D Rev B step 8 — KELLY_SAFETY_FRACTION import removed (Kelly sizing removed)
     EXIT_TIME_STOP_HOURS,                       # Fallback time stop if a fold's half-life can't be estimated
     VALIDATED_IC,                               # Fallback IC if a fold's TRAIN slice can't produce its own
     VALIDATED_WIN_RATE,                         # Fallback win rate if a fold's TRAIN slice can't produce its own
@@ -484,7 +486,7 @@ class WalkForwardEngine:
         min_train_trades:   int   = MIN_TRAIN_TRADES,
         min_test_candles:   int   = MIN_TEST_CANDLES,
         capital_usdt:        float = STRATEGY_CAPITAL_USDT,
-        kelly_safety:         float = KELLY_SAFETY_FRACTION,
+        # claude code changed: Stage 2D Rev B step 8 — kelly_safety parameter removed (fixed-fraction sizing)
         output_dir:           str   = WALK_FORWARD_OUTPUT_DIR,
         resample_hours:        Optional[int] = None,   # claude code changed: new — threaded into the full-history loader; folds are then sliced from already-resampled data
         data_dir:               str   = "data",   # claude code changed: new — raw OHLCV CSVs for the per-fold Kalman refit (fetch_all_symbols.py's output folder)
@@ -510,7 +512,7 @@ class WalkForwardEngine:
             max(1, min_test_candles // resample_hours) if resample_hours else min_test_candles
         )
         self.capital_usdt      = capital_usdt               # Capital used for every fold's simulation
-        self.kelly_safety      = kelly_safety                # Quarter-Kelly safety factor, passed straight through
+        # claude code changed: Stage 2D Rev B step 8 — self.kelly_safety removed
         self.output_dir        = Path(output_dir)             # Root directory for this engine's outputs
         self.output_dir.mkdir(parents=True, exist_ok=True)     # Ensure it exists before we try to write to it
         self.data_dir          = Path(data_dir)               # claude code changed: new — raw OHLCV source for per-fold Kalman refits
@@ -715,9 +717,17 @@ class WalkForwardEngine:
         train_end = data_start + pd.DateOffset(years=self.min_train_years)  # First anchor train window's end
 
         while train_end < data_end:                                    # Keep building folds while data remains
-            test_start = train_end                                     # Test begins exactly where train ends
+            # claude code changed: 2026-10-03, remediation M-03 — was `test_start = train_end`. Both
+            # slices use .loc (inclusive), so the train_end candle sat in TRAIN (including the fold's OLS
+            # seed fit) AND in TEST. Exclusive boundary: TEST begins at the first candle strictly after
+            # train_end. (Train-side trades are force-closed at train_end, so no further purge is needed
+            # for this engine; its Kalman state is causal across the fold.)
+            later = df_full.index[df_full.index > train_end]
+            if len(later) == 0:
+                break
+            test_start = later[0]                                      # Test begins one candle AFTER train ends
             test_end   = min(                                          # Test window is fixed-length, but clipped
-                test_start + pd.DateOffset(years=self.test_window_years),
+                train_end + pd.DateOffset(years=self.test_window_years),   # claude code changed: M-03 — anchored on train_end (window = (train_end, train_end + Y]) so the exclusive start does not drift later folds' calendar boundaries
                 data_end,
             )
 
@@ -1034,7 +1044,7 @@ class WalkForwardEngine:
         return EntryExitEngine(
             capital_usdt          = capital_usdt,                            # This fold's capital baseline
             exit_time_stop_hours    = exit_time_stop_h,                        # This fold's re-calibrated time stop
-            kelly_safety              = self.kelly_safety,                       # Project-standard quarter-Kelly safety
+            # claude code changed: Stage 2D Rev B step 8 — kelly_safety no longer passed (fixed-fraction sizing)
             output_dir                  = output_dir,                             # Keep this run's files isolated
             pair_name=pair_name, symbol_a=symbol_a, symbol_b=symbol_b,             # claude code changed: new
             signal_source=self.signal_source,                                       # claude code changed: new
@@ -1134,6 +1144,7 @@ class WalkForwardEngine:
         if not fold_df.empty:                                                     # Only write if we actually have folds
             p = pair_output_dir / f"{pair_name_safe}_walk_forward_folds.csv"      # Per-fold summary report
             fold_df.to_csv(p, index=False)                                        # Save it
+            write_legacy_provenance(p, kind="WALK_FORWARD_FOLDS", producer="bot.research.walk_forward_engine")   # claude code changed: Stage 2D Rev B G-1
             logger.info(f"  Saved fold report   : {p}")
 
         if not oos_trades_df.empty:                                               # Only write if OOS trades exist
@@ -1445,6 +1456,7 @@ def run_walk_forward_pipeline(
     leaderboard_path = Path(output_dir) / "walk_forward_leaderboard.csv"       # Where the leaderboard gets saved
     Path(output_dir).mkdir(parents=True, exist_ok=True)                       # Ensure the output directory exists
     leaderboard_df.to_csv(leaderboard_path, index=False)                       # Save the leaderboard to disk
+    write_legacy_provenance(leaderboard_path, kind="WALK_FORWARD_SUMMARY", producer="bot.research.walk_forward_engine")   # claude code changed: Stage 2D Rev B G-1
 
     logger.info("\n" + "=" * 70)
     logger.info("WALK-FORWARD PIPELINE — LEADERBOARD")
@@ -1468,6 +1480,57 @@ def run_walk_forward_pipeline(
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: 2026-10-04 (step 3) — CANONICAL WALK-FORWARD. The WalkForwardEngine class above is the
+# LEGACY method: it re-runs the legacy Kalman (first-N OLS seed, F-03) per fold. Under Stage 2D (decision lock
+# §2.4–§2.6) nothing is fitted per fold: selection objects (EG test, causal seed, pair inclusion) are fitted
+# once, in zone S; the Kalman state runs CONTINUOUSLY from the one canonical seed; Q, R, thresholds, H and the
+# allocation are frozen. Canonical walk-forward is therefore the time-sliced evaluation of ONE canonical
+# lifecycle run (EntryExitEngine rule_set="CANONICAL"), with label truncation: a decision t counts in fold
+# [Z_s, Z_e] only if t ≤ Z_e − (d + H) (§2.3; never completed with prices from the next fold).
+# Fold boundaries are an OWNER PARAMETER (D-8 fixes only "inside S ∪ V"): there is no default.
+# Results are DEVELOPMENT evidence (decision lock §3.3) — never claim-eligible.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+CANONICAL_WF_VERSION = "QBP-WF-CANON-1"
+
+
+def canonical_walk_forward(trade_log: pd.DataFrame, fold_edges, *, protocol=None, zones=None) -> Dict:
+    """trade_log: a CANONICAL EntryExitEngine trade log (needs entry_decision_timestamp, net_pnl_pct,
+    net_pnl_usdt). fold_edges: strictly increasing timestamps e0 < e1 < … ; fold i = [e_i, e_{i+1} − 1 h].
+    Every fold must lie entirely inside zone S or entirely inside zone V."""
+    from bot.quant_core.protocol import CANONICAL
+    from bot.quant_core.research_zones import SELECTION, VALIDATION, ZONES
+    protocol, zones = protocol or CANONICAL, zones or ZONES
+    if fold_edges is None or len(fold_edges) < 2:
+        raise ValueError("fold boundaries are an owner parameter (D-8 fixes only 'inside S ∪ V'); pass >= 2 edges")
+    edges = [pd.Timestamp(e).tz_localize("UTC") if pd.Timestamp(e).tzinfo is None else pd.Timestamp(e).tz_convert("UTC")
+             for e in fold_edges]
+    if any(b <= a for a, b in zip(edges, edges[1:])):
+        raise ValueError("fold edges must be strictly increasing")
+    trunc = pd.Timedelta(hours=protocol.execution_delay_candles + protocol.require_max_holding())
+    t = pd.to_datetime(trade_log["entry_decision_timestamp"], utc=True) if len(trade_log) else pd.Series([], dtype="datetime64[ns, UTC]")
+    folds, used = [], np.zeros(len(trade_log), dtype=bool)
+    for i, (a, b) in enumerate(zip(edges, edges[1:])):
+        z_end = b - pd.Timedelta(hours=1)
+        zs = {zones.classify(a), zones.classify(z_end)}
+        if zs not in ({SELECTION}, {VALIDATION}):
+            raise ValueError(f"fold {i} [{a}, {z_end}] is not entirely inside zone S or entirely inside zone V ({sorted(zs)})")
+        mask = ((t >= a) & (t <= z_end - trunc)).to_numpy() if len(trade_log) else np.zeros(0, dtype=bool)
+        sub = trade_log.loc[mask]
+        used |= mask
+        r = sub["net_pnl_pct"].astype(float)
+        folds.append({"fold": i, "zone": zs.pop(), "start": a.isoformat(), "end": z_end.isoformat(),
+                      "last_label_complete_decision": (z_end - trunc).isoformat(), "n_trades": int(len(sub)),
+                      "net_mean_return_per_trade": float(r.mean()) if len(sub) else None,
+                      "net_pnl_usdt": float(sub["net_pnl_usdt"].astype(float).sum()) if len(sub) else 0.0,
+                      "win_rate": float((r > 0).mean()) if len(sub) else None})
+    return {"version": CANONICAL_WF_VERSION, "status": "DEVELOPMENT_EVIDENCE_NOT_CLAIM_ELIGIBLE",
+            "truncation_candles": int(trunc / pd.Timedelta(hours=1)), "folds": folds,
+            "n_trades_in_folds": int(used.sum()), "n_trades_excluded": int(len(trade_log) - used.sum())}
+
+
 if __name__ == "__main__":
     """
     Run from project root:

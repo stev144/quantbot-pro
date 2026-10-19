@@ -147,6 +147,12 @@ class StrategyScorer:
         )
         self.loss_streak = self._resolve_loss_streak()
 
+        # claude code changed: 2026-10-03, remediation F-14 — Phase 3 made Sharpe/Sortino None when
+        # UNDEFINED (too few periods, zero dispersion, no downside). Coercing None to 0.0 scored an
+        # undefined ratio as a measured "Poor" one. Undefined now stays None: it earns no points (no
+        # evidence, no credit) and is labelled undefined, never a number.
+        self.sharpe_defined = self.results.get("sharpe_ratio") is not None
+        self.sortino_defined = self.results.get("sortino_ratio") is not None
         self.sharpe = self._as_float(self.results.get("sharpe_ratio", 0.0), 0.0)
 
         # Cap Sortino — values like 272 or 999 are meaningless artefacts
@@ -950,10 +956,10 @@ class StrategyScorer:
         verdict = self._get_verdict(final_total)
 
         # Override verdict if health is bad
-        if strategy_health == "HIGH RISK":
-            verdict = "HIGH RISK — Review before live deployment"
+        if strategy_health == "HIGH RISK":   # claude code changed: D-11 — descriptive, no deployment advice
+            verdict = "HIGH RISK (descriptive) — " + verdict
         elif strategy_health == "WEAK":
-            verdict = "WEAK — Significant improvements required"
+            verdict = "WEAK (descriptive) — " + verdict
 
         # Build actionable suggestions based on weak dimensions
         suggestions = self._get_suggestions(final_total, raw_total)
@@ -1122,7 +1128,9 @@ class StrategyScorer:
         notes = []
 
         # ── Sharpe ratio ──────────────────────────────────────
-        if self.sharpe >= self.SHARPE_EXCELLENT:
+        if not getattr(self, "sharpe_defined", True):   # claude code changed: F-14
+            notes.append("Sharpe undefined (too few periods / zero dispersion) — not scored")
+        elif self.sharpe >= self.SHARPE_EXCELLENT:
             score += 8
             notes.append(f"Excellent Sharpe {self.sharpe}")
         elif self.sharpe >= self.SHARPE_GOOD:
@@ -1135,7 +1143,9 @@ class StrategyScorer:
             notes.append(f"Poor Sharpe {self.sharpe} ❌")
 
         # ── Sortino ratio — capped at 10 ─────────────────────
-        if self.sortino >= self.SORTINO_EXCELLENT:
+        if not getattr(self, "sortino_defined", True):   # claude code changed: F-14
+            notes.append("Sortino undefined (no downside periods) — not scored")
+        elif self.sortino >= self.SORTINO_EXCELLENT:
             score += 7
             notes.append(f"Excellent Sortino {self.sortino}")
         elif self.sortino >= self.SORTINO_GOOD:
@@ -1216,13 +1226,14 @@ class StrategyScorer:
         return "F"
 
     def _get_verdict(self, score: float) -> str:
-        """Converts adjusted score to a plain-English verdict."""
+        """Converts adjusted score to a DESCRIPTIVE label.
 
-        if score >= 85: return "INSTITUTIONAL GRADE — Ready for real capital deployment"
-        if score >= 70: return "STRONG STRATEGY — Consider small live deployment"
-        if score >= 55: return "PROMISING — Needs improvement before live trading"
-        if score >= 40: return "ALMOST THERE — Monitor once deployed live required"
-        return "POOR — Do not trade with real capital"
+        claude code changed: owner decision D-11 (signed 2026-10-03) — the scorer no longer has a pass/fail or
+        deployment role (its thresholds were built for an old metric basis and re-deriving them from invalidated
+        evidence would be circular). Gating comes solely from the D-7 verdict ladder. Was: "INSTITUTIONAL GRADE —
+        Ready for real capital deployment" / "STRONG STRATEGY — Consider small live deployment" / ... / "POOR — Do
+        not trade with real capital"."""
+        return f"DESCRIPTIVE SCORE {score:.0f}/100 — not a deployment decision (D-11; eligibility = D-7 verdict ladder)"
 
     # ============================================================
     # SUGGESTIONS ENGINE — enhanced with structure and walk-forward

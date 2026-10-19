@@ -19,7 +19,8 @@ import logging    # Structured logging — consistent with rest of system
 
 # Import TradeRecord — the Django database model
 # NOT Trade — that is the backtester's in-memory object
-from bot.journal.models import TradeRecord
+from bot.journal.models import MODE_UNKNOWN, TradeRecord   # claude code changed: Post-audit Phase 1 journal-mode separation
+from django.utils import timezone   # claude code changed: Post-audit Phase 1 — closed_at
 
 # claude code changed: new import — Phase 4 (DB persistence of trade
 # provenance). Needed because generate_exit() requires net_pnl/r_multiple/
@@ -43,11 +44,12 @@ class TradeLogger:
     The dashboard and analytics views read from these records.
     """
 
-    def __init__(self):
+    def __init__(self, execution_mode=MODE_UNKNOWN):   # claude code changed: Post-audit Phase 1 — LIVE / DRY_RUN from the owning ExecutionEngine; UNKNOWN when nobody set it
         # claude code changed: new — Phase 4 (DB persistence of trade
         # provenance). See log_exit()'s docstring for why generate_exit()
         # is called from inside this class rather than by ExecutionEngine.
         self.narrator = TradeNarrativeGenerator()
+        self.execution_mode = execution_mode   # claude code changed: Post-audit Phase 1 journal-mode separation
 
     # ============================================================
     # LOG ENTRY
@@ -101,6 +103,7 @@ class TradeLogger:
                     "slippage_pct", 0.0
                 ) or 0.0,
                 order_id     = fill_result["order_id"],         # exchange order ID
+                execution_mode = self.execution_mode,           # claude code changed: Post-audit Phase 1 journal-mode separation
                 rsi_at_entry = signal.get("rsi", 0.0),         # RSI at signal time
                 risk_amount  = risk_amount,                     # dollar risk for R calc
 
@@ -266,6 +269,7 @@ class TradeLogger:
                 "slippage_pct", 0.0
             ) or 0.0
             record.exit_reason    = reason                              # why it closed
+            record.closed_at      = timezone.now()                      # claude code changed: Post-audit Phase 1 — durable exit time
             record.gross_pnl      = round(gross_pnl, 4)               # before fees
             record.net_pnl        = round(net_pnl, 4)                 # after fees
             record.r_multiple     = round(r_multiple, 4)              # R-Multiple

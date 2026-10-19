@@ -51,9 +51,13 @@ class SupportedRejectedFeaturesTest(TestCase):
         self.user = User.objects.create_user(username="ei2", password="x")
 
     def test_list_supported_features_only_includes_survived_verdicts(self):
-        _make_experiment(self.user, "SUPPORTED", feature="rsi")
-        _make_experiment(self.user, "PARTIALLY_SUPPORTED", feature="macd")
+        # claude code changed: owner decision D-7 — "survived" = STATISTICAL or higher on the verdict ladder;
+        # a stored legacy SUPPORTED row is UNVERIFIED (F-11) and must NOT appear, nor an unconfirmed OBSERVATION.
+        _make_experiment(self.user, "STATISTICAL", feature="rsi")
+        _make_experiment(self.user, "ECONOMIC", feature="macd")
         _make_experiment(self.user, "REJECTED", feature="volume_ratio")
+        _make_experiment(self.user, "SUPPORTED", feature="obv")
+        _make_experiment(self.user, "OBSERVATION", feature="ema_12")
 
         supported = ei.list_supported_features()
         names = {row["feature"] for row in supported}
@@ -97,8 +101,8 @@ class CrossSymbolConsistencyTest(TestCase):
         self.user = User.objects.create_user(username="ei4", password="x")
 
     def test_replicates_true_when_supported_on_every_tested_asset(self):
-        _make_experiment(self.user, "SUPPORTED", feature="rsi", asset="BTC/USDT")
-        _make_experiment(self.user, "PARTIALLY_SUPPORTED", feature="rsi", asset="ETH/USDT")
+        _make_experiment(self.user, "STATISTICAL", feature="rsi", asset="BTC/USDT")   # claude code changed: D-7 ladder verdicts
+        _make_experiment(self.user, "TRADEABLE", feature="rsi", asset="ETH/USDT")
 
         result = ei.cross_symbol_consistency("rsi")
         self.assertEqual(result["n_assets_tested"], 2)

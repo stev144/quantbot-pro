@@ -35,3 +35,24 @@ HEALTH_CLASS_MAP = {
 @register.filter
 def health_class(status):
     return HEALTH_CLASS_MAP.get(str(status).upper(), "dim")
+
+
+# claude code changed: 2026-10-07 Deep Health — its own six-state vocabulary (PASS/PARTIAL/FAIL/BLOCKED/UNKNOWN/N/A),
+# kept separate from HEALTH_CLASS_MAP so BLOCKED/UNKNOWN never borrow a "fine" colour.
+DEEP_HEALTH_CLASS = {"PASS": "pos", "PARTIAL": "warn", "FAIL": "neg", "BLOCKED": "neu", "UNKNOWN": "warn", "N/A": "dim"}   # claude code changed: 2026-10-07 Deep Health
+DEEP_HEALTH_DOT = {"PASS": "ok", "PARTIAL": "warn", "FAIL": "err", "BLOCKED": "warn", "UNKNOWN": "warn", "N/A": "off"}   # claude code changed: 2026-10-07 Deep Health
+
+
+@register.filter
+def deep_health_class(status):   # claude code changed: 2026-10-07 Deep Health
+    return DEEP_HEALTH_CLASS.get(str(status).upper(), "neg")   # an unrecognised status is never shown as fine
+
+
+@register.filter
+def deep_health_dot(status):   # claude code changed: 2026-10-07 Deep Health
+    return DEEP_HEALTH_DOT.get(str(status).upper(), "err")
+
+
+@register.filter
+def dict_get(d, key):   # claude code changed: 2026-10-07 Deep Health — gate lookup in templates
+    return d.get(key) if hasattr(d, "get") else None

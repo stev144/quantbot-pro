@@ -60,6 +60,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy import stats
+from bot.quant_core.inference import IID_PVALUE_BASIS   # claude code changed: F-02
+from bot.quant_core.inference import CONFIRMATORY_BASIS, confirmatory_ic_test, horizon_from_label, stable_seed   # claude code changed: D-2
 
 from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO  # claude code changed: new — Forex Integration Stage 1, see SYMBOLS comment below
 
@@ -291,8 +293,13 @@ class FeatureDecayAnalyzer:
                 fw = fwd[valid].values
 
                 # IC — the primary measure of predictive power
-                # Spearman rank correlation: feature vs forward return
-                ic, pvalue = stats.spearmanr(fc, fw)
+                # claude code changed: owner decision D-2 — the DECISION p is the block permutation
+                # (block = max(4h, 24), B = 999); the IID Spearman p is descriptive only.
+                ct = confirmatory_ic_test(fc, fw, horizon_from_label(self.forward_col),
+                                          seed=stable_seed("decay_year", symbol, feature, year, self.forward_col))
+                ic = ct["ic"] if ct["status"] == "OK" else float(stats.spearmanr(fc, fw)[0])
+                pvalue = ct["p_value"] if ct["status"] == "OK" else np.nan
+                pvalue_iid = ct["p_iid"] if ct["status"] == "OK" else float(stats.spearmanr(fc, fw)[1])
 
                 # FIX 2: Sharpe is NOT computed here.
                 # A valid Sharpe requires a real trading strategy with position
@@ -303,7 +310,7 @@ class FeatureDecayAnalyzer:
                 sharpe = np.nan    # Kept as column for CSV compatibility only
 
                 # Grade — based on IC and p-value only (see FIX 1 in _grade)
-                grade = self._grade(ic, pvalue, sharpe)
+                grade = self._grade(ic, pvalue, sharpe) if ct["status"] == "OK" else "UNTESTABLE"   # claude code changed: D-2 — never graded on a missing test
 
                 rows.append({
                     "symbol":  symbol,
@@ -312,10 +319,13 @@ class FeatureDecayAnalyzer:
                     "context": YEAR_CONTEXT.get(year, ""),
                     "n_obs":   int(valid.sum()),
                     "ic":      round(float(ic), 6) if not np.isnan(ic) else np.nan,
-                    "pvalue":  round(float(pvalue), 6),
+                    "pvalue":  float(pvalue) if not np.isnan(pvalue) else np.nan,   # claude code changed: D-2 — block-permutation p (decision)
+                    "pvalue_basis": CONFIRMATORY_BASIS,
+                    "pvalue_iid": round(float(pvalue_iid), 6), "iid_basis": IID_PVALUE_BASIS,   # descriptive only (F-02)
+                    "test_status": ct["status"], "block": ct["block"], "n_perm": ct["n_perm"], "seed": ct["seed"],
                     "sharpe":  round(float(sharpe), 4),
                     "grade":   grade,
-                    "significant": pvalue < self.alpha,
+                    "significant": bool(ct["status"] == "OK" and pvalue < self.alpha),
                 })
 
         return pd.DataFrame(rows)
@@ -371,7 +381,12 @@ class FeatureDecayAnalyzer:
                 fc = feat[valid].values
                 fw = fwd[valid].values
 
-                ic, pvalue = stats.spearmanr(fc, fw)
+                # claude code changed: owner decision D-2 — block-permutation decision p; IID p descriptive only.
+                ct = confirmatory_ic_test(fc, fw, horizon_from_label(self.forward_col),
+                                          seed=stable_seed("decay_regime", symbol, feature, regime_name, self.forward_col))
+                ic = ct["ic"] if ct["status"] == "OK" else float(stats.spearmanr(fc, fw)[0])
+                pvalue = ct["p_value"] if ct["status"] == "OK" else np.nan
+                pvalue_iid = ct["p_iid"] if ct["status"] == "OK" else float(stats.spearmanr(fc, fw)[1])
 
                 rows.append({
                     "symbol":  symbol,
@@ -380,8 +395,11 @@ class FeatureDecayAnalyzer:
                     "context": context,
                     "n_obs":   int(valid.sum()),
                     "ic":      round(float(ic), 6) if not np.isnan(ic) else np.nan,
-                    "pvalue":  round(float(pvalue), 6),
-                    "significant": pvalue < self.alpha,
+                    "pvalue":  float(pvalue) if not np.isnan(pvalue) else np.nan,   # claude code changed: D-2 — block-permutation p (decision)
+                    "pvalue_basis": CONFIRMATORY_BASIS,
+                    "pvalue_iid": round(float(pvalue_iid), 6), "iid_basis": IID_PVALUE_BASIS,   # descriptive only (F-02)
+                    "test_status": ct["status"], "block": ct["block"], "n_perm": ct["n_perm"], "seed": ct["seed"],
+                    "significant": bool(ct["status"] == "OK" and pvalue < self.alpha),
                     "ic_grade": self._grade_ic_only(ic),
                 })
 
@@ -772,4 +790,16 @@ def run_decay_analysis(
 
 
 if __name__ == "__main__":
-    run_decay_analysis()
+    # claude code changed: market-agnostic infrastructure — --asset-class CLI arg selects symbol universe
+    import argparse as _argparse
+    _p = _argparse.ArgumentParser(description="Feature Decay Analyzer")
+    _p.add_argument(
+        "--asset-class",
+        default=ASSET_CLASS_CRYPTO,
+        choices=[ASSET_CLASS_CRYPTO, "FOREX"],
+        help="Asset class universe to analyse (default: CRYPTO)",
+    )
+    _args = _p.parse_args()
+    from bot.instruments import symbols_for_asset_class as _sfa  # noqa: F811
+    _symbols = [s.replace("/", "_") for s in _sfa(_args.asset_class)]
+    run_decay_analysis(symbols=_symbols)

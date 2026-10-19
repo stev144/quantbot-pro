@@ -121,6 +121,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations          # Modern type hints
+from bot.quant_core.provenance import write_legacy_provenance   # claude code changed: Stage 2D Rev B G-1 — LEGACY sidecars: this engine runs pre-Stage-2D (legacy) methodology
 
 import logging                              # Structured logging
 import warnings                             # Suppress statistical warnings
@@ -330,8 +331,9 @@ class PairResult:
         # (see module docstring): a pair being stationary within the fixed
         # TRAINING_WINDOW never meant the relationship actually persisted.
         # Empirically, 76 of 84 pairs that passed the training-window-only
-        # ADF test (90.5%) failed a second ADF test on the untouched
-        # out-of-sample holdout using the SAME frozen hedge ratio/intercept
+        # ADF test (90.5%) failed a second ADF test on the post-training
+        # window (a PSEUDO-holdout — already exposed to earlier research, NOT an
+        # untouched holdout; claude code changed: F-19 wording) using the SAME frozen hedge ratio/intercept
         # — a genuine, permanent structural break in most cases (spread
         # means shifting by 6+ training-period standard deviations), not
         # noise. oos_adf_pvalue is the raw result; oos_adf_pvalue_fdr/
@@ -751,7 +753,7 @@ class CointegrationEngine:
     # OUT-OF-SAMPLE PERSISTENCE CORRECTION ACROSS ALL CANDIDATE PAIRS
     # claude code changed: new — see _test_pair()'s "OUT-OF-SAMPLE PERSISTENCE
     # CHECK" comment for the full finding (76/84 previously-valid pairs, 90.5%,
-    # failed a second ADF test on untouched holdout data using the same frozen
+    # failed a second ADF test on post-training pseudo-holdout data (already exposed — not untouched; claude code changed: F-19) using the same frozen
     # hedge ratio). Same "provisional then corrected" pattern as
     # _apply_fdr_correction() immediately above, applied to oos_adf_pvalue
     # instead of adf_pvalue: mutates self.pair_results in place, only ever
@@ -1054,7 +1056,7 @@ class CointegrationEngine:
         # chance or a temporary regime, then break down permanently right
         # after. Applies the SAME frozen hedge_ratio/intercept (no
         # re-fitting — this is a pure persistence check, not a second
-        # estimation) to the untouched holdout candles and re-runs ADF.
+        # estimation) to the post-training pseudo-holdout candles (exposed to prior research, so not an untouched holdout — claude code changed: F-19) and re-runs ADF.
         # Empirically this rejected 76 of 84 pairs (90.5%) that had passed
         # the training-window-only test — most by a permanent, multi-sigma
         # mean shift, not noise. oos_adf_pvalue is recorded here at its raw
@@ -1602,7 +1604,12 @@ def run_cointegration_research(
     # Save pair summary
     if not pairs_df.empty:
         pairs_path = Path(output_dir) / "cointegration_pairs.csv"
+        # claude code changed: 2026-10-04 — every row of this LEGACY scan says how it was selected (first-N training
+        # window over each pair's whole history, reading zone V and later). Canonical selection: run_selection_zone_screen.
+        pairs_df = pairs_df.assign(selection_basis="LEGACY_FIRST_N_TRAINING_WINDOW")
+        logger.warning("  cointegration_pairs.csv is a LEGACY selection (not zone-S, not D-3) — never canonical evidence")
         pairs_df.to_csv(pairs_path, index=False)
+        write_legacy_provenance(pairs_path, kind="COINTEGRATION_SCAN", producer="bot.research.cointegration_engine")   # claude code changed: Stage 2D Rev B G-1
         logger.info(f"\n  Saved pair summary: {pairs_path}")
 
     # Save each valid pair's spread DataFrame
@@ -1673,6 +1680,238 @@ def _rejection_status_label(row: pd.Series) -> str:
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: 2026-10-04 — CANONICAL SELECTION IN ZONE S (owner decisions D-8 + D-3). Step 2 of the
+# post-decision-sheet plan. The legacy run_all()/_test_pair() path fits on the FIRST N candles of each pair's
+# whole history and checks persistence on the rest — i.e. it reads zone V (and anything later). The functions
+# below reuse the SAME single-pair test (_test_pair: Engle–Granger + the engine's existing half-life and
+# persistence filters, unchanged) but feed it ONLY zone S candles, and route the scan's p-values through the
+# D-3 exploratory screen (BH q = 0.10, zone S only, labelled EXPLORATORY — NOT CLAIMABLE, ≤ 5 nominated).
+#
+#   coverage   both legs observed at or before S_start and at or after S_end; no gap > protocol.gap_max_candles
+#              (existing frozen gap policy, D8) inside zone S — otherwise UNTESTABLE (never filled)
+#   seed       a pair is NOMINATABLE only if the canonical causal seed exists for it (L = 1000 complete grid
+#              candles immediately before S_start) — checked with the real causal_init, not re-implemented
+#   family     every TESTABLE pair of the scan is one exploratory BH family (filters only ever downgrade after
+#              correction, never shrink the family before it)
+#   seal       any candle ≥ F (sealed holdout) in the input is refused
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+SELECTION_SCREEN_VERSION = "QBP-COINT-ZONE-S-1"
+
+
+def _zone_s_slice(log_a: pd.Series, log_b: pd.Series, *, zones=None, protocol=None, calendar=None,
+                  gap_max_candles=None):   # claude code changed: 2026-10-04 asset-agnostic — optional session calendar + its owner g_max
+    """(aligned zone-S frame, reason). Frame has columns a, b on the timestamps both legs observed in S.
+    calendar None / continuous: the unchanged REVB-4 (crypto) rule — any gap > g_max grid candles fails.
+    SessionCalendar: scheduled-closure hours are not on the grid (Decision 5 A); only missing TRADING hours count
+    against `gap_max_candles`, which is an owner value with no default (Decision 5 B)."""
+    from bot.quant_core.protocol import CANONICAL
+    from bot.quant_core.research_zones import ZONES
+    zones, protocol = zones or ZONES, protocol or CANONICAL
+    for s in (log_a, log_b):
+        zones.assert_no_sealed_data(s.index, purpose="cointegration selection screen")
+    both = pd.concat({"a": log_a, "b": log_b}, axis=1, join="inner").dropna().sort_index()
+    idx = pd.DatetimeIndex(both.index)
+    idx = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    both.index = idx
+    if len(both) == 0 or both.index[0] > zones.S0 or both.index[-1] < zones.S1:
+        return None, (f"does not cover zone S ({zones.S0} → {zones.S1}); "
+                      f"data spans {both.index[0] if len(both) else None} → {both.index[-1] if len(both) else None}")
+    s = both.loc[(both.index >= zones.S0) & (both.index <= zones.S1)]
+    if calendar is not None and not calendar.is_continuous:   # claude code changed: 2026-10-04 asset-agnostic — trading-grid gap rule
+        from bot.quant_core.market_profile import assert_no_closure_rows, max_missing_trading_run
+        if gap_max_candles is None:
+            raise ValueError("a session calendar needs its own unexpected-gap g_max (owner value, Decision 5 B)")
+        assert_no_closure_rows(s.index, calendar, purpose="cointegration selection screen")
+        run = max_missing_trading_run(s.index, calendar, zones.S0, zones.S1)
+        if run > gap_max_candles:
+            return None, f"{run} consecutive missing trading candles inside zone S exceed the {gap_max_candles}-candle gap policy"
+        return s, ""
+    max_gap = (s.index[1:] - s.index[:-1]).max() if len(s) > 1 else pd.Timedelta(0)
+    allowed = pd.Timedelta(hours=protocol.gap_max_candles + 1)
+    if max_gap > allowed:
+        return None, f"gap of {max_gap} inside zone S exceeds the {protocol.gap_max_candles}-candle gap policy"
+    return s, ""
+
+
+def _seed_eligibility(raw_a: pd.Series, raw_b: pd.Series, *, protocol=None, calendar=None):   # claude code changed: 2026-10-06 — calendar (FX trading grid)
+    """(eligible, reason) using the canonical seed code path (KalmanFilterEngine alignment + causal_init)."""
+    from bot.quant_core.protocol import CANONICAL
+    from bot.quant_core.seed import causal_init
+    from bot.research.kalman_filter_engine import KalmanFilterEngine
+    protocol = protocol or CANONICAL
+    eng = KalmanFilterEngine(pair_name="A/B", symbol_a="A", symbol_b="B", ols_beta=1.0, ols_alpha=0.0)
+    try:
+        aligned = eng._align_prices(raw_a, raw_b, calendar=calendar)   # claude code changed: 2026-10-06 — None = unchanged crypto grid
+        la, lb = eng._to_log_prices(aligned)
+        causal_init(la, lb, protocol, calendar=calendar)               # claude code changed: 2026-10-06
+        return True, ""
+    except Exception as e:      # any refusal of the canonical seed makes the pair non-nominatable
+        return False, f"no canonical seed: {e}"
+
+
+def _market_block(symbol_a, symbol_b, close_a, close_b, zones, market_out: Optional[list] = None) -> Optional[Dict]:   # claude code changed: 2026-10-04 asset-agnostic — new; 2026-10-06 market_out
+    """None when the pair may run under its market profile; otherwise a BLOCKED result (never UNTESTABLE or
+    REJECTED: an undecided market rule is not a data problem and not negative evidence). The holdout seal is
+    checked first, for every asset class."""
+    from bot.quant_core.market_profile import (AssetClassMismatch, OwnerDecisionMissing, assert_continuous_market,
+                                               profile_for_pair)
+    for s in (close_a, close_b):
+        zones.assert_no_sealed_data(s.index, purpose="cointegration selection screen")
+    try:
+        market = profile_for_pair(symbol_a, symbol_b)   # claude code changed: 2026-10-06 — gate chosen per asset class below
+        if market.asset_class == "CRYPTO":   # claude code changed: 2026-10-06 — crypto path unchanged
+            market.require_canonical(f"zone-S selection {symbol_a}/{symbol_b}")
+        else:                                # claude code changed: 2026-10-06 — FX: selection-only gate + universe
+            from bot.quant_core.market_profile import in_universe
+            market.require_selection(f"zone-S selection {symbol_a}/{symbol_b}")
+            outside = [s for s in (symbol_a, symbol_b) if not in_universe(market, s)]
+            if outside:
+                raise OwnerDecisionMissing(f"{outside} outside the {market.asset_class} universe ({market.universe_rule})")
+        if market.calendar.is_continuous:
+            assert_continuous_market(close_a.dropna().index, purpose=f"zone-S selection {symbol_a}")
+            assert_continuous_market(close_b.dropna().index, purpose=f"zone-S selection {symbol_b}")
+        if market_out is not None:   # claude code changed: 2026-10-06 — hand the resolved profile to the caller
+            market_out.append(market)   # claude code changed: 2026-10-06
+        return None
+    except (OwnerDecisionMissing, AssetClassMismatch) as e:
+        return {"symbol_a": symbol_a, "symbol_b": symbol_b, "pair_name": f"{symbol_a}/{symbol_b}",
+                "selection_basis": "ZONE_S_D8", "selection_screen_version": SELECTION_SCREEN_VERSION,
+                "zones_hash": zones.zones_hash(), "zone_s": [zones.S0.isoformat(), zones.S1.isoformat()],
+                "status": "BLOCKED", "reject_reason": str(e), "is_cointegrated": None, "passes_filters": None,
+                "coint_pvalue": None, "seed_eligible": False, "seed_reason": str(e)}
+
+
+def pair_test_in_selection_zone(symbol_a: str, symbol_b: str, close_a: pd.Series, close_b: pd.Series, *,
+                                timeframe: str = "1h", zones=None, protocol=None) -> Dict:
+    """One pair, zone S only. Returns the PairResult dict (same keys as the legacy single-pair test) plus
+    selection_basis / status / seed eligibility / zone provenance."""
+    from bot.quant_core.research_zones import ZONES
+    zones = zones or ZONES
+    _m = []   # claude code changed: 2026-10-06 — receives the resolved market profile
+    blocked = _market_block(symbol_a, symbol_b, close_a, close_b, zones, market_out=_m)   # claude code changed: 2026-10-04 asset-agnostic
+    if blocked is not None:
+        return blocked
+    market = _m[0]   # claude code changed: 2026-10-06
+    cal = None if market.calendar.is_continuous else market.calendar   # claude code changed: 2026-10-06 — FX trading grid
+    log_a = np.log(close_a.astype(float).clip(lower=1e-12))
+    log_b = np.log(close_b.astype(float).clip(lower=1e-12))
+    eligible, seed_reason = _seed_eligibility(close_a, close_b, protocol=protocol, calendar=cal)   # claude code changed: 2026-10-06 — calendar
+    base = {"symbol_a": symbol_a, "symbol_b": symbol_b, "selection_basis": "ZONE_S_D8",
+            "selection_screen_version": SELECTION_SCREEN_VERSION, "zones_hash": zones.zones_hash(),
+            "zone_s": [zones.S0.isoformat(), zones.S1.isoformat()],
+            "seed_eligible": eligible, "seed_reason": seed_reason}
+    if cal is not None:   # claude code changed: 2026-10-06 — FX rows say what they are (crypto rows unchanged)
+        base.update({"asset_class": market.asset_class, "market_profile_hash": market.profile_hash(),
+                     "selection_mode": "FX_SELECTION_ONLY — costs, financing, holding horizon and protocol values "
+                                       "undecided; exploratory, never claimable"})
+    s, reason = _zone_s_slice(log_a, log_b, zones=zones, protocol=protocol, calendar=cal,
+                              gap_max_candles=market.gap_max_candles if cal is not None else None)   # claude code changed: 2026-10-06
+    if s is None:
+        return {**base, "status": "UNTESTABLE", "reject_reason": reason, "is_cointegrated": False,
+                "passes_filters": False, "coint_pvalue": None}
+    engine = CointegrationEngine(timeframe=timeframe)
+    pr = engine._test_pair(symbol_a, symbol_b, s["a"], s["b"])
+    out = pr.to_dict()
+    untestable = (pr.reject_reason or "").startswith("UNTESTABLE")
+    out.update(base)
+    out.update({"status": "UNTESTABLE" if untestable else "OK", "n_zone_s_candles": int(len(s))})
+    return out
+
+
+# claude code changed: 2026-10-04 — PARALLEL SELECTION SCREEN. Each pair test is a pure, deterministic function of
+# its two close series (no shared state, no randomness), so pairs can be tested in separate processes. Workers get
+# the universe's closes ONCE (initializer) and receive only (symbol_a, symbol_b) per task; ProcessPoolExecutor.map
+# returns results in the ORIGINAL pair order, and the exploratory BH correction runs once, in the parent, over the
+# merged rows — exactly as in the serial path. A worker exception (e.g. a sealed-holdout candle) is re-raised in the
+# parent: nothing is skipped silently. Serial and parallel outputs are tested to be identical.
+_SCREEN_WORKER_STATE = None
+
+
+def _screen_worker_init(closes, timeframe, zones, protocol):   # claude code changed: 2026-10-04 — new (runs in each worker)
+    global _SCREEN_WORKER_STATE
+    logging.disable(logging.WARNING)
+    _SCREEN_WORKER_STATE = (closes, timeframe, zones, protocol)
+
+
+def _screen_worker_pair(pair):   # claude code changed: 2026-10-04 — new (runs in each worker)
+    closes, timeframe, zones, protocol = _SCREEN_WORKER_STATE
+    a, b = pair
+    return pair_test_in_selection_zone(a, b, closes[a], closes[b], timeframe=timeframe, zones=zones, protocol=protocol)
+
+
+def run_selection_zone_screen(closes: Dict[str, pd.Series], pairs: Optional[List[Tuple[str, str]]] = None, *,
+                              timeframe: str = "1h", zones=None, protocol=None,
+                              n_workers: int = 1) -> Dict:   # claude code changed: 2026-10-04 — n_workers > 1 tests pairs in parallel processes (identical results)
+    """The canonical selection stage (D-8 zone S + D-3 exploration). Never claimable — it can only NOMINATE at
+    most 5 pairs for D-3 registration and a later single confirmatory test in zone V."""
+    from itertools import combinations
+    from bot.quant_core.hypothesis_registry import exploratory_screen
+    from bot.quant_core.protocol import CANONICAL, METHODOLOGY_VERSION
+    from bot.quant_core.research_zones import ZONES
+    zones, protocol = zones or ZONES, protocol or CANONICAL
+    pairs = pairs if pairs is not None else list(combinations(sorted(closes), 2))
+    if n_workers is None or int(n_workers) <= 1 or len(pairs) < 2:
+        rows = [pair_test_in_selection_zone(a, b, closes[a], closes[b], timeframe=timeframe, zones=zones,
+                                            protocol=protocol) for a, b in pairs]
+    else:   # claude code changed: 2026-10-04 — parallel path; same function per pair, original order kept
+        from concurrent.futures import ProcessPoolExecutor
+        needed = {s: closes[s] for s in sorted({s for p in pairs for s in p})}
+        n_workers = int(n_workers)
+        chunk = max(1, len(pairs) // (n_workers * 8))
+        with ProcessPoolExecutor(max_workers=n_workers, initializer=_screen_worker_init,
+                                 initargs=(needed, timeframe, zones, protocol)) as ex:
+            rows = list(ex.map(_screen_worker_pair, [tuple(p) for p in pairs], chunksize=chunk))
+    testable = [r for r in rows if r["status"] == "OK" and r.get("coint_pvalue") is not None]
+    family_note = (f"one exploratory BH family = all {len(testable)} testable pairs of this scan "
+                   f"(of {len(rows)} requested), Engle–Granger p on zone S only")
+    if testable:
+        s_index = pd.date_range(zones.S0, zones.S1, freq="h")
+        screen = exploratory_screen({r["pair_name"]: float(r["coint_pvalue"]) for r in testable}, s_index, zones=zones)
+        ok_after = {r["pair_name"] for r in testable if r["passes_filters"] and r["seed_eligible"]}
+        survivors = [p for p in screen["survivors"] if p in ok_after]   # downgrade-only, after correction
+        nominated = survivors[:5]
+    else:
+        screen, survivors, nominated = {"p_bh": {}, "survivors": [], "label": None}, [], []
+    for r in rows:
+        r["p_bh_exploratory"] = screen["p_bh"].get(r.get("pair_name")) if testable else None
+        r["nominated"] = r.get("pair_name") in nominated
+    from bot.quant_core.hypothesis_registry import EXPLORATORY_LABEL
+    return {"label": EXPLORATORY_LABEL, "claimable": False, "selection_screen_version": SELECTION_SCREEN_VERSION,
+            "methodology_version": METHODOLOGY_VERSION, "protocol_hash": protocol.config_hash(),
+            "zones_hash": zones.zones_hash(), "family_definition": family_note,
+            "half_life_bounds_candles": [MIN_HALF_LIFE_HOURS, MAX_HALF_LIFE_HOURS],
+            "n_requested": len(rows), "n_testable": len(testable), "bh_survivors": screen["survivors"],
+            "survivors_after_filters": survivors, "nominated": nominated, "pairs": rows}
+
+
+def run_selection_screen_on_data(data_dir: str = "data", symbols: Optional[List[str]] = None, *, n_workers: int = 1,
+                                 output_path: Optional[str] = None, timeframe: str = "1h") -> Dict:   # claude code changed: 2026-10-04 — new
+    """Load <SYMBOL>_1h.csv closes (crypto: *_USDT_1h.csv in `data_dir` when `symbols` is None) and run the zone-S
+    selection screen. Every symbol's FULL file is passed in, so the seal check sees any sealed candle and refuses.
+    `output_path` (JSON) is written only if it does not exist yet — an earlier screen is never overwritten."""
+    import glob
+    import json
+    from pathlib import Path
+    if output_path is not None and Path(output_path).exists():
+        raise FileExistsError(f"{output_path} already exists — a screen result is never overwritten; choose a new path")
+    if symbols is None:
+        symbols = sorted(Path(p).name[:-len("_1h.csv")] for p in glob.glob(str(Path(data_dir) / "*_USDT_1h.csv")))
+    closes = {}
+    for sym in symbols:
+        d = pd.read_csv(Path(data_dir) / f"{sym}_1h.csv", usecols=["timestamp", "close"], float_precision="round_trip")
+        closes[sym] = pd.Series(d["close"].to_numpy(float), index=pd.to_datetime(d["timestamp"], utc=True))
+    result = run_selection_zone_screen(closes, timeframe=timeframe, n_workers=n_workers)
+    result["universe"] = {"data_dir": str(data_dir), "symbols": list(symbols), "n_symbols": len(symbols)}
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "x", encoding="utf-8") as f:   # "x": fail if it appeared meanwhile
+            json.dump(result, f, indent=1, default=str)
+    return result
+
+
 if __name__ == "__main__":
     run_cointegration_research(
         output_dir="research_data",

@@ -99,23 +99,15 @@
 
     <div class="two-col">
         <div class="term-section">
-            <div class="term-section-head"><span class="term-section-title">Coins to Trade</span><span class="term-section-meta">score &ge; 70</span></div>
+            <div class="term-section-head"><span class="term-section-title">Coins to Trade</span><span class="term-section-meta">no selection role</span></div>
             <div class="term-section-body">
-                {% if leaderboard.coins_to_trade %}
-                <div>{% for s in leaderboard.coins_to_trade %}<span class="badge pos">{{ s }}</span> {% endfor %}</div>
-                {% else %}
-                <div class="unavailable">No symbols cleared the 70-score threshold this run.</div>
-                {% endif %}
+                <div class="unavailable">Scores are descriptive only (owner decision D-11). Trade eligibility comes from the research verdict ladder (D-7), not from this score.</div>
             </div>
         </div>
         <div class="term-section">
-            <div class="term-section-head"><span class="term-section-title">Coins to Avoid</span><span class="term-section-meta">score &lt; 50</span></div>
+            <div class="term-section-head"><span class="term-section-title">Coins to Avoid</span><span class="term-section-meta">no selection role</span></div>
             <div class="term-section-body">
-                {% if leaderboard.coins_to_avoid %}
-                <div>{% for s in leaderboard.coins_to_avoid %}<span class="badge neg">{{ s }}</span> {% endfor %}</div>
-                {% else %}
-                <div class="unavailable">No symbols fell below the 50-score threshold this run.</div>
-                {% endif %}
+                <div class="unavailable">Scores are descriptive only (owner decision D-11).</div>
             </div>
         </div>
     </div>

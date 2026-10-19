@@ -12,6 +12,13 @@
    {symbol}_observations.csv (see get_feature_correlation_matrix in
    bot/views/feature_intelligence_data.py), cached per symbol. A real
    derived statistic from real data, not a fabricated score.
+
+   claude code changed: feature-correlation upgrade — basis (stationary /
+   raw) and method (Pearson / Spearman) selectors; headers show the
+   transform applied; empty/constant columns and exact duplicates listed
+   separately instead of filling the grid with nan or 1.00; every
+   redundancy pair labelled BY CONSTRUCTION or EMPIRICAL with its
+   per-year range; a short reading guide.
 {% endcomment %}
 
 {% include "partials/_topbar.html" with active="features" %}
@@ -21,31 +28,51 @@
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title">Single-Asset Indicator Correlation — {{ symbol }}</span>
-            <span class="term-section-meta">Pearson correlation, computed live from {{ symbol }}_observations.csv</span>
+            <span class="term-section-meta">{{ method|title }} · {{ basis }} basis · computed live from {{ symbol }}_observations.csv</span>
         </div>
         <div class="term-section-body">
-            <form method="get" action="." style="margin-bottom:14px">
-                <label class="text-dim">Symbol:</label>
-                <select name="symbol" class="term-input mono" onchange="this.form.submit()">
-                    {% for s in symbols %}
-                    <option value="{{ s }}" {% if s == symbol %}selected{% endif %}>{{ s }}</option>
-                    {% endfor %}
-                </select>
+            <form method="get" action="." style="margin-bottom:14px; display:flex; gap:14px; flex-wrap:wrap; align-items:center">
+                <label class="text-dim">Symbol:
+                    <select name="symbol" class="term-input mono" onchange="this.form.submit()">
+                        {% for s in symbols %}
+                        <option value="{{ s }}" {% if s == symbol %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="text-dim">Basis:
+                    <select name="basis" class="term-input mono" onchange="this.form.submit()">
+                        <option value="stationary" {% if basis == "stationary" %}selected{% endif %}>Stationary (price-free, recommended)</option>
+                        <option value="raw" {% if basis == "raw" %}selected{% endif %}>Raw (as stored)</option>
+                    </select>
+                </label>
+                <label class="text-dim">Method:
+                    <select name="method" class="term-input mono" onchange="this.form.submit()">
+                        <option value="pearson" {% if method == "pearson" %}selected{% endif %}>Pearson (linear)</option>
+                        <option value="spearman" {% if method == "spearman" %}selected{% endif %}>Spearman (rank, outlier-robust)</option>
+                    </select>
+                </label>
             </form>
 
             {% if matrix.available %}
             <div class="chart-caption" style="margin-bottom:10px">
-                {{ matrix.n_candles }} candles. Cells shaded by |correlation| using the theme's positive/negative colors.
-                |corr| &ge; {{ matrix.threshold }} is flagged a redundancy candidate below — this only means the two
-                columns move together on this symbol's history, not that either one is predictive (see each feature's
-                own detail page for that).
+                {{ matrix.n_candles }} candles ({{ matrix.first_timestamp|slice:":10" }} → {{ matrix.last_timestamp|slice:":10" }}),
+                file written {{ matrix.file_date }}.
+                {% if basis == "stationary" %}
+                Price levels are shown as distance from price (÷ close − 1) and dollar amounts as a fraction of price (÷ close),
+                so a high value means shared information, not a shared price trend.
+                {% else %}
+                <strong>Raw basis:</strong> price levels and dollar amounts all follow the long-run price trend, so they
+                correlate near 1.00 with each other regardless of any shared information. Use for inspection only.
+                {% endif %}
+                |corr| &ge; {{ matrix.threshold }} is listed as a redundancy candidate below. Correlation says two features
+                move together, not that either one predicts returns (see each feature's detail page for that).
             </div>
             <div class="term-table-wrap">
                 <table class="term-table mono" style="font-size:11px">
                     <thead>
                         <tr>
                             <th></th>
-                            {% for f in matrix.features %}<th>{{ f }}</th>{% endfor %}
+                            {% for f in matrix.labels %}<th>{{ f }}</th>{% endfor %}
                         </tr>
                     </thead>
                     <tbody>
@@ -61,18 +88,42 @@
                 </table>
             </div>
 
+            {% if matrix.unavailable or matrix.duplicates %}
+            <div class="hairline"></div>
+            <div class="metric-label" style="margin-bottom:8px">Excluded from the matrix (data-quality findings)</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Feature</th><th>Finding</th><th>Detail</th></tr></thead>
+                    <tbody>
+                        {% for u in matrix.unavailable %}
+                        <tr><td class="label-cell">{{ u.feature }}</td><td class="neg">NO USABLE DATA</td><td>{{ u.reason }}</td></tr>
+                        {% endfor %}
+                        {% for d in matrix.duplicates %}
+                        <tr><td class="label-cell">{{ d.feature }}</td><td class="neg">DUPLICATE of {{ d.duplicate_of }}</td><td>{{ d.why }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
             <div class="hairline"></div>
             <div class="metric-label" style="margin-bottom:8px">Redundancy Candidates (|corr| &ge; {{ matrix.threshold }})</div>
             {% if matrix.redundant_pairs %}
             <div class="term-table-wrap">
                 <table class="term-table">
-                    <thead><tr><th>Feature A</th><th>Feature B</th><th class="num">Correlation</th></tr></thead>
+                    <thead><tr>
+                        <th>Feature A</th><th>Feature B</th><th class="num">Correlation</th>
+                        <th>Type</th><th class="num">Per-year range</th><th>Why / note</th>
+                    </tr></thead>
                     <tbody>
                         {% for p in matrix.redundant_pairs %}
                         <tr>
                             <td class="label-cell"><a href="{% url 'feature_detail' p.feature_a %}">{{ p.feature_a }}</a></td>
                             <td class="label-cell"><a href="{% url 'feature_detail' p.feature_b %}">{{ p.feature_b }}</a></td>
                             <td class="num stat-number {% if p.corr > 0 %}pos{% else %}neg{% endif %}" data-target="{{ p.corr }}" data-decimals="4">0</td>
+                            <td>{{ p.kind }}</td>
+                            <td class="num mono">{% if p.yearly %}{{ p.yearly.min|floatformat:2 }} … {{ p.yearly.max|floatformat:2 }} ({{ p.yearly.n_years }}y){% else %}—{% endif %}</td>
+                            <td>{% if p.why %}{{ p.why }}{% elif p.yearly and p.yearly.sign_flip %}<span class="neg">sign flips between years: unstable</span>{% else %}empirical overlap on this symbol's history{% endif %}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -81,6 +132,20 @@
             {% else %}
             <div class="unavailable">No feature pairs at or above the {{ matrix.threshold }} threshold for {{ symbol }}.</div>
             {% endif %}
+
+            <div class="hairline"></div>
+            <details>
+                <summary class="metric-label" style="cursor:pointer">How to read this matrix</summary>
+                <div class="chart-caption" style="margin-top:8px; line-height:1.6">
+                    <p><strong>1. Check the data first.</strong> Read the excluded-features table before any number. An empty column or a duplicate is a pipeline finding, not a market finding.</p>
+                    <p><strong>2. Use the stationary basis.</strong> Two series that both trended up correlate near 1 even with no shared information. Only price-free values say whether two features carry the same information.</p>
+                    <p><strong>3. Separate arithmetic from evidence.</strong> A BY CONSTRUCTION pair is high because of how the features are defined, so no data could make it otherwise. Only an EMPIRICAL pair tells you something about this market.</p>
+                    <p><strong>4. Check stability.</strong> A single full-history number can hide regimes. A narrow per-year range means the overlap is structural; a wide range or a sign flip means it depends on the period.</p>
+                    <p><strong>5. Compare Pearson with Spearman.</strong> If Spearman is much lower, a few extreme candles drive the Pearson value. If Spearman is higher, the relationship is monotone but not linear.</p>
+                    <p><strong>6. Decide.</strong> For a redundant pair, keep the feature with the better out-of-sample predictive evidence (detail page), not the one listed first. |corr| near 0 is good: the features add independent information.</p>
+                    <p><strong>Rule of thumb for |corr|:</strong> &lt; 0.3 weak · 0.3–0.7 moderate · 0.7–0.8 strong · &ge; 0.8 treated as redundant here. With tens of thousands of candles, almost any non-zero value is statistically significant, so judge by size and stability, not p-values.</p>
+                </div>
+            </details>
             {% else %}
             <div class="unavailable">{{ matrix.reason }}</div>
             {% endif %}
@@ -89,7 +154,7 @@
 
 </div>
 
-{% include "partials/_footer.html" with label="Feature Intelligence" note=symbol|add:" · correlation cached 1h" %}
+{% include "partials/_footer.html" with label="Feature Intelligence" note=symbol|add:" · correlation cached 1h per file version" %}
 
 {% endblock %}
 

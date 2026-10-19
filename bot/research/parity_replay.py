@@ -152,6 +152,7 @@ def replay(close_a: pd.Series, close_b: pd.Series, *, hedge_ratio: float, interc
             "kalman_zscore_lag1": batch["kalman_zscore_lag1"].to_numpy(),
             "pair_signal_dynamic": -batch["kalman_zscore"].to_numpy(),
             "kalman_beta": batch["kalman_beta"].to_numpy(),
+            "kalman_alpha": batch["kalman_alpha"].to_numpy(),   # claude code changed: Stage 2D Rev B — α_e, required by the canonical rule set
             "kalman_spread": batch["kalman_spread"].to_numpy(),
             "prediction_error": batch["prediction_error"].to_numpy(),
             "beta_uncertainty": batch["beta_uncertainty"].to_numpy(),
@@ -161,9 +162,9 @@ def replay(close_a: pd.Series, close_b: pd.Series, *, hedge_ratio: float, interc
         le = live.engine
         research = EntryExitEngine(
             output_dir=str(tmp / "out"), validated_win_rate=validated_win_rate,
-            capital_usdt=le.sizer.capital, kelly_safety=le.sizer.kelly_safety,
-            min_position_usdt=le.sizer.min_position_usdt, exit_time_stop_hours=le.exit_time_stop,
-            disable_target_exit=le.disable_target_exit,
+            capital_usdt=le.sizer.capital,   # claude code changed: Stage 2D Rev B step 8 — kelly_safety removed with Kelly sizing
+            min_position_usdt=le.sizer.min_position_usdt,
+            rule_set="CANONICAL_UNCERTIFIED", protocol=le.protocol,   # claude code changed: Stage 2D Rev B Steps 9–10 — the live engine's canonical lifecycle; D-4 — UNCERTIFIED: this harness feeds an explicit shared θ₀ (not a causal canonical dataset), so its output is never labelled canonical
             pair_name="X_USDT/Y_USDT", symbol_a="X_USDT", symbol_b="Y_USDT",
         )
         trades, _, _ = research.run(kalman_csv=str(csv))

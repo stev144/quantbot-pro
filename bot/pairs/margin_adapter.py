@@ -104,6 +104,7 @@ class MarginFillResult:
     fee_usdt: Optional[float]   # claude code changed: LIVE-02 — the fee's QUOTE-currency value (quote fees as-is, base-asset fees × this fill's price); None when any fee is in a third asset (e.g. BNB) or the exchange returned no fee information. Was ccxt fee.cost read as USDT regardless of currency.
     fee_asset: str              # claude code changed: LIVE-02 — the single fee currency, "MIXED" if several, "UNKNOWN" if none reported
     fees: Tuple[Tuple[float, str], ...] = ()   # claude code changed: new, LIVE-02 — raw (cost, currency) pairs exactly as the exchange reported them, one per currency
+    price_source: str = "EXCHANGE"   # claude code changed: Post-audit Phase 1 A4 — how fill_price was obtained: EXCHANGE (real fill) or a DRY_RUN_* model label
 
 
 @dataclass
@@ -343,6 +344,31 @@ class BinanceIsolatedMarginAdapter:
         ticker = self.exchange.fetch_ticker(symbol)
         return float(ticker["last"])
 
+    def get_bid_ask(self, symbol: str) -> Tuple[float, float]:   # claude code changed: Post-audit Phase 1 A2 (owner decision: liquidation-value marking) — new
+        """(bid, ask) from ONE ticker snapshot, for the drawdown guard's
+        liquidation-value mark. Raises ValueError when either side is missing
+        or non-positive, or the book is crossed (bid > ask) — the guard then
+        fails closed. Never falls back to the last trade price."""
+        ticker = self.exchange.fetch_ticker(symbol)
+        bid, ask = ticker.get("bid"), ticker.get("ask")
+        if bid is None or ask is None or float(bid) <= 0 or float(ask) <= 0:
+            raise ValueError(f"{symbol}: no usable bid/ask in the ticker snapshot (bid={bid!r}, ask={ask!r})")
+        if float(bid) > float(ask):
+            raise ValueError(f"{symbol}: crossed book (bid {bid} > ask {ask})")
+        return float(bid), float(ask)
+
+    def get_touch_price(self, symbol: str, side: str) -> Tuple[float, str]:   # claude code changed: Post-audit Phase 1 A4 — new
+        """Side-correct touch from ONE ticker snapshot: a market BUY lifts the
+        ask, a market SELL hits the bid. Returns (price, source). Falls back
+        to the last trade price — labelled LAST_FALLBACK — only when the
+        snapshot carries no usable bid/ask (never silently)."""
+        ticker = self.exchange.fetch_ticker(symbol)
+        key = "ask" if side == "buy" else "bid"
+        touch = ticker.get(key)
+        if touch is not None and float(touch) > 0:
+            return float(touch), "TOUCH"
+        return float(ticker["last"]), "LAST_FALLBACK"
+
     # ── Collateral transfer ────────────────────────────────────────────
 
     def transfer_in(self, symbol: str, quote_amount: float) -> dict:
@@ -414,17 +440,29 @@ class BinanceIsolatedMarginAdapter:
         raise OrderStillOpenException(f"{symbol} margin {side} order {order_id} still open after {ORDER_CONFIRM_MAX_ATTEMPTS} confirmation attempts")
 
     def _simulate_fill(self, symbol: str, side: str, quantity: float) -> MarginFillResult:
-        """Matches OrderManager._simulate_fill()'s convention: real
-        reference price via a real ticker fetch, adverse slippage
-        applied in the trader's disfavor, fee on notional. No real
-        order/borrow/repay/transfer touches Binance in this path."""
-        reference_price = self.get_ticker_price(symbol)
+        """Dry-run fill model (claude code changed: Post-audit Phase 1 A4 —
+        was ticker LAST × (1 ± slippage)):
+
+          reference = side-correct touch from one ticker snapshot (ask for a
+                      buy, bid for a sell; last price only as a labelled
+                      fallback) — so the bid-ask spread is paid explicitly;
+          fill      = reference × (1 + s) for a buy, × (1 − s) for a sell,
+                      s = the declared SLIPPAGE_RATE (market impact beyond
+                      the touch; same constant research uses);
+          fee       = fill × quantity × FEE_RATE, charged in USDT;
+          quantity  = FULL FILL ASSUMED (no order-book depth model);
+          time      = the moment the runner processes the closed candle
+                      (after close(c)), not the candle close itself.
+        Borrow interest is NOT modelled in dry run — see the trade logger's
+        borrow_cost_status=UNAVAILABLE label. No real order/borrow/repay/
+        transfer touches Binance in this path."""
+        reference_price, source = self.get_touch_price(symbol, side)
         if side == "buy":
             fill_price = reference_price * (1 + SLIPPAGE_RATE)
         else:
             fill_price = reference_price * (1 - SLIPPAGE_RATE)
         fee_usdt = round(fill_price * quantity * FEE_RATE, 6)
-        logger.info(f"[MarginAdapter:DRY_RUN] {side} {quantity} {symbol} @ {fill_price:.6f} (fee ${fee_usdt:.4f})")
+        logger.info(f"[MarginAdapter:DRY_RUN] {side} {quantity} {symbol} @ {fill_price:.6f} ({source}+slippage, fee ${fee_usdt:.4f})")
         return MarginFillResult(
             order_id=f"dryrun-{symbol}-{side}-{time.time_ns()}",
             symbol=symbol,
@@ -434,6 +472,7 @@ class BinanceIsolatedMarginAdapter:
             fee_usdt=fee_usdt,
             fee_asset="USDT",
             fees=((fee_usdt, "USDT"),),   # claude code changed: new, LIVE-02 — the simulated fee is charged in USDT
+            price_source=f"DRY_RUN_{source}+SLIPPAGE",   # claude code changed: Post-audit Phase 1 A4
         )
 
     # ── Execution quantity inputs ────────────────────────────────────
@@ -446,6 +485,17 @@ class BinanceIsolatedMarginAdapter:
             return AmountRules(step=None, min_qty=None)
         market = self.exchange.market(symbol)
         return AmountRules(step=market["precision"]["amount"], min_qty=(market.get("limits") or {}).get("amount", {}).get("min"))
+
+    def min_notional(self, symbol: str) -> Optional[float]:   # claude code changed: Stage 2D Rev B step 8 — exchange minNotional for the entry executability check
+        """MIN_NOTIONAL (quote) from ccxt market metadata. Dry run: None — the
+        simulator applies no exchange filters. Real mode: raises rather than
+        guessing when the metadata has no value."""
+        if self.dry_run:
+            return None
+        cost_min = ((self.exchange.market(symbol).get("limits") or {}).get("cost") or {}).get("min")
+        if cost_min is None:
+            raise ValueError(f"{symbol}: no minNotional (limits.cost.min) in market metadata — cannot verify executability")
+        return float(cost_min)
 
     def fee_buffer_rate(self, symbol: str) -> float:
         """Worst-case base-asset fee rate used to size a short-cover buy: the

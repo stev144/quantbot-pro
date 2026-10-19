@@ -24,12 +24,13 @@
         </div>
         <div class="term-section-body">
             {% if conclusions.available %}
+            <div class="chart-caption" style="margin-bottom:10px; border-left:3px solid var(--warning); padding-left:8px"><strong>Evidence status ({{ "CRRP-2026-10-02" }}):</strong> every entry carries its classification from the evidence registry. Entries written before the reset point are preserved for provenance and are <strong>not current evidence</strong> unless marked CANONICAL. See PRE_PHASE3_RESEARCH_GOVERNANCE_REPORT_2026-10-02.md.</div>{# claude code changed: Post-CRRP Task 4 — page-level evidence note #}
             <div class="chart-caption" style="margin-bottom:10px">Every research verdict this project has recorded — <span class="stat-number" data-target="{{ conclusions.n_entries }}" data-decimals="0">0</span> entries. Synthesizes cointegration, walk-forward, and permutation-test results into one accepted/rejected call per line of research, explaining WHY, not just what the numbers were.</div>
             {% for e in conclusions.entries %}
             <div class="term-panel" style="margin-bottom:10px">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
                     <span style="font-weight:600">{{ e.title }}</span>
-                    <span><span class="badge {{ e.verdict_tag|verdict_class }}">{{ e.verdict_tag }}</span> <span class="text-dim mono" style="margin-left:8px">{{ e.date|default:"—" }}</span></span>
+                    <span>{% include "partials/_evidence_badge.html" with ev=e.evidence %} {% if e.evidence.is_current_evidence %}<span class="badge {{ e.verdict_tag|verdict_class }}">{{ e.verdict_tag }}</span>{% else %}<span class="text-dim mono" title="historical verdict tag, not current evidence" style="font-size:11px">legacy verdict: {{ e.verdict_tag }}</span>{% endif %} <span class="text-dim mono" style="margin-left:8px">{{ e.date|default:"—" }}</span></span>{# claude code changed: Post-CRRP Task 4 — evidence badge first; the legacy verdict is coloured only when the entry is current evidence #}
                 </div>
                 {% if e.verdict_text %}<div class="text-secondary" style="margin-bottom:6px"><strong>Verdict:</strong> {{ e.verdict_text }}</div>{% endif %}
                 <div class="text-dim" style="white-space:pre-line; font-size:12px">{{ e.excerpt }}</div>

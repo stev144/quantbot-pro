@@ -173,3 +173,23 @@ class DropdownCloseOnOutsideClickTest(TestCase):
         resp = self.client.get('/')
         html = resp.content.decode()
         self.assertIn('!details.contains(event.target)', html)
+
+class DropdownNotPreOpenedAfterSelectionTest(TestCase):   # claude code changed: 2026-10-07 — new (navbar menu stayed hanging after a selection)
+
+    def test_groups_are_closed_on_their_own_pages_but_the_section_stays_highlighted(self):
+        from django.template.loader import render_to_string
+        from django.test import RequestFactory
+        from django.contrib.auth.models import AnonymousUser
+        for active in ("features", "research_lab_mvp", "portfolio_risk"):
+            request = RequestFactory().get("/")
+            request.user = AnonymousUser()
+            html = render_to_string("partials/_topbar.html", {"active": active, "request": request})
+            self.assertEqual(html.count('<details class="term-nav-group">'), 3, active)   # never rendered with `open`
+            self.assertNotRegex(html, r'<details class="term-nav-group"[^>]*open', active)
+            self.assertIn('class="term-nav-link active"', html, active)                   # the section is still marked
+
+    def test_choosing_an_item_or_pressing_escape_closes_the_group(self):
+        html = self.client.get("/").content.decode()
+        self.assertIn('event.target.closest(".term-nav-group .term-nav-dropdown a")', html)
+        self.assertIn('event.key === "Escape"', html)
+

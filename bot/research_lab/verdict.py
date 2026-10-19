@@ -18,10 +18,22 @@ from typing import Dict, List, Optional
 from bot.research.feature_decay_analyzer import IC_STRONG, IC_MODERATE, IC_WEAK  # claude code changed: reuse, section 25
 from bot.research_lab.tools.conditional_tools import MIN_CONDITION_SAMPLE  # claude code changed: new — Statistical Integrity Hardening (gap #2), single source for "enough qualifying events," not a second constant that could drift from the tool layer's own floor
 
-VERDICT_CRITERIA_VERSION = "1.0.0"
+VERDICT_CRITERIA_VERSION = "2.0.0"   # claude code changed: owner decision D-7 — was 1.0.0; SUPPORTED/PARTIALLY_SUPPORTED replaced by the verdict ladder
 
 MIN_SAMPLE_SIZE = 1000  # claude code changed: below this, even a "significant" result isn't trustworthy — matches this project's WINSOR_MIN_PERIODS-style floors elsewhere
 ALPHA = 0.05
+
+
+def _ladder(explanation: List[str], **evidence) -> "VerdictResult":   # claude code changed: owner decision D-7 — new
+    """A positive research-lab finding is reported as the highest D-7 ladder level its evidence reaches. A
+    research-lab single test has no registered, Holm-confirmed D-3 family (family_confirmed=None), no complete
+    cost model, no D-1 execution check and no forward-holdout pass, so it is capped at OBSERVATION — never the
+    old SUPPORTED. The cap reasons are part of the explanation."""
+    from bot.quant_core.verdict_ladder import LADDER_VERSION, LadderEvidence, ladder_level
+    level, reasons = ladder_level(LadderEvidence(**evidence))
+    if level is None:      # defensive: callers only reach here with an observed effect
+        return VerdictResult("INCONCLUSIVE", explanation + reasons)
+    return VerdictResult(level, explanation + [f"verdict ladder ({LADDER_VERSION}): {level}"] + reasons)
 
 
 @dataclass
@@ -97,10 +109,10 @@ def compute_verdict(
     abs_ic = abs(ic)
     if abs_ic >= IC_STRONG:
         explanation.append(f"|IC|={abs_ic:.4f} clears the strong threshold ({IC_STRONG}) and survives FDR correction")
-        return VerdictResult("SUPPORTED", explanation)
+        return _ladder(explanation, effect_observed=True, dependence_aware_test=True)   # claude code changed: D-7 — was SUPPORTED
     if abs_ic >= IC_MODERATE:
         explanation.append(f"|IC|={abs_ic:.4f} clears the moderate threshold ({IC_MODERATE}) and survives FDR correction")
-        return VerdictResult("PARTIALLY_SUPPORTED", explanation)
+        return _ladder(explanation, effect_observed=True, dependence_aware_test=True)   # claude code changed: D-7 — was PARTIALLY_SUPPORTED
 
     explanation.append(f"|IC|={abs_ic:.4f} survives FDR correction but is below the moderate threshold ({IC_MODERATE}) — statistically real but too weak to act on")
     return VerdictResult("INCONCLUSIVE", explanation)
@@ -201,10 +213,10 @@ def compute_verdict_conditional(
 
     if block_p <= CONDITIONAL_EFFECT_STRONG_P:
         explanation.append(f"block-permutation p={block_p:.4f} clears the strong threshold ({CONDITIONAL_EFFECT_STRONG_P})")
-        return VerdictResult("SUPPORTED", explanation)
+        return _ladder(explanation, effect_observed=True, dependence_aware_test=True)   # claude code changed: D-7 — was SUPPORTED
 
     explanation.append(f"block-permutation p={block_p:.4f} is significant but above the strong threshold ({CONDITIONAL_EFFECT_STRONG_P})")
-    return VerdictResult("PARTIALLY_SUPPORTED", explanation)
+    return _ladder(explanation, effect_observed=True, dependence_aware_test=True)   # claude code changed: D-7 — was PARTIALLY_SUPPORTED
 
 
 # claude code changed: new — Advanced Quant Research Capability
@@ -241,6 +253,8 @@ def compute_verdict_pairs(cointegration_test: Optional[Dict]) -> VerdictResult:
         return VerdictResult("REQUIRES_REVIEW", ["evidence shape does not match a cointegration test — the requested pairs hypothesis was not actually tested"])
 
     reject_reason = (cointegration_test.get("reject_reason") or "").lower()
+    if cointegration_test.get("status") == "BLOCKED":   # claude code changed: 2026-10-04 asset-agnostic — undecided market rules (e.g. FX_CALENDAR_UNAVAILABLE): not tested, not negative evidence
+        return VerdictResult("REQUIRES_REVIEW", [cointegration_test.get("reject_reason")])
     if "insufficient" in reject_reason:
         return VerdictResult("INSUFFICIENT_DATA", [cointegration_test.get("reject_reason")])
     if "ols failed" in reject_reason:
@@ -275,7 +289,7 @@ def compute_verdict_pairs(cointegration_test: Optional[Dict]) -> VerdictResult:
 
     if passes_filters:
         explanation.append("cointegrated and passes the half-life/tradability filter")
-        return VerdictResult("SUPPORTED", explanation)
+        return _ladder(explanation, effect_observed=True)   # claude code changed: D-7 — was SUPPORTED (a scan cointegration is an observation, not a confirmed pairs edge)
 
     # claude code changed: cointegrated on the raw test, but rejected by
     # cointegration_engine.py's own half-life (or FDR, in a full-universe
@@ -285,7 +299,7 @@ def compute_verdict_pairs(cointegration_test: Optional[Dict]) -> VerdictResult:
     # the raw test actually found) and not SUPPORTED (a half-life outside
     # the accepted range is a real caveat, not a footnote).
     explanation.append("cointegrated on the raw test, but rejected by the half-life/tradability filter — a partial finding")
-    return VerdictResult("PARTIALLY_SUPPORTED", explanation)
+    return _ladder(explanation, effect_observed=True)   # claude code changed: D-7 — was PARTIALLY_SUPPORTED
 
 
 # claude code changed: new — Regime-Conditional Research wiring. Maps

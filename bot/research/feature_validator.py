@@ -32,6 +32,7 @@ import numpy as np                              # Numerical operations
 from typing import Dict, List, Tuple, Optional  # Type hints
 from pathlib import Path                       # Path handling
 from scipy import stats                        # Statistical tests (t-test, Mann-Whitney)
+from bot.quant_core.inference import CONFIRMATORY_B, d10_block_length   # claude code changed: D-2/D-3/D-10
 from statsmodels.stats.multitest import multipletests  # Multiple testing correction
 from bot.quant_core.targets import assert_label_admissible   # claude code changed: Stage 2D — retired (non-tradeable) labels are refused as evidence
 from dataclasses import dataclass, asdict      # Type-safe data structures
@@ -39,7 +40,7 @@ import json                                    # JSON serialization
 import hashlib                                 # Feature versioning via hash
 from datetime import datetime                  # Timestamps
 import concurrent.futures                      # Parallel processing (optional)
-from bot.instruments import UnsupportedAnnualizationError, UnsupportedTimeframeError, periods_per_year  # claude code changed: new — Phase 1B hardening, section 7
+from bot.instruments import UnsupportedAnnualizationError, UnsupportedTimeframeError, periods_per_year, ASSET_CLASS_FOREX  # claude code changed: new — Phase 1B hardening §7; ASSET_CLASS_FOREX added for market-agnostic threshold
 
 # claude code changed: real bug fix. This used to be a blanket
 # `warnings.filterwarnings('ignore')` — a global, process-wide suppression
@@ -99,6 +100,15 @@ MIN_QUARTILE_OBSERVATIONS = 30                 # Minimum observations per quarti
 ECONOMIC_SIGNIFICANCE_THRESHOLD = 0.005        # Minimum 0.5% return difference (CRITICAL!)
                                               # This prevents trading tiny differences that don't cover costs
 
+# claude code changed: market-agnostic refactor — per-asset-class economic significance thresholds.
+# The global constant above is calibrated for crypto (typical crypto IC quartile spread ~0.5–2%).
+# FX spot moves in pips; EUR/USD 1h realistic IC quartile spread ~0.002–0.005% — roughly 100× smaller.
+# Using the crypto threshold for FX blocks every FX feature by construction, making validation
+# impossible. 0.0002 (2 bps) covers a typical FX broker spread with a reasonable margin.
+_ECONOMIC_THRESHOLD_BY_ASSET_CLASS: Dict[str, float] = {
+    ASSET_CLASS_FOREX: 0.0002,
+}
+
 # Multiple testing correction
 USE_BONFERRONI = True                         # Use Bonferroni for ultra-conservative approach
 USE_FDR = True                                # Use FDR (False Discovery Rate) for balanced approach
@@ -129,10 +139,19 @@ def _build_stability_windows(df: pd.DataFrame, timestamp_col: str = "timestamp")
     vs tz-naive mismatch. Returns {} if timestamp_col isn't present or
     has no parseable dates — an honest empty result (no stability score
     computed) rather than a misleading placeholder.
+
+    Falls back to a DatetimeIndex when timestamp_col is absent — df_features
+    carries timestamps as its index (not a column), so without this fallback
+    all stability windows were silently empty and stability_std was always NaN,
+    blocking every feature from KEEP.
     """
-    if timestamp_col not in df.columns:
+    if timestamp_col in df.columns:  # claude code changed: fix DatetimeIndex fallback — was "not in → return {}", now column → use it, index → use it, neither → {}
+        ts = pd.to_datetime(df[timestamp_col], errors="coerce")
+    elif isinstance(df.index, pd.DatetimeIndex):
+        ts = df.index.to_series()  # does not mutate df
+    else:
         return {}
-    ts = pd.to_datetime(df[timestamp_col], errors="coerce")
+    ts = pd.to_datetime(ts, errors="coerce")
     ts = ts.dropna()
     if ts.empty:
         return {}
@@ -163,7 +182,7 @@ MIN_SHARPE_CONTRIBUTION = 0.5                 # Feature should contribute at lea
 # fix. N_PERMUTATIONS matches permutation_test_engine.py's
 # DEFAULT_N_PERMUTATIONS (100) — same convention already established
 # elsewhere in this research pipeline, not picked independently.
-BLOCK_PERMUTATION_N: int = 100
+BLOCK_PERMUTATION_N: int = CONFIRMATORY_B   # claude code changed: owner decision D-3 — B = 999 per confirmatory test (was 100: p floor 0.0099, unresolvable against family corrections, F-07)
 DEFAULT_HORIZON_CANDLES_FALLBACK: int = 4     # Used only if forward_return_col's name doesn't parse to a number
 
 
@@ -391,6 +410,11 @@ class FeatureValidator:
         self.results: List[InstitutionalValidationResult] = []
         self.timeframe = timeframe
         self.asset_class = asset_class
+        # claude code changed: market-agnostic refactor — derive economic significance threshold
+        # from asset class; callers passing no asset_class keep the existing crypto default.
+        self.economic_significance_threshold: float = _ECONOMIC_THRESHOLD_BY_ASSET_CLASS.get(
+            asset_class, ECONOMIC_SIGNIFICANCE_THRESHOLD
+        )
         # Initialize regime detector
         self.regime_detector = MarketRegimeDetector()
         # claude code changed: new — Phase B (P1-3). Isolated RNG for the
@@ -403,7 +427,7 @@ class FeatureValidator:
         logger.info(f"InstitutionalFeatureValidator initialized")
         logger.info(f"  Min observations per quartile: {min_observations}")
         logger.info(f"  Statistical significance: {alpha}")
-        logger.info(f"  Economic significance: >{ECONOMIC_SIGNIFICANCE_THRESHOLD*100:.2f}%")
+        logger.info(f"  Economic significance: >{self.economic_significance_threshold*100:.4f}%")  # claude code changed: instance threshold (asset-class-aware)
     
     # ───────────────────────────────────────────────────────────────────────────────────────────────────
     # MAIN METHOD: Validate all features with full institutional pipeline
@@ -491,11 +515,13 @@ class FeatureValidator:
         logger.info(f"\nConfiguration:")
         logger.info(f"  Total observations: {len(df):,}")
         logger.info(f"  Statistical alpha: {self.alpha}")
-        logger.info(f"  Economic threshold: {ECONOMIC_SIGNIFICANCE_THRESHOLD*100:.2f}%")
+        logger.info(f"  Economic threshold: {self.economic_significance_threshold*100:.4f}%")  # claude code changed: instance threshold (asset-class-aware)
         logger.info(f"  Multiple testing: Bonferroni + FDR corrections enabled")
         logger.info(f"  Tests: T-test, Mann-Whitney U, Information Coefficient")
         logger.info(f"  Stability: Across time periods + market regimes")
         
+        df = df.copy()  # claude code changed: market-agnostic refactor — avoid mutating caller's DataFrame (G4)
+
         # Add market regime classification
         logger.info(f"\nDetecting market regimes...")
         df['market_regime'] = self.regime_detector.detect_regime(df)
@@ -518,7 +544,10 @@ class FeatureValidator:
         exclude_cols = {
             'symbol', 'timeframe', 'timestamp', 'market_regime',
             'close', 'open', 'high', 'low', 'volume',
-            'realized_vol', 'adx'
+            'realized_vol',  # still excluded: FX 1h annualization factor unresolved in bot/instruments.py (FOREX/1h not registered); value is wrong for FX data
+            # adx was excluded here before 2026-10-19 because it was silently all-NaN (dtype bug in _calculate_adx that
+            # assigned int64 Series and then failed boolean-mask assignment under pandas>=2.x — fixed in feature_calculator.py).
+            # ADX now produces real values; exclusion removed so it is tested like every other indicator.  # claude code changed: removed 'adx' from exclude_cols — dtype bug fixed, ADX now valid
         }
         # claude code changed: was an enumerated set of specific horizons
         # (forward_return_1h/4h/24h, win_1h/4h/24h) that didn't cover every
@@ -583,6 +612,7 @@ class FeatureValidator:
         stability_consistency: float,
         ic_overall: float,
         significance_failure_reason: str = "Failed statistical significance (p >= alpha)",
+        economic_threshold: float = ECONOMIC_SIGNIFICANCE_THRESHOLD,  # claude code changed: market-agnostic refactor — callers pass self.economic_significance_threshold for FX-correct reason strings; default preserves existing behavior
     ) -> Tuple[str, float]:
         reasons = []
 
@@ -590,7 +620,7 @@ class FeatureValidator:
             reasons.append(significance_failure_reason)
 
         if not passed_economic:
-            reasons.append(f"Failed economic significance (spread {quartile_spread:.4f} < {ECONOMIC_SIGNIFICANCE_THRESHOLD:.4f})")
+            reasons.append(f"Failed economic significance (spread {quartile_spread:.6f} < {economic_threshold:.6f})")  # claude code changed: use param so FX threshold appears correctly
 
         if not passed_stability:
             reasons.append(f"Poor stability across time (std={stability_consistency:.3f})")
@@ -830,7 +860,7 @@ class FeatureValidator:
             q1_mask=q1_mask,
             q4_mask=q4_mask,
             real_spread=spread,
-            block_size=horizon_candles,
+            block_size=d10_block_length(horizon_candles),   # claude code changed: owner decision D-10 — block = max(4·h, 24) (was h)
         )
 
         # ── STEP 4: Economic significance check (CRITICAL!) ────────────────────
@@ -838,7 +868,7 @@ class FeatureValidator:
         # p < 0.05 means statistically real
         # But we also need spread > threshold (covers costs)
         quartile_spread = abs(spread)
-        is_economically_significant = quartile_spread > ECONOMIC_SIGNIFICANCE_THRESHOLD
+        is_economically_significant = quartile_spread > self.economic_significance_threshold  # claude code changed: use instance threshold (asset-class-aware)
         
         # ── STEP 5: Information Coefficient (Spearman rank correlation) ───────
         # IC = how much does feature correlate with actual returns?
@@ -877,9 +907,13 @@ class FeatureValidator:
         for year, (start_date, end_date) in windows.items():
             try:
                 # Filter data to this year (if timestamp available)
-                if 'timestamp' in df.columns:
+                if 'timestamp' in df.columns:  # claude code changed: add DatetimeIndex fallback — without it, windows built from index were used but year-filter used full data every year, producing identical ICs and stability_std=0
                     year_mask = (pd.to_datetime(df['timestamp']) >= start_date) & \
                                (pd.to_datetime(df['timestamp']) <= end_date)
+                    year_feature = feature_data[year_mask].copy()
+                    year_returns_raw = returns_series[year_mask]
+                elif isinstance(df.index, pd.DatetimeIndex):
+                    year_mask = (df.index >= start_date) & (df.index <= end_date)
                     year_feature = feature_data[year_mask].copy()
                     year_returns_raw = returns_series[year_mask]
                 else:
@@ -1038,6 +1072,7 @@ class FeatureValidator:
             quartile_spread=quartile_spread,
             stability_consistency=stability_consistency,
             ic_overall=ic_overall,
+            economic_threshold=self.economic_significance_threshold,  # claude code changed: market-agnostic refactor
         )
         
         # Create result
@@ -1232,6 +1267,7 @@ class FeatureValidator:
                 stability_consistency=row["stability_std"],
                 ic_overall=row["ic_overall"],
                 significance_failure_reason="Failed FDR-corrected, dependence-aware statistical significance (p_fdr >= alpha)",
+                economic_threshold=self.economic_significance_threshold,  # claude code changed: market-agnostic refactor
             )
             final_recs.append(rec)
             final_confs.append(conf)

@@ -2526,6 +2526,37 @@ class Command(BaseCommand):
                  "OFF by default — a normal run makes zero external network calls beyond what Layer 2 "
                  "already permits (see LIVE_EXCHANGE_MODULE_PATTERNS)."
         )
+        parser.add_argument(  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+            "--level", type=str, default=None, choices=["L0", "L1", "L2", "all"],  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+            help="Run the five-gate Deep Health suite (bot/deep_health) instead of the module walk: "  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                 "L0 infrastructure, L1 functional known answers, L2 research integrity (slow), all = L0+L1+L2. "  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                 "Offline and read-only; writes a report to logs/deep_health/."  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        )  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+
+    def _run_deep_health_levels(self, level: str):  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        """Five-gate Deep Health (DEEP_HEALTH_PLAN_2026-10-07.md): run, print, map every non-PASS component into
+        the existing HealthFinding sink (worst-of severity) and save the report (never overwritten)."""  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        from bot.deep_health import run_health, save_report  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        levels = ("L0", "L1", "L2") if level == "all" else (level,)  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        report = run_health(levels)  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        sev = {"FAIL": RED_SEVERITY, "BLOCKED": ORANGE_SEVERITY, "UNKNOWN": ORANGE_SEVERITY, "PARTIAL": YELLOW_SEVERITY}  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        findings = []  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        self.stdout.write(f"\n{BOLD}{CYAN}DEEP HEALTH {'+'.join(levels)}  run {report['run_id']}  "  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                          f"commit {(report['code_commit'] or 'NO_GIT')[:12]}{' (dirty)' if report['code_dirty'] else ''}{RESET}")  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        for c in report["components"]:  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+            gates = " ".join(f"{g}:{s}" for g, s in c["gates"].items() if s != "N/A")  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+            self.stdout.write(f"  {c['status']:8} {c['title']:<62} {DIM}{gates}{RESET}")  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+            for r in c["results"]:  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                if r["status"] != "PASS":  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                    self.stdout.write(f"      {r['gate']} {r['status']:8} {r['name']}: expected {r['expected']} | "  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                                      f"observed {r['observed']} | {r['reason']}")  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                    findings.append(HealthFinding(component=c["key"], check=f"{r['gate']} {r['name']}",  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                                                  severity=sev.get(r["status"], ORANGE_SEVERITY), evidence=r["reason"],  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                                                  expected=r["expected"], actual=r["observed"],  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                                                  impact=f"{c['title']}: gate {r['gate']} is {r['status']}"))  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        path = save_report(report)  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+        self.stdout.write(f"\n  OVERALL {report['overall']}  {report['counts']}  severity {compute_overall_severity(findings)}"  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+                          f"  ({report['duration_ms'] / 1000:.1f}s)\n  report: {path}\n")  # claude code changed: 2026-10-07 Deep Health — five-gate levels
 
     def handle(self, *args, **options):
         """Entry point called by Django."""
@@ -2536,6 +2567,9 @@ class Command(BaseCommand):
         baseline     = options["baseline"]
         skip_private = options["no_private"]
         check_external = options["check_external"]
+
+        if options.get("level"):  # claude code changed: 2026-10-07 Deep Health — five-gate levels
+            return self._run_deep_health_levels(options["level"])  # claude code changed: 2026-10-07 Deep Health — five-gate levels
 
         # Build infrastructure
         factories  = _safe_instance_factory()           # safe constructors

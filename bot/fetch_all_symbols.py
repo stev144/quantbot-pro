@@ -14,6 +14,7 @@ import logging
 import sys
 import pandas as pd
 from pathlib import Path
+from bot.quant_core.research_zones import seal_before_write   # claude code changed: D-8
 from datetime import datetime, timedelta, timezone
 
 # claude code changed: new — real bug, not introduced by this mission but
@@ -283,6 +284,7 @@ def download_all_symbols() -> dict:
             # ── Save to CSV ──────────────────────────────────────────────────
             filename = symbol_to_filename(symbol)
             filepath = OUTPUT_DIR / filename
+            df_clean = seal_before_write(df_clean, filepath)   # claude code changed: D-8 — candles ≥ F go to the sealed store, never to data/
             df_clean.to_csv(filepath, index=False)
 
             candle_count = len(df_clean)

@@ -15,7 +15,8 @@
     ACTIVE SLUGS: dashboard, market_intelligence, research_lab, features,
     strategy_research, strategy_pipeline, pairs_performance, backtesting,
     robustness_analysis, rejected_research, research_archive, portfolio_risk,
-    execution_monitor, pairs_pilot, venue_comparison, system_health
+    execution_monitor, pairs_pilot, dca_engine, venue_comparison, system_health,
+    forex_scanner
 
     claude code changed: new — 'crypto' and 'forex' also highlight their
     respective nav link, though no page passes them today: Crypto shares
@@ -137,8 +138,15 @@
            data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
            href="{% url 'dashboard' %}">Crypto</a>
 
-        <a class="term-nav-link {% if active == 'forex' %}active{% endif %}"
-           href="{% url 'forex_dashboard' %}">Forex</a>
+        {# claude code changed: converted from plain link to dropdown — Scanner added #}
+        <details class="term-nav-group">
+            <summary class="term-nav-link {% if active == 'forex' or active == 'forex_scanner' %}active{% endif %}"
+                     {% if active == 'forex' or active == 'forex_scanner' %}aria-current="page"{% endif %}>Forex</summary>
+            <div class="term-nav-dropdown">
+                <a class="{% if active == 'forex' %}active{% endif %}" href="{% url 'forex_dashboard' %}">Dashboard</a>
+                <a class="{% if active == 'forex_scanner' %}active{% endif %}" href="{% url 'forex_scanner' %}">Market Scanner</a>
+            </div>
+        </details>
 
         {# claude code changed: Research Capabilities Discoverability & Navigation Refactor — #}
         {# was a single top-level <a> straight into the hypothesis-formalization form, with #}
@@ -154,7 +162,8 @@
         {# "Research" dropdown's own first item is, confusingly, ALSO labeled "Research Lab" but #}
         {# points at a completely different, older /research/ view — a real, pre-existing naming #}
         {# collision, not introduced or fixed here; out of this refactor's scope). #}
-        <details class="term-nav-group" {% if active == 'research_lab_mvp' %}open{% endif %}>
+        {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
+        <details class="term-nav-group">
             <summary class="term-nav-link {% if active == 'research_lab_mvp' %}active{% endif %}"
                      {% if active == 'research_lab_mvp' %}aria-current="page"{% endif %}>Research Lab</summary>
             <div class="term-nav-dropdown">
@@ -171,8 +180,9 @@
             </div>
         </details>
 
-        <details class="term-nav-group" {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}open{% endif %}>
-            <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive" %}active{% endif %}">Research</summary>
+        {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
+        <details class="term-nav-group">
+            <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive,decision_journal" %}active{% endif %}">Research</summary>{# claude code changed: 2026-10-07 — decision_journal added #}
             <div class="term-nav-dropdown">
                 <a class="{% if active == 'research_lab' %}active{% endif %}" href="{% url 'research_lab' %}">Research Lab</a>
                 <a class="{% if active == 'features' %}active{% endif %}" href="{% url 'feature_leaderboard' %}">Feature Intelligence</a>
@@ -183,15 +193,19 @@
                 <a class="{% if active == 'robustness_analysis' %}active{% endif %}" href="{% url 'robustness_analysis' %}">Robustness Analysis</a>
                 <a class="{% if active == 'rejected_research' %}active{% endif %}" href="{% url 'rejected_research' %}">Rejected Research</a>
                 <a class="{% if active == 'research_archive' %}active{% endif %}" href="{% url 'research_archive' %}">Research Archive</a>
+                <a class="{% if active == 'decision_journal' %}active{% endif %}" href="{% url 'decision_journal' %}">Decision Journal</a>{# claude code changed: 2026-10-07 — new (read-only journal pages) #}
             </div>
         </details>
 
-        <details class="term-nav-group" {% if active in "portfolio_risk,execution_monitor,pairs_pilot,venue_comparison" %}open{% endif %}>
-            <summary class="term-nav-link {% if active in "portfolio_risk,execution_monitor,pairs_pilot,venue_comparison" %}active{% endif %}">Risk &amp; Execution</summary>
+        {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
+        <details class="term-nav-group">
+            <summary class="term-nav-link {% if active in "portfolio_risk,execution_monitor,pairs_pilot,venue_comparison,dca_engine,paper_trading" %}active{% endif %}">Risk &amp; Execution</summary>{# claude code changed: paper_trading added #}
             <div class="term-nav-dropdown">
                 <a class="{% if active == 'portfolio_risk' %}active{% endif %}" href="{% url 'portfolio_risk' %}">Portfolio &amp; Risk</a>
                 <a class="{% if active == 'execution_monitor' %}active{% endif %}" href="{% url 'execution_monitor' %}">Execution Monitor</a>
                 <a class="{% if active == 'pairs_pilot' %}active{% endif %}" href="{% url 'pairs_pilot' %}">Pairs Pilot</a>
+                <a class="{% if active == 'dca_engine' %}active{% endif %}" href="{% url 'dca_engine' %}">DCA Engine</a>{# claude code changed: new — QC-1 Forex DCA Engine #}
+                <a class="{% if active == 'paper_trading' %}active{% endif %}" href="{% url 'paper_trading' %}">Paper Trader</a>{# claude code changed: new — Ranging Paper Trader #}
                 <a class="{% if active == 'venue_comparison' %}active{% endif %}" href="{% url 'venue_comparison' %}">Venue Comparison</a>
             </div>
         </details>

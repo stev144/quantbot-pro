@@ -24,6 +24,22 @@ from django.db import connection
 DATA_DIR = os.path.join(settings.BASE_DIR, "data")
 RESEARCH_DATA_DIR = os.path.join(settings.BASE_DIR, "research_data")
 
+# claude code changed: 2026-10-05 — research freshness is judged from research OUTPUT files only. Was the newest
+# mtime of ANYTHING in research_data/ (documents and sub-folders included), so editing the governance log made the
+# whole research pipeline read "FRESH".
+_NON_OUTPUT_SUFFIXES = (".md", ".txt", ".log", ".provenance.json")
+
+
+def _latest_research_output():   # claude code changed: 2026-10-05 — new; shared by Research State and System Health
+    """(mtime, filename) of the newest research output file directly in research_data/, or (None, None)."""
+    paths = [p for p in glob.glob(os.path.join(RESEARCH_DATA_DIR, "*"))
+             if os.path.isfile(p) and not p.lower().endswith(_NON_OUTPUT_SUFFIXES)]
+    if not paths:
+        return None, None
+    newest = max(paths, key=os.path.getmtime)
+    return os.path.getmtime(newest), os.path.basename(newest)
+
+
 # How stale research output can be before the dashboard calls it "STALE"
 # rather than "FRESH". Not a precise SLA — just a sanity threshold so a
 # multi-month-old research run doesn't silently read as current.
@@ -89,32 +105,47 @@ def get_cross_sectional_dispersion():
     Reads only the last valid row of the 'cs_zscore' column per file
     (not the whole file) to keep this cheap on every dashboard load.
     """
-    files = sorted(glob.glob(os.path.join(RESEARCH_DATA_DIR, "*_cross_section.csv")))
-    if not files:
-        return {"available": False, "reason": "No *_cross_section.csv files found in research_data/"}
+    return cross_sectional_dispersion_at_common_timestamp(RESEARCH_DATA_DIR, top_n=5)   # claude code changed: 2026-10-05 — one shared implementation (also used by the Forex dashboard)
 
-    latest_zscores = {}
+
+def cross_sectional_dispersion_at_common_timestamp(directory, *, top_n=5, asset_label="symbols",
+                                                   no_files_reason=None):   # claude code changed: 2026-10-05 — new (was duplicated in forex_terminal_data.py)
+    """Dispersion and |z|-ranked extremes of the latest cs_zscore in <directory>/*_cross_section.csv, using ONLY
+    the symbols whose latest value is at the most common latest timestamp (a cross-section is one moment).
+    top_n=None returns every symbol ranked."""
+    files = sorted(glob.glob(os.path.join(directory, "*_cross_section.csv")))
+    if not files:
+        return {"available": False, "reason": no_files_reason or f"No *_cross_section.csv files found in {directory}"}
+    # claude code changed: 2026-10-05 — each symbol's last cs_zscore is read WITH its timestamp. Files end on
+    # different dates (measured: 2026-08-19 … 2026-09-27), and a cross-sectional comparison is only meaningful
+    # across symbols at the SAME timestamp. The reading uses the most common latest timestamp; symbols whose last
+    # value is from another time are excluded from the dispersion and the ranking, and counted.
+    latest = {}
     for path in files:
         symbol = os.path.basename(path).replace("_cross_section.csv", "")
         try:
-            col = pd.read_csv(path, usecols=["cs_zscore"])["cs_zscore"].dropna()
-            if len(col) > 0:
-                latest_zscores[symbol] = float(col.iloc[-1])
+            df = pd.read_csv(path, usecols=["timestamp", "cs_zscore"]).dropna(subset=["cs_zscore"])
+            if len(df) > 0:
+                latest[symbol] = (pd.Timestamp(df["timestamp"].iloc[-1]), float(df["cs_zscore"].iloc[-1]))
         except Exception:
             continue
-
+    if not latest:
+        return {"available": False, "reason": f"No {asset_label} had a readable cs_zscore"}
+    counts = pd.Series([ts for ts, _ in latest.values()]).value_counts()
+    as_of = max(counts[counts == counts.max()].index)            # most common latest timestamp (latest on a tie)
+    latest_zscores = {s: z for s, (ts, z) in latest.items() if ts == as_of}
     if len(latest_zscores) < 3:
-        return {"available": False, "reason": "Fewer than 3 symbols had a readable cs_zscore"}
-
+        return {"available": False, "reason": f"Fewer than 3 {asset_label} share one latest timestamp ({len(latest_zscores)} at {as_of})"}
     values = list(latest_zscores.values())
     dispersion = float(pd.Series(values).std())
     ranked = sorted(latest_zscores.items(), key=lambda kv: abs(kv[1]), reverse=True)
-
     return {
         "available": True,
         "dispersion_std": round(dispersion, 4),
         "n_symbols": len(latest_zscores),
-        "top_extremes": [{"symbol": s, "cs_zscore": round(z, 3)} for s, z in ranked[:5]],
+        "top_extremes": [{"symbol": s, "cs_zscore": round(z, 3)} for s, z in (ranked if top_n is None else ranked[:top_n])],
+        "as_of": as_of.strftime("%Y-%m-%d %H:%M UTC"),             # claude code changed: 2026-10-05
+        "n_excluded_other_timestamp": len(latest) - len(latest_zscores),   # claude code changed: 2026-10-05
     }
 
 
@@ -154,8 +185,7 @@ def get_research_state():
 
     # Latest research run — most recently modified file anywhere under
     # research_data/. Real filesystem mtime, not a claimed schedule.
-    all_research_files = glob.glob(os.path.join(RESEARCH_DATA_DIR, "*"))
-    latest_mtime = max((os.path.getmtime(p) for p in all_research_files), default=None)
+    latest_mtime, latest_output_file = _latest_research_output()   # claude code changed: 2026-10-05 — outputs only
 
     if latest_mtime is None:
         latest_run = None
@@ -187,6 +217,7 @@ def get_research_state():
         "strategies_active": strategies_active,
         "strategies_unwired": strategies_unwired,
         "latest_run": latest_run,
+        "latest_output_file": latest_output_file,   # claude code changed: 2026-10-05 — which file sets the date
         "age_days": age_days,
         "pipeline_health": pipeline_health,
         "governance_entries": governance_entries,
@@ -221,6 +252,9 @@ def get_alpha_intelligence(cross_section_dispersion, backtest_results):
         except Exception:
             continue
 
+    # claude code changed: 2026-10-05 — the date of the validator run behind this table, shown on the panel
+    feature_files_date = (datetime.fromtimestamp(max(os.path.getmtime(p) for p in feature_files), tz=timezone.utc)
+                          .strftime("%Y-%m-%d") if feature_files else None)
     if rows:
         all_features = pd.concat(rows, ignore_index=True)
         all_features["abs_ic"] = all_features["ic_overall"].abs()
@@ -247,6 +281,8 @@ def get_alpha_intelligence(cross_section_dispersion, backtest_results):
     return {
         "feature_power_available": feature_power_available,
         "top_features": top_features_list,
+        "feature_files_date": feature_files_date,                                      # claude code changed: 2026-10-05
+        "n_feature_estimates": int(len(all_features)) if rows else 0,                  # claude code changed: 2026-10-05 — the "of N" for top-8 selection
         "cross_sectional_opportunities": (
             cross_section_dispersion.get("top_extremes", [])
             if cross_section_dispersion.get("available") else []
@@ -360,6 +396,21 @@ def _compute_price_correlation(window=500, directory=None):
 # ============================================================
 # SECTION 5: EXECUTION
 # ============================================================
+def pnl_by_execution_mode(records):   # claude code changed: new — Post-audit Phase 1 journal-mode separation
+    """({execution_mode: realised net P&L}, n_unvalued) over closed journal
+    rows. Modes are never summed together — LIVE is account P&L, DRY_RUN is
+    simulated, UNKNOWN cannot be attributed. A row whose net P&L is None
+    (unvalued third-asset fee) is counted in n_unvalued, never added as 0."""
+    by_mode, unvalued = {}, 0
+    for t in records:
+        if t.net_pnl is None:
+            unvalued += 1
+            continue
+        mode = getattr(t, "execution_mode", "") or "UNKNOWN"
+        by_mode[mode] = by_mode.get(mode, 0.0) + float(t.net_pnl)
+    return {m: round(v, 2) for m, v in sorted(by_mode.items())}, unvalued
+
+
 def get_execution_state():
     """
     Real TradeRecord query — architecture audit confirmed TradeRecord
@@ -378,7 +429,7 @@ def get_execution_state():
     that's a real architectural decision (sync exchange call latency in a
     page load), not a one-line addition.
     """
-    from bot.journal.models import TradeRecord
+    from bot.journal.models import MODE_LIVE, TradeRecord   # claude code changed: Post-audit Phase 1 — MODE_LIVE
 
     try:
         open_positions = list(
@@ -389,12 +440,19 @@ def get_execution_state():
         )
         total_closed = TradeRecord.objects.exclude(status="OPEN").count()
 
+        # claude code changed: Post-audit Phase 1 journal-mode separation — the
+        # headline realised P&L / fees / slippage are LIVE rows only (was: every
+        # row, so dry-run simulated P&L was shown as "Realized P&L"); every mode
+        # is still reported, separately, in realized_pnl_by_mode. A row with
+        # unvalued net P&L is counted, never added as 0.
+        closed_all = TradeRecord.objects.exclude(status="OPEN")
+        realized_pnl_by_mode, unvalued_pnl_count = pnl_by_execution_mode(closed_all)
         realized_pnl = 0.0
         total_fees = 0.0
         total_slippage_events = 0
         slippage_sum = 0.0
-        for t in TradeRecord.objects.exclude(status="OPEN"):
-            realized_pnl += t.net_pnl or 0.0
+        for t in closed_all.filter(execution_mode=MODE_LIVE):
+            realized_pnl += t.net_pnl or 0.0   # None rows are excluded from the headline below via unvalued_pnl_count
             total_fees += (t.fee_entry or 0.0) + (t.fee_exit or 0.0)
             if t.slippage_in:
                 slippage_sum += abs(t.slippage_in)
@@ -412,6 +470,9 @@ def get_execution_state():
             "recent_closed": closed_trades,
             "total_closed": total_closed,
             "realized_pnl": round(realized_pnl, 2),
+            "realized_pnl_scope": "LIVE trades only",            # claude code changed: Post-audit Phase 1 journal-mode separation
+            "realized_pnl_by_mode": realized_pnl_by_mode,        # claude code changed: e.g. {"DRY_RUN": -0.12} — simulated, never account P&L
+            "unvalued_pnl_count": unvalued_pnl_count,            # claude code changed: rows whose net P&L could not be valued (third-asset fee)
             "total_fees": round(total_fees, 2),
             "avg_slippage_pct": round(avg_slippage_pct, 4) if avg_slippage_pct is not None else None,
             "unrealized_pnl": {"available": False, "reason": "Requires a live price fetch per open symbol inside the request — not implemented"},
@@ -466,12 +527,11 @@ def get_system_health():
     checks.append(_import_check("Execution Engine (code)", "bot.engines.execution_engine", "ExecutionEngine"))
 
     # ---- Research engine (freshness, not import) ----
-    research_files = glob.glob(os.path.join(RESEARCH_DATA_DIR, "*"))
-    if research_files:
-        latest = max(os.path.getmtime(p) for p in research_files)
+    latest, latest_name = _latest_research_output()   # claude code changed: 2026-10-05 — outputs only (documents excluded)
+    if latest is not None:
         age_days = (time.time() - latest) / 86400
         status = "ok" if age_days <= RESEARCH_FRESHNESS_DAYS else "warn"
-        checks.append({"name": "Research Engine", "status": status, "detail": f"last output {age_days:.1f}d ago"})
+        checks.append({"name": "Research Engine", "status": status, "detail": f"last output {age_days:.1f}d ago ({latest_name})"})
     else:
         checks.append({"name": "Research Engine", "status": "err", "detail": "no research_data/ output found"})
 

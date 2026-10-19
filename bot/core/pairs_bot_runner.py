@@ -38,6 +38,7 @@
 #      deliberate second signal, not just one flag flip.
 # ============================================================
 
+import math   # claude code changed: F-17 — math.isfinite in _health_baseline_beta
 import sys
 import time
 import logging
@@ -45,7 +46,7 @@ import logging.handlers
 import io
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple   # claude code changed: F-17 — Tuple for _health_baseline_beta
 
 import pandas as pd
 import ccxt
@@ -73,6 +74,13 @@ from bot.pairs.signal_engine import PairSignalEngine
 from bot.pairs.monitor_engine import PairMonitorEngine
 from bot.pairs.execution import PairsExecutionEngine
 from bot.pairs.health import evaluate_pair_health, write_health_snapshot, PairHealthState
+from bot.pairs.config import COINTEGRATION_CSV   # claude code changed: Stage 2D Rev B step 6 — the seed registry lives next to the research outputs
+from bot.quant_core.seed import load_seed, validate_seed, verify_theta_reproduction   # claude code changed: Stage 2D Rev B step 6 (D9); C6 causal seed + data-version check
+from bot.quant_core.protocol import CANONICAL, METHODOLOGY_VERSION   # claude code changed: Stage 2D Rev B C6; D-2 provenance on rejections
+from bot.quant_core.lifecycle import ENTRY_SIGN_MISMATCH   # claude code changed: Stage 2D Rev B D-2
+from bot.pairs.canonical_eligibility import ELIGIBILITY_DIR, check_entry_eligibility   # claude code changed: Stage 2D Rev B D-3
+
+PROTOCOL = CANONICAL   # claude code changed: Stage 2D Rev B — the protocol live seeds and trades under (its hash must match the seed record)
 
 # ── SAFETY ───────────────────────────────────────────────────
 # DRY_RUN = True  -> every leg fill/borrow/repay/transfer is simulated
@@ -158,6 +166,9 @@ class PairSession:
     engine: "PairSignalEngine | PairMonitorEngine"
     last_candle_ts: Optional[int] = None  # ms epoch of the last CLOSED candle processed, dedupes re-polls
     last_action: str = "NONE"
+    seed_ok: bool = False                 # claude code changed: Stage 2D Rev B step 6 (D9) — True only after a full replay from the validated canonical seed candle; entries are refused otherwise
+    seed_refusal: str = "not bootstrapped"   # claude code changed: Stage 2D Rev B step 6 (D9)
+    seed: Optional[object] = None             # claude code changed: Stage 2D Rev B D-2/D-3 — the validated KalmanSeed (lineage for rejections and eligibility)
 
 
 def _fetch_last_closed_candle(exchange, symbol: str, timeframe: str):
@@ -173,7 +184,29 @@ def _fetch_last_closed_candle(exchange, symbol: str, timeframe: str):
     return ts_ms, float(close)
 
 
-BOOTSTRAP_CANDLES = 1000  # comfortably above ZSCORE_WINDOW(504)+WARMUP_CANDLES(168) — Binance's own klines limit ceiling
+BOOTSTRAP_CANDLES = 1000  # comfortably above ZSCORE_WINDOW(504)+WARMUP_CANDLES(168) — Binance's own klines limit ceiling. claude code changed: Stage 2D Rev B — now used for MONITOR-ONLY pairs only; trading pairs replay from the canonical seed (D9)
+SEED_REGISTRY_DIR = os.path.dirname(COINTEGRATION_CSV)   # claude code changed: Stage 2D Rev B step 6 — research_data/, where KalmanFilterEngine writes kalman_seeds.json
+HOUR_MS = 3_600_000   # claude code changed: Stage 2D Rev B step 6
+
+
+def _fetch_closed_history(exchange, symbol: str, since_ms: int, now_ms: int, page_limit: int = 1000):   # claude code changed: Stage 2D Rev B step 6 (D9) — new
+    """{open_ms: close} for every CLOSED 1h candle from since_ms to now,
+    paginated (a canonical replay can span years). Hard page ceiling so a
+    misbehaving endpoint can never loop forever; ceiling reached = error."""
+    out, cursor = {}, since_ms
+    max_pages = (now_ms - since_ms) // (HOUR_MS * page_limit) + 3
+    for _ in range(max_pages):
+        batch = exchange.fetch_ohlcv(symbol, timeframe=CANDLE_TIMEFRAME, since=cursor, limit=page_limit)
+        closed = [c for c in batch if c[0] + HOUR_MS <= now_ms]   # a candle is closed once open + 1h has passed
+        for c in closed:
+            out[int(c[0])] = float(c[4])
+        if not batch or len(closed) < len(batch) or batch[-1][0] + HOUR_MS > now_ms:
+            return out
+        nxt = int(batch[-1][0]) + HOUR_MS
+        if nxt <= cursor:
+            raise RuntimeError(f"{symbol}: kline pagination did not advance at {cursor}")
+        cursor = nxt
+    raise RuntimeError(f"{symbol}: kline pagination exceeded {max_pages} pages from {since_ms}")
 
 # claude code changed: 2026-09-24 — the ad-hoc BETA_DRIFT_MAX_RATIO=0.5
 # guard that was here was superseded by bot/pairs/health.py after a real
@@ -212,6 +245,10 @@ def bootstrap_session(session: PairSession, exchange) -> None:
     logger = logging.getLogger(__name__)
     cfg = session.pair_config
 
+    if cfg.is_entry_eligible:   # claude code changed: Stage 2D Rev B step 6 (D9) — trading pairs: canonical replay from the seed, or no trading
+        _bootstrap_from_canonical_seed(session, exchange)
+        return
+
     candles_a = exchange.fetch_ohlcv(cfg.binance_symbol_a, timeframe=CANDLE_TIMEFRAME, limit=BOOTSTRAP_CANDLES)
     candles_b = exchange.fetch_ohlcv(cfg.binance_symbol_b, timeframe=CANDLE_TIMEFRAME, limit=BOOTSTRAP_CANDLES)
 
@@ -227,22 +264,80 @@ def bootstrap_session(session: PairSession, exchange) -> None:
     price_pairs = [(closed_a[ts], closed_b[ts]) for ts in common_ts]
     session.last_candle_ts = common_ts[-1]
 
-    if cfg.is_entry_eligible:
-        session.engine.bootstrap_from_history(price_pairs)
-        zscore_ready = session.engine._zscore_roller._values and len(session.engine._zscore_roller._values) >= session.engine._zscore_roller.min_periods
-        logger.info(
-            f"[PairsBotRunner:{cfg.pair_name}] Bootstrapped {len(price_pairs)} historical candles "
-            f"({pd.Timestamp(common_ts[0], unit='ms', tz='UTC')} -> {pd.Timestamp(common_ts[-1], unit='ms', tz='UTC')}) | "
-            f"z-score ready: {bool(zscore_ready)}"
-        )
-    else:
-        for price_a, price_b in price_pairs:
-            session.engine.update(price_a, price_b)
-        logger.info(
-            f"[PairsBotRunner:{cfg.pair_name}] Bootstrapped {len(price_pairs)} historical candles "
-            f"({pd.Timestamp(common_ts[0], unit='ms', tz='UTC')} -> {pd.Timestamp(common_ts[-1], unit='ms', tz='UTC')}) | "
-            f"MONITOR_ONLY | current_beta={session.engine.current_beta:.4f}"
-        )
+    # claude code changed: Stage 2D Rev B step 6 — monitor-only pairs only now (the entry-eligible branch moved to _bootstrap_from_canonical_seed)
+    for price_a, price_b in price_pairs:
+        session.engine.update(price_a, price_b)
+    logger.info(
+        f"[PairsBotRunner:{cfg.pair_name}] Bootstrapped {len(price_pairs)} historical candles "
+        f"({pd.Timestamp(common_ts[0], unit='ms', tz='UTC')} -> {pd.Timestamp(common_ts[-1], unit='ms', tz='UTC')}) | "
+        f"MONITOR_ONLY | current_beta={session.engine.current_beta:.4f}"
+    )
+
+
+def _health_baseline_beta(session: PairSession) -> Tuple[float, str]:   # claude code changed: F-17 — new
+    """The β that pair-health drift/sign checks compare the live β against.
+    A validated canonical seed (θ₀ from the causal L-candle init window) is the
+    baseline whenever one is loaded; otherwise the legacy OLS hedge_ratio from
+    cointegration_pairs.csv is used and labelled as such (it is fitted on data
+    the filter later passes — F-03/F-17 — so it is never called canonical).
+    Entries are refused without a validated seed anyway (seed_ok gate)."""
+    # Never raises: this runs inside the entry path between the engine's decision and the
+    # executor, so an exception here would leave engine and executor state divergent.
+    beta0 = getattr(session.seed, "beta0", None) if session.seed_ok and session.seed is not None else None
+    if isinstance(beta0, (int, float)) and not isinstance(beta0, bool) and math.isfinite(beta0):
+        return float(beta0), "CANONICAL_SEED"
+    return float(session.pair_config.hedge_ratio), "LEGACY_OLS_HEDGE_RATIO"
+
+
+def _bootstrap_from_canonical_seed(session: PairSession, exchange) -> None:   # claude code changed: Stage 2D Rev B step 6 (D9) — new
+    """Replay EVERY closed candle from the research seed candle through the
+    state-only path, so the live filter state equals research's (same seed
+    candle, θ₀, P₀, Q, R, update order, warmup, gap policy). Fails closed —
+    session.seed_ok stays False and entries are refused — when the seed
+    record is missing/stale/incompatible or the exchange history does not
+    start exactly at the seed candle."""
+    logger = logging.getLogger(__name__)
+    cfg = session.pair_config
+    # claude code changed: Stage 2D Rev B C6 — the seed must be CAUSAL (θ₀ from an
+    # init window ending one candle before the seed); it is no longer compared
+    # with cointegration_pairs.csv's hedge_ratio/intercept (a look-ahead fit).
+    check = validate_seed(load_seed(cfg.pair_name, SEED_REGISTRY_DIR), pair_name=cfg.pair_name, protocol=PROTOCOL)
+    if not check.ok:
+        session.seed_ok, session.seed_refusal = False, check.reason
+        logger.critical(f"[PairsBotRunner:{cfg.pair_name}] ENTRIES REFUSED — {check.reason}")
+        return
+    seed = check.value
+    init_ms = int(pd.Timestamp(seed.init_window_start).timestamp() * 1000)   # claude code changed: Stage 2D Rev B C6 — history from the init window start
+    since_ms = int(seed.seed_ts.timestamp() * 1000)
+    now_ms = int(exchange.milliseconds())
+    hist_a = _fetch_closed_history(exchange, cfg.binance_symbol_a, init_ms, now_ms)
+    hist_b = _fetch_closed_history(exchange, cfg.binance_symbol_b, init_ms, now_ms)
+    reproduced = verify_theta_reproduction(seed, hist_a, hist_b)   # claude code changed: Stage 2D Rev B C6 — data-version check: exchange closes must reproduce θ₀
+    if not reproduced.ok:
+        session.seed_ok, session.seed_refusal = False, reproduced.reason
+        logger.critical(f"[PairsBotRunner:{cfg.pair_name}] ENTRIES REFUSED — {reproduced.reason}")
+        return
+    common = sorted(t for t in set(hist_a) & set(hist_b) if t >= since_ms)   # claude code changed: Stage 2D Rev B C6 — the filter starts at the seed candle
+    if not common or common[0] != since_ms:
+        session.seed_ok = False
+        session.seed_refusal = (f"exchange history does not start at the seed candle {seed.seed_timestamp} "
+                                f"(first common candle: {pd.Timestamp(common[0], unit='ms', tz='UTC') if common else None})")
+        logger.critical(f"[PairsBotRunner:{cfg.pair_name}] ENTRIES REFUSED — {session.seed_refusal}")
+        return
+    # candles present on only one leg are left out here and stepped by the
+    # engine as missing grid candles — exactly research's NaN grid rows
+    session.engine = PairSignalEngine(cfg, theta0=(seed.beta0, seed.alpha0), protocol=PROTOCOL)   # claude code changed: Stage 2D Rev B C6 — θ₀ from the causal seed record
+    session.engine.bootstrap_from_history(
+        [(pd.Timestamp(ts, unit="ms", tz="UTC"), hist_a[ts], hist_b[ts]) for ts in common])
+    session.last_candle_ts = common[-1]
+    session.seed_ok, session.seed_refusal = True, ""
+    session.seed = seed   # claude code changed: Stage 2D Rev B D-2/D-3
+    logger.info(
+        f"[PairsBotRunner:{cfg.pair_name}] Canonical replay of {len(common)} candles from seed "
+        f"{seed.seed_timestamp} -> {pd.Timestamp(common[-1], unit='ms', tz='UTC')} | "
+        f"missing grid candles stepped: {session.engine.missing_candles_stepped} | "
+        f"z-score ready: {session.engine._zscore_roller.n_valid >= session.engine._zscore_roller.min_periods}"
+    )
 
 
 def reconcile_pairs(pair_configs: list[PairConfig], exec_engine: PairsExecutionEngine) -> None:
@@ -260,6 +355,12 @@ def reconcile_pairs(pair_configs: list[PairConfig], exec_engine: PairsExecutionE
     and requires a human to manually reconcile the real isolated-margin
     account state and clear those records before it trades again."""
     logger = logging.getLogger(__name__)
+    # claude code changed: Post-audit Phase 1 A1 — an unresolved
+    # MANUAL_REVIEW_REQUIRED execution incident (failed mid-open unwind, failed
+    # or exchange-blocked close) keeps its pair disabled across restarts.
+    for name in exec_engine.trade_logger.unresolved_manual_review_pairs():
+        exec_engine.disable_pair(name, "unresolved MANUAL_REVIEW_REQUIRED execution incident in the journal "
+                                       "(bot.journal.models.ExecutionIncident) — resolve it before this pair trades again.")
     for cfg in pair_configs:
         strategy_tag = f"PairsTrading_{cfg.pair_name}"
         open_legs = TradeRecord.objects.filter(strategy=strategy_tag, status="OPEN")
@@ -324,18 +425,33 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
         decision = session.engine.process_candle(timestamp, price_a, price_b)
         session.last_action = decision.action
 
-        logger.info(
-            f"[PairsBotRunner:{cfg.pair_name}] {timestamp} | action={decision.action} | "
-            f"{decision.direction or decision.reason or ''}"
-        )
+        # claude code changed: Stage 2D Rev B D-2 — was "action=… | <direction or reason>",
+        # which logged a C1 rejection as "action=NONE | LONG_SPREAD" (direction,
+        # not reason). NONE/HOLD/EXIT now always name the reason; a direction is
+        # shown only as what was INTENDED.
+        detail = f"direction={decision.direction}" if decision.action == "ENTER" else (
+            f"reason={decision.reason or '-'}" + (f" intended={decision.direction}" if decision.direction else ""))
+        logger.info(f"[PairsBotRunner:{cfg.pair_name}] {timestamp} | action={decision.action} | {detail}")
+
+        if decision.action == "NONE" and decision.reason == ENTRY_SIGN_MISMATCH and decision.rejection is not None:   # claude code changed: Stage 2D Rev B D-2 — durable journal record
+            exec_engine.trade_logger.log_signal_rejection(
+                cfg.pair_name, decision.rejection, methodology_version=METHODOLOGY_VERSION,
+                protocol_hash=PROTOCOL.config_hash(), data_version=getattr(session.seed, "data_version", "") or "")
 
         if decision.action == "ENTER":
+            baseline_beta, _baseline_src = _health_baseline_beta(session)   # claude code changed: F-17 — canonical seed β, not the legacy OLS
             health = evaluate_pair_health(
-                cfg.pair_name, cfg.hedge_ratio, session.engine.current_beta,
+                cfg.pair_name, baseline_beta, session.engine.current_beta,   # claude code changed: F-17
                 cfg.passes_filters, cfg.reject_reason,
             )
             refusal = _entry_refusal_reason(health)
-            if not exec_engine.is_pair_tradeable(cfg.pair_name):
+            eligibility = check_entry_eligibility(cfg.pair_name, seed=session.seed, protocol=PROTOCOL, registry_dir=ELIGIBILITY_DIR)   # claude code changed: Stage 2D Rev B D-3
+            opened = None   # claude code changed: Stage 2D Rev B D-3 — any path below that does not open aborts the engine-side entry
+            if not session.seed_ok:   # claude code changed: Stage 2D Rev B step 6 (D9) — state not provably canonical
+                logger.warning(f"[PairsBotRunner:{cfg.pair_name}] ENTRY REFUSED — Kalman state not canonical: {session.seed_refusal}")
+            elif session.engine.requires_reconciliation:   # claude code changed: Stage 2D Rev B C5 — defensive; the engine already refuses
+                logger.critical(f"[PairsBotRunner:{cfg.pair_name}] ENTRY REFUSED — live candle gap requires reconciliation: {session.engine.reconciliation_gaps}")
+            elif not exec_engine.is_pair_tradeable(cfg.pair_name):
                 logger.warning(f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but pair is disabled — not opening.")
             elif exec_engine.has_open_position(cfg.pair_name):
                 logger.error(f"[PairsBotRunner:{cfg.pair_name}] Entry signal fired but a position is already tracked open — not opening a second.")
@@ -344,12 +460,18 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
                 # ad-hoc BETA_DRIFT_MAX_RATIO check with the full NORMAL/DEGRADED/INVALIDATED
                 # policy (cointegration gate + sign reversal + drift magnitude).
                 logger.warning(f"[PairsBotRunner:{cfg.pair_name}] {refusal}")
+            elif not eligibility.ok:   # claude code changed: Stage 2D Rev B D-3 — canonical evidence only; legacy can never enable
+                logger.warning(f"[PairsBotRunner:{cfg.pair_name}] ENTRY REFUSED — not canonically eligible: {eligibility.reason}")
             else:
-                exec_engine.open_pair_trade(cfg, decision)
+                opened = exec_engine.open_pair_trade(cfg, decision)
+            if opened is None:   # claude code changed: Stage 2D Rev B D-3 — no position exists, so the engine must not hold a phantom trade
+                session.engine.abort_entry(decision.trade)
 
         elif decision.action == "EXIT":
             if exec_engine.has_open_position(cfg.pair_name):
-                exec_engine.close_pair_trade(cfg, exit_reason=decision.reason)
+                exec_engine.close_pair_trade(cfg, exit_reason=decision.reason,   # claude code changed: Stage 2D Rev B D-1 — durable reconciliation provenance
+                                             reconciliation_affected=bool(getattr(decision.trade, "reconciliation_affected", False)),
+                                             reconciliation_gaps=getattr(decision.trade, "reconciliation_gaps", "") or "")
             else:
                 logger.error(f"[PairsBotRunner:{cfg.pair_name}] Exit signal fired but no position is tracked open — nothing to close.")
 
@@ -366,9 +488,31 @@ def process_pair_candle(session: PairSession, exchange, exec_engine: PairsExecut
         return "error"
 
 
+def pending_migrations() -> list:   # claude code changed: Post-audit Phase 1 A5 — new
+    """Unapplied Django migrations ([] when the schema is current)."""
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+    executor = MigrationExecutor(connection)
+    return [f"{m.app_label}.{m.name}" for m, _ in executor.migration_plan(executor.loader.graph.leaf_nodes())]
+
+
 def run_bot():
     setup_logging()
     logger = logging.getLogger(__name__)
+
+    # claude code changed: Post-audit Phase 1 A5 — refuse to start on an
+    # out-of-date schema. The journal now writes reconciliation, borrow-status,
+    # fill-model, rejection and incident fields (migrations 0012/0013); a missing
+    # column would make every journal write fail (logged CRITICAL, but the
+    # position record would be lost). Migrations are NEVER applied automatically.
+    try:
+        missing = pending_migrations()
+    except Exception as e:
+        logger.critical(f"[PairsBotRunner] Cannot verify the database schema ({e}) — refusing to start.")
+        return
+    if missing:
+        logger.critical(f"[PairsBotRunner] Unapplied migrations {missing} — run `python manage.py migrate` first. Refusing to start.")
+        return
 
     logger.info("=" * 60)
     logger.info("[PairsBotRunner] Steph Quant Technologies — Pairs Pilot starting up")
@@ -410,6 +554,11 @@ def run_bot():
         return
 
     exec_engine = PairsExecutionEngine(exchange, dry_run=DRY_RUN)
+    # claude code changed: Post-audit Phase 1 provenance — every journal row records
+    # the methodology and protocol it was traded under (same values SignalRejection
+    # records). data_version is per-session (each pair's seed) and is not set here.
+    exec_engine.trade_logger.provenance = {"methodology_version": METHODOLOGY_VERSION,
+                                           "protocol_hash": PROTOCOL.config_hash()}
 
     reconcile_pairs(pair_configs, exec_engine)
 
@@ -461,17 +610,21 @@ def run_bot():
             now = time.time()
             if now - last_heartbeat_time >= HEARTBEAT_INTERVAL_SECONDS:
                 try:
-                    equity = exec_engine.compute_mark_to_market_equity(pair_configs)
-                    tripped = exec_engine.drawdown_guard.update(equity)
+                    # claude code changed: Post-audit Phase 1 A2 — the SAME strategy-level
+                    # equity and guard check that open_pair_trade enforces (was the
+                    # isolated-account sum, which reads ≈ 0 once collateral is refunded).
+                    capital = max((c.capital_usdt for c in pair_configs if c.is_entry_eligible), default=0.0)
+                    allowed, why = exec_engine.drawdown_entry_check(capital)
                     logger.info(
                         f"[PairsBotRunner] HEARTBEAT | loop={loop_count} | "
-                        f"mark_to_market_equity=${equity:.2f} | drawdown_guard_tripped={tripped}"
+                        f"entries_allowed_by_drawdown_guard={allowed} | {why}"
                     )
                     health_results = {}
                     for session in sessions:
                         cfg = session.pair_config
+                        baseline_beta, baseline_src = _health_baseline_beta(session)   # claude code changed: F-17
                         health = evaluate_pair_health(
-                            cfg.pair_name, cfg.hedge_ratio, session.engine.current_beta,
+                            cfg.pair_name, baseline_beta, session.engine.current_beta,   # claude code changed: F-17
                             cfg.passes_filters, cfg.reject_reason,
                         )
                         health_results[cfg.pair_name] = health
@@ -482,7 +635,8 @@ def run_bot():
                             f"open={is_open} | "
                             f"tradeable={exec_engine.is_pair_tradeable(cfg.pair_name)} | "
                             f"health={health.state.value} | "
-                            f"seed_beta={health.seed_beta:.4f} | current_beta={health.current_beta:.4f} | "
+                            f"seed_beta={health.seed_beta:.4f} ({baseline_src}) | "   # claude code changed: F-17 — baseline source
+                            f"current_beta={health.current_beta:.4f} | "
                             f"drift={health.beta_drift_ratio:.0%} | sign_reversed={health.beta_sign_reversed}"
                             f"{' | ' + ', '.join(health.reason_codes) if health.reason_codes else ''}"
                         )

@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+{% comment %}
+   claude code changed: new template — 2026-10-07 Decision Journal Phase 4: descriptive outcome tables for one run
+   (bot/journal/analytics.py::outcome_table). Zone S only; episode-level units; suppressed small cells; intervals are
+   dependence-aware and descriptive — no tests, no claims.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="decision_journal" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title"><a href="{% url 'decision_journal' %}">Decision Journal</a> / <a class="mono" href="{% url 'decision_journal_run' run.run_id %}">{{ run.run_id }}</a> / analytics</span>
+            <span class="term-section-meta">group by:
+                {% for g in groupings %}<a href="?by={{ g }}&amp;label={{ label }}" class="{% if g == by %}badge pos{% endif %}" style="margin-right:6px">{{ g }}</a>{% endfor %}
+                · outcome: {% for l in labels %}<a href="?by={{ by }}&amp;label={{ l }}" class="{% if l == label %}badge pos{% endif %}" style="margin-right:6px">{{ l }}</a>{% endfor %}
+            </span>
+        </div>
+        <div class="term-section-body">
+            {% include "partials/_journal_banner.html" %}
+            {% if refused %}
+            <div class="unavailable">Not available: {{ refused }}</div>
+            {% else %}
+            <div class="chart-caption" style="margin-bottom:10px">
+                <strong>{{ table.status }}.</strong> Unit = one opportunity episode (episodes break at a trade exit; the never-break count is shown too).
+                Means are of {{ table.value }} ({% if table.label_type == "COUNTERFACTUAL_RULE" %}hypothetical rule, NOT executed, stop-first baseline with the target-first bound beside it{% else %}forward {{ table.horizon }}h return of the asset, NOT executed{% endif %}).
+                Intervals: {{ table.block_hours }}-hour time-block bootstrap, 95%, descriptive. Groups with fewer than {{ table.display_min_episodes }} episodes are suppressed for display ({{ table.n_suppressed }} suppressed) — the threshold is not a validity threshold.
+                Zones read: {{ table.zones|join:", " }}. Excluded decisions: {{ table.excluded.no_label }} without a label, {{ table.excluded.not_ok }} with a non-OK label.
+            </div>
+            {% if table.rows %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>{{ by }}</th><th class="num">Decisions</th><th class="num">Episodes (break / never-break)</th><th class="num">Mean</th><th class="num">95% interval</th>{% if table.label_type == "COUNTERFACTUAL_RULE" %}<th class="num">Target-first bound</th><th class="num">Ambiguous share</th>{% endif %}</tr></thead>
+                    <tbody>{% for r in table.rows %}
+                        <tr><td class="label-cell mono" style="font-size:12px">{{ r.group }}</td>
+                            <td class="num">{{ r.n_decisions }}</td>
+                            <td class="num">{{ r.n_units }} / {{ r.n_episodes_never_break }}</td>
+                            {% if r.suppressed %}<td class="num text-dim" colspan="{% if table.label_type == 'COUNTERFACTUAL_RULE' %}4{% else %}2{% endif %}">suppressed (&lt; {{ table.display_min_episodes }} episodes)</td>
+                            {% else %}
+                            <td class="num">{{ r.mean|floatformat:4 }}</td>
+                            <td class="num">{% if r.ci_ok %}[{{ r.ci_lo|floatformat:4 }}, {{ r.ci_hi|floatformat:4 }}]{% else %}<span class="text-dim">{{ r.ci_reason }}</span>{% endif %}</td>
+                            {% if table.label_type == "COUNTERFACTUAL_RULE" %}<td class="num">{{ r.mean_target_first_bound|floatformat:4 }}</td><td class="num">{{ r.ambiguous_share|floatformat:2 }}</td>{% endif %}
+                            {% endif %}
+                        </tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}<div class="unavailable">No zone-S labelled decisions in this run (record one with --end inside zone S, then label it).</div>{% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Decision Journal" note="descriptive outcome tables — zone S" %}
+{% endblock %}

@@ -113,7 +113,13 @@ class GenerateFoldsTest(SimpleTestCase):
         train_start_1, train_end_1, test_start_1, test_end_1 = folds[0]
         self.assertEqual(train_start_1, idx[0])  # claude code changed: train always anchored at data_start
         self.assertEqual(train_end_1, pd.Timestamp("2022-01-01"))
-        self.assertEqual(test_start_1, train_end_1)  # claude code changed: test begins exactly where train ends
+        # claude code changed: 2026-10-03, remediation M-03 — was assertEqual(test_start_1, train_end_1)
+        # (the defect: the boundary candle sat in both TRAIN and TEST). TEST now begins at the first
+        # candle strictly after train_end, and no candle belongs to both slices.
+        self.assertGreater(test_start_1, train_end_1)
+        self.assertEqual(test_start_1, idx[idx > train_end_1][0])
+        for tr_s, tr_e, te_s, te_e in folds:
+            self.assertEqual(len(df_full.loc[tr_s:tr_e].index.intersection(df_full.loc[te_s:te_e].index)), 0)
 
         train_start_2, train_end_2, test_start_2, test_end_2 = folds[1]
         self.assertEqual(train_start_2, idx[0])  # claude code changed: still anchored at data_start, not fold1's train_end

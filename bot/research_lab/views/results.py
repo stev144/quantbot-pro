@@ -8,9 +8,11 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, render
 
 from bot.research_lab.models import ResearchExperiment
+from bot.research.evidence_registry import classify_research_experiment   # claude code changed: Post-CRRP Task 4
 
 
 @login_required
 def results(request, experiment_id):
     experiment = get_object_or_404(ResearchExperiment, id=experiment_id, student=request.user)
-    return render(request, "research_lab/results.html", {"experiment": experiment})
+    evidence = classify_research_experiment(experiment.created_at, experiment.capability_id or "", experiment.verdict or "")   # claude code changed: Post-CRRP Task 4
+    return render(request, "research_lab/results.html", {"experiment": experiment, "evidence": evidence})

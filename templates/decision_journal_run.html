@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+{% comment %}
+   claude code changed: new template — 2026-10-07 Decision Journal UI: one recorded run. Read-only; counts are
+   plain tallies of recorded statuses/reasons (descriptive), coverage shows what was NOT evaluated.
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="decision_journal" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title"><a href="{% url 'decision_journal' %}">Decision Journal</a> / <span class="mono">{{ run.run_id }}</span></span>
+            <span class="term-section-meta"><span class="badge {{ run.badge }}">{{ run.status }}</span> {{ run.symbol }} · {{ run.environment }} · {{ run.execution_mode }} · <a href="{% url 'decision_journal_analytics' run.run_id %}">analytics</a>{# claude code changed: 2026-10-07 Phase 4 #}</span>
+        </div>
+        <div class="term-section-body">
+            {% include "partials/_journal_banner.html" %}
+            {% if run.taxonomy_version == "QBP-JRNL-LEGACY-1" %}{# claude code changed: 2026-10-07 Phase 3 — legacy notice #}
+            <div class="unavailable" style="margin-bottom:12px"><strong>LEGACY — incomplete population.</strong> These decisions were reconstructed from rows journaled at the time (trades / incidents only). There are no no-signal or rejection rows, no denominator, no snapshots and no recorded provenance; times are the recorded times, not decision candles. Never usable for rates, rejection value, episodes or evidence.</div>
+            {% endif %}
+            {% if run.status == "INCOMPLETE" %}
+            <div class="unavailable" style="margin-bottom:12px">This run is <strong>INCOMPLETE</strong> ({{ run.incomplete_reasons|join:", " }}): it is not complete research evidence. See the journal gaps below.</div>
+            {% endif %}
+
+            <div class="term-grid term-grid-4" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Decisions (evaluation points)</div><div class="metric-value">{{ run.n_decisions }}</div></div>
+                <div class="metric-tile"><div class="metric-label">Candles in run</div><div class="metric-value">{{ coverage_meta.n_candles|default:"—" }}</div></div>
+                <div class="metric-tile"><div class="metric-label">Journal gaps</div><div class="metric-value {% if n_gaps %}neg{% endif %}">{{ n_gaps }}</div></div>
+                <div class="metric-tile"><div class="metric-label">Missing grid candles</div><div class="metric-value">{{ coverage_meta.n_missing_grid_candles|default:"0" }}</div></div>
+            </div>
+
+            <div class="term-grid term-grid-3" style="margin-bottom:16px">
+                <div class="term-panel">
+                    <div class="metric-label" style="margin-bottom:6px">Decisions by status</div>
+                    <table class="term-table"><tbody>
+                        {% for s in by_status %}<tr><td><a href="?status={{ s.status }}"><span class="badge {{ s.badge }}">{{ s.status }}</span></a></td><td class="num">{{ s.n }}</td></tr>{% empty %}<tr><td class="text-dim">none</td></tr>{% endfor %}
+                    </tbody></table>
+                </div>
+                <div class="term-panel">
+                    <div class="metric-label" style="margin-bottom:6px">Most frequent reasons</div>
+                    <table class="term-table"><tbody>
+                        {% for r in by_reason %}<tr><td class="mono" style="font-size:12px">{{ r.reason_code }}</td><td><span class="badge {{ r.badge }}">{{ r.reason_stage }}</span></td><td class="num">{{ r.n }}</td></tr>{% empty %}<tr><td class="text-dim">none</td></tr>{% endfor %}
+                    </tbody></table>
+                </div>
+                <div class="term-panel">
+                    <div class="metric-label" style="margin-bottom:6px">Candle coverage (what was evaluated, and what was not)</div>
+                    <table class="term-table"><tbody>
+                        {% for c in coverage %}<tr><td style="font-size:12px">{{ c.label }}</td><td class="num">{{ c.n }}</td></tr>{% empty %}<tr><td class="text-dim">no coverage recorded</td></tr>{% endfor %}
+                    </tbody></table>
+                    <div class="chart-caption mono" style="margin-top:6px">non-evaluated candles are never counted as NO_SIGNAL</div>
+                </div>
+            </div>
+
+            {# claude code changed: 2026-10-07 Phase 2 — label status counts only (no outcome values on this page) #}
+            <div class="term-panel" style="margin-bottom:16px">
+                <div class="metric-label" style="margin-bottom:6px">Outcome labels (hypothetical, NOT executed) — counts by status</div>
+                {% if label_counts %}
+                <table class="term-table"><tbody>{% for c in label_counts %}<tr><td class="mono" style="font-size:12px">{{ c.label_type }}</td><td><span class="badge {% if c.status == 'OK' %}pos{% elif c.status == 'SEALED' %}warn{% else %}dim{% endif %}">{{ c.status }}</span></td><td class="num">{{ c.n }}</td></tr>{% endfor %}</tbody></table>
+                <div class="chart-caption mono" style="margin-top:6px">values appear on decision pages for zone-S decisions only</div>
+                {% else %}<div class="unavailable">Not labelled yet — <span class="mono">python manage.py label_journal_run --run {{ run.run_id }}</span></div>{% endif %}
+            </div>
+
+            {% if gaps %}
+            <div class="term-panel" style="margin-bottom:16px">
+                <div class="metric-label" style="margin-bottom:6px">Journal gaps ({{ n_gaps }})</div>
+                <table class="term-table">
+                    <thead><tr><th>Kind</th><th class="num">Candle</th><th>Raw reason</th><th>Detail</th></tr></thead>
+                    <tbody>{% for g in gaps %}<tr><td><span class="badge neg">{{ g.kind }}</span></td><td class="num">{{ g.candle_index|default:"—" }}</td><td class="mono">{{ g.raw_reason|default:"—" }}</td><td class="text-dim" style="font-size:12px">{{ g.detail }}</td></tr>{% endfor %}</tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <div class="term-panel" style="margin-bottom:16px">
+                <div class="metric-label" style="margin-bottom:6px">Provenance</div>
+                <div class="mono text-dim" style="font-size:12px; line-height:1.7">
+                    code {{ run.code_commit|default:"no git" }}{% if run.code_dirty %} (dirty, digest {{ run.dirty_digest|slice:":12" }}){% endif %}<br>
+                    methodology {{ run.methodology_version }} · strategy {{ run.strategy_set }} {{ run.strategy_version }}<br>
+                    data_version {{ run.data_version }}<br>
+                    config_hash {{ run.config_hash }}<br>
+                    zones {{ run.zones_version }} {{ run.zones_hash|slice:":16" }} · market profile {{ run.market_profile_hash|slice:":16" }}<br>
+                    taxonomy {{ run.taxonomy_version }} · schema {{ run.schema_version }} · gates {{ run.gate_order_version }} · snapshot {{ run.feature_set_version }}<br>
+                    evidence status: {{ run.evidence_status }}
+                </div>
+            </div>
+
+            <div class="term-section-head" style="margin-top:4px">
+                <span class="term-section-title">Decisions{% if status_filter %} — {{ status_filter }} <a class="text-dim" href="?">(clear filter)</a>{% endif %}</span>
+                <span class="term-section-meta">page {{ page.number }} of {{ page.paginator.num_pages }} · {{ page.paginator.count }} rows</span>
+            </div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th class="num">Candle</th><th>Decision time (UTC)</th><th>Status</th><th>Reason</th><th>Direction</th><th>Strategy</th><th>Zone</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th>Trade</th></tr></thead>
+                    <tbody>
+                        {% for d in page.object_list %}
+                        <tr>
+                            <td class="num"><a href="{% url 'decision_journal_decision' run.run_id d.decision_id %}">{{ d.candle_index }}</a></td>
+                            <td class="text-dim mono">{{ d.information_time|date:"Y-m-d H:i" }}</td>
+                            <td><span class="badge {{ d.badge }}">{{ d.status }}</span></td>
+                            <td class="mono" style="font-size:12px">{{ d.reason_code|default:"—" }}</td>
+                            <td class="{% if d.direction == 'LONG' %}dir-long{% elif d.direction == 'SHORT' %}dir-short{% endif %}">{{ d.direction|default:"—" }}</td>
+                            <td class="text-dim" style="font-size:12px">{{ d.strategy }}</td>
+                            <td class="text-dim mono" style="font-size:11px">{{ d.research_zone }}</td>
+                            <td class="num">{{ d.planned_entry|default:"—" }}</td>
+                            <td class="num">{{ d.planned_stop|default:"—" }}</td>
+                            <td class="num">{{ d.planned_target|default:"—" }}</td>
+                            <td class="mono text-dim" style="font-size:11px">{{ d.backtest_trade_id|default:"" }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="11" class="text-dim">No decisions{% if status_filter %} with status {{ status_filter }}{% endif %}.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if page.has_other_pages %}
+            <div class="chart-caption mono" style="margin-top:8px">
+                {% if page.has_previous %}<a href="?{% if status_filter %}status={{ status_filter }}&amp;{% endif %}page={{ page.previous_page_number }}">← previous</a>{% endif %}
+                &nbsp;page {{ page.number }} / {{ page.paginator.num_pages }}&nbsp;
+                {% if page.has_next %}<a href="?{% if status_filter %}status={{ status_filter }}&amp;{% endif %}page={{ page.next_page_number }}">next →</a>{% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Decision Journal" note="one recorded run — descriptive" %}
+{% endblock %}

@@ -25,6 +25,12 @@ VERDICT_CLASS_MAP = {
     # and were silently falling through to "dim" (gray) regardless of verdict.
     "SUPPORTED": "pos",
     "CONDITIONAL": "neu",
+    # claude code changed: owner decision D-7 — verdict ladder (OBSERVATION is unconfirmed → neutral)
+    "OBSERVATION": "neu",
+    "STATISTICAL": "pos",
+    "ECONOMIC": "pos",
+    "TRADEABLE": "pos",
+    "CANONICAL": "pos",
     "WEAK": "warn",
     "UNTESTED": "dim",
 }

@@ -152,6 +152,16 @@ class Trade:
 #   python manage.py migrate
 # ============================================================
 
+# claude code changed: Post-audit Phase 1 journal-mode separation — the only
+# values TradeRecord/ExecutionIncident.execution_mode may hold.
+MODE_LIVE, MODE_DRY_RUN, MODE_RESEARCH, MODE_UNKNOWN = "LIVE", "DRY_RUN", "RESEARCH", "UNKNOWN"
+EXECUTION_MODES = (MODE_LIVE, MODE_DRY_RUN, MODE_RESEARCH, MODE_UNKNOWN)
+
+
+def execution_mode_for(dry_run: bool) -> str:   # claude code changed: new — writers derive the mode from their engine's flag, never from data
+    return MODE_DRY_RUN if dry_run else MODE_LIVE
+
+
 class TradeRecord(models.Model):
     """
     Permanent database record of a live bot trade.
@@ -311,6 +321,45 @@ class TradeRecord(models.Model):
     cycle_id = models.UUIDField(null=True, blank=True, db_index=True)
     dca_level = models.IntegerField(null=True, blank=True)
 
+    # claude code changed: Stage 2D Rev B D-1 — durable C5 provenance. True when
+    # this leg was CLOSED while the live engine's reconciliation flag was
+    # active (a live polling gap not yet reconciled). Exits stay allowed for
+    # risk management, but such a trade is never clean parity/research
+    # evidence. False = a clean exit (and every non-pairs row).
+    reconciliation_affected = models.BooleanField(default=False)
+    reconciliation_gaps = models.TextField(default="", blank=True)   # claude code changed: D-1 — ";"-joined ISO open times live did not receive
+    # claude code changed: Post-audit Phase 1 A4 — explicit cost/fill labels.
+    # fill_model: how the entry (and, after "|exit:", the exit) price was
+    # obtained — "EXCHANGE" for a real fill, "DRY_RUN_TOUCH+SLIPPAGE" or
+    # "DRY_RUN_LAST_FALLBACK+SLIPPAGE" for a simulated one (full fill assumed).
+    # borrow_cost_status: KNOWN (exchange-reported interest), UNAVAILABLE
+    # (dry run: interest not modelled — never presented as a real zero), or
+    # NOT_APPLICABLE (long leg). "" on rows written before this field existed.
+    fill_model = models.CharField(max_length=80, default="", blank=True)
+    borrow_cost_status = models.CharField(max_length=20, default="", blank=True)
+    # claude code changed: Post-audit Phase 1 — journal-mode separation. Every row
+    # says HOW it was produced, so simulated P&L can never be read as account P&L
+    # (or feed the live drawdown guard): LIVE (a real exchange order), DRY_RUN
+    # (in-process fill simulation against live prices), RESEARCH (offline
+    # backtest/research output), UNKNOWN (cannot be established — consumers that
+    # need a definite mode fail closed on it). Set explicitly by the writer from
+    # its engine's dry_run flag, never inferred at read time. Migration 0014
+    # backfills existing rows from their order id (dryrun-/DRYRUN- → DRY_RUN,
+    # anything else → UNKNOWN; a row is never ASSUMED live).
+    execution_mode = models.CharField(max_length=10, default="UNKNOWN", db_index=True)
+    # Provenance of the decision that produced the row (same values SignalRejection
+    # records); "" when the writer had none (e.g. the main single-symbol bot).
+    methodology_version = models.CharField(max_length=40, default="", blank=True)
+    protocol_hash = models.CharField(max_length=64, default="", blank=True)
+    data_version = models.CharField(max_length=64, default="", blank=True)
+    # When the exit was journaled. updated_at is auto_now (moves on ANY later
+    # save), so it cannot order the realised-P&L path; null on rows closed
+    # before this field existed (readers fall back to updated_at, labelled).
+    closed_at = models.DateTimeField(null=True, blank=True)
+    # claude code changed: 2026-10-07 decision journal Phase 1 (owner D6) — nullable link to the DecisionEvent
+    # that produced this row. Additive; unused until live/dry-run wiring (a later, separately approved phase).
+    decision_id = models.UUIDField(null=True, blank=True, db_index=True)
+
 
     # ---- Status ----
 
@@ -376,3 +425,430 @@ class TradeRecord(models.Model):
                 name="unique_open_trade_per_symbol",
             )
         ]
+
+
+class SignalRejection(models.Model):
+    """claude code changed: Stage 2D Rev B D-2 — durable record of a canonical
+    entry REJECTION (C1 ENTRY_SIGN_MISMATCH): the intended direction disagreed
+    with the held-spread sign at the decision candle, so no order, no trade and
+    no P&L exist for it. One row per rejected decision; survives restarts. Part
+    of the trade journal, next to TradeRecord — not a separate logging system."""
+    pair_name = models.CharField(max_length=60, db_index=True)
+    venue = models.CharField(max_length=20, default="binance")
+    decision_timestamp = models.DateTimeField(db_index=True)   # cutoff t (candle open time)
+    intended_direction = models.CharField(max_length=20)       # LONG_SPREAD | SHORT_SPREAD
+    zscore = models.FloatField()                                # the entry z that generated the signal
+    held_spread = models.FloatField()                           # h_t = ln P_A,t − β_e ln P_B,t − α_e
+    alpha_e = models.FloatField()
+    beta_e = models.FloatField()
+    price_a = models.FloatField()                               # decision-candle closes used for h_t
+    price_b = models.FloatField()
+    reason = models.CharField(max_length=40)                    # ENTRY_SIGN_MISMATCH
+    decision_id = models.UUIDField(null=True, blank=True, db_index=True)   # claude code changed: 2026-10-07 Phase 3 — legacy backfill (nullable link, Rev B §17)
+    methodology_version = models.CharField(max_length=40)
+    protocol_hash = models.CharField(max_length=64)
+    data_version = models.CharField(max_length=64, default="", blank=True)   # the seed record's content data version, if the engine was seeded canonically
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-decision_timestamp"]
+        constraints = [models.UniqueConstraint(fields=["pair_name", "venue", "decision_timestamp", "reason"],
+                                               name="unique_signal_rejection_per_decision")]
+
+    def __str__(self):
+        return f"{self.pair_name} {self.decision_timestamp} {self.intended_direction} {self.reason}"
+
+
+
+class ExecutionIncident(models.Model):
+    """claude code changed: Post-audit Phase 1 A1/A3 — durable record of a
+    pairs execution failure (a leg failed mid-open, a close failed, or a close
+    was blocked by exchange rules). requires_manual_review=True keeps the pair
+    disabled across restarts (pairs_bot_runner.reconcile_pairs) until a human
+    resolves the incident; the system never retries such a pair by itself."""
+    KIND_CHOICES = ("OPEN_LEG_FAILURE", "CLOSE_LEG_FAILURE", "CLOSE_BLOCKED_EXCHANGE_RULES")
+    STATE_CHOICES = ("NO_EXPOSURE", "UNWOUND_CONFIRMED", "MANUAL_REVIEW_REQUIRED")
+    pair_name = models.CharField(max_length=60, db_index=True)
+    pair_trade_id = models.UUIDField(null=True, blank=True, db_index=True)
+    kind = models.CharField(max_length=40)
+    state = models.CharField(max_length=40)
+    requires_manual_review = models.BooleanField(default=True)
+    legs_filled = models.TextField(default="", blank=True)        # e.g. "A:BUY 10.0 @ 1.0"
+    legs_open_after = models.TextField(default="", blank=True)    # legs the system believes are still open
+    error = models.TextField(default="", blank=True)
+    resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(default="", blank=True)
+    decision_id = models.UUIDField(null=True, blank=True, db_index=True)   # claude code changed: 2026-10-07 Phase 3 — legacy backfill (nullable link, Rev B §17)
+    execution_mode = models.CharField(max_length=10, default="UNKNOWN", db_index=True)   # claude code changed: Post-audit Phase 1 journal-mode separation — LIVE / DRY_RUN / UNKNOWN, same vocabulary as TradeRecord
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.pair_name} {self.kind} {self.state} resolved={self.resolved}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: new — 2026-10-07 Trading Decision Journal, PHASE 1 (backtester-only recorder).
+# Owner sign-off: TRADING_DECISION_JOURNAL_PHASE1_OWNER_SIGNOFF_2026-10-07.md; vocabulary: bot/journal/taxonomy.py.
+#   JournalRun     one backtest run (provenance header + compact coverage, D8); mutable ONLY while OPEN
+#   DecisionEvent  one genuine evaluation point (OD-J13 backtester half), terminal status + gate vector; insert-only
+#   MarketSnapshot point-in-time inputs of one decision (SIMULATED_CAUSAL in Phase 1); insert-only
+#   JournalGap     an explicit journal defect (mapping failure / recorder failure); insert-only
+# Insert-only follows the ResearchRecordIsImmutableError pattern (bot.research_lab.models): a correction is a
+# NEW row pointing at the old one (DecisionEvent.supersedes), never an edit. QuerySet.update()/delete() and
+# instance delete() are refused; bulk_create (pure INSERT) is how the recorder writes.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+class JournalRecordIsImmutableError(Exception):   # claude code changed: new
+    """Raised when code tries to modify or delete a decision-journal record (insert-only, Rev B §13)."""
+
+
+class _InsertOnlyQuerySet(models.QuerySet):   # claude code changed: new
+    def update(self, **kwargs):
+        raise JournalRecordIsImmutableError(f"{self.model.__name__} rows are insert-only (QuerySet.update refused)")
+
+    def delete(self):
+        raise JournalRecordIsImmutableError(f"{self.model.__name__} rows are insert-only (QuerySet.delete refused)")
+
+
+class _InsertOnlyModel(models.Model):   # claude code changed: new
+    objects = _InsertOnlyQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise JournalRecordIsImmutableError(f"{type(self).__name__} {self.pk} is insert-only; write a superseding row")
+        # an explicit primary key would otherwise make Django try an UPDATE first and silently overwrite an
+        # existing row; force_insert turns any duplicate into an IntegrityError (found by the duplicate test)
+        kwargs["force_insert"] = True
+        kwargs.pop("force_update", None)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise JournalRecordIsImmutableError(f"{type(self).__name__} rows are insert-only (delete refused)")
+
+
+JOURNAL_RUN_OPEN, JOURNAL_RUN_CLOSED, JOURNAL_RUN_INCOMPLETE = "OPEN", "CLOSED", "INCOMPLETE"   # claude code changed: new
+_RUN_MUTABLE_WHILE_OPEN = ("status", "closed_at", "coverage", "incomplete_reasons", "n_decisions")   # claude code changed: new
+
+
+class JournalRun(models.Model):   # claude code changed: new
+    """One recorded backtest run. Created OPEN at run start; closed exactly once (CLOSED or INCOMPLETE); after
+    that it is immutable. Provenance reuses bot.quant_core.provenance (code_state, config_hash, data_version)."""
+    run_id = models.CharField(max_length=80, unique=True)
+    environment = models.CharField(max_length=10)                    # taxonomy.ENVIRONMENTS (OD-J15); Phase 1: BACKTEST
+    execution_mode = models.CharField(max_length=10)                 # EXECUTION_MODES above; Phase 1: RESEARCH (owner 2026-10-07)
+    symbol = models.CharField(max_length=40)
+    asset_class = models.CharField(max_length=20)
+    venue = models.CharField(max_length=20)
+    timeframe = models.CharField(max_length=10)
+    status = models.CharField(max_length=12, default=JOURNAL_RUN_OPEN)
+    started_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    # provenance (bot.quant_core.provenance; never re-implemented here)
+    code_commit = models.CharField(max_length=64, null=True, blank=True)
+    code_dirty = models.BooleanField(null=True)
+    dirty_digest = models.CharField(max_length=64, null=True, blank=True)
+    methodology_version = models.CharField(max_length=60)            # NON-CANONICAL-RESEARCH-ENGINE for the backtester
+    protocol_hash = models.CharField(max_length=64, blank=True, default="")   # "" = not under a canonical protocol
+    config_hash = models.CharField(max_length=64)
+    config = models.JSONField(default=dict)
+    data_version = models.CharField(max_length=64)
+    data_version_detail = models.JSONField(default=dict)
+    zones_version = models.CharField(max_length=40)
+    zones_hash = models.CharField(max_length=64)
+    market_profile_hash = models.CharField(max_length=64, blank=True, default="")
+    strategy_set = models.CharField(max_length=120)
+    strategy_version = models.CharField(max_length=80)
+    taxonomy_version = models.CharField(max_length=40)
+    schema_version = models.CharField(max_length=40)
+    gate_order_version = models.CharField(max_length=40)
+    feature_set_version = models.CharField(max_length=40)
+    coverage_version = models.CharField(max_length=40)
+    evidence_status = models.CharField(max_length=80)
+    coverage = models.JSONField(default=dict)
+    incomplete_reasons = models.JSONField(default=list)
+    n_decisions = models.IntegerField(default=0)
+
+    objects = _InsertOnlyQuerySet.as_manager()
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(status__in=[JOURNAL_RUN_OPEN, JOURNAL_RUN_CLOSED,
+                                                                              JOURNAL_RUN_INCOMPLETE]),
+                                              name="journalrun_status_valid")]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            old = type(self).objects.get(pk=self.pk)
+            if old.status != JOURNAL_RUN_OPEN:
+                raise JournalRecordIsImmutableError(f"JournalRun {self.run_id} is {old.status}; closed runs are immutable")
+            for f in self._meta.concrete_fields:
+                if f.name not in _RUN_MUTABLE_WHILE_OPEN and f.attname != "id" and \
+                        getattr(old, f.attname) != getattr(self, f.attname):
+                    raise JournalRecordIsImmutableError(f"JournalRun.{f.name} is fixed at run start")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise JournalRecordIsImmutableError("JournalRun rows are never deleted")
+
+    def __str__(self):
+        return f"JournalRun {self.run_id} {self.environment} {self.symbol} {self.status}"
+
+
+class DecisionEvent(_InsertOnlyModel):   # claude code changed: new
+    """One genuine evaluation point and its terminal disposition. Holds ONLY decision-time information plus the
+    terminal status (and, for EXECUTED, the link to the simulated trade — whose fill facts stay in the backtest
+    result, D6). Never a post-decision outcome (those belong to the future DecisionLabel, Phase 2)."""
+    decision_id = models.UUIDField(primary_key=True)                 # deterministic uuid5(run_id, symbol, candle)
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="decisions")
+    environment = models.CharField(max_length=10)                    # copies of the run identity (validated equal)
+    execution_mode = models.CharField(max_length=10)
+    symbol = models.CharField(max_length=40)
+    asset_class = models.CharField(max_length=20)
+    venue = models.CharField(max_length=20)
+    timeframe = models.CharField(max_length=10)
+    candle_index = models.IntegerField()
+    candle_open_time = models.DateTimeField()
+    information_time = models.DateTimeField()                        # candle close = open + timeframe
+    research_zone = models.CharField(max_length=40)
+    zone_basis = models.CharField(max_length=20, default="CANDLE_OPEN_TIME")
+    zones_hash = models.CharField(max_length=64)
+    strategy = models.CharField(max_length=60)
+    strategy_version = models.CharField(max_length=80)
+    direction = models.CharField(max_length=6, blank=True, default="")   # LONG / SHORT when a candidate existed
+    status = models.CharField(max_length=24)
+    reason_code = models.CharField(max_length=40, null=True, blank=True)
+    reason_stage = models.CharField(max_length=20, null=True, blank=True)
+    origin = models.CharField(max_length=20, null=True, blank=True)
+    raw_reason = models.CharField(max_length=200, blank=True, default="")
+    reason_detail = models.JSONField(default=dict)
+    lifecycle_stages = models.JSONField(default=list)
+    gate_vector = models.JSONField(default=dict)
+    gate_order_version = models.CharField(max_length=40)
+    planned_entry = models.FloatField(null=True, blank=True)
+    planned_stop = models.FloatField(null=True, blank=True)
+    planned_target = models.FloatField(null=True, blank=True)
+    planned_risk_per_unit = models.FloatField(null=True, blank=True)
+    planned_risk_amount = models.FloatField(null=True, blank=True)   # null in the backtester: sizing happens at the fill
+    planned_reward_risk = models.FloatField(null=True, blank=True)
+    expected_r = models.FloatField(null=True, blank=True)            # null: no validated expectancy model exists
+    estimated_cost = models.JSONField(null=True, blank=True)
+    risk_state = models.JSONField(default=dict)
+    portfolio_state = models.JSONField(default=dict)
+    liquidity_state = models.JSONField(default=dict)
+    financing_state = models.JSONField(default=dict)
+    data_quality_state = models.JSONField(default=dict)
+    execution_eligible = models.BooleanField(default=False)
+    backtest_trade_id = models.CharField(max_length=100, null=True, blank=True)   # "<run_id>:T000001" (D6)
+    backtest_trade_seq = models.IntegerField(null=True, blank=True)
+    fill_candle_index = models.IntegerField(null=True, blank=True)
+    methodology_version = models.CharField(max_length=60)
+    protocol_hash = models.CharField(max_length=64, blank=True, default="")
+    config_hash = models.CharField(max_length=64)
+    data_version = models.CharField(max_length=64)
+    taxonomy_version = models.CharField(max_length=40)
+    reevaluation_of = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="reevaluations")   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder (same candle evaluated again in a later live run, e.g. after a restart)
+    terminal_source = models.CharField(max_length=20, default="ENGINE")   # claude code changed: 2026-10-07 Phase 3 — legacy backfill: ENGINE | RECONCILIATION | LEGACY_BACKFILL
+    supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by")
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["run", "symbol", "candle_open_time"], name="one_decision_per_candle_per_run"),
+            models.UniqueConstraint(fields=["run", "backtest_trade_seq"], name="one_decision_per_backtest_trade"),
+            # # claude code changed: 2026-10-07 Phase 3 — legacy backfill: legacy rows carry the RECORDED time in both fields (no decision candle is invented)
+            models.CheckConstraint(condition=models.Q(information_time__gt=models.F("candle_open_time")) |
+                                   (models.Q(terminal_source="LEGACY_BACKFILL") & models.Q(information_time=models.F("candle_open_time"))),
+                                   name="decision_information_after_open"),
+            models.CheckConstraint(condition=models.Q(status__in=["EXECUTED", "NO_SIGNAL", "REJECTED", "REGIME_REJECTED",
+                                                                   "COST_REJECTED", "LIQUIDITY_REJECTED", "TIMING_REJECTED",
+                                                                   "RISK_REJECTED", "PORTFOLIO_REJECTED", "BORROW_REJECTED",
+                                                                   "DATA_REJECTED", "DUPLICATE_REJECTED", "EXECUTION_FAILED",
+                                                                   "SYSTEM_REJECTED", "CENSORED_END_OF_DATA"]),
+                                   name="decision_status_terminal"),
+            # # claude code changed: 2026-10-07 Phase 3 — legacy backfill: a legacy EXECUTED decision is linked from TradeRecord.decision_id instead of a backtest trade
+            models.CheckConstraint(condition=models.Q(status="EXECUTED", backtest_trade_seq__isnull=False) |
+                                   models.Q(status="EXECUTED", terminal_source="LEGACY_BACKFILL", backtest_trade_seq__isnull=True) |
+                                   models.Q(status="EXECUTED", environment__in=["DRY_RUN", "LIVE", "PAPER"], backtest_trade_seq__isnull=True) |   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder: linked from TradeRecord.decision_id
+                                   (~models.Q(status="EXECUTED") & models.Q(backtest_trade_seq__isnull=True)),
+                                   name="decision_trade_link_iff_executed"),
+            models.CheckConstraint(condition=models.Q(terminal_source__in=["ENGINE", "RECONCILIATION", "LEGACY_BACKFILL"]),
+                                   name="decision_terminal_source_valid"),   # claude code changed: 2026-10-07 Phase 3 — legacy backfill
+        ]
+
+
+SNAPSHOT_POINT_IN_TIME_LIVE, SNAPSHOT_SIMULATED_CAUSAL = "POINT_IN_TIME_LIVE", "SIMULATED_CAUSAL"   # claude code changed: new
+
+
+class MarketSnapshot(_InsertOnlyModel):   # claude code changed: new
+    """What the engine could see at the decision. RECONSTRUCTED_POST_HOC snapshots can never be stored here
+    (DB check) — a reconstruction must never masquerade as a point-in-time snapshot (Rev B §8)."""
+    decision = models.OneToOneField(DecisionEvent, on_delete=models.PROTECT, primary_key=True, related_name="snapshot")
+    snapshot_kind = models.CharField(max_length=24)
+    feature_set_version = models.CharField(max_length=40)
+    information_time = models.DateTimeField()
+    window_start_time = models.DateTimeField()
+    window_end_time = models.DateTimeField()                         # open time of the last candle the engine saw
+    window_rows = models.IntegerField()
+    input_window_sha256 = models.CharField(max_length=64)
+    values = models.JSONField(default=dict)
+    available_at = models.JSONField(default=dict)                    # feature -> ISO time; every one <= information_time
+    missing = models.JSONField(default=list)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(snapshot_kind__in=[SNAPSHOT_POINT_IN_TIME_LIVE, SNAPSHOT_SIMULATED_CAUSAL]),
+                                   name="snapshot_kind_point_in_time_only"),
+            models.CheckConstraint(condition=models.Q(window_end_time__lt=models.F("information_time")),
+                                   name="snapshot_window_before_information_time"),
+        ]
+
+
+GAP_MAPPING_FAILURE, GAP_RECORDER_FAILURE = "MAPPING_FAILURE", "RECORDER_FAILURE"   # claude code changed: new
+GAP_EVALUATION_NOT_PERFORMED, GAP_ORPHANED_ATTEMPT = "EVALUATION_NOT_PERFORMED", "ORPHANED_ATTEMPT"   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder
+
+
+class JournalGap(_InsertOnlyModel):   # claude code changed: new
+    """An explicit journal defect. Any gap makes its run INCOMPLETE (never complete research evidence)."""
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="gaps")
+    kind = models.CharField(max_length=32)   # claude code changed: 2026-10-07 Phase 6 — was 20; EVALUATION_NOT_PERFORMED is 24 characters
+    candle_index = models.IntegerField(null=True, blank=True)
+    candle_open_time = models.DateTimeField(null=True, blank=True)
+    raw_reason = models.CharField(max_length=200, blank=True, default="")
+    detail = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(kind__in=[GAP_MAPPING_FAILURE, GAP_RECORDER_FAILURE,   # claude code changed: 2026-10-07 Phase 6 — DRY_RUN live recorder
+                                                                       GAP_EVALUATION_NOT_PERFORMED, GAP_ORPHANED_ATTEMPT]),
+                                              name="journalgap_kind_valid")]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: new — 2026-10-07 Decision Journal PHASE 2 (owner-delegated OD-J2/J3/J4/J9/J17).
+#   DecisionLabel     post-decision OUTCOME of a decision under a frozen hypothetical rule or a fixed horizon —
+#                     always NOT_EXECUTED, never linked to TradeRecord (real P&L), never read by real-P&L code.
+#   PostTradeMetrics  derived post-trade metrics of an EXECUTED simulated trade (bar-resolution MAE/MFE, fill
+#                     shortfall); recomputable, never edits the trade itself.
+# Both insert-only. Label values for decisions outside zone S are read-guarded in the UI (OD-J16).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+LABEL_STATUSES = ("OK", "CENSORED", "UNTESTABLE", "SEALED", "COST_UNAVAILABLE")   # claude code changed: new
+
+
+class DecisionLabel(_InsertOnlyModel):   # claude code changed: new
+    decision = models.ForeignKey(DecisionEvent, on_delete=models.PROTECT, related_name="labels")
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="labels")
+    outcome_kind = models.CharField(max_length=32)                    # FORWARD_RETURN_NOT_EXECUTED | COUNTERFACTUAL_NOT_EXECUTED
+    label_type = models.CharField(max_length=24)                      # FORWARD_RETURN | COUNTERFACTUAL_RULE
+    label_version = models.CharField(max_length=40)
+    rule_id = models.CharField(max_length=64, blank=True, default="")
+    variant = models.CharField(max_length=24)                         # NONE | BASELINE_STOP_FIRST | BOUND_TARGET_FIRST
+    horizon_candles = models.IntegerField()                           # h for forward returns; H (max hold) for the rule
+    information_time = models.DateTimeField()                         # copy of the decision's, for the causality check
+    label_window_start = models.DateTimeField()                       # open of candle t+1 (= information_time)
+    label_window_end = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20)
+    status_reason = models.CharField(max_length=200, blank=True, default="")
+    research_zone = models.CharField(max_length=40)                   # zone of the DECISION (read guard key)
+    window_end_zone = models.CharField(max_length=40, blank=True, default="")
+    gross_return = models.FloatField(null=True, blank=True)           # forward return of the asset (direction-free)
+    fill_time = models.DateTimeField(null=True, blank=True)
+    fill_price = models.FloatField(null=True, blank=True)
+    exit_time = models.DateTimeField(null=True, blank=True)
+    exit_price = models.FloatField(null=True, blank=True)
+    exit_reason = models.CharField(max_length=20, blank=True, default="")
+    gross_r = models.FloatField(null=True, blank=True)
+    net_r = models.FloatField(null=True, blank=True)
+    cost_detail = models.JSONField(default=dict)
+    mae_bar_1h_r = models.FloatField(null=True, blank=True)
+    mfe_bar_1h_r = models.FloatField(null=True, blank=True)
+    mae_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    mfe_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    bars_to_exit = models.IntegerField(null=True, blank=True)
+    path_resolution = models.CharField(max_length=12, default="BAR_1H")
+    ambiguity = models.CharField(max_length=32, default="NONE")
+    outcome_assumption = models.CharField(max_length=24, default="RESOLVED")
+    data_version = models.CharField(max_length=64)
+    computed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["decision", "label_type", "label_version", "horizon_candles", "variant"],
+                                    name="one_label_per_decision_type_version_horizon_variant"),
+            models.CheckConstraint(condition=models.Q(label_window_start__gte=models.F("information_time")),
+                                   name="label_window_not_before_decision"),
+            models.CheckConstraint(condition=models.Q(status__in=list(LABEL_STATUSES)), name="label_status_valid"),
+            models.CheckConstraint(condition=~models.Q(status="SEALED") | (models.Q(gross_return__isnull=True) &
+                                   models.Q(gross_r__isnull=True) & models.Q(net_r__isnull=True)),
+                                   name="sealed_label_has_no_values"),
+            models.CheckConstraint(condition=models.Q(outcome_kind__endswith="_NOT_EXECUTED"), name="label_is_not_executed"),
+        ]
+
+
+class PostTradeMetrics(_InsertOnlyModel):   # claude code changed: new
+    decision = models.OneToOneField(DecisionEvent, on_delete=models.PROTECT, primary_key=True, related_name="post_trade")
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="post_trade_metrics")
+    metrics_version = models.CharField(max_length=40)
+    trade_ref = models.CharField(max_length=100)                      # backtest_trade_id (or TradeRecord pk later)
+    status = models.CharField(max_length=20, default="OK")
+    status_reason = models.CharField(max_length=200, blank=True, default="")
+    realized_risk_per_unit = models.FloatField(null=True, blank=True)  # |fill - stop|, the backtester's own R basis
+    mae_bar_1h_r = models.FloatField(null=True, blank=True)
+    mfe_bar_1h_r = models.FloatField(null=True, blank=True)
+    mae_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    mfe_excl_exit_bar_r = models.FloatField(null=True, blank=True)
+    bars_held = models.IntegerField(null=True, blank=True)
+    bars_to_mae = models.IntegerField(null=True, blank=True)
+    bars_to_mfe = models.IntegerField(null=True, blank=True)
+    implementation_shortfall_bps = models.FloatField(null=True, blank=True)   # fill vs decision close, adverse > 0
+    fill_vs_rule_reference_bps = models.FloatField(null=True, blank=True)     # fill vs open of t+1, adverse > 0
+    excursion_resolution = models.CharField(max_length=12, default="BAR_1H")
+    computed_at = models.DateTimeField(auto_now_add=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# claude code changed: new — 2026-10-07 Decision Journal PHASE 5 (human journaling, Rev A §13 / Rev B).
+# HUMAN annotations, kept apart from MACHINE observations: never exported with decision streams, never a model
+# feature (no NLP pipeline exists), staff-only. Insert-only — an edit is a new row with `supersedes`. Owner-delegated
+# OD-J8: NO attachment/screenshot storage. `written_after_outcome` flags hindsight (written once the outcome was
+# knowable: decision + 24 h, the longest label window; for a trade, after it closed).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+ANNOTATION_KINDS = ("NOTE", "PRE_TRADE_PLAN", "POST_TRADE_REVIEW", "CHECKLIST", "SETUP_NAME", "TAG", "EMOTION",
+                    "CONFIDENCE", "MISTAKE", "LESSON")   # claude code changed: new
+
+
+class HumanAnnotation(_InsertOnlyModel):   # claude code changed: new
+    annotation_id = models.UUIDField(primary_key=True)
+    decision = models.ForeignKey(DecisionEvent, null=True, blank=True, on_delete=models.PROTECT, related_name="annotations")
+    trade_record = models.ForeignKey(TradeRecord, null=True, blank=True, on_delete=models.PROTECT, related_name="annotations")
+    author = models.ForeignKey("auth.User", on_delete=models.PROTECT, related_name="journal_annotations")
+    kind = models.CharField(max_length=20)
+    text = models.TextField(blank=True, default="")
+    value = models.JSONField(default=dict)
+    written_after_outcome = models.BooleanField(default=False)
+    supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=(models.Q(decision__isnull=False) & models.Q(trade_record__isnull=True)) |
+                                   (models.Q(decision__isnull=True) & models.Q(trade_record__isnull=False)),
+                                   name="annotation_exactly_one_target"),
+            models.CheckConstraint(condition=models.Q(kind__in=list(ANNOTATION_KINDS)), name="annotation_kind_valid"),
+        ]
+
+
+class DecisionAttempt(_InsertOnlyModel):   # claude code changed: new — 2026-10-07 Phase 6 (write-ahead, Rev B §5.4)
+    """Committed BEFORE a live/dry-run order is sent. A DecisionAttempt with no DecisionEvent of the same id after
+    the process stops is an ORPHAN: the next start records a JournalGap and marks that run INCOMPLETE — the outcome
+    is never guessed."""
+    decision_id = models.UUIDField(primary_key=True)
+    run = models.ForeignKey(JournalRun, on_delete=models.PROTECT, related_name="attempts")
+    symbol = models.CharField(max_length=40)
+    candle_open_time = models.DateTimeField()
+    attempted_at = models.DateTimeField(auto_now_add=True)
+

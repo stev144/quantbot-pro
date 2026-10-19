@@ -27,7 +27,7 @@ from django.test import SimpleTestCase
 from bot.config.cost_model import UnsupportedAssetClassCostModel
 from bot.instruments import ASSET_CLASS_CRYPTO, ASSET_CLASS_US_EQUITY
 from bot.research.entry_exit_engine import (  # claude code changed: module under test
-    EntryExitEngine, KalmanPositionSizer, _parse_pair_from_kalman_filename,
+    EntryExitEngine, FixedFractionSizer, _parse_pair_from_kalman_filename,   # claude code changed: Stage 2D Rev B step 8 — was KalmanPositionSizer
     PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT,   # claude code changed: new — both classes now require an explicit validated_win_rate (no more silent AVAX/ATOM default); these tests exercise mechanics, not real edge, so the shared placeholder is correct here
 )
 
@@ -184,30 +184,31 @@ class CostModelIntegrationTest(SimpleTestCase):
         self.assertEqual(summary.iloc[0]["fee_rate"], 0.0026)  # claude code changed: kraken's real published taker fee
 
 
-class KalmanPositionSizerTest(SimpleTestCase):
-    """Position-sizing math (Kelly fraction, dollar-neutral leg split by
-    dynamic hedge ratio beta) — pure, asset-agnostic arithmetic."""
+# claude code changed: Stage 2D Rev B step 8 — KalmanPositionSizerTest replaced:
+# Kelly sizing (and its uncertainty/z multipliers) was REMOVED by owner
+# decision, so the tests of those multipliers test a rule that no longer
+# exists. The leg-split and floor properties carry over to the fixed-fraction
+# sizer and are re-asserted here against hand-computed values.
+class FixedFractionSizerTest(SimpleTestCase):
+    """T = f·C (f = 0.05), N_A = T/(1+β), N_B = βT/(1+β); β > 0 only."""
 
     def test_legs_split_dollar_neutral_by_beta(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: now required
-        total, leg_a, leg_b, _ = sizer.size_position(
-            zscore=2.5, beta=2.0, beta_uncertainty=0.01, prediction_error=0.005,
-        )
-        self.assertGreater(total, 0.0)
-        self.assertAlmostEqual(leg_a, total / 3.0)         # claude code changed: leg_a = total / (1 + beta)
-        self.assertAlmostEqual(leg_b, total * 2.0 / 3.0)   # claude code changed: leg_b = total * beta / (1 + beta)
-        self.assertAlmostEqual(leg_a + leg_b, total)        # claude code changed: legs must sum back to total, no capital lost/created
+        sized = FixedFractionSizer(capital_usdt=10_000.0).size(2.0)
+        self.assertTrue(sized.ok)
+        total, leg_a, leg_b = sized.value
+        self.assertAlmostEqual(total, 500.0, places=12)         # 0.05 × 10,000
+        self.assertAlmostEqual(leg_a, 500.0 / 3.0, places=12)   # T / (1 + β)
+        self.assertAlmostEqual(leg_b, 1000.0 / 3.0, places=12)  # β T / (1 + β)
+        self.assertAlmostEqual(leg_a + leg_b, total, places=12)
 
-    def test_high_beta_uncertainty_halves_position(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: now required
-        total_low_unc, *_ = sizer.size_position(zscore=2.5, beta=1.0, beta_uncertainty=0.01, prediction_error=0.0)
-        total_high_unc, *_ = sizer.size_position(zscore=2.5, beta=1.0, beta_uncertainty=0.50, prediction_error=0.0)
-        self.assertAlmostEqual(total_high_unc, total_low_unc * 0.50)  # claude code changed: MAX_BETA_UNCERTAINTY breach -> 0.5x multiplier
+    def test_size_does_not_depend_on_anything_but_capital_and_beta(self):
+        sizer = FixedFractionSizer(capital_usdt=10_000.0)
+        self.assertEqual(sizer.size(1.0).value[0], sizer.size(1.7).value[0])   # same T for every trade
 
     def test_below_minimum_position_size_skips_trade(self):
-        sizer = KalmanPositionSizer(capital_usdt=100.0, kelly_safety=0.01, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)  # claude code changed: tiny capital forces sub-$100 result; validated_win_rate now required
-        total, leg_a, leg_b, _ = sizer.size_position(zscore=2.0, beta=1.0, beta_uncertainty=0.01, prediction_error=0.0)
-        self.assertEqual((total, leg_a, leg_b), (0.0, 0.0, 0.0))  # claude code changed: MIN_POSITION_USDT gate returns all-zero, not a tiny trade
+        sized = FixedFractionSizer(capital_usdt=100.0).size(1.0)   # T = $5 < $100 floor
+        self.assertFalse(sized.ok)
+        self.assertIn("below the minimum position", sized.reason)
 
 
 class EntryExitSimulationTest(SimpleTestCase):

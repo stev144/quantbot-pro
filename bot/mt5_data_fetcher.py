@@ -57,6 +57,84 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import pandas as pd
+from bot.quant_core.research_zones import seal_before_write   # claude code changed: D-8
+
+# claude code changed: 2026-10-06 — DATA CLOCK FIX (owner-approved option A). MT5 returns bar times in the BROKER
+# SERVER's wall clock encoded as epoch seconds; they were stored as if UTC. Measured on all 58 data/forex files:
+# the weekend gap is Fri 23:00 -> Mon 00:00 in every week of every season, INCLUDING the weeks when US and EU
+# daylight-saving dates differ, i.e. the server clock follows US DST: server time = America/New_York + 7 h
+# (UTC+2 in winter, UTC+3 in summer — the standard "New York close" broker). Inferred from the data and CONFIRMED
+# LIVE 2026-10-06 (ICFundedEvaluations-MT5-Demo, account 90018157: last EURUSD tick 21:42:15 server vs 18:42:17 UTC
+# = +3.00 h during US DST, exactly as NY+7 predicts). Another broker clock is set via MT5_SERVER_CLOCK.   # claude code changed: 2026-10-06
+MT5_SERVER_CLOCK = os.getenv("MT5_SERVER_CLOCK", "NY+7")
+MT5_CLOCK_LABEL = "UTC (converted from MT5 server time = America/New_York + 7 h)"
+
+
+def mt5_server_time_to_utc(server_wall_clock) -> pd.Series:   # claude code changed: 2026-10-06 — new
+    """MT5 server wall-clock times (epoch seconds, or naive/UTC-labelled datetimes that are really server time)
+    -> true tz-aware UTC. Fails closed on times that do not exist / are ambiguous in New York (DST switches fall on
+    Sunday early morning, when the market is closed, so a bar there means the clock assumption is wrong)."""
+    if MT5_SERVER_CLOCK != "NY+7":
+        raise ValueError(f"unsupported MT5_SERVER_CLOCK={MT5_SERVER_CLOCK!r} (only 'NY+7' is implemented and verified)")
+    s = pd.Series(server_wall_clock)
+    naive = pd.to_datetime(s, unit="s") if pd.api.types.is_numeric_dtype(s) else pd.to_datetime(s)
+    if getattr(naive.dt, "tz", None) is not None:
+        naive = naive.dt.tz_localize(None)              # the label was wrong: keep the wall-clock digits
+    ny = (naive - pd.Timedelta(hours=7)).dt.tz_localize("America/New_York", ambiguous="raise", nonexistent="raise")
+    return ny.dt.tz_convert("UTC")
+
+
+def convert_server_clock_files(directory, archive_dir) -> list:   # claude code changed: 2026-10-06 — new, one-off
+    """Convert data/forex/*_1h.csv written with MT5 server time labelled as UTC to true UTC, after copying every
+    original to `archive_dir` (refuses if an archive copy already exists — nothing is ever overwritten twice).
+    Only files whose weekend gap is the MT5 server-time signature (Fri 23:00 -> Mon 00:00/01:00) are converted;
+    anything else is reported and left untouched."""
+    import shutil
+    from pathlib import Path
+    from bot.instruments import write_provenance_marker
+    directory, archive_dir = Path(directory), Path(archive_dir)
+    archive_dir.mkdir(parents=True, exist_ok=False)
+    report = []
+    for p in sorted(directory.glob("*_1h.csv")):
+        df = pd.read_csv(p, float_precision="round_trip")
+        t = pd.to_datetime(df["timestamp"], utc=True)
+        gaps = [(t.iloc[i - 1], t.iloc[i]) for i in range(1, len(t)) if t.iloc[i] - t.iloc[i - 1] > timedelta(hours=30)]
+        sig = sum(1 for a, b in gaps if a.dayofweek == 4 and a.hour == 23 and b.dayofweek == 0 and b.hour in (0, 1))
+        if not gaps or sig / len(gaps) < 0.9:
+            report.append({"file": p.name, "converted": False, "reason": f"server-time signature in {sig}/{len(gaps)} weekends"})
+            continue
+        shutil.copy2(p, archive_dir / p.name)
+        m = p.with_suffix(".provenance.json")
+        had_marker = m.exists()   # claude code changed: 2026-10-06 — read BEFORE the new marker is written
+        if had_marker:
+            shutil.copy2(m, archive_dir / m.name)
+        df["timestamp"] = mt5_server_time_to_utc(t).dt.strftime("%Y-%m-%d %H:%M:%S+00:00").to_numpy()
+        df.to_csv(p, index=False)
+        ts = pd.to_datetime(df["timestamp"], utc=True)
+        symbol = p.name[:-len("_1h.csv")].replace("_", "/")
+        write_provenance_marker(p, venue="mt5", data_source="mt5_data_fetcher", source="mt5_terminal_ipc", symbol=symbol,
+                                timeframe=INTERVAL, start_date=str(ts.iloc[0].date()), end_date=str(ts.iloc[-1].date()),
+                                row_count=len(df), clock=MT5_CLOCK_LABEL + "; converted 2026-10-06 from stored server-time rows"
+                                + ("" if had_marker else "; original marker missing — MT5 origin inferred from the weekend signature"))
+        report.append({"file": p.name, "converted": True, "rows": len(df), "weekend_signature": f"{sig}/{len(gaps)}",
+                       "had_marker": had_marker})
+    return report
+
+
+def confirm_mt5_server_clock() -> dict:   # claude code changed: 2026-10-06 — new; live check (needs the terminal)
+    """Compare the terminal's latest server tick time with the real UTC clock: the offset must be +3 h during US
+    daylight saving and +2 h otherwise if MT5_SERVER_CLOCK='NY+7' is right."""
+    mt5 = connect()
+    try:
+        tick = mt5.symbol_info_tick("EURUSD" + os.getenv("MT5_SYMBOL_SUFFIX", ""))
+        now_utc = pd.Timestamp.now(tz="UTC")
+        server = pd.Timestamp(tick.time, unit="s")
+        expected = now_utc.tz_convert("America/New_York").tz_localize(None) + pd.Timedelta(hours=7)
+        return {"server_minus_utc_hours": round((server - now_utc.tz_localize(None)).total_seconds() / 3600, 2),
+                "expected_hours": round((expected - now_utc.tz_localize(None)).total_seconds() / 3600, 2),
+                "note": "tick time is the LAST tick; outside market hours it can be stale"}
+    finally:
+        mt5.shutdown()
 
 # claude code changed: new — reuse, not reimplementation. Same universe,
 # same filename convention, same gap-detection logic as the Yahoo fetcher
@@ -84,6 +162,8 @@ INTERVAL = "1h"
 # module level, so importing this module never requires the MetaTrader5
 # package to be installed — only actually calling a fetch function does.
 _INTERVAL_TO_MT5_TIMEFRAME_ATTR: Dict[str, str] = {
+    "5m": "TIMEFRAME_M5",   # claude code changed: v8 intraday — added 5m/15m for intraday FX research protocol
+    "15m": "TIMEFRAME_M15", # claude code changed: v8 intraday — added 5m/15m for intraday FX research protocol
     "1h": "TIMEFRAME_H1",
     "4h": "TIMEFRAME_H4",
     "1d": "TIMEFRAME_D1",
@@ -228,12 +308,19 @@ def connect() -> "object":
     if not mt5.initialize(**init_kwargs):
         raise MT5ConnectionError(f"mt5.initialize() failed: {mt5.last_error()}")
 
-    authorized = mt5.login(
-        login=int(creds["login"]), password=creds["password"], server=creds["server"],
-    )
-    if not authorized:
-        mt5.shutdown()
-        raise MT5ConnectionError(f"mt5.login() failed for server={creds['server']!r}: {mt5.last_error()}")
+    # claude code changed: v8 intraday — if the terminal is already logged in (e.g. user opened
+    # it manually), mt5.login() returns False with (1, 'Success'). Check account_info() first;
+    # skip login if already authenticated so we don't disconnect a live session.
+    already_connected = mt5.account_info() is not None
+    if already_connected:
+        logger.info(f"[mt5_data_fetcher] Terminal already authenticated — skipping mt5.login()")
+    else:
+        authorized = mt5.login(
+            login=int(creds["login"]), password=creds["password"], server=creds["server"],
+        )
+        if not authorized:
+            mt5.shutdown()
+            raise MT5ConnectionError(f"mt5.login() failed for server={creds['server']!r}: {mt5.last_error()}")
 
     logger.info(f"[mt5_data_fetcher] Connected — server={creds['server']}, login={creds['login']}")
     return mt5
@@ -280,7 +367,7 @@ def get_mt5_klines(symbol: str, interval: str = INTERVAL, history_days: int = HI
             )
 
         df = pd.DataFrame(rates)
-        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        df["timestamp"] = mt5_server_time_to_utc(df["time"]).to_numpy()   # claude code changed: 2026-10-06 — was utc=True on server time
         df = df.rename(columns={"tick_volume": "volume"})[
             ["timestamp", "open", "high", "low", "close", "volume"]
         ]
@@ -295,7 +382,19 @@ def get_mt5_klines(symbol: str, interval: str = INTERVAL, history_days: int = HI
         mt5.shutdown()   # claude code changed: always release the terminal connection, even on error
 
 
-def download_all_mt5_symbols() -> dict:
+def _attach_running_terminal():   # claude code changed: 2026-10-06 — new
+    """Attach to the terminal that is already running and logged in (no login call, no stored credentials) —
+    read-only use of whatever account the operator opened, e.g. with the investor password."""
+    mt5 = _import_mt5()
+    if not mt5.initialize():
+        raise MT5ConnectionError(f"mt5.initialize() failed — is the MT5 terminal running and logged in? {mt5.last_error()}")
+    return mt5
+
+
+def download_all_mt5_symbols(date_from=None, attach_only: bool = False, archive_dir=None) -> dict:
+    # claude code changed: 2026-10-06 — optional args (defaults = previous behaviour): date_from (history start;
+    # default = HISTORY_DAYS before now), attach_only (use the logged-in terminal, no stored credentials) and
+    # archive_dir (copy each existing file + marker there BEFORE overwriting it; refuses an existing archive dir).
     """
     claude code changed: new — the MT5 equivalent of forex_data_fetcher.py's
     download_all_forex_symbols(). Same shape (per-symbol try/except,
@@ -309,16 +408,22 @@ def download_all_mt5_symbols() -> dict:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(tz=timezone.utc)
+    start = (pd.Timestamp(date_from).tz_localize("UTC") if pd.Timestamp(date_from).tzinfo is None
+             else pd.Timestamp(date_from).tz_convert("UTC")).to_pydatetime() if date_from is not None else None   # claude code changed: 2026-10-06
+    if archive_dir is not None:   # claude code changed: 2026-10-06
+        from pathlib import Path as _P
+        archive_dir = _P(archive_dir)
+        archive_dir.mkdir(parents=True, exist_ok=False)
 
     print("\n" + "=" * 80)
     print(f"DOWNLOADING MT5 FOREX DATA FOR {len(SYMBOLS)} PAIRS")
-    print(f"History : most recent {HISTORY_DAYS} days as of {now.isoformat()}")
+    print(f"History : {'from ' + start.isoformat() if start else f'most recent {HISTORY_DAYS} days'} to {now.isoformat()}")   # claude code changed: 2026-10-06
     print(f"Interval: {INTERVAL}")
     print("Fetcher : MetaTrader5 package (local terminal IPC)")
     print("=" * 80)
 
     summary = {}
-    mt5 = connect()   # claude code changed: one connection for the whole run
+    mt5 = _attach_running_terminal() if attach_only else connect()   # claude code changed: one connection for the whole run; 2026-10-06 attach_only
 
     try:
         for symbol in SYMBOLS:
@@ -331,13 +436,13 @@ def download_all_mt5_symbols() -> dict:
                     raise MT5ConnectionError(f"mt5.symbol_select({mt5_symbol!r}) failed: {mt5.last_error()}")
 
                 date_to = now
-                date_from = now - timedelta(days=HISTORY_DAYS)
-                rates = mt5.copy_rates_range(mt5_symbol, timeframe, date_from, date_to)
+                window_from = start if start is not None else now - timedelta(days=HISTORY_DAYS)   # claude code changed: 2026-10-06
+                rates = mt5.copy_rates_range(mt5_symbol, timeframe, window_from, date_to)
                 if rates is None or len(rates) == 0:
                     raise MT5ConnectionError(f"no data returned: {mt5.last_error()}")
 
                 df = pd.DataFrame(rates)
-                df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                df["timestamp"] = mt5_server_time_to_utc(df["time"]).to_numpy()   # claude code changed: 2026-10-06 — was utc=True on server time
                 df = df.rename(columns={"tick_volume": "volume"})[
                     ["timestamp", "open", "high", "low", "close", "volume"]
                 ]
@@ -356,6 +461,12 @@ def download_all_mt5_symbols() -> dict:
                 other_gaps = [g for g in gaps if not g["likely_weekend"]]
 
                 filepath = OUTPUT_DIR / symbol_to_filename(symbol)
+                if archive_dir is not None:   # claude code changed: 2026-10-06 — keep the previous version
+                    import shutil
+                    for _old in (filepath, filepath.with_suffix(".provenance.json")):
+                        if _old.exists():
+                            shutil.copy2(_old, archive_dir / _old.name)
+                df = seal_before_write(df, filepath)   # claude code changed: D-8 — sealed forward holdout
                 df.to_csv(filepath, index=False)
 
                 # claude code changed: Data-Layer Audit Step 1 — records that
@@ -384,7 +495,7 @@ def download_all_mt5_symbols() -> dict:
                     filepath, venue="mt5", data_source="mt5_data_fetcher",
                     source="mt5_terminal_ipc", symbol=symbol, timeframe=INTERVAL,
                     start_date=str(df["timestamp"].iloc[0].date()), end_date=str(df["timestamp"].iloc[-1].date()),
-                    row_count=len(df),
+                    row_count=len(df), clock=MT5_CLOCK_LABEL,   # claude code changed: 2026-10-06
                 )
 
                 last_timestamp = df["timestamp"].iloc[-1]
@@ -419,6 +530,82 @@ def download_all_mt5_symbols() -> dict:
     print(f"DOWNLOAD COMPLETE — {success_count}/{len(SYMBOLS)} pairs downloaded successfully")
     print("=" * 80)
     return summary
+
+
+def get_mt5_symbol_info(symbol: str, *, attach_only: bool = True) -> dict:  # claude code changed: new — 2026-10-16, Stage 2 broker spec fetch; attach_only=True uses the already-running terminal (no stored creds needed for a demo already logged in)
+    """
+    Fetch broker instrument specification for one symbol via mt5.symbol_info().
+    Returns a plain dict with every field needed to populate ForexInstrumentSpec:
+      canonical_symbol, spread_pips, commission_per_lot, swap_long_pips,
+      swap_short_pips, swap_triple_day, contract_size, pip_size, price_precision,
+      min_volume, volume_increment, quantity_precision, leverage_max, margin_rate.
+
+    attach_only=True attaches to the already-running terminal without re-logging in
+    (safe for a Read Only / demo terminal open on the desktop). Set False to use
+    the full MT5_LOGIN/PASSWORD/SERVER credential path instead.
+
+    Raises MT5ConnectionError on any failure — never returns partial data silently.
+    All pip/swap values are expressed in PIPS (divided by point*10 for 5-decimal pairs,
+    divided by point for 3-decimal JPY pairs) so the caller doesn't need to know the
+    internal point representation.
+    """
+    mt5 = _attach_running_terminal() if attach_only else connect()  # claude code changed: one attach, one shutdown
+    try:
+        mt5_sym = _to_mt5_symbol(symbol)
+        if not mt5.symbol_select(mt5_sym, True):
+            raise MT5ConnectionError(f"symbol_select({mt5_sym!r}) failed: {mt5.last_error()}")
+
+        info = mt5.symbol_info(mt5_sym)
+        if info is None:
+            raise MT5ConnectionError(f"symbol_info({mt5_sym!r}) returned None: {mt5.last_error()}")
+
+        # pip_size: for 5-decimal pairs (EUR/USD) pip = 0.0001 = point * 10;
+        # for 3-decimal JPY pairs (USD/JPY) pip = 0.01 = point * 10.
+        # MT5's own 'point' is the minimum price change (0.00001 or 0.001).
+        # Convention across all retail brokers: pip = point * 10.
+        pip_size = round(info.point * 10, 10)  # claude code changed: pip = point * 10 is the universal retail convention
+
+        def _to_pips(value_in_points: float) -> float:
+            """Convert a value stored in MT5's internal 'points' to pips."""  # claude code changed: inline helper — avoids silent unit confusion
+            return round(value_in_points / 10.0, 6)
+
+        # Spread: MT5 stores current_spread as an integer count of points.
+        spread_pips = _to_pips(info.spread) if hasattr(info, "spread") else None  # claude code changed: None if field absent (older builds)
+
+        # Swap: MT5 stores swap_long/swap_short in POINTS (same unit as spread).
+        swap_long_pips = _to_pips(info.swap_long) if hasattr(info, "swap_long") else None  # claude code changed: None = unavailable
+        swap_short_pips = _to_pips(info.swap_short) if hasattr(info, "swap_short") else None
+
+        # swap_rollover3days: 0=Sun,1=Mon,...,6=Sat (MT5 convention)
+        swap_triple_day = getattr(info, "swap_rollover3days", None)
+
+        # Commission: MT5 stores commission per lot in account currency (already in USD for USD account).
+        commission_per_lot = getattr(info, "commission", None)
+
+        # Leverage: MT5 stores as an integer (e.g. 30 for 1:30).
+        leverage_max = float(info.leverage) if hasattr(info, "leverage") and info.leverage else None
+        margin_rate = round(1.0 / leverage_max, 8) if leverage_max else None  # claude code changed: 1/leverage
+
+        return {
+            "canonical_symbol": symbol,
+            "mt5_symbol": mt5_sym,
+            "pip_size": pip_size,
+            "price_precision": info.digits,
+            "contract_size": float(info.trade_contract_size),
+            "min_volume": float(info.volume_min),
+            "volume_increment": float(info.volume_step),
+            "quantity_precision": len(str(info.volume_step).rstrip("0").split(".")[-1]) if "." in str(info.volume_step) else 0,
+            "spread_pips": spread_pips,
+            "commission_per_lot": commission_per_lot,
+            "swap_long_pips": swap_long_pips,
+            "swap_short_pips": swap_short_pips,
+            "swap_triple_day": swap_triple_day,
+            "leverage_max": leverage_max,
+            "margin_rate": margin_rate,
+            "source": f"MT5_LIVE_{datetime.now(tz=timezone.utc).strftime('%Y-%m-%d')}",
+        }  # claude code changed: all fields needed by ForexInstrumentSpec — no silent None for required fields
+    finally:
+        mt5.shutdown()  # claude code changed: always release
 
 
 if __name__ == "__main__":

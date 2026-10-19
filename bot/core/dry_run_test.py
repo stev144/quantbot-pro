@@ -863,9 +863,9 @@ def test_pairs_signal_engine(results: TestResults):
 
         bootstrap_rows = merged.iloc[:-50]
         live_rows = merged.iloc[-50:]
-        engine.bootstrap_from_history(list(zip(bootstrap_rows.price_a, bootstrap_rows.price_b)))
+        engine.bootstrap_from_history(list(zip(bootstrap_rows.timestamp, bootstrap_rows.price_a, bootstrap_rows.price_b)))   # claude code changed: Stage 2D Rev B — timestamped, so gaps are stepped on the grid
 
-        zscore_ready = len(engine._zscore_roller._values) >= engine._zscore_roller.min_periods
+        zscore_ready = engine._zscore_roller.n_valid >= engine._zscore_roller.min_periods   # claude code changed: Stage 2D Rev B — window now holds NaN slots; count valid values
         if not zscore_ready:
             results.fail_test("Pairs signal engine bootstrap", f"z-score not ready after {len(bootstrap_rows)} real historical candles")
         else:
@@ -909,7 +909,7 @@ def test_pairs_position_sizer(results: TestResults):
 
     try:
         from bot.pairs.config import MIN_POSITION_USDT_OVERRIDE, load_pair_configs
-        from bot.research.entry_exit_engine import MIN_POSITION_USDT as RESEARCH_MIN_POSITION_USDT, KalmanPositionSizer
+        from bot.research.entry_exit_engine import MIN_POSITION_USDT as RESEARCH_MIN_POSITION_USDT, FixedFractionSizer   # claude code changed: Stage 2D Rev B step 8 — was KalmanPositionSizer (Kelly removed)
 
         assert MIN_POSITION_USDT_OVERRIDE < RESEARCH_MIN_POSITION_USDT, (
             f"pilot override (${MIN_POSITION_USDT_OVERRIDE}) is not lower than the research "
@@ -920,41 +920,25 @@ def test_pairs_position_sizer(results: TestResults):
             f"entry_exit_engine.py's own ${RESEARCH_MIN_POSITION_USDT} floor"
         )
 
-        # claude code changed: only entry-eligible pairs ever get a real
-        # KalmanPositionSizer in the live runner (bot/core/pairs_bot_runner.py
-        # constructs PairMonitorEngine — no sizer at all — for the rest, see
-        # bot/pairs/monitor_engine.py). KalmanPositionSizer itself raises on
-        # validated_win_rate=None, which every non-eligible pair now
-        # correctly resolves to (bot/pairs/config.py's _load_validated_win_rate),
-        # so iterating all pair_configs here would fail this section for a
-        # reason that isn't actually a bug — this loop must match what the
-        # real runner does, not the full monitored universe.
+        # claude code changed: Stage 2D Rev B step 8 — fixed-fraction sizing:
+        # T = f·C is the SAME for every entry (no z/Kelly scaling), so one call
+        # per entry-eligible pair (the only pairs the runner ever sizes) at its
+        # real configured strategy capital is the complete check.
         pair_configs = [c for c in load_pair_configs() if c.is_entry_eligible]
         for cfg in pair_configs:
-            sizer = KalmanPositionSizer(
-                capital_usdt=cfg.capital_usdt, kelly_safety=0.25, validated_ic=None,
-                validated_win_rate=cfg.validated_win_rate, min_position_usdt=MIN_POSITION_USDT_OVERRIDE,
-            )
-            # a threshold-level entry (z=2.0, the minimum that can ever fire) — the
-            # worst case for clearing Binance's minimum, since size scales UP from here
-            total, leg_a, leg_b, strength = sizer.size_position(
-                zscore=2.0, beta=cfg.hedge_ratio, beta_uncertainty=0.02, prediction_error=0.005
-            )
-
-            assert total > 0, (
-                f"{cfg.pair_name}: a threshold-level entry (z=2.0) sized to $0 at this pilot's "
-                f"real ${cfg.capital_usdt:.2f} capital — every real signal on this pair would be silently skipped"
-            )
-            assert abs((leg_a + leg_b) - total) < 0.01, f"{cfg.pair_name}: leg_a+leg_b (${leg_a + leg_b}) does not reconcile with total (${total})"
+            sizer = FixedFractionSizer(capital_usdt=cfg.capital_usdt, min_position_usdt=MIN_POSITION_USDT_OVERRIDE)
+            sized = sizer.size(cfg.hedge_ratio)
+            assert sized.ok, f"{cfg.pair_name}: sizer refused at real ${cfg.capital_usdt:.2f} strategy capital — {sized.reason}"
+            total, leg_a, leg_b = sized.value
+            assert abs((leg_a + leg_b) - total) < 1e-9, f"{cfg.pair_name}: leg_a+leg_b (${leg_a + leg_b}) does not reconcile with total (${total})"
             smaller_leg = min(leg_a, leg_b)
             assert smaller_leg >= BINANCE_MIN_NOTIONAL_USDT, (
                 f"{cfg.pair_name}: smaller leg (${smaller_leg:.2f}) is below Binance's real "
-                f"${BINANCE_MIN_NOTIONAL_USDT} minNotional even at a threshold-level entry — "
-                f"this pair's orders would be rejected by the exchange"
+                f"${BINANCE_MIN_NOTIONAL_USDT} minNotional — this pair's orders would be rejected by the exchange"
             )
             results.pass_test(
-                f"{cfg.pair_name} (beta={cfg.hedge_ratio:.3f}) at ${cfg.capital_usdt:.2f} capital, "
-                f"threshold entry: total=${total:.2f} leg_a=${leg_a:.2f} leg_b=${leg_b:.2f} — clears Binance's ${BINANCE_MIN_NOTIONAL_USDT} minimum"
+                f"{cfg.pair_name} (beta={cfg.hedge_ratio:.3f}) at C=${cfg.capital_usdt:.2f}, f={sizer.fraction:.0%}: "
+                f"T=${total:.2f} leg_a=${leg_a:.2f} leg_b=${leg_b:.2f} — clears Binance's ${BINANCE_MIN_NOTIONAL_USDT} minimum"
             )
 
     except Exception as e:
@@ -1004,7 +988,7 @@ def test_pairs_margin_dry_run(results: TestResults):
         fake_trade = ResearchTradeRecord(
             trade_id=1, entry_timestamp=pd.Timestamp.utcnow(), entry_zscore=-2.5, entry_signal=2.5,
             entry_beta=cfg.hedge_ratio, entry_spread=-0.01, direction="LONG_SPREAD",
-            position_usdt=30.0, leg_a_usdt=16.0, leg_b_usdt=14.0, kelly_fraction=0.2,
+            position_usdt=30.0, leg_a_usdt=16.0, leg_b_usdt=14.0, kelly_fraction=float("nan"),   # claude code changed: Stage 2D Rev B step 8 — Kelly removed
             signal_strength="NORMAL", stop_zscore=4.0, target_zscore=0.25, min_hold_hours=1.0,
         )
         decision = SignalDecision(action="ENTER", direction="LONG_SPREAD", trade=fake_trade)

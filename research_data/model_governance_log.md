@@ -8,6 +8,21 @@ exist to stop a rejected pair (or its parameters) from being silently reused.
 
 ---
 
+## FULL_LADDER_STOP_RULE — PRE-REGISTERED 2026-10-18
+
+**Date:** 2026-10-18
+**Status:** PRE-REGISTERED — threshold not chosen; no implementation until test window closes 2027-01-17.
+**Scope:** GBP/JPY LONG only (QC-1 validated pair)
+**Full document:** `FULL_LADDER_STOP_RULE_PRE_REGISTRATION_2026-10-18.md`
+
+Full-ladder loss scan found 7 cycles across 5 QC pairs where all 7 fills triggered
+and TIME_EXIT still closed at a loss (worst: AUD/CAD −$9,127; GBP/JPY −$6,371 BOJ event).
+Pre-registered a stop rule: close any 7-fill cycle if unrealised loss exceeds K × entry_notional.
+Threshold candidates K ∈ {1.0, 1.5, 2.0, 2.5}. Selection criterion and 90-day test
+window fully specified in the document above. No historical data may be used to choose K.
+
+---
+
 ## AVAX_USDT / ATOM_USDT — REJECTED
 
 **Date:** 2026-08-02
@@ -2180,3 +2195,1023 @@ Best individual result: `PAXG_USDT` / `return_1h`, IC=-0.1020, p_fdr=0.0347 (sta
 **Why this matters beyond contagion itself:** this is now the fourth independent feature family (alongside crypto cross-sectional, the representative-sample core feature set, and PCA residual stat-arb) to land in exactly this same place — statistically real, economically too weak. That consistency across unrelated hypothesis shapes is itself evidence worth weighing: it looks less like each individual hypothesis failing for its own reason, and more like this project's crypto cost structure (~0.15% real taker fee) sets a floor that most single-feature signals in this universe don't clear, regardless of the feature's construction. See [[project_crypto_cross_sectional_no_survivors]] for the parallel finding on cross-sectional ranking.
 
 **How to apply:** don't re-run `contagion_engine.py` expecting a different answer without new evidence (a materially different feature construction, a lower-cost venue, or a longer/different sample). The raw per-symbol files remain on disk for anyone who wants to re-slice them differently.
+
+---
+
+## CANONICAL RESEARCH RESET POINT — CRRP-2026-10-02 (supersession notice)
+
+**Date:** 2026-10-02
+**Verdict:** GOVERNANCE — no new research result. Every entry above this one is preserved unchanged for provenance and is **not automatically current evidence**.
+
+`CRRP-2026-10-02` is the canonical research reset point. Every entry above was produced before it, under methods that the 2026-09-29 forensic audit and the 2026-10-02 reassessment found materially weak:
+- pairs P&L measured as the Kalman innovation (C-01);
+- mechanical spread-label IC (C-02);
+- pairs permutation nulls that cannot fail (C-03);
+- anti-conservative Dickey-Fuller residual p-values (H-03);
+- permutation p-floors against BH families (H-12);
+- IID p-values on overlapping labels (M-04);
+- walk-forward overlap (M-03);
+- full-sample PCA look-ahead;
+- same-print DCA fills and full-history volatility scaling;
+- no untouched historical holdout.
+
+**Classification of this log's conclusions:** see `PRE_PHASE3_RESEARCH_GOVERNANCE_REPORT_2026-10-02.md`. The machine-readable form is `bot/research/governance/evidence_registry_CRRP-2026-10-02.json` (version-controlled). In short:
+- **INVALIDATED:** every pairs design-attempt result, including the "eighth design / strongest result", the 7-pair portfolio, the leg-overlap and slippage checks, and "edge survives FIDA's real cost".
+- **LEGACY / DESCRIPTIVE:**
+  - the REJECTED pair verdicts (confirmed in direction by corrected fixed-quantity P&L);
+  - the forex cointegration 0/378 screens (FX calendar BLOCKED; not negative evidence);
+  - the contagion RESEARCH_NEGATIVE ("edge not established", **not** "no edge": the validator's p-floor makes the negative statistically uninformative);
+  - this entry's "fourth feature family" pattern statement (economic description only).
+
+**Current state:** no strategy in this repository has canonical evidence of a tradeable edge. Historical OOS is `PSEUDO_HOLDOUT — NOT CLAIM-ELIGIBLE`. New evidence requires full provenance under the reset-point standard (methodology version, protocol hash, code commit, data fingerprint, run ID, pre-registered family, role).
+
+
+---
+
+## DATASET VERSION v2 — completed-candle correction (F-09)
+
+**Date:** 2026-10-03
+**Verdict:** GOVERNANCE — data correction; no research result.
+
+145 hourly price files (142 PARTIAL, 3 UNVERIFIABLE) ended with a candle written before it closed (audit F-09). Rule: a candle is complete only if it was fetched after its close (t_fetch >= open + interval); for stored files the write time bounds the fetch time, and a last row closing within 60 s of the write is treated as unverifiable. Each affected file's original (v1) is preserved byte-identical in `data/_archive/v1_CRRP-2026-10-02/`. The live file is the original minus its final row (every other row byte-identical). Lineage: `bot/research/governance/data_manifest_CRRP-2026-10-02.json` (v1) and `..._v2.json` (v2: per-file v1/v2 SHA-256, rule, dropped row). Future fetches drop the forming candle at the source (`data_fetcher._build_ohlcv_dataframe`). Artifacts built on the v1 final row keep their existing classes; none is upgraded.
+
+
+---
+
+## 2026-10-03 — RESEARCH PROTOCOL: ZONES + SEALED FORWARD HOLDOUT (owner decision D-8)
+
+- **Decision:** `DECISION_SHEET_D1-D11_2026-10-03.md` D-8, approved as written by the owner on 2026-10-03.
+- **Source of truth:** `bot/quant_core/research_zones.py`, version `QBP-ZONES-1`.
+- **Init:** the L = 1000 candles 2021-09-26 08:00 → 2021-11-06 23:00 UTC.
+- **Selection S:** 2021-11-07 00:00 → 2024-03-31 23:00 UTC.
+- **Embargo:** 504 candles.
+- **Validation V:** 2024-04-22 00:00 → 2026-09-24 23:00 UTC.
+- **Unassigned:** 2026-09-25 → 2026-10-03 23:00, exposed, never evidence.
+- **Forward holdout F:** 2026-10-04 00:00 UTC, SEALED. One evaluation at 2027-04-04 00:00 UTC, extended 90 days at a time while fewer than 30 trades have occurred.
+- **Claim eligibility:** S, V and all earlier history are `PSEUDO_HOLDOUT — NOT CLAIM-ELIGIBLE`; only F is claim-eligible.
+- **Methodology:** `STAGE2D-REVB-3` → `STAGE2D-REVB-4`. The canonical Kalman seed candle is bound to the S start (Design A), so a REVB-3 seed can never validate. No canonical seed existed, so there is no live effect.
+- **Seal:** candles ≥ F are refused by `run_canonical`. The four raw-data writers (crypto, forex, MT5, funding/OI) route them to `data/_sealed_holdout_F2026-10-04/` instead of `data/`.
+- **Evaluate-once ledger:** `bot/research/governance/forward_holdout_ledger.json` (not yet created; it is written only by `open_holdout_evaluation`).
+- **Consequence:** pairs whose common history does not cover the full init window before 2021-11-07 cannot be seeded canonically (e.g. FIDA, whose data starts 2021-09-30).
+- **History:** nothing deleted and no classification changed.
+
+
+---
+
+## 2026-10-03 — RESEARCH LABELS: EXECUTION DELAY d = 1 AT THE NEXT OPEN (owner decision D-1)
+
+- **Change:** every research label (feature, cross-sectional, contagion, derivatives, PCA) now fills at bar t+1's OPEN after a signal at bar t's close: open(t+1+h) / open(t+1) − 1 (`bot/quant_core/timing.py`, `RESEARCH_LABEL_CONTRACT`). No fallback to close.
+- **PCA (owner choice, option 1):** the causal close-return factor model, frozen at the decision bar, is applied to open-to-open returns over open(t+1) → open(t+1+h).
+- **Cross-sectional:** the label is now raw (not winsorised).
+- **d = 2:** sensitivity check only. **d = 0:** labelled diagnostic only.
+- **Column names:** unchanged. Every historical label file was built under d = 0 (same close) and stays LEGACY; any rerun under D-1 is a NEW experiment.
+
+
+---
+
+## 2026-10-03 — INFERENCE, FAMILIES, PAIRS NULL, FINANCING (owner decisions D-2, D-10, D-3, D-4, borrow row)
+
+- **D-2 / D-10:** the confirmatory test is block permutation, block = max(4h, 24), B = 999 (QBP-INF-D2D10-1). Calibrated size 3.3–6.3 % (9 scenarios). The interaction test is Freedman–Lane block permutation (size 4.0–6.0 % vs 27–57 % for the old IID ANOVA). IID p-values are descriptive only, in every engine.
+- **D-3:** hypothesis registry (QBP-HYP-D3-1): at most 5 pre-registered hypotheses per program per quarter; Holm FWER 0.05 on zone V only; exploration BH q = 0.10 on zone S only, never claimable.
+- **D-4:** Step-17 null implemented (QBP-STEP17-D4-1). NOT usable until its size/power calibration (R >= 500) is run — owner compute decision pending.
+- **Borrow row:** short-leg financing = recorded perpetual funding (QBP-FUND-1). A CANONICAL output requires funding coverage for every trade; constant borrow rates are BORROW_RATE_ASSUMED (non-canonical).
+- **History:** no historical result reclassified.
+
+
+---
+
+## 2026-10-03 — VERDICT LADDER, DESCRIPTIVE SCORER, PIT UNIVERSE, DCA REDESIGN (owner decisions D-7, D-11, D-6, D-5)
+
+- **D-7:** SUPPORTED replaced by the ladder OBSERVATION > STATISTICAL > ECONOMIC > TRADEABLE > CANONICAL (QBP-LADDER-D7-1). A single research-lab test is capped at OBSERVATION. Stored legacy SUPPORTED rows stay readable but are UNVERIFIED and never survived. Migration 0015 (no-op SQL).
+- **D-11:** strategy scorer is descriptive only; no trade/avoid selection.
+- **D-6:** point-in-time membership rules implemented (QBP-PIT-D6-1); the volume floor and the listing table are pending, so cross-sectional research stays BLOCKED.
+- **D-5:** single DCA statistic and the 80 % power gate implemented (QBP-DCA-D5-1); calibration pending owner definitions, so DCA stays descriptive only.
+
+
+---
+
+## 2026-10-04 — CANONICAL PAIRS PATHS (steps 2 and 3)
+
+- **Step 2:** cointegration selection runs on zone S only (`run_selection_zone_screen`, QBP-COINT-ZONE-S-1). D-3 exploratory BH q = 0.10, never claimable, at most 5 nominated; canonical-seed eligibility required. Legacy `cointegration_pairs.csv` rows are labelled LEGACY_FIRST_N_TRAINING_WINDOW. The research-lab cointegration tool is zone-S. Real-data note: BTC/BCH is NOT cointegrated within zone S (EG p = 0.119).
+- **Step 3:** the research-lab Kalman tool uses `run_canonical` (data to the end of zone S). Canonical walk-forward (QBP-WF-CANON-1): one canonical run, label truncation 25 candles, owner fold boundaries required. The D-4 statistic is the D-3 endpoint on label-complete zone-V decisions. Canonical pair ladder (QBP-PAIR-LADDER-CANON-1): recorded funding or stop; the D-4 null and walk-forward are BLOCKED until the owner supplies calibration compute and fold boundaries. Legacy paths are kept and self-identify as LEGACY.
+- **History:** no historical result reclassified.
+
+---
+
+## 2026-10-04 — ASSET-AGNOSTIC MARKET LAYER (QBP-MARKET-1)
+
+- Market rules (calendar, gap policy, seed rule, horizon basis, financing, costs, universe) are now an explicit MarketProfile (`bot/quant_core/market_profile.py`). CRYPTO_PROFILE describes REVB-4 exactly: protocol hash unchanged, 14 crypto output fingerprints identical before and after.
+- FOREX: decision-lock Decision 5 principle implemented as a mechanism (scheduled closures excluded from the grid; missing trading hours follow an owner g_max). Decision 5 remains BLOCKED: every FOREX_PROFILE rule is an owner decision (OD-FX-1 to OD-FX-9). Every canonical consumer returns or raises FX_CALENDAR_UNAVAILABLE; FX is never negative evidence.
+- Cross-asset leaks refused: perpetual funding, crypto costs and the D-6 universe cannot reach FX; mixed-class pairs are refused; session-traded data under a crypto name is refused.
+- Tests: test_asset_agnostic_market (16), mutations 9/9; full suite 1,807 tests with 0 new failures. No live change; no historical result reclassified; no FX result produced.
+
+---
+
+## 2026-10-04 — D-4 PIPELINE SPEED-UP AND DCA_ENGINE RESTORE
+
+- D-4 statistic 16.6 s -> 4.9 s per evaluation, bit-identical (10-dataset reference harness vs 105e256). Lean in-memory canonical run (EntryExitEngine.run_canonical_frame) shares one simulation core with run(). Defect fixed: canonical Kalman CSV now read with float_precision='round_trip' (default parser changed ~65 % of floats by ~1e-16; diagnostic log columns move <=5e-13, no trade or P&L changed). No calibration run.
+- INCIDENT: dca_engine.py was overwritten at 13:31 with the 458ac14 version (losing post-audit B1-B8 fixes); commit 105e256 captured it. Restored from 757578d (verified identical). An external review written against the reverted file is superseded where 757578d already fixed the item. Process change: per-file diff review before every commit.
+- Full suite: 1,811 tests, 0 new failures vs the known baseline.
+
+---
+
+## 2026-10-04 — DCA FIVE-GATE REMEDIATION STEP 2
+
+- Fixed F1 (censored cycles out of OOS trade statistics, kept in mark-to-market drawdown/final balance; flag-based, other strategies byte-identical), F2 (censored cycles out of feature-experiment outcomes; fail closed without censoring info), F3 (undefined R reported as None), F4 (sealed holdout refused), F5 (evidence label), F6 (provenance: config hash, data version, zones hash, code state, run id), F7 (FX DCA gives FX_CALENDAR_UNAVAILABLE).
+- Finding: in a synthetic DCA walk-forward every 'loss' was a censored fold-end cycle; completed-cycle statistics must be read with the censored marks.
+- DCA remains descriptive only: D-5 power (F-08) BLOCKED pending owner definitions. Full suite 1,820 tests, 0 new failures. Mutations 8/8.
+
+---
+
+## 2026-10-04 — OOS EVALUATOR DRAWDOWN DEFECT FIXED
+
+- Since ef5636b (Phase 3 M-02) the strategy-to-outcome evaluator reported max_drawdown_pct = 0.0 for every fold (it injected Backtester.max_drawdown but _build_results() reads the never-set max_drawdown_mtm). Real BTC folds: 0.0 % reported vs 10.3-26.7 % closed-trade drawdown.
+- Fixed: closed-trade balance peak-to-trough, with max_drawdown_basis stating intra-trade MTM is not observable from a trade list. Field-by-field diff vs 7e9645c: only drawdown fields changed.
+- No stored artifact affected (no strategy-to-outcome output saved after ef5636b). Full suite 1,822 tests, 0 new failures.
+
+---
+
+## 2026-10-05 — PARALLEL ZONE-S SELECTION SCREEN; SECOND SILENT-REVERT INCIDENT
+
+- run_selection_zone_screen(n_workers=k) and run_selection_screen_on_data(): identical output to serial (synthetic + 190 and 66 real pairs, all worker counts); one BH family in the parent; worker errors raised; result files never overwritten. Speed on this laptop (i5-8365U, 4 cores, 15 W): best 1.28x with 3 workers; full 150-symbol screen ~2 h (3 workers) / ~2.8 h serial. Not run on the universe.
+- Incident 2026-10-05 08:26: kalman_filter_engine.py, test_cointegration_engine.py, config/settings.py reverted to Aug/Sep commits, a stray line in kraken_adapter.py (server crash), and 6 governance documents deleted (incl. STAGE2D_DECISION_LOCK.md) outside the session. All restored from 9e1e98d; reverted copies kept in the session scratchpad. Not caused by git (no reflog entry); likely an editor saving stale buffers.
+- Full suite: 1,825 tests, 0 new failures.
+
+---
+
+## 2026-10-05 — TEST OVERWROTE REAL CROSS-SECTION OUTPUTS (FIXED)
+
+- test_run_cross_sectional_oos_forex.AssetClassDispatchTest wrote 155 research_data/*_cross_section.csv and 58 research_data/forex/*_cross_section.csv on every full-suite run (default research_data_dir). Fixed: temporary output dir plus an assertion that the real files are untouched.
+- The ORIGINAL cross-section outputs are lost (git-ignored, no backup, no provenance sidecar). Files now on disk are REGENERATIONS (code as of 2026-10-05), rebuildable from data/; any earlier result citing them is not reproducible from them as-is.
+
+---
+
+## 2026-10-05 — PROVENANCE FOR NON-CANONICAL RESEARCH ENGINES
+
+- Cross-section (crypto + forex), run_research_all (observations, pooled and per-symbol validated features), contagion and PCA outputs now carry LEGACY provenance sidecars: exact inputs (file sha256 or QBP-DATAV1), config hash, code state, deterministic run id. Never canonical; descriptive only.
+- Existing files on disk have no sidecar until their engine is next run (the regenerated cross-section files included).
+
+---
+
+## 2026-10-06 — KALMAN P0 SENSITIVITY (DESCRIPTIVE)
+
+- Synthetic only. Baseline P0 = 1 is in the robust region (x10/x100: |dz| <= 0.24, entries >= 98.4 % identical). Smaller P0 is sensitive on weakly identified pairs (x0.01: |dz| up to 2.3, entries 80 %, influence ~20k candles). Recommendation (owner): keep P0 = 1, report a P0 = 10 robustness check with any canonical pairs result; P0 < 1 = protocol change. No code changed.
+
+---
+
+## 2026-10-06 — FX DATA CLOCK FIXED; FX CALENDAR DECIDED (OD-FX-1)
+
+- All 58 data/forex files were MT5 broker SERVER time labelled as UTC (server = America/New_York + 7 h, inferred from the weekend signature across US/EU DST-mismatch weeks; live confirmation pending). Converted to true UTC; originals archived in data/forex/_archive_server_clock_2026-10-06/. The fetcher now converts at download.
+- OD-FX-1 (owner): closed Friday 17:00 -> Sunday 17:00 America/New_York (22:00 UTC winter / 21:00 UTC summer), no holidays. Converted data: 0 rows inside closures. Metals need their own calendar (daily break).
+- Forex research outputs computed before today (research_data/forex/*_cross_section.csv, forex_pca_*, forex_cointegration_pairs*, forex_cross_sectional_family_verdict.json) are LEGACY on the server clock (2-3 h shifted).
+- test_instruments.ProvenanceMarkerTest deleted the real EUR/USD marker on every run: fixed (temporary data folder); marker restored.
+
+---
+
+## 2026-10-06 — MT5 SERVER CLOCK CONFIRMED LIVE
+
+- Read-only attach to the logged-in terminal (ICFundedEvaluations-MT5-Demo, account 90018157, investor/read-only): last EURUSD tick 2026-10-06 21:42:15 server vs 18:42:17 UTC = +3.00 h during US daylight saving, exactly as server = America/New_York + 7 h predicts. The data-clock conversion of 85fec26 is confirmed.
+
+---
+
+## 2026-10-06 — FX HISTORY FETCHED (OD-FX-9)
+
+- 58/58 MT5 pairs re-downloaded in true UTC from 2021-05-02 to 2026-10-02 (>= 3,093 trading candles before zone S; zone V complete); rows >= F sealed; 0 rows inside calendar closures. Previous files archived in data/forex/_archive_pre_history_2026-10-06/.
+
+
+---
+
+## 2026-10-06 — FX SELECTION RULES (OD-FX-2/3/7, OWNER-DELEGATED)
+
+- Delegated by the owner ("do what's recommended"); strictest defensible choices:
+  - g_max = 5 missing trading hours on the FX grid (admits the measured 2021-12-02 5 h broker outage; 5 of 51 pairs exceed it in zone S, so USD/SEK, EUR/SEK, USD/NOK, EUR/NOK (2023-01-02 Scandinavian closure) and USD/THB are UNTESTABLE);
+  - seed = first trading candle at or after S0;
+  - universe FX-FLOATING-51 v1 (excludes HKD/DKK pegs and XAU/XAG metals; outside the universe = BLOCKED);
+  - 11 measured Christmas/New Year closure intervals added to the FX calendar (the outage is not a holiday).
+- FX may now run the exploratory zone-S SELECTION screen only (FX_SELECTION_ONLY, never claimable). Canonical FX (Kalman, lifecycle, evidence) stays BLOCKED: horizon, financing, costs and protocol are undecided. Crypto unchanged.
+
+
+---
+
+## 2026-10-06 — FX ZONE-S SELECTION SCREEN (EXPLORATORY, NOT CLAIMABLE)
+
+- **Run.** `run_selection_screen_on_data("data/forex", FX-FLOATING-51, n_workers=3)` at commit 25283c4. Output: `research_data/selection_screen/fx_screen_2026-10-06.json` (new file, opened with "x"). Runtime 1,101 s.
+- **Result.**
+  - 1,275 pairs requested: 1,033 testable, 242 UNTESTABLE (gap rule), 0 BLOCKED, 0 seed-ineligible.
+  - One exploratory BH family (q = 0.10) over the 1,033 testable pairs, Engle–Granger on zone S: **0 BH survivors, 0 nominated**.
+  - Raw (unadjusted) EG p < 0.05: 56 of 1,033 (5.4 %). That is about the rate expected by chance across this many tests; the pairs share currencies, so the tests are not independent and this is descriptive only.
+  - Reading: no FX pair is distinguishable from multiple-testing noise under this screen. That is "edge not established", not proof that no relationship exists. Nothing advances to V or F.
+- **UNTESTABLE breakdown.**
+  - 240 pairs contain a symbol with its own zone-S hole longer than 5 h: USD/SEK, EUR/SEK, USD/NOK, EUR/NOK, USD/THB.
+  - The other 2 (EUR/PLN–USD/CZK and USD/CZK–USD/PLN) have no single-symbol hole above 5 h, but their joint (inner-joined) series has a 7 h hole where adjacent holes of the two legs meet. This is correct: the rule applies to the series the test actually uses.
+- **CORRECTION to the entry above ("FX SELECTION RULES").** The 2023-01-02 SEK/NOK hole is NOT a Scandinavian market closure, as I had called it. NOK/SEK, SEK/JPY and NOK/JPY were quoted normally through that day, and only the four USD/EUR crosses of SEK and NOK are missing (no other universe pair is). It is a broker feed gap on those four symbols with unknown cause; the USD/THB hole (2023-12-22 16:00–21:00 UTC) is likewise unexplained. Neither is a holiday, so neither may be added to the calendar. Re-admitting these pairs would mean loosening the rule after seeing data, which is an owner decision.
+
+
+---
+
+## 2026-10-07 — TRADING DECISION JOURNAL PHASE 1 (BACKTESTER-ONLY RECORDER)
+
+- Owner decisions OD-J1, OD-J5 (DB canonical; CSV = export only), OD-J6, OD-J7a and OD-J15 (environment vocabulary), plus the sign-off D1–D8: OD-J13 backtester half; candidate = BUY/SELL only; control-flow gate vector; the D4 reason/status table; CENSORED_END_OF_DATA; backtest trade link; BACKTEST plus execution_mode RESEARCH (amendment: the existing value, no SIMULATED); run-level coverage. Recorded verbatim in TRADING_DECISION_JOURNAL_PHASE1_OWNER_SIGNOFF_2026-10-07.md.
+- Implemented opt-in and off by default; the backtest result is identical with the recorder on and off. Tests: 35/35; mutations 15/15 caught; related regression 343/349 (the 6 failures are pre-existing). No trading, strategy, P&L or holdout change.
+- Infrastructure only: journal data is never edge evidence by itself. Still OPEN: OD-J13 live half, OD-J14 (episodes), V-1.
+
+
+---
+
+## 2026-10-07 — CRYPTO ZONE-S SELECTION SCREEN (EXPLORATORY, NOT CLAIMABLE)
+
+- Run: run_selection_screen_on_data("data", all 155 *_USDT_1h files, n_workers=3). Output research_data/selection_screen/crypto_screen_2026-10-07.json (new file, "x"). Runtime 16,734 s.
+- 11,935 pairs: 11,026 testable, 909 UNTESTABLE (459 do not cover zone S; the rest have Binance data gaps of 4/8/18 days inside S, beyond the 3-candle policy). One exploratory BH family (q = 0.10) over the 11,026, Engle-Granger on zone S.
+- Raw EG p < 0.05: 3,620 of 11,026 (32.8 %), far above the ~5 % expected under the null. BH survivors: 2,863. After the half-life/seed filters: 277. Nominated (cap 5): AVA/PUNDIX, DIA/FIL, DIA/IOTX, DIA/LPT, DIA/ONT (half-lives 33-62 h, all seed-eligible).
+- Reading (descriptive): a raw rejection rate of 33 % means either widespread zone-S cointegration (crypto shares a dominant market factor and the 2022 bear trend) or EG size distortion on heavy-tailed, break-prone crypto series. The screen cannot tell which. Survivors are concentrated: DIA is in 48 of the 277 and in 4 of the 5 nominees, so the nominees are not 5 independent findings. Statistical cointegration in S is not tradeability (cf. the 09-29 pairs P&L-artifact audit). Nothing is claimable; confirmation would need owner-registered hypotheses (D-3, at most 5) tested in zone V (Holm, B = 999) under the corrected pairs P&L/cost model.
+
+
+---
+
+## 2026-10-07 — CRYPTO SCREEN: ENGLE-GRANGER SIZE CHECKS (DESCRIPTIVE)
+
+- Question: is the screen's 32.8 % raw EG rejection rate a test artifact? Same function and settings as the screen (bot.quant_core.cointegration.engle_granger, maxlag=None, autolag='aic', log prices, n = 10,000 = the screen's training window).
+- (1) Synthetic nulls, existing tools (bot.quant_core.calibration.eg_size_run; 200 replicates per cell, no cointegration by construction). Size at 5 %:
+  - independent random walks 3.5 / 5.0 / 9.0 % (gaussian / student-t3 / GARCH);
+  - common factor 2.5 / 8.5 / 4.5 %;
+  - beta walk 5.0 / 4.0 / 5.5 %;
+  - worst Wilson upper bound 13.8 %.
+  Heavy tails and volatility clustering inflate size modestly, nowhere near 33 %.
+- (2) Real-data null: 1,000 random pairs of 149 coins (6 excluded by the screen's 3-candle gap rule), zone S only.
+  - Same period (the screen's setting): 323/1000 = 32.3 % [29.5, 35.3], which reproduces the screen.
+  - B taken from a non-overlapping later part of S (no shared calendar time; real jumps, breaks and flat stretches kept): 4/1000 = 0.4 % [0.2, 1.0].
+  - The rejections therefore require contemporaneous co-movement; data quirks do not produce them.
+- (3) Flat (zero-change) hours in the first 10k of S: median coin 3.7 %; DIA 10.7 % (rank 13/149); top PAXG 20.5 %. Flat-heavy coins are inside the shifted null, which barely rejects, so flatness does not explain DIA's survivor concentration.
+- Reading: the zone-S signal is statistically genuine IN-SAMPLE (coins behave as a market trend plus a mean-reverting idiosyncratic part, Nov 2021 - Dec 2022). Not established: persistence out of sample (zone V) or tradeability after costs. Still EXPLORATORY; no claim. Scripts and results: session scratchpad (eg_size_crypto.py, eg_realdata_null.py, *_result.json).
+
+
+---
+
+## 2026-10-07 — DECISION JOURNAL PHASES 2-7: OWNER-DELEGATED DECISIONS
+
+- The owner asked for all 7 journal phases, in order and under the five gates. The open decisions OD-J2, J3, J4, J8, J9, J11, J12, J16, J17 and J18 were DELEGATED to the strictest Revision B recommendations. OD-J14 = (iii) break at exit and report both counts. Phase 6 = DRY_RUN live wiring, equivalence-tested (approves the OD-J13 live half). Phase 7 = statsmodels logistic only (OD-J10 defer). Full values: TRADING_DECISION_JOURNAL_PHASE1_OWNER_SIGNOFF_2026-10-07.md.
+
+
+---
+
+## 2026-10-07 — V-1 RESOLVED (STRICT): ZONE V IS NOT INDEPENDENT OF THE BACKTESTER STRATEGIES
+
+- Question (Revision B §11): were the MovingAverage / MeanReversion parameters and the router thresholds set while zone V data (2024-04-22 onward) was visible?
+- Evidence (git): repository first commit 2026-08-16. moving_average.py, mean_reversion_strategy.py and regime_detector.py were first and last committed 2026-08-16 (1 commit each). strategy_router.py was first committed 2026-08-16 and last changed 2026-08-20; min_adx_for_trend and the backtester thresholds date from the initial commit. All of this is more than two years after V0, with most of V already observable. Design work from before the repository existed cannot be shown either way, so independence cannot be established.
+- Ruling (strictest, per the delegated-strictness rule): zone V is NOT independent of these strategies' design. Journal findings about StrategyRouter[MovingAverageStrategy, MeanReversionStrategy] can never be confirmatory in V; only the sealed holdout F (from 2026-10-04) is clean for them. Enforced in code by the Phase 4 journal read guard.
+
+
+---
+
+## 2026-10-07 — DECISION JOURNAL PHASES 2-7 IMPLEMENTED (INFRASTRUCTURE, NOT EVIDENCE)
+
+- Commits: Phase 2 outcome labels / post-trade metrics 4f3c8cf; Phase 3 legacy backfill 5db832a; Phase 4 descriptive analytics + zone read guard + V-1 da7f40c; Phase 5 human annotations 3989c0a (+ a320653 marker restore); Phase 6 DRY_RUN live recorder d4578bb; Phase 7 statsmodels-logistic discovery 5a3c9f7. Migrations 0017-0020, all additive (two constraints relaxed only for clearly-marked LEGACY_BACKFILL and DRY_RUN/LIVE rows), applied locally.
+- Phase 6 (owner blocker test): the real bot_runner.process_venue_candle and the real ExecutionEngine (DRY_RUN) were driven offline over 400 replayed hours with the recorder OFF and then ON. Statuses, signals, regimes, every TradeRecord field and the engine state were identical; negative controls were detected. The full regression then caught a recorder-OFF engine read (three hooks evaluated engine attributes even with no recorder attached). It was fixed before commit with lazy hook arguments and pinned by RecorderOffPathTests / mutation P6-7. The recorder is off unless JOURNAL_LIVE_RECORDER=1 and refuses non-DRY_RUN engines. Live and dry-run outcomes are never labelled (sealed until the D-8 evaluation, OD-J4).
+- Phase 7: zone-S episodes only, purged + embargoed walk-forward folds, out-of-fold log-loss vs base rate and AUC, sign stability >= 0.8. Output is candidate hypotheses for owner review only: nothing is registered and nothing is reachable from trading code (import-boundary test). Evidence level is at most OBSERVATION. No scikit-learn.
+- Tests: 86 new across Phases 2-7; 32/32 mutations caught (P2-8, P4-3 and P7-4 exposed test holes, all fixed). Final offline regression after the last edit: 130 journal tests OK. The 6 remaining failures were all pre-existing and were reproduced identically on HEAD for the live-path modules (3 bot_runner venue-session network tests, test_exit_updates_trade_record, forex currency balance, research-lab 0.336 baseline).
+- No confirmatory journal test was run: none is permitted in zone V for the backtester strategies (V-1), and F is sealed. No strategy, execution, risk or live-trading behaviour changed. Report: TRADING_DECISION_JOURNAL_PHASES_2-7_REPORT_2026-10-07.md.
+
+
+---
+
+## 2026-10-07 — OPEN-36 SIGNED; D-3 CRYPTO REGISTRATION DEFERRED; D-4 SIZE CALIBRATION PREPARED (NOT RUN)
+
+- Owner sign-off of DECISION_SHEET_OPEN36_D3_PROPOSAL_2026-10-07.md.
+  - **OPEN-36:** nominal 5 %, δ = 1 percentage point, α = 0.05, design power 0.80. Size criterion: one-sided 95 % Wilson upper bound ≤ 6 % with ≥ 3,202 testable replicates (`minimum_repetitions`). Never loosened for cost or after a failure; never replaced by an observed-rate comparison.
+  - **D-3:** DEFERRED. AVA/PUNDIX, DIA/FIL, DIA/IOTX, DIA/LPT and DIA/ONT stay OBSERVATION / EXPLORATORY / NON-CLAIMABLE. No registry entry, no verdict.
+  - **BTC journal logistic run** (BT-d1f6aac01934e215acc5e2d18921e128): descriptive only. Out-of-fold log-loss 0.600 vs base rate 0.565 → 0 ML candidates. No added ML complexity.
+- **Implementation:**
+  - Code records the signed values: `calibration.OPEN36_*` and `signed_size_gate`.
+  - The D-4 gate (`pairs_step17_null.require_calibrated`) now enforces the signed Wilson criterion, recomputed from the recorded rejection count, IN ADDITION to the signed D-4 observed band (3–7 %) and power. It is stricter, nothing removed: the old rule accepted R = 600 at 5 %, which is now refused.
+  - New resumable runner (`bot/research/step17_calibration.py`, `calibrate_step17`):
+    - scenario = D-4 unrelated Gaussian random-walk pairs over the full canonical span;
+    - each replicate = a complete Step-17 test (B = 999, full canonical pipeline per shift);
+    - untestable replicates do not count towards the 3,202;
+    - provenance and checkpoint are bound to the exact code state;
+    - it never writes the canonical gate artifact.
+- **Timing pilot** (labelled, not evidence): 8 replicates × 50 evaluations = 400 canonical pipeline runs in 708 s on 4 workers (0.57 evaluations/s); 0 untestable.
+  - The signed run needs 3,202 × 1,000 ≈ 3.2 M evaluations ≈ 65 days on this PC. **It was NOT started:** the compute is an owner decision.
+  - The D-4 power criterion (OU parameters, required power) is unspecified, so the power calibration cannot run.
+- **Not changed:** strategy, execution, zones, holdout, D-1, D-2/D-10, five-gate standards. The recorded D-2 calibration (size 3.3–6.3 %) is preserved as historical evidence; it predates the signed replicate requirement. No historical result reclassified.
+
+
+---
+
+## 2026-10-07 — D-4 STATISTIC SPEED-UP (BIT-IDENTICAL) AND A BLAS REPRODUCIBILITY FINDING
+
+- **Decision:** owner instruction "proceed with the most recommended" = option C, accelerate without changing any result.
+- **Changes** (both byte-verified on 13 cases, including gaps and re-seeds: statistic, data version, full Kalman frame and seed record identical):
+  - `data_version` builds its canonical text column-wise with C-vectorised timestamps: fingerprint 0.70 s → 0.22 s;
+  - the Kalman update writes `np.outer` as the identical element-wise broadcast, and caches Q (read-only).
+- **Net:** about 1.2–1.3× per D-4 evaluation (machine load is noisy). The rest of the cost is the per-step numpy/BLAS matrix products, which cannot change without changing bits.
+- **Finding (G5, reproducibility):** the canonical Kalman output depends on the CPU-specific OpenBLAS kernel. On this PC (Haswell kernel) β = 1.5124510083044023; the Sandybridge/Prescott kernels give …038 (≈1e-15 relative).
+  - Canonical results are bit-reproducible only on the same kernel, and provenance does not record it.
+  - Any off-machine run must pin `OPENBLAS_CORETYPE=Haswell` and be checksum-verified against this PC.
+  - Reported, not changed (methodology unchanged).
+- **Signed D-4 size calibration:** still NOT started. Estimated ≈ 50 days on this PC after the speed-up. The next recommended route (cloud with a pinned kernel) needs an owner account/cost decision. The D-4 power criterion is still unspecified.
+
+
+---
+
+## 2026-10-07 — ZONE-S DIAGNOSTICS OF THE FIVE NOMINATED CRYPTO PAIRS (DESCRIPTIVE, ZONE V UNTOUCHED)
+
+- **Owner choice:** "Zone-S only, keep V clean". Code b6c15df (clean). Output: research_data/selection_screen/zone_s_pair_diagnostics_2026-10-07.json plus sidecar.
+- **Zone discipline:** every price and funding series is cut at S1 (2024-03-31 23:00) and asserted; trades count only if decided in S and label-complete in S. Canonical Kalman seed at the S start; canonical lifecycle; recorded perp funding.
+- **Funding coverage:** AVA (from 2024-12), PUNDIX (from 2025-04) and DIA (from 2024-10) had NO Binance perpetual during zone S. Under the signed borrow row, those short legs are BORROW_UNAVAILABLE. FIL, IOTX and ONT are covered; LPT from 2021-11-11.
+- **Signed 3× pre-screen** (mean gross edge per trade ≥ 3 × round-trip cost): ALL FIVE FAIL in zone S, even on fees + slippage alone (≈0.30 %/trade).
+  - AVA/PUNDIX: gross 0.88 %/trade (block-bootstrap 95 % CI 0.45–1.36 %), short of the 0.90 % bar; financing unpriceable for every trade; 0.57 % after the selection test window.
+  - DIA/FIL 0.01 %, DIA/IOTX −0.07 %, DIA/LPT 0.14 %, DIA/ONT 0.26 %; all four gross CIs include 0.
+  - Mean net on trades with priced financing: −0.13 % to −0.57 % per trade.
+- **Walk-forward** (canonical_walk_forward, 10 calendar quarters inside S; a descriptive fold choice, owner canonical boundaries unset):
+  - quarters with positive gross: AVA/PUNDIX 10/10, DIA/ONT 8/10, DIA/LPT 7/10, DIA/FIL 6/10, DIA/IOTX 5/10;
+  - quarters meeting 3×: 1–3 of 10 for each pair.
+- **Reading (descriptive):** the cointegration-selected relationships do not show a cost-surviving gross edge in zone S. AVA/PUNDIX is consistent but below the bar and was not shortable by perpetual in S.
+- **Status:** OBSERVATION / EXPLORATORY / NON-CLAIMABLE; no verdict, no registration; zone V not read.
+
+
+---
+
+## 2026-10-07 — AVA/PUNDIX THROUGH THE RESEARCH LAB PAIR CAPABILITIES (ZONE S ONLY, DESCRIPTIVE)
+
+- **Run:** offline (network guard), at owner request. Output: research_data/selection_screen/ava_pundix_research_lab_2026-10-07.json plus sidecar.
+- **Lab tools used:** run_cointegration_test (zone-S Engle-Granger) and run_kalman_pairs_test (canonical causal Kalman, data stop at S1).
+- **Regime-conditional analysis:** regime_conditional_cointegration was called directly on prices and causal regime labels cut at S1. The lab driver run_regime_conditional_research was NOT used: it defaults to a 5-year window ending now (zones V/F) and downloads live data.
+- **Not run:** the lab's walk_forward_validation and permutation_robustness_testing capabilities are BLOCKED_BY_DEPENDENCY.
+- **Results:**
+  - **Cointegration** (first 10,000 S candles): EG p ≈ 0; hedge ratio 1.134; half-life 32.8 h; seed-eligible. Within-S pseudo-holdout ADF p = 0.0138 (raw, not FDR-corrected).
+  - **Kalman:** β drifted from the causal seed 0.187 (init window) to 0.414 at the end of S (posterior variance 0.0046).
+  - **Regime conditioning:** full-S static hedge ratio 1.914 (EG p 1.2e-8). 877 trend-state episodes (median 16 h, max 191 h), 0 reach the 1,000-candle minimum, so no regime-conditional estimate exists.
+- **Reading (descriptive):** the hedge ratio is unstable across estimators and windows (0.19 / 0.41 / 1.13 / 1.91). That is evidence against one stable linear relationship over S, consistent with the earlier cost-screen failure.
+- **Status:** OBSERVATION / EXPLORATORY / NON-CLAIMABLE; zone V not read.
+
+
+---
+
+## 2026-10-07 — DCA ENGINE: CORRECTNESS + DESCRIPTIVE ZONE-S RUN (NO SIGNIFICANCE)
+
+- **Correctness:** test_dca_engine, test_dca_phase2 and test_d5_dca_significance: 74/74 pass (offline). Deep Health DCA: G1/G2/G4/G5 PASS (next-open fills, weighted average, capital, censoring, sealed refusal); G3 BLOCKED (D-5 calibration pending owner definitions).
+- **Descriptive zone-S run** (owner request):
+  - Baseline ladder (6 USDT; ×2…×64; 762 USDT full ladder; full deployment after ≈48 % cumulative drop); real Binance costs (fee 0.1 %, slippage 0.05 %).
+  - BTC/ETH/SOL/BNB/XRP/ADA/DOGE × NEXT_OPEN and INTRABAR_LADDER; data cut at S1 (asserted).
+  - Output: research_data/dca_zone_s_descriptive_2026-10-07.json plus sidecar.
+- **Results:**
+  - Every run ended with positive mark-to-market P&L (+66 to +318 USDT); resolved-cycle win rates 95.8–100 %.
+  - D-5 statistic values 0.13–0.42. These are values only: no p-value, and the matched-exposure benchmark is not defined.
+  - Tail risk: max MTM drawdown up to 451–683 USDT (59–90 % of the full ladder); the full ladder was exhausted 1–3 times on most coins; the longest underwater spell reached 14,976–16,703 h (SOL/ADA INTRABAR).
+  - Fill-model sensitivity is large (e.g. SOL +318 vs +97 USDT; ADA 179 vs 40 cycles).
+- **Reading (descriptive):** a high win rate with rare deep drawdowns. Zone S ends in the 2024 Q1 rally, so every deep cycle recovered inside the window. The 7 coins are today's survivors (survivorship bias). No evidence that DCA beats a null; D-5 is still blocked. Not claimable.
+
+
+---
+
+## 2026-10-07 — D-5 / D-6 OPEN ITEMS SIGNED FOR THE DCA "REAL ANSWER" (owner: "accept all")
+
+- Signed: DECISION_SHEET_D5_D6_DCA_PROPOSAL_2026-10-07.md.
+  1. **Benchmark:** constant exposure = the DCA run's time-weighted average deployed capital, same coin and costs. Statistic = (DCA MTM − benchmark MTM) / DCA max deployed capital.
+  2. **Mean bootstrap block:** 24 h (6 h and 72 h as sensitivities only).
+  3. **Universe:** top 50 USDT spot pairs by trailing 30-day quote volume at the test start; listed ≥ 90 days and still trading; stablecoins, fiat, pegged and leveraged tokens excluded; delisted coins included (data.binance.vision); frozen at t.
+  4. **Scope:** (a) zone S + V development evidence (descriptive); (b) ≤ 5 registered per-coin hypotheses for zone F, Holm FWER 0.05, owner rationale; (c) calibration first (OPEN-36 size + D-5 power).
+  5. **Compute:** cloud.
+- **Facts recorded with the sign-off:**
+  - The DCA engine and baseline ladder were first committed 2026-09-27, so zone V is not independent for DCA (strict V-1 reasoning). A claimable answer exists only at the single F evaluation (≥ 2027-04-04).
+  - A pooled 50-coin confirmatory calibration (≈ 5 CPU-years) is infeasible.
+- **Implementation:**
+  - dca_significance_d5: MEAN_BLOCK_H, SENSITIVITY_BLOCKS_H, matched_exposure_benchmark_mtm, d5_excess_statistic.
+  - point_in_time_universe: archive listing and monthly fetch (cached; months ≥ the F month refused); µs/ms timestamp parsing; signed exclusions; top_n_universe_at; build_listing_table implemented.
+  - **D-6 look-ahead fix:** trailing_volume_at now counts only candles CLOSED by t. It previously counted the candle opening at t, a full day of future volume for daily data. Pinned by test.
+  - Tests: test_dca_d5_d6_signed (10); mutations 3/3 caught.
+
+
+---
+
+## 2026-10-17 — CRYPTO ZONE-S COINTEGRATION SCREEN: CLOSED NEGATIVE (shared-collapse artifact)
+
+**Date:** 2026-10-17
+**Screen identifier:** `crypto_coint_screen_20261017.json` (scratchpad; not committed to repo)
+**Status: CLOSED — NEGATIVE FINDING. Do not move any nominated pair to P&L validation or registration.**
+
+### What was run
+
+Zone S selection screen (2021-11-07 → 2024-03-31, 1h candles, Binance spot).
+Universe: ~150 USDT pairs. Method: Engle-Granger + ADF two-test structure, BH q=0.10 family-wise correction,
+OOS ADF persistence check (S split at midpoint), half-life filter 24–168 h.
+11,026 pairs tested → 5 nominated: AVA_USDT/PUNDIX_USDT, DIA_USDT/FIL_USDT, DIA_USDT/IOTX_USDT,
+DIA_USDT/LPT_USDT, DIA_USDT/ONT_USDT.
+
+### Finding: shared-collapse artifact, not structural cointegration
+
+Visual inspection of spread series and raw price history for both the shortest half-life pair
+(AVA/PUNDIX, 32.8h) and the highest-OOS pair (DIA/ONT, lowest OOS ADF p=0.006) reveals the
+same pattern:
+
+1. **Both assets lost 60–70% of value during zone S** (AVA −70.7%, PUNDIX −57.8%, DIA −62.9%,
+   ONT −66.2%). Zone S = the 2022 crypto bear market. The spread appears stationary because
+   both assets collapsed in parallel, not because a structural long-run equilibrium pulled them
+   together.
+
+2. **Spread explodes after zone S ends.** Post-2024-03 the AVA/PUNDIX spread drifts to +1.25
+   (full history std = 0.24 vs zone S std = 0.12). The DIA/ONT spread reaches +1.5 in 2025.
+   Neither spread returns to the zone S mean after the selection window closes. The relationship
+   does not hold out-of-sample in any meaningful sense.
+
+3. **EG and ADF p-values = 0.000 (numerical underflow) for all 5 pairs.** Extreme test statistics
+   of this kind are a known signature of correlated-trend artifacts (both series share a
+   structural downtrend; the residual looks stationary within a window but reverts to the trend
+   outside it).
+
+4. **DIA appears in 4 of 5 nominated pairs.** DIA Protocol's price trajectory in zone S was
+   proportional to FIL, IOTX, LPT, and ONT — all small-cap alts in a correlated bear market.
+   This is sector correlation, not cointegration.
+
+5. **This replicates the C-01 finding from the prior scan (2026-09-29):** pairs trading
+   "edge" in the crypto bear market is a P&L-measurement artifact. Random walks also produced
+   nominated pairs under similar conditions.
+
+### Governance actions
+
+- All 5 nominated pairs are **DISQUALIFIED**. None shall be moved to DCA/P&L validation,
+  walk-forward testing, or live registration at any future date without a fresh screen on a
+  different zone (non-bear-market window, or detrended prices).
+- The zone S methodology for crypto is assessed **insufficient** to distinguish genuine
+  mean-reversion pairs from correlated-decline artifacts in a sustained bear market period.
+  Any future crypto cointegration screen should apply a detrending or structural-break
+  pre-filter before the EG test, or use a zone that does not coincide with a
+  market-wide drawdown.
+- Zone V and zone F are **untouched**; this finding is based on zone S and full-history
+  spread plots only.
+- Diagnostic evidence: `spread_diagnostic.png` generated 2026-10-17 (scratchpad;
+  not committed). Key outputs:
+  - Price series (log scale): both assets in each pair trend from ~$1–3 to ~$0.07–0.85
+    across zone S.
+  - Zone S spread: looks stationary (std ≈ 0.12–0.13), explaining the low EG p-values.
+  - Full-history spread: structure breaks immediately after zone S ends; spread permanently
+    diverges from zone S mean.
+
+---
+
+## 2026-10-17 — INTRADAY FX RESEARCH PROTOCOL v1.0: RISK LIMITS APPROVED + DATA ACQUISITION AUTHORISED
+
+**Date:** 2026-10-17
+**Protocol:** Intraday FX Research Protocol v1.0 (published as Artifact BnVfv3y2Y8zoZkuLhKqEMJ)
+**Owner action:** Explicit approval of proposed risk limits; authorised 5m/15m data acquisition.
+
+### Approved risk limits (Section D, Protocol v1.0)
+
+| Parameter | Approved Value |
+|-----------|---------------|
+| Risk per trade | 1% of equity ($10 on $1,000 account) |
+| Daily loss stop | 3% ($30) |
+| Max peak-to-trough drawdown | 10% ($100) |
+| Max concurrent positions | 1 |
+| Max notional | 3 mini lots (0.3 standard lots) |
+| Max holding: 5m strategy | 4 hours (48 bars) |
+| Max holding: 15m strategy | 8 hours (32 bars) |
+| Overnight exposure | Prohibited |
+| Weekend exposure | Prohibited |
+| DCA / averaging down | Prohibited |
+| Auto-block trigger | Daily loss stop OR drawdown > 10% hit |
+
+These limits are locked and may not be silently changed after viewing strategy results.
+Any modification requires a new governance log entry with explicit owner approval.
+
+### Authorised data acquisition
+
+- Pairs: EUR/USD, GBP/USD, USD/CHF, AUD/USD (USD/JPY excluded per v7/A6-2)
+- Timeframes: 5-minute and 15-minute bars
+- Source: MetaTrader 5 terminal (ICFundedEvaluations demo, same broker as 1h data)
+- Script: `bot/fetch_fx_intraday.py` (new, v8 intraday protocol)
+- MT5 timeframe constants added: `TIMEFRAME_M5`, `TIMEFRAME_M15` (`bot/mt5_data_fetcher.py`)
+- Output: `data/forex/{SYMBOL}_5m.csv`, `data/forex/{SYMBOL}_15m.csv`
+- Holdout protection: `seal_before_write()` (D-8) strips rows after 2026-10-16 08:00 UTC
+
+### Remaining blockers (not yet resolved)
+
+- G1 (PARTIAL): Leverage limit `leverage_max=None` in instrument specs; spread is a snapshot
+  not a distribution; position sizer outputs crypto units, not FX lots.
+- G2/G4 (BLOCKED → pending data): 5m/15m data fetch not yet run; pullback family has
+  no implementation.
+- Protocol not ready to freeze: see five-gate checklist in protocol document.
+
+### What is NOT authorised
+
+- Strategy logic modification or parameter tuning
+- Holdout access (v7 holdout sealed until 2027-10-16 AND ≥10 trades/direction)
+- Live or paper trading
+- Any profitability claim from development-period results alone
+
+---
+
+## INTRADAY FX PROTOCOL — DECISIONS D-7, D-4, D-9 CONFIRMED
+
+**Date:** 2026-10-18
+
+### D-7: Walk-forward fold structure — LOCKED
+
+Applies to: 15m EUR/USD (primary arm, H2). Confirmed parameters:
+
+| Parameter | Value | Derivation |
+|---|---|---|
+| Folds | 5 | Fits within 49,415 bars (728 calendar days) |
+| IS window | 5,973 bars (88 trading days) | ~4 months per fold |
+| OOS window | 2,986 bars (44 trading days) | ~2 months per fold; IS:OOS = 2:1 |
+| Embargo | 67 bars (1 trading day) | Standard gap between IS end and OOS start |
+| Total per fold | 9,026 bars | 5 x 9,026 = 45,130 < 49,415 — fits |
+
+5m arm is exploratory only (180 days available — insufficient for 5-fold walk-forward at this IS:OOS ratio).
+
+### D-4: Bonferroni family size — LOCKED
+
+5-test Bonferroni family (H1–H5). Rationale for 5-test over 4-test: H5 (1h benchmark)
+will be run and its result observed; including it in the family prevents ex-post cherry-picking
+of whether to count it. Per delegated-strictness rule, the strictest option is chosen.
+
+| Hypothesis | Description | alpha_per_test |
+|---|---|---|
+| H1 | MR, 5m, EUR/USD | 0.010 |
+| H2 | MR, 15m, EUR/USD | 0.010 |
+| H3 | Momentum/Pullback, 5m | 0.010 |
+| H4 | Momentum/Pullback, 15m | 0.010 |
+| H5 | MR, 1h benchmark | 0.010 |
+
+Family-wise alpha = 0.050. Per-test alpha = 0.010 (Bonferroni). A result is only
+evidence of edge if p < 0.010.
+
+H3 and H4 remain blocked (no pullback implementation). H1 is exploratory only (180d 5m data).
+
+### D-9: Candidate registry — REGISTERED
+
+Pre-registration for H2 (primary 15m run). Parameters are the current defaults from
+MeanReversionStrategy.__init__() — not tuned, not selected from any data.
+
+**Strategy:** MeanReversionStrategy  
+**Hypothesis:** H2 (MR, 15m, EUR/USD)  
+**Registration date:** 2026-10-18 (before any 15m data is processed by the strategy)
+
+| Parameter | Pre-registered value | Source |
+|---|---|---|
+| rsi_oversold | 35 | MeanReversionStrategy default |
+| rsi_overbought | 65 | MeanReversionStrategy default |
+| atr_multiplier | 1.0 | MeanReversionStrategy default |
+| bb_width_max | 6.0% | MeanReversionStrategy default |
+| min_candles | 50 | MeanReversionStrategy default |
+| rr_ratio | 1.5 | MeanReversionStrategy default |
+| Regime gate | RANGING only | StrategyRouter routing rule |
+| Max holding | 32 bars (8h at 15m) | Approved risk limits |
+| Spread assumption | 0.5 pips round-trip | Conservative; snapshot was 0.0 |
+| Position sizing | PositionSizer(risk_pct=0.01) | risk.py DEFAULT_RISK_PCT |
+| Initial balance | ,000 | Protocol account size |
+
+**Selection rule:** These parameters are fixed. Any change requires a new pre-registration
+entry in this log with a written justification BEFORE the changed parameters are applied
+to any data. Post-hoc parameter changes are prohibited.
+
+**Permutation test spec (H2):**
+- Method: M3 block-shuffle of log-returns (reusing fx_permutation_test.block_shuffle_returns)
+- Block size: 48 bars (48 x 15m = 12 hours)
+- N permutations: 499
+- Test statistic: mean net P&L per OOS trade (USD, cost-adjusted)
+- Secondary statistic: total OOS P&L
+- Significance threshold: p < 0.010 (D-4 5-test Bonferroni)
+
+### What is NOT authorised
+
+- Parameter changes to MeanReversionStrategy without a new pre-registration entry
+- Any inspection of the v7 holdout data
+- Live or paper trading
+- Citing H2 results as evidence of edge unless p < 0.010 at the primary statistic
+
+---
+
+## H2: MeanReversionStrategy · 15m · EUR/USD — NEGATIVE
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — H2 not significant. No edge evidence from development data.
+
+### Walk-forward results (D-7 fold structure, pre-registered parameters D-9)
+
+| Metric | Value |
+|---|---|
+| OOS trades (5 folds) | 975 (~4.4/day; signal frequency is healthy) |
+| Win rate | 43.2% |
+| Avg win | +3.24 |
+| Avg loss | -0.24 |
+| Realized R:R | 1.293 |
+| Pre-registered theoretical R:R | 1.500 |
+| Break-even R:R at 43.2% win rate | 1.315 |
+| Mean net P&L per trade | -/usr/bin/bash.10 |
+| Total OOS net P&L | -7.74 |
+| Exit breakdown | SL=550 (56.4%), TP=412 (42.3%), Timeout=13 (1.3%) |
+
+Per-fold: -4.88 / +6.46 / -37.07 / +24.68 / -16.93  
+Inconsistent across folds; no temporal pattern of improvement.
+
+### Root cause (G3 finding)
+
+Win rate (43.2%) is above the theoretical break-even for 1.5:1 R:R (40%). The strategy would be
+profitable IF it achieved the pre-registered R:R. It does not.
+
+The realized R:R is 1.293, not 1.500. Root cause: the strategy computes SL and TP from the signal
+bar''s close price. The actual entry is at the NEXT bar''s open. In mean reversion, price often
+continues its move one bar further before reversing — so the next-bar open is frequently worse
+than the signal close. This widens the SL distance and narrows the TP distance, reducing the
+realized price R:R from 1.500 to a mean of 1.420. After spread costs the P&L R:R is 1.293.
+
+Break-even gap: 1.293 realized vs. 1.315 required = 0.022 shortfall. Structurally
+negative across all pairs for which this implementation applies.
+
+### Permutation test
+
+Not run — with a negative mean P&L, the permutation test would only confirm p >> 0.010. A
+permutation test cannot rescue a negative-expectation result. Skipped per owner decision
+(2026-10-18).
+
+### What this means for the protocol
+
+- H2 is CLOSED NEGATIVE for EUR/USD. Governs this pair at default parameters.
+- The same R:R slippage affects GBP/USD, AUD/USD, and (with conversion caveat) USD/CHF — running
+  those pairs without addressing the root cause would be uninformative repetition.
+- The R:R issue IS fixable: rebasing SL/TP from the actual entry price (next-bar open estimate)
+  rather than the signal close would restore the theoretical R:R. That fix requires a new
+  pre-registration entry (protocol amendment) before any re-run.
+- H5 (1h benchmark) is unaffected by this finding — it uses a different runner (fx_fold_runner.py)
+  designed for the 1h DCA strategy and does not share this implementation.
+
+### What is NOT authorised
+
+- Citing this as a positive result under any reframing
+- Running the same parameters on other pairs without addressing the root cause
+- Any holdout access
+
+---
+
+## INTRADAY FX PROTOCOL — D-9 AMENDMENT: H2 SIMULATION FIX (REBASE SL/TP FROM ENTRY PRICE)
+
+**Date:** 2026-10-18  
+**Amendment type:** Simulation-layer correction — does not change MeanReversionStrategy defaults  
+**Pre-registration scope:** H2 re-run (MR, 15m, EUR/USD) with corrected entry-price rebasing
+
+### Justification
+
+H2 NEGATIVE root cause (documented above): `MeanReversionStrategy` computes SL and TP from
+the signal bar's close. The simulation enters at the NEXT bar's open. The gap between
+signal-close and entry-open is frequently adverse in mean reversion (price continues one bar
+before reversing), which widens SL distance and narrows TP distance. Realized R:R = 1.293 vs.
+pre-registered 1.500. The pre-registered R:R of 1.5 was never achievable with the original
+simulation because the simulation measured R:R from the wrong anchor.
+
+This is a simulation-layer arithmetic error, not a strategy failure. The fix is:
+compute SL distance from `signal["sl"]` vs. `signal["entry"]` (the strategy's own ATR ×
+multiplier), then rebase that distance from the actual `entry_price` (next-bar open ± spread).
+
+### What changes in the runner (bot/fx_intraday_runner.py)
+
+**Before:**
+```python
+sl = float(signal["sl"])   # strategy-computed level relative to signal close
+tp = float(signal["tp"])   # strategy-computed level relative to signal close
+```
+
+**After:**
+```python
+sl_distance = abs(float(signal["entry"]) - float(signal["sl"]))  # ATR x multiplier
+# BUY: entry_price - sl_distance / TP: entry_price + sl_distance * rr_ratio
+# SELL: entry_price + sl_distance / TP: entry_price - sl_distance * rr_ratio
+```
+
+`RR_RATIO = 1.5` is added as a named constant (already in D-9 as `rr_ratio`).
+`signal["entry"]` is confirmed in the fixed-key contract (CLAUDE.md) and is the
+signal-bar close — the strategy's own anchor for its SL/TP computation.
+
+### What does NOT change
+
+- All D-9 registered strategy parameters are unchanged (rsi_oversold, rsi_overbought,
+  atr_multiplier, bb_width_max, min_candles, rr_ratio, spread, risk_pct, max_hold)
+- MeanReversionStrategy itself is not modified (the strategy is correct; the simulation's
+  anchoring was wrong)
+- D-7 fold structure (5 folds, IS/OOS/embargo) is unchanged
+- D-4 Bonferroni alpha (0.010) is unchanged
+- This amendment applies only to the simulation runner, not to live execution
+
+### What is authorised
+
+- One re-run of H2 (MR, 15m, EUR/USD) with this rebasing fix applied
+- The result replaces the H2 NEGATIVE entry above as the current H2 verdict
+- If the re-run is also NEGATIVE, no further H2 parameter or logic changes are permitted
+  without a new owner decision and a fully documented amendment entry
+
+### What is NOT authorised
+
+- Any change to strategy parameters to improve the result
+- Retroactively running other pairs before H2-amended result is logged
+- Any holdout access
+
+---
+
+## H2 AMENDED: MeanReversionStrategy · 15m · EUR/USD — NEGATIVE (re-run after D-9 amendment)
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — H2 not significant after SL/TP rebasing fix. H2 is CLOSED NEGATIVE.
+
+### Context
+
+Re-run with the D-9 amendment (above): SL/TP rebased from actual entry price instead of
+signal-bar close. All D-9 strategy parameters unchanged. Fold structure unchanged (D-7).
+
+### Walk-forward results
+
+| Metric | Original H2 | H2 Amended (this run) |
+|---|---|---|
+| OOS trades (5 folds) | 975 | 994 |
+| Win rate | 43.2% | 41.1% |
+| Mean net P&L per trade | -$0.10 | -$0.25 |
+| Total OOS net P&L | -$97.74 | -$251.37 |
+| SL exits | 550 (56.4%) | 582 (58.6%) |
+| TP exits | 412 (42.3%) | 399 (40.1%) |
+| Timeout exits | 13 (1.3%) | 13 (1.3%) |
+
+Per-fold: -$81.20 / +$24.91 / -$165.98 / +$100.84 / -$129.95
+
+### Why the amended run is worse, not better
+
+The SL was rebased up by `half_spread` (0.000025 per unit) relative to the original.
+This made the SL marginally easier to hit: SL-exit fraction rose from 56.4% → 58.6%.
+Win rate fell from 43.2% → 41.1% — barely above the 40% theoretical break-even for 1.5:1 R:R,
+but below it once spread costs erode the realized R:R below 1.5.
+
+The rebasing correctly maintains the 1.5:1 R:R ratio at the price level, but the strategy
+fundamentally cannot generate wins at a rate high enough to be profitable after spread.
+This is a win-rate problem, not a simulation-anchoring problem.
+
+### Final interpretation
+
+Both simulation approaches (signal-anchored and entry-anchored) produce negative expectancy.
+The failure mode is structural: at 41–43% win rate and 1.5:1 R:R, this strategy is marginally
+sub-break-even before spread and clearly sub-break-even after spread.
+
+### Governance actions
+
+- **H2 is CLOSED NEGATIVE.** No further re-runs or parameter adjustments are authorised
+  without a new owner decision and fully documented amendment entry.
+- The same win-rate problem governs GBP/USD, AUD/USD, USD/CHF — running those pairs in
+  either simulation mode would be uninformative.
+- Permutation test: not run. Negative mean P&L — permutation test would only confirm
+  p >> 0.010.
+
+### What is NOT authorised
+
+- Any further H2 parameter changes or re-runs without a new owner decision
+- Running H2 on other pairs with current parameters
+- Any holdout access
+- Citing H2 results as evidence of edge
+
+---
+
+## INTRADAY FX PROTOCOL — H5 PRE-REGISTRATION: MR · 1h · EUR/USD
+
+**Date:** 2026-10-18  
+**Hypothesis:** H5 — MeanReversionStrategy, 1h timeframe, EUR/USD  
+**Registration date:** 2026-10-18 (before any 1h data is processed by the strategy in this run)
+
+### H5 fold structure (1h equivalent of D-7)
+
+Data: `data/forex/EUR_USD_1h.csv` — 33,781 bars, 2021-05-02 to 2026-10-02.
+
+Same real-time IS/OOS/embargo durations as D-7 (88/44/1 trading days), scaled to 1h bars:
+
+| Parameter | Value | Derivation |
+|---|---|---|
+| Folds | 5 | 5 × 3,192 = 15,960 < 33,781 — fits |
+| IS window | 2,112 bars (88 trading days) | 88 × 24 h |
+| OOS window | 1,056 bars (44 trading days) | 44 × 24 h; IS:OOS = 2:1 |
+| Embargo | 24 bars (1 trading day) | 24 × 1 h |
+| Total per fold | 3,192 bars | |
+
+IS:OOS ratio (2:1) and fold count (5) identical to D-7. Strictest defensible choice: no
+inflation of fold count even though 10 folds would fit. Same real-time test duration, same
+IS:OOS ratio — this is the directly comparable benchmark to H2.
+
+### H5 strategy parameters (MeanReversionStrategy defaults, unchanged from D-9)
+
+| Parameter | Value |
+|---|---|
+| rsi_oversold | 35 |
+| rsi_overbought | 65 |
+| atr_multiplier | 1.0 |
+| bb_width_max | 6.0% |
+| min_candles | 50 |
+| rr_ratio | 1.5 |
+| Regime gate | RANGING only |
+| Max holding | 8 bars (8h at 1h) |
+| Spread | 0.5 pips round-trip |
+| Position sizing | PositionSizer(risk_pct=0.01) |
+| Initial balance | $1,000 |
+| SL/TP simulation | Entry-price rebasing (D-9 amendment, applied by default) |
+
+`MAX_HOLD_BARS=8` preserves the same real-time 8h holding limit as D-9's 32 bars at 15m.
+
+### What is NOT authorised
+
+- Parameter changes after viewing H5 results
+- Extending H5 to other pairs without a new governance entry
+- Any holdout access
+- Citing H5 results as evidence of edge unless p < 0.010 (D-4 Bonferroni)
+
+---
+
+## H5: MeanReversionStrategy · 1h · EUR/USD — NEGATIVE
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — H5 not significant. No edge evidence.
+
+### Walk-forward results (H5 fold structure, pre-registered parameters)
+
+| Metric | Value |
+|---|---|
+| OOS trades (5 folds) | 367 (~73/fold; ~0.8/day) |
+| Win rate | 43.1% |
+| Mean net P&L per trade | -$0.18 |
+| Total OOS net P&L | -$67.37 |
+| SL exits | 181 (49.3%) |
+| TP exits | 107 (29.2%) |
+| Timeout exits | 79 (21.5%) |
+
+Per-fold: -$27.67 / +$162.54 / +$36.95 / -$69.48 / -$169.71  
+OOS periods: 2021-09 to 2021-11 / 2022-03 to 2022-05 / 2022-09 to 2022-11 / 2023-03 to 2023-05 / 2023-09 to 2023-11
+
+### Key observation: 21.5% timeout rate
+
+At 1h with MAX_HOLD_BARS=8 (8h), 79/367 trades timed out at close price. This is 16× the
+timeout rate of H2/H2-amended (~1.3%). At 1h, mean-reversion signals require more than 8h
+to resolve cleanly, so trades that are neither stopped out nor hitting TP within 8h exit at
+whatever the close happens to be.
+
+This distorts the P&L: timeout exits can be small wins, small losses, or large losses if the
+trade was moving against us. The 21.5% timeout rate means the realized R:R distribution is
+materially different from the 1.5:1 theoretical R:R — a non-trivial fraction of exits are at
+random prices, not at SL or TP.
+
+Permutation test: not run. Negative mean P&L.
+
+### Interpretation
+
+Folds 1, 4, 5 negative; folds 2, 3 positive. No temporal pattern of improvement — fold 5
+(Sep–Nov 2023) is the worst at -$2.18/trade and 33.3% win rate. No evidence of edge.
+
+The 1h timeframe may be fundamentally poorly matched to the MR strategy's pre-registered
+parameters: signal frequency drops to ~0.8/day (vs. ~4.4/day at 15m), and the 8h max-hold
+is too tight for signals that take longer to resolve at hourly resolution.
+
+### What this means for the protocol
+
+- H5 CLOSED NEGATIVE.
+- H1 (MR, 5m, EUR/USD): exploratory only; 180d of 5m data is insufficient for 5-fold walk-forward.
+- H3/H4 (pullback family, 5m/15m): blocked on D-5 implementation.
+- The full D-4 family (H1–H5) has now been exhausted for MR at its pre-registered defaults.
+  All MR hypotheses with current strategy parameters are closed.
+
+### What is NOT authorised
+
+- Any further H5 parameter changes or re-runs without a new owner decision
+- Citing H5 results as evidence of edge
+- Any holdout access
+
+---
+
+## INTRADAY FX PROTOCOL — D-5: PULLBACK STRATEGY PRE-REGISTRATION (H3/H4)
+
+**Date:** 2026-10-18  
+**Decision:** D-5 — pullback family implementation and parameter registration  
+**Hypotheses covered:** H3 (pullback 5m) and H4 (pullback 15m)
+
+### Strategy design rationale
+
+MeanReversionStrategy fires on RANGING regime. The pullback family addresses TRENDING_UP/DOWN
+regimes: enter on a retracement to a key moving average level within a confirmed trend, then
+catch the resumption. This is structurally different from MovingAverageStrategy (which enters
+on EMA crossover without waiting for a retracement).
+
+### Signal logic (PullbackStrategy)
+
+**For BUY (TRENDING_UP regime):**
+1. EMA20 > EMA50 — confirms uptrend structure at two timescales
+2. At least one of the last `pullback_lookback` bars had its close at or below EMA20 — the pullback actually reached the EMA level
+3. Current bar close > EMA20 — price reclaimed above EMA20 (trend resuming)
+4. Confirmation: current close > previous close (momentum direction matches trend)
+5. RSI between `rsi_min` and `rsi_max` — not oversold (would indicate reversal) and not overbought (avoids buying at the top after the pullback)
+6. SL = entry - ATR × atr_multiplier; TP = entry + SL_distance × rr_ratio
+
+**For SELL (TRENDING_DOWN regime):** exact mirror.
+
+**Regime gate:** TRENDING_UP → BUY only; TRENDING_DOWN → SELL only.  
+**No signal on RANGING or HIGH_VOLATILITY.**
+
+### Pre-registered parameters (H3 and H4, same defaults)
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| fast_ema_period | 20 | Standard pullback anchor; consistent with MR's BB period |
+| slow_ema_period | 50 | Trend direction filter |
+| atr_period | 14 | Standard ATR; same as MR |
+| atr_multiplier | 1.5 | Wider than MR (1.0); trending trades need room for noise |
+| rr_ratio | 2.0 | Higher R:R target for momentum trades |
+| pullback_lookback | 5 | 5-bar lookback window for EMA touch |
+| rsi_min | 35 | Lower bound: avoids entries where price is already reversing |
+| rsi_max | 65 | Upper bound: avoids buying at overbought top of pullback |
+| min_candles | 50 | Warmup; same as MR |
+| Spread | 0.5 pips round-trip | Same as H2/H5 |
+| Position sizing | PositionSizer(risk_pct=0.01) | Same as H2/H5 |
+| Initial balance | $1,000 | Same as H2/H5 |
+| SL/TP simulation | Entry-price rebasing (D-9 amendment) | Applied by default in runner |
+
+### Fold structures
+
+**H4 (15m):** Same as D-7 — IS=5,973, OOS=2,986, embargo=67, 5 folds, 49,415 bars available.  
+**H3 (5m):** Exploratory only — 180d of 5m data insufficient for 5-fold walk-forward.
+The H3 run on 5m will be treated as a feasibility/directional check, not a formal hypothesis
+test. H3 result will not be counted against the D-4 Bonferroni family.
+
+### What is NOT authorised
+
+- Parameter changes after viewing any H3 or H4 results
+- Running on other pairs before EUR/USD H4 result is logged
+- Any holdout access
+
+---
+
+## H4: PullbackStrategy · 15m · EUR/USD — NEGATIVE (structural incompatibility)
+
+**Date:** 2026-10-18  
+**Verdict:** NEGATIVE — 0 OOS trades generated; strategy structurally incompatible with pair/timeframe regime.  
+**Command:** `python bot/fx_intraday_runner.py --pair EUR/USD --interval 15m --strategy pullback --no-permtest --save`
+
+### Run parameters (as pre-registered under D-5)
+
+| Parameter | Value |
+|---|---|
+| fast_ema_period | 20 |
+| slow_ema_period | 50 |
+| atr_multiplier | 1.5 |
+| rr_ratio | 2.0 |
+| pullback_lookback | 5 |
+| rsi_min / rsi_max | 35 / 65 |
+| Spread | 0.5 pips round-trip |
+| Fold structure | IS=5,973, OOS=2,986, embargo=67, 5 folds |
+| Total bars | 49,415 (2024-10-18 to 2026-10-16, dev window) |
+
+### Result
+
+| Fold | OOS dates | Trades |
+|---|---|---|
+| 1 | 2025-01-17 → 2025-03-03 | 0 |
+| 2 | 2025-05-29 → 2025-07-14 | 0 |
+| 3 | 2025-10-09 → 2025-11-21 | 0 |
+| 4 | 2026-02-20 → 2026-04-06 | 0 |
+| 5 | 2026-07-02 → 2026-08-14 | 0 |
+| **Total** | — | **0** |
+
+### Root cause: regime incompatibility
+
+EUR/USD 15m is classified by RegimeDetector as RANGING 95.4% of the time and HIGH_VOLATILITY
+4.6% of the time. TRENDING_DOWN appeared in 0.02% of bars (1/5,000 sampled); TRENDING_UP in 0%.
+
+PullbackStrategy only fires on TRENDING_UP or TRENDING_DOWN. With near-zero TRENDING bars, the
+strategy has no opportunity to generate signals, regardless of parameter tuning.
+
+This is not a "strategy underperformed" result — it is a structural mismatch between the
+strategy's regime requirements and the pair/timeframe's actual regime distribution under the
+current RegimeDetector thresholds (ADX ≥ 25, EMA spread, ATR ratio, BB width). The RegimeDetector
+was calibrated on crypto data where percentage moves are much larger; EUR/USD 15m pips-level moves
+produce near-zero EMA spread (consistently ~0.01%) which always falls below the TRENDING threshold.
+
+### Implications
+
+- H4 is closed. Zero trades is a valid (negative) result — no evidence of edge was possible.
+- The D-4 Bonferroni family is now exhausted: H1 exploratory, H2 NEGATIVE, H3 exploratory,
+  H4 NEGATIVE (0 trades), H5 NEGATIVE. No hypothesis produced development-period evidence of edge.
+- A future hypothesis testing PullbackStrategy would require either:
+  (a) A different pair/timeframe with confirmed TRENDING regime prevalence, OR
+  (b) A regime detector calibrated for FX percentage scales.
+  Neither can be attempted until a new D-5/D-4 decision is pre-registered.
+- H3 (5m, exploratory) may still be run as a directional feasibility check, but
+  results will not count in the D-4 Bonferroni family regardless.
+
+### H4 CLOSED NEGATIVE.
+
+
+---
+
+## QC-2 Pre-Registration: EUR/CAD Nomination
+**Date:** 2026-10-19  
+**Protocol ID:** QC-FX-2-EURCAD-2026-10-19  
+**Document:** `QC2_PRE_REGISTRATION_2026-10-19.md`  
+**SHA-256:** `7454b53e586609f45c75c438c5454cedccc5f263e139881bdc701604fbf92e1a`
+
+EUR/CAD nominated as QC-2 replacement for dropped AUD/CAD. Candidate selected
+on regime data only (RANGING, ADX 17.3, ECB/BoC, no GBP/JPY overlap).
+
+**Sealed criterion:** `total_pnl_usdt > 0` AND `total_trades ≥ 15` over
+holdout window 2026-10-19 → 2027-01-17 (minimum 90 days). Historical data
+is descriptive only per CRRP-2026-10-02.
+
+**EUR/CAD added to QC_PORTFOLIO_SPECS** (replaces AUD/CAD). CSV already in
+MT5 universe; `refresh_forex_data` will append candles hourly.

@@ -128,3 +128,36 @@ class ReasonCodeDeterminismTest(SimpleTestCase):
     def test_policy_version_is_stamped(self):
         h = evaluate_pair_health("A/B", 1.0, 1.0, True)
         self.assertTrue(h.policy_version)
+
+
+class HealthBaselineSourceTest(SimpleTestCase):   # claude code changed: F-17 — drift must be measured against the canonical seed
+    def _session(self, seed_ok, beta0=None):
+        from types import SimpleNamespace
+        seed = SimpleNamespace(beta0=beta0) if beta0 is not None else None
+        return SimpleNamespace(seed_ok=seed_ok, seed=seed, pair_config=SimpleNamespace(hedge_ratio=1.625))
+
+    def test_validated_canonical_seed_is_the_baseline(self):
+        from bot.core.pairs_bot_runner import _health_baseline_beta
+        self.assertEqual(_health_baseline_beta(self._session(True, beta0=0.802)), (0.802, "CANONICAL_SEED"))
+
+    def test_legacy_ols_used_only_without_a_validated_seed_and_labelled(self):
+        from bot.core.pairs_bot_runner import _health_baseline_beta
+        self.assertEqual(_health_baseline_beta(self._session(False, beta0=0.802)), (1.625, "LEGACY_OLS_HEDGE_RATIO"))
+        self.assertEqual(_health_baseline_beta(self._session(True, beta0=None)), (1.625, "LEGACY_OLS_HEDGE_RATIO"))
+
+    def test_baseline_choice_changes_the_verdict(self):
+        # Same live beta: a sign reversal vs the legacy OLS (+1.625 → −0.307, the real MINA/ONG case)
+        # is not a reversal vs a canonical seed of −0.25. The baseline matters, so it must be canonical.
+        from bot.core.pairs_bot_runner import _health_baseline_beta
+        legacy = evaluate_pair_health("P", _health_baseline_beta(self._session(False))[0], -0.307, True)
+        canon = evaluate_pair_health("P", _health_baseline_beta(self._session(True, beta0=-0.25))[0], -0.307, True)
+        self.assertTrue(legacy.beta_sign_reversed)
+        self.assertFalse(canon.beta_sign_reversed)
+
+    def test_never_raises_on_a_seed_without_a_numeric_beta(self):   # claude code changed: F-17 — runs mid entry path; must not raise
+        from types import SimpleNamespace
+        from unittest import mock
+        from bot.core.pairs_bot_runner import _health_baseline_beta
+        for seed in (mock.Mock(data_version="d" * 64), SimpleNamespace(beta0=float("nan")), SimpleNamespace(beta0=None)):
+            s = SimpleNamespace(seed_ok=True, seed=seed, pair_config=SimpleNamespace(hedge_ratio=1.625))
+            self.assertEqual(_health_baseline_beta(s), (1.625, "LEGACY_OLS_HEDGE_RATIO"))

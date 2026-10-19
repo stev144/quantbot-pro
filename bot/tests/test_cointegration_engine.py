@@ -280,7 +280,7 @@ class OutOfSamplePersistenceTest(SimpleTestCase):
     cointegration_engine.py's fixed TRAINING_WINDOW never proved the
     relationship persists: empirically, 76 of 84 pairs (90.5%) that passed
     the old training-window-only ADF test failed a second ADF test on the
-    untouched out-of-sample holdout using the SAME frozen hedge ratio — a
+    post-training pseudo-holdout (already exposed, not untouched — F-19) using the SAME frozen hedge ratio — a
     genuine, permanent structural break in most cases, not noise. These
     tests build synthetic series where the true generating process is
     known and controlled, so the pass/fail outcome can be asserted exactly

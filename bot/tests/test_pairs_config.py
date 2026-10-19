@@ -15,7 +15,7 @@ from bot.pairs.config import (
     PAIR_NAMES,
     ENTRY_ELIGIBLE_PAIR_NAMES,
     TOTAL_PILOT_CAPITAL_USDT,
-    PER_PAIR_CAPITAL_USDT,
+    STRATEGY_CAPITAL_USDT,   # claude code changed: Stage 2D Rev B step 8 — was PER_PAIR_CAPITAL_USDT
     load_pair_configs,
 )
 
@@ -52,7 +52,7 @@ class LoadPairConfigsTest(SimpleTestCase):
             self.assertTrue(cfg.passes_filters)
             self.assertIsNotNone(cfg.validated_win_rate)
             self.assertGreater(cfg.validated_win_rate, 0.0)
-            self.assertAlmostEqual(cfg.capital_usdt, PER_PAIR_CAPITAL_USDT)
+            self.assertAlmostEqual(cfg.capital_usdt, STRATEGY_CAPITAL_USDT)   # claude code changed: Stage 2D Rev B step 8 — strategy capital C, not a per-pair split
 
     def test_non_eligible_pairs_get_zero_capital_and_no_win_rate(self):
         non_eligible = set(PAIR_NAMES) - set(ENTRY_ELIGIBLE_PAIR_NAMES)
@@ -72,9 +72,18 @@ class LoadPairConfigsTest(SimpleTestCase):
             self.assertIsInstance(cfg.hedge_ratio, float)
             self.assertNotEqual(cfg.hedge_ratio, 0.0)
 
-    def test_capital_allocation_sums_to_total_pilot_capital(self):
-        allocated = sum(c.capital_usdt for c in self.configs)
-        self.assertAlmostEqual(allocated, TOTAL_PILOT_CAPITAL_USDT, places=2)
+    # claude code changed: Stage 2D Rev B step 8 — was "per-pair capital buckets
+    # sum to the total"; under fixed-fraction sizing every eligible pair sizes
+    # T = f·C off the shared strategy capital, so the invariant is a bound on
+    # gross deployment instead.
+    def test_fixed_fraction_gross_deployment_within_strategy_capital(self):
+        from bot.quant_core.protocol import CANONICAL
+        eligible = [c for c in self.configs if c.is_entry_eligible]
+        self.assertEqual(STRATEGY_CAPITAL_USDT, TOTAL_PILOT_CAPITAL_USDT)
+        gross = sum(CANONICAL.pair_allocation_fraction * c.capital_usdt for c in eligible)
+        self.assertLessEqual(gross, TOTAL_PILOT_CAPITAL_USDT)
+        for c in eligible:
+            self.assertGreaterEqual(CANONICAL.pair_allocation_fraction * c.capital_usdt, 15.0)   # clears MIN_POSITION_USDT_OVERRIDE
 
     def test_reject_reason_present_for_pairs_that_fail_filters(self):
         for cfg in self.configs:

@@ -75,9 +75,13 @@ def run_cointegration_test(asset_a: str, asset_b: str) -> dict:
             "fdr_note": "not evaluated — rejected before the cointegration test could run",
         }
 
-    engine = CointegrationEngine(timeframe=timeframe_a or "1h")
-    result = engine._test_pair(asset_a, asset_b, price_a, price_b)
-    output = result.to_dict()
+    # claude code changed: 2026-10-04 (D-8 + D-3) — was engine._test_pair() on the WHOLE history (first-N training
+    # window + persistence on the rest, i.e. it read zone V and later). Exploration may use zone S only, so the
+    # same single-pair test now runs on zone-S candles only, with seed eligibility recorded. Never claimable.
+    from bot.research.cointegration_engine import pair_test_in_selection_zone
+    output = pair_test_in_selection_zone(asset_a, asset_b, df_a["close"], df_b["close"], timeframe=timeframe_a or "1h")
+    if output["status"] == "UNTESTABLE":
+        output["reject_reason"] = f"insufficient zone-S data — {output['reject_reason']}"   # → INSUFFICIENT_DATA, never REJECTED
     # claude code changed: FDR correction for this field is only ever
     # computed across a whole tested universe by run_all() — a single-pair
     # call has no cross-pair family to correct against, so these stay
@@ -171,10 +175,32 @@ def run_kalman_pairs_test(
     # raw input, it does its own log conversion — only this seed test gets
     # a separately log-transformed copy, matching _test_pair()'s real
     # contract.
-    coint_engine = CointegrationEngine(timeframe=timeframe_a or "1h")
-    log_price_a = np.log(price_a.clip(lower=MIN_PRICE))
-    log_price_b = np.log(price_b.clip(lower=MIN_PRICE))
-    coint_result = coint_engine._test_pair(asset_a, asset_b, log_price_a, log_price_b)
+    # claude code changed: 2026-10-04 (step 3, D-8 + Stage 2D C6) — was a whole-history OLS seed
+    # (CointegrationEngine._test_pair on every candle, first-N training window) fed to run_on_prices(): the
+    # legacy look-ahead seed (F-03). Now: (1) the pair evidence is the ZONE-S selection test; (2) the Kalman
+    # state comes from run_canonical() — causal seed at the S start, θ₀ from the L = 1000 candles before it;
+    # (3) the data stop at the END OF ZONE S, so this exploration tool never reads zone V or the sealed holdout.
+    from bot.quant_core.protocol import CANONICAL
+    from bot.quant_core.research_zones import ZONES
+    from bot.research.cointegration_engine import pair_test_in_selection_zone
+    sel = pair_test_in_selection_zone(asset_a, asset_b, price_a, price_b, timeframe=timeframe_a or "1h")
+    evidence = {
+        "selection_basis": sel["selection_basis"], "zone_s": sel["zone_s"], "zones_hash": sel["zones_hash"],
+        "zone_s_coint_pvalue": sel.get("coint_pvalue"), "zone_s_half_life_candles": sel.get("half_life_candles"),
+        "zone_s_is_cointegrated": sel.get("is_cointegrated"), "zone_s_passes_filters": sel.get("passes_filters"),
+        "seed_eligible": sel["seed_eligible"], "seed_reason": sel["seed_reason"],
+    }
+    if sel["status"] == "BLOCKED":   # claude code changed: 2026-10-04 asset-agnostic — market profile incomplete (FX_CALENDAR_UNAVAILABLE): not tested
+        return {
+            "asset_a": asset_a, "asset_b": asset_b, "observation": None, "statistical_evidence": evidence,
+            "verdict": "REQUIRES_REVIEW", "reject_reason": sel["reject_reason"],
+        }
+    if sel["status"] != "OK" or not sel["seed_eligible"]:
+        return {
+            "asset_a": asset_a, "asset_b": asset_b, "observation": None, "statistical_evidence": evidence,
+            "verdict": "INSUFFICIENT_DATA",
+            "reject_reason": sel.get("reject_reason") if sel["status"] != "OK" else sel["seed_reason"],
+        }
 
     kalman_kwargs = {}   # claude code changed: only pass noise overrides the caller actually supplied — let KalmanFilterEngine's own constructor defaults apply otherwise
     if process_noise_beta is not None:
@@ -185,67 +211,56 @@ def run_kalman_pairs_test(
         kalman_kwargs["observation_noise"] = observation_noise
 
     kalman_engine = KalmanFilterEngine(
-        symbol_a=asset_a, symbol_b=asset_b,
-        ols_beta=coint_result.hedge_ratio, ols_alpha=coint_result.intercept,
-        half_life_h=coint_result.half_life,
+        pair_name=f"{asset_a}/{asset_b}", symbol_a=asset_a, symbol_b=asset_b,
+        ols_beta=1.0, ols_alpha=0.0,   # NOT used for θ₀ by run_canonical (causal_init only)
         **kalman_kwargs,
     )
-    kalman_df = kalman_engine.run_on_prices(price_a, price_b)
+    s_end = ZONES.S1
+    from bot.quant_core.market_profile import OwnerDecisionMissing   # claude code changed: 2026-10-06
+    try:
+        kalman_df = kalman_engine.run_canonical(price_a[price_a.index <= s_end], price_b[price_b.index <= s_end])
+    except OwnerDecisionMissing as e:   # e.g. FX: selection rules decided, canonical market rules not yet
+        return {
+            "asset_a": asset_a, "asset_b": asset_b, "observation": None, "statistical_evidence": evidence,
+            "verdict": "REQUIRES_REVIEW", "reject_reason": str(e),
+        }
+    seed = kalman_engine.seed_record
+    protocol = kalman_engine.canonical_protocol
 
     post_warmup = kalman_df.loc[~kalman_df["is_warmup"]]
     if post_warmup.empty:
         return {
-            "asset_a": asset_a, "asset_b": asset_b,
-            "observation": None,
-            "statistical_evidence": {
-                "seed_adf_pvalue": coint_result.adf_pvalue,
-                "seed_coint_pvalue": coint_result.coint_pvalue,
-                "seed_half_life_hours": coint_result.half_life,
-                "seed_is_cointegrated": coint_result.is_cointegrated,
-            },
+            "asset_a": asset_a, "asset_b": asset_b, "observation": None, "statistical_evidence": evidence,
             "verdict": "INCONCLUSIVE",
-            "reject_reason": f"insufficient candles after warmup ({len(kalman_df)} total, warmup={kalman_engine.warmup}) — cannot report a trusted dynamic estimate",
+            "reject_reason": f"no post-warmup canonical state inside zone S ({len(kalman_df)} candles after the seed)",
         }
 
-    latest = post_warmup.iloc[-1]   # claude code changed: leakage-free — kalman_beta_pred/kalman_alpha_pred, the pre-update state, is what a spread computed AT this candle must use (see _calculate_dynamic_spread)
+    latest = post_warmup.iloc[-1]   # leakage-free: the pre-update state is what a spread at this candle uses
+    zone_ok = bool(sel.get("is_cointegrated")) and bool(sel.get("passes_filters"))
     return {
         "asset_a": asset_a, "asset_b": asset_b,
-        # claude code changed: OBSERVATION — measured, not evaluated for significance
         "observation": {
+            "as_of": post_warmup.index[-1].isoformat(),          # end of zone S, never later
             "dynamic_hedge_ratio": float(latest["kalman_beta_pred"]),
             "dynamic_intercept": float(latest["kalman_alpha_pred"]),
-            "dynamic_spread": float(latest["kalman_spread"]),
-            "dynamic_zscore": float(latest["kalman_zscore"]) if pd.notna(latest.get("kalman_zscore")) else None,
-            "n_candles": len(kalman_df),
-            "n_post_warmup_candles": len(post_warmup),
-            "warmup_candles": kalman_engine.warmup,
+            "beta_uncertainty": float(latest["beta_uncertainty"]),
+            "seed_beta": float(seed.beta0), "seed_timestamp": seed.seed_timestamp,
+            "beta_drift_from_canonical_seed": float(latest["kalman_beta_pred"]) - float(seed.beta0),
         },
-        # claude code changed: STATISTICAL EVIDENCE — from the fresh cointegration
-        # seed test; Kalman itself doesn't run a second significance test —
-        # its evidence IS the seed's, refined by a dynamic (not static) hedge ratio.
-        "statistical_evidence": {
-            "seed_adf_pvalue": coint_result.adf_pvalue,
-            "seed_coint_pvalue": coint_result.coint_pvalue,
-            "seed_half_life_hours": coint_result.half_life,
-            "seed_is_cointegrated": coint_result.is_cointegrated,
-            "seed_ols_hedge_ratio": coint_result.hedge_ratio,
-            "beta_drift_from_ols_seed": float(latest["kalman_beta_pred"]) - coint_result.hedge_ratio,
-        },
-        # claude code changed: VERDICT — a deterministic function of the statistical
-        # evidence above, never an AI judgment call (Phase 1D, Objective 12).
-        "verdict": "SUPPORTED" if (coint_result.is_cointegrated and coint_result.passes_filters) else (
-            "REJECTED" if not coint_result.is_cointegrated else "INCONCLUSIVE"
-        ),
+        "statistical_evidence": evidence,
+        "verdict": "OBSERVATION" if zone_ok else ("REJECTED" if sel.get("is_cointegrated") is False else "INCONCLUSIVE"),   # D-7 ladder cap
         "config": {
             "process_noise_beta": kalman_engine.qb,
             "process_noise_alpha": kalman_engine.qa,
             "observation_noise": kalman_engine.R,
             "warmup_candles": kalman_engine.warmup,
+            "protocol_hash": protocol.config_hash(),
+            "canonical_defaults": protocol.config_hash() == CANONICAL.config_hash(),
         },
-        "warnings": (
-            ["seed pair did not pass cointegration_engine.py's own half-life filter — dynamic estimate is not backed by a validated pair relationship"]
-            if coint_result.is_cointegrated and not coint_result.passes_filters else []
-        ),
+        "warnings": (["noise overrides change the protocol hash — this run is NOT on canonical protocol values"]
+                     if protocol.config_hash() != CANONICAL.config_hash() else [])
+                    + (["zone-S pair did not pass the engine's half-life/persistence filters"]
+                       if sel.get("is_cointegrated") and not sel.get("passes_filters") else []),
     }
 
 

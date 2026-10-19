@@ -1,0 +1,291 @@
+{% extends 'base.html' %}
+{% load static %}
+{# claude code changed: ranging gate removed — now unrestricted QC-1 paper trader #}
+
+{% block head %}
+<script src="{% static 'js/counters.js' %}"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<style>
+.pt-gate-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:4px; }
+.pt-gate {
+    display:flex; align-items:center; gap:6px;
+    padding:6px 12px; border-radius:4px;
+    border:1px solid var(--border-0,rgba(255,255,255,.08));
+    font-size:11px; font-family:monospace;
+}
+.pt-gate-label { font-weight:700; font-size:10px; letter-spacing:.6px; color:var(--text-dim,#636c76); }
+.pt-gate-pass  { border-color:var(--term-pos,#3fb87f); color:var(--term-pos,#3fb87f); }
+
+.pt-pair-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(480px, 1fr));
+    gap:16px; margin-bottom:16px;
+}
+@media(max-width:600px){ .pt-pair-grid{ grid-template-columns:1fr; } }
+
+.pt-stats-card { padding:10px; border-radius:4px; border:1px solid rgba(63,184,127,.3); margin-bottom:10px; }
+.pt-stats-title { font-size:9px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-dim,#636c76); margin-bottom:4px; }
+.pt-stats-pnl   { font-size:22px; font-weight:700; }
+
+.pt-chart-row { margin-bottom:10px; }
+.pt-chart-label {
+    display:flex; justify-content:space-between; align-items:center;
+    font-size:10px; color:var(--text-dim,#636c76); margin-bottom:3px;
+}
+.pt-chart-label span.leg { display:inline-flex; align-items:center; gap:4px; }
+.pt-chart-box { height:200px; }
+
+.regime-badge-sm { display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:.4px;font-family:monospace; }
+.regime-RANGING       { background:rgba(63,184,127,.15);color:var(--term-pos,#3fb87f); }
+.regime-TRENDING      { background:rgba(91,141,201,.15);color:var(--accent,#5b8dc9); }
+.regime-HIGH_VOLATILITY{ background:rgba(232,168,56,.15);color:var(--term-warn,#e8a838); }
+
+.pt-badge-validated   { display:inline-block;padding:2px 8px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(63,184,127,.12);color:var(--term-pos,#3fb87f);border:1px solid rgba(63,184,127,.3); }
+.pt-badge-exploratory { display:inline-block;padding:2px 8px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(232,168,56,.08);color:var(--term-warn,#e8a838);border:1px solid rgba(232,168,56,.2); }
+
+.ranging-bar-wrap { height:5px;border-radius:3px;background:var(--border-0,rgba(255,255,255,.08));overflow:hidden;margin-top:4px; }
+.ranging-bar-fill { height:100%;border-radius:3px;background:var(--term-pos,#3fb87f); }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="paper_trading" %}
+
+<div class="term-body">
+
+{# ── header ──────────────────────────────────────────────────────────────── #}
+<div class="term-section-head" style="margin-bottom:14px">
+    <div>
+        <span class="term-section-title">QC-1 Paper Trader</span>
+        <span class="term-section-meta" style="margin-left:10px">unrestricted DCA · 5 QC pairs · exploratory</span>
+    </div>
+    <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span class="badge dim">LONG · ${{ entry_usdt|default:"100" }} margin · 1:{{ leverage|default:"30" }} · ${{ entry_notional|default:"3000" }} notional/entry</span>
+        {% if total_max_margin %}<span class="badge dim">max margin ${{ total_max_margin }} (5 pairs full ladder)</span>{% endif %}
+    </span>
+</div>
+
+{# ── governance gates ─────────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Governance gates</span>
+        <span class="term-section-meta">all PASS — simulation only, no live orders</span>
+    </div>
+    <div class="term-section-body">
+        <div class="pt-gate-row">
+            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G1 · Software</span>IS_PAPER_ONLY=True · clean package · deferred imports</div>
+            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G2 · Math</span>verbatim QC-1 fill / exit / commission / swap formulas · no new formula</div>
+            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G3 · Stats</span>causal indicators only · no look-ahead · ADX/ATR shown for market context only</div>
+            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G4 · Quant-real</span>spread from ForexInstrumentSpec · ${{ entry_usdt|default:"100" }} margin × 1:{{ leverage|default:"30" }} = ${{ entry_notional|default:"3000" }} notional · 72h exit</div>
+            <div class="pt-gate pt-gate-pass"><span class="pt-gate-label">G5 · Governance</span>exploratory · ranging gate removed after evidence showed it hurt the validated pair · no live signal</div>
+        </div>
+    </div>
+</div>
+
+{% if error %}
+<div class="term-section" style="border-color:var(--term-neg,#d9534f);margin-bottom:16px">
+    <div class="term-section-body"><span class="neg mono" style="font-size:12px">{{ error }}</span></div>
+</div>
+{% endif %}
+
+{# ── per-pair cards ───────────────────────────────────────────────────────── #}
+<div class="pt-pair-grid">
+{% for pair, r in results.items %}
+{% if not r.error %}
+{% with slug=pair|cut:"/"|lower %}
+<div class="term-section">
+    <div class="term-section-head">
+        <span class="term-section-title">
+            {{ pair }}&nbsp;
+            {% if r.validated %}<span class="pt-badge-validated">VALIDATED</span>
+            {% else %}<span class="pt-badge-exploratory">EXPLORATORY</span>{% endif %}
+        </span>
+        <span style="display:flex;gap:6px;align-items:center">
+            <span class="regime-badge-sm regime-{{ r.current_regime }}">{{ r.current_regime|lower }}</span>
+            {% if r.current_adx %}<span class="badge dim" style="font-size:10px">ADX {{ r.current_adx }}</span>{% endif %}
+        </span>
+    </div>
+    <div class="term-section-body">
+
+        {# ranging % bar — context only, not used to gate trades #}
+        <div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim,#636c76);margin-bottom:3px">
+                <span>RANGING candles (context only — not gating trades)</span>
+                <span class="pos">{{ r.ranging_pct }}%</span>
+            </div>
+            <div class="ranging-bar-wrap"><div class="ranging-bar-fill" style="width:{{ r.ranging_pct }}%"></div></div>
+        </div>
+
+        {# capital row #}
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:10px;color:var(--text-dim,#636c76);font-family:monospace">
+            <span>${{ r.entry_usdt|default:"100" }} margin × 1:{{ r.leverage|default:"30" }} = ${{ r.entry_notional|default:"3000" }} notional/entry</span>
+            {% if r.max_margin %}<span>max margin ${{ r.max_margin }} · max notional ${{ r.max_notional }}</span>{% endif %}
+        </div>
+
+        {# single stats card #}
+        <div class="pt-stats-card">
+            <div class="pt-stats-title">QC-1 unrestricted · all regimes</div>
+            <div class="pt-stats-pnl {% if r.stats.total_pnl >= 0 %}pos{% else %}neg{% endif %}">
+                $<span class="stat-number" data-target="{{ r.stats.total_pnl }}" data-decimals="2">0.00</span>
+            </div>
+            <div style="font-size:11px;margin-top:4px;color:var(--text-dim,#636c76)">
+                <span class="stat-number" data-target="{{ r.stats.total_trades }}" data-decimals="0">0</span> trades ·
+                <span class="stat-number" data-target="{{ r.stats.win_pct }}" data-decimals="1" data-suffix="%">0%</span> win ·
+                avg <span class="stat-number" data-target="{{ r.stats.avg_fills }}" data-decimals="1" data-suffix=" fills">0</span>
+            </div>
+            <div style="font-size:11px;margin-top:2px;color:var(--text-dim,#636c76)">
+                maxDD $<span class="stat-number" data-target="{{ r.stats.max_dd }}" data-decimals="2">0.00</span>
+            </div>
+        </div>
+
+        {# chart 1: DCA ladder fill depth #}
+        <div class="pt-chart-row">
+            <div class="pt-chart-label">
+                <span>DCA ladder fill depth</span>
+                <span class="leg"><span style="color:var(--accent,#5b8dc9)">▬</span> cycles per fill level</span>
+            </div>
+            <div class="pt-chart-box"><canvas id="fill_{{ slug }}"></canvas></div>
+        </div>
+
+        {# chart 2: equity curve #}
+        <div class="pt-chart-row">
+            <div class="pt-chart-label">
+                <span>Cumulative P&amp;L</span>
+                <span class="leg" style="color:var(--positive,#3fb87f)">▬ QC-1 unrestricted</span>
+            </div>
+            <div class="pt-chart-box"><canvas id="eq_{{ slug }}"></canvas></div>
+        </div>
+
+        {# chart 3: drawdown curve #}
+        <div class="pt-chart-row" style="margin-bottom:0">
+            <div class="pt-chart-label">
+                <span>Drawdown</span>
+                <span class="leg" style="color:var(--negative,#e0564c)">▬ from peak</span>
+            </div>
+            <div class="pt-chart-box"><canvas id="dd_{{ slug }}"></canvas></div>
+        </div>
+
+    </div>
+</div>
+{% endwith %}
+{% endif %}
+{% endfor %}
+</div>
+
+{# ── caveats ──────────────────────────────────────────────────────────────── #}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Caveats</span>
+        <span class="term-section-meta">exploratory · no deployment signal</span>
+    </div>
+    <div class="term-section-body" style="font-size:12px;line-height:1.7;color:var(--text-dim,#636c76)">
+        <p><strong style="color:var(--text-0,#e6edf3)">Ranging gate removed:</strong>
+        Evidence showed the gate hurt GBP/JPY (the only validated pair) by over $13,000 on a $100 margin entry at 1:30 leverage.
+        The DCA ladder edge exists across all regimes, not just ranging candles.
+        The ranging % bar remains visible as market context only.</p>
+        <p><strong style="color:var(--text-0,#e6edf3)">Governance:</strong>
+        All results are exploratory — GBP/JPY holdout consumed 2026-10-18.
+        P&amp;L at ${{ entry_usdt|default:"100" }} margin × 1:{{ leverage|default:"30" }} = ${{ entry_notional|default:"3000" }} notional/entry.
+        No live deployment signal. Account currency: USD.</p>
+    </div>
+</div>
+
+</div>{# /term-body #}
+
+<script>
+// ── QC-1 Paper Trader charts — single series per pair (gate removed)  # claude code changed
+var PAIRS_DATA = {{ pairs_json|safe }};
+
+function waitForChartJs(fn) {
+    if (typeof Chart !== 'undefined') { fn(); return; }
+    var t = setInterval(function() { if (typeof Chart !== 'undefined') { clearInterval(t); fn(); } }, 50);
+}
+
+var _ptCharts = {};
+function destroySafe(id) {
+    if (_ptCharts[id]) { try { _ptCharts[id].destroy(); } catch(e){} _ptCharts[id] = null; }
+}
+
+function renderPTCharts() {
+    var posColor    = themeColor('--positive');
+    var negColor    = themeColor('--negative');
+    var accentColor = themeColor('--accent');
+    var borderColor = themeColor('--border') || 'rgba(255,255,255,0.08)';
+    var textDim     = themeColor('--text-dim') || '#636c76';
+
+    var baseScaleOpts = {
+        x: { grid: { color: borderColor }, ticks: { color: textDim, font: { size: 9 } } },
+        y: { grid: { color: borderColor }, ticks: { color: textDim, font: { size: 9 } } },
+    };
+
+    Object.keys(PAIRS_DATA).forEach(function(pair) {
+        var d    = PAIRS_DATA[pair];
+        var slug = pair.replace('/', '').toLowerCase();
+
+        // 1. Fill depth bar
+        var fillId = 'fill_' + slug;
+        destroySafe(fillId);
+        var fillCtx = document.getElementById(fillId);
+        if (fillCtx && d.fill_dist) {
+            var maxFill = d.ladder_depth || 7;
+            var labels = [], counts = [];
+            for (var lv = 1; lv <= maxFill; lv++) {
+                labels.push(lv === 1 ? '1 (entry only)' : lv + ' fills');
+                counts.push(d.fill_dist[String(lv)] || 0);
+            }
+            _ptCharts[fillId] = new Chart(fillCtx, {
+                type: 'bar',
+                data: { labels: labels, datasets: [{ data: counts,
+                    backgroundColor: chartAreaFill(accentColor), borderColor: accentColor,
+                    borderWidth: 1, borderRadius: 2 }] },
+                options: { responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false },
+                        tooltip: { callbacks: { label: function(ctx){ return ctx.parsed.y + ' cycles'; } } } },
+                    scales: Object.assign({}, baseScaleOpts, {
+                        x: Object.assign({}, baseScaleOpts.x, { ticks: { color: textDim, font: { size: 8 } } }),
+                        y: Object.assign({}, baseScaleOpts.y, { beginAtZero: true,
+                            ticks: { color: textDim, font: { size: 9 }, precision: 0 } }) }) },
+            });
+        }
+
+        // 2. Equity curve — single series
+        var eqId = 'eq_' + slug;
+        destroySafe(eqId);
+        var eqCtx = document.getElementById(eqId);
+        if (eqCtx) {
+            var eqData = (d.equity || []).map(function(t, i){ return { x: i+1, y: t.p }; });
+            _ptCharts[eqId] = new Chart(eqCtx, {
+                type: 'line',
+                data: { datasets: [{ label: 'QC-1', data: eqData,
+                    borderColor: posColor, backgroundColor: chartAreaFill(posColor),
+                    fill: true, borderWidth: 1.8, pointRadius: 0, tension: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }, scales: baseScaleOpts },
+            });
+        }
+
+        // 3. Drawdown curve — single series
+        var ddId = 'dd_' + slug;
+        destroySafe(ddId);
+        var ddCtx = document.getElementById(ddId);
+        if (ddCtx) {
+            var ddData = (d.drawdown || []).map(function(t, i){ return { x: i+1, y: t.p }; });
+            _ptCharts[ddId] = new Chart(ddCtx, {
+                type: 'line',
+                data: { datasets: [{ label: 'Drawdown', data: ddData,
+                    borderColor: negColor, backgroundColor: chartAreaFill(negColor),
+                    fill: true, borderWidth: 1.5, pointRadius: 0, tension: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }, scales: baseScaleOpts },
+            });
+        }
+    });
+}
+
+waitForChartJs(function() {
+    renderPTCharts();
+    onThemeChange(renderPTCharts);
+});
+</script>
+{% endblock %}

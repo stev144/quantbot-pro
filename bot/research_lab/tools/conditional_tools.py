@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import numpy as np
+from bot.quant_core.inference import CONFIRMATORY_B, d10_block_length   # claude code changed: D-3/D-10
 from scipy import stats as scipy_stats
 
 from bot.instruments import candles_per_calendar_day  # claude code changed: new — Phase 1B hardening (Rule 3)
@@ -37,7 +38,7 @@ from bot.research_lab.tools._data import load_ohlcv
 from bot.research_lab.tools.base import register_tool
 
 MIN_CONDITION_SAMPLE = 30  # claude code changed: below this, a "difference in means" isn't a trustworthy result — same floor philosophy as feature_validator.py's own MIN_OBS-style guards
-BLOCK_PERMUTATION_N = 100  # claude code changed: matches permutation_test_engine.py's own DEFAULT_N_PERMUTATIONS — smallest achievable p-value is 1/(N+1)
+BLOCK_PERMUTATION_N = CONFIRMATORY_B  # claude code changed: owner decision D-3 — B = 999 (was 100). Previous note: claude code changed: matches permutation_test_engine.py's own DEFAULT_N_PERMUTATIONS — smallest achievable p-value is 1/(N+1)
 BLOCK_SIZE_CANDLES = 24  # claude code changed: one day of 1h candles — short enough to preserve statistical power, long enough to respect short-range autocorrelation, same reasoning as this codebase's other block-permutation tools
 
 # claude code changed: new — Statistical Integrity Hardening. Above this
@@ -204,7 +205,7 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
     # applied regardless of the data's actual timeframe. round() to the
     # nearest whole candle; a fractional day-in-candles isn't meaningful
     # as a block boundary.
-    block_size = round(candles_per_calendar_day(timeframe))
+    block_size = d10_block_length(horizon)   # claude code changed: owner decision D-10 — block = max(4·h, 24) candles (was one calendar day of candles)
     block_p = _block_permutation_pvalue(condition_mask, forward_returns, observed_diff, seed=random_seed, block_size_candles=block_size)
 
     # claude code changed: new — Statistical Integrity Hardening (gap #5).
@@ -219,8 +220,16 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
     # one family, real family-wide correction would replace this — out of
     # scope for this MVP, where every conditional experiment is its own
     # hypothesis family of size 1.
-    fdr_adjusted_p_value = block_p
-    passes_fdr = block_p < 0.05
+    # claude code changed: 2026-10-03, remediation F-11 — the line above was
+    # `fdr_adjusted_p_value = block_p`. BH over m=1 is arithmetically the
+    # identity, but labelling the result "FDR-adjusted" asserted a
+    # multiplicity control that does not exist: the real family is every
+    # condition / threshold / asset / horizon researchers try, and no family is
+    # registered. The raw p stays in block_permutation_p_value; the adjusted
+    # value is NOT APPLIED and says why.
+    fdr_adjusted_p_value = None
+    passes_fdr = None
+    family_correction = "NOT_APPLIED_NO_REGISTERED_FAMILY"
 
     n_episodes_true = _count_episodes(condition_mask)
     episode_ratio = (n_true / n_episodes_true) if n_episodes_true > 0 else float("nan")
@@ -240,7 +249,8 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
         "mannwhitney_p_value": float(mannwhitney_p),
         "block_permutation_p_value": block_p,
         "fdr_adjusted_p_value": fdr_adjusted_p_value,  # claude code changed: new — gap #5
-        "passes_fdr": passes_fdr,  # claude code changed: new — gap #5
+        "passes_fdr": passes_fdr,  # claude code changed: new — gap #5; 2026-10-03 F-11: None = not evaluated (no registered family)
+        "family_correction": family_correction,  # claude code changed: 2026-10-03 F-11
         "sample_size": n_true + n_false,
         "n_condition_episodes": n_episodes_true,  # claude code changed: new — gap #6, contiguous-run count, not raw candle count
         "episode_ratio": episode_ratio,  # claude code changed: new — gap #6, candles-per-episode; large values flag overlapping/clustered events

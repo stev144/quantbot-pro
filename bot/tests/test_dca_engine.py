@@ -9,6 +9,8 @@
 # calculated and trusted.
 # ============================================================
 
+from dataclasses import replace
+
 import pandas as pd
 from django.test import SimpleTestCase
 
@@ -22,6 +24,15 @@ from bot.research.dca_engine import (
     simulate_dca_cycles,
     summarize_dca_cycles,
 )
+
+
+# claude code changed: Post-audit Phase 2 — these cases feed CLOSE-ONLY series,
+# so they exercise the ladder/exit MECHANICS under the pre-2026-10-02 clock,
+# now an explicit, labelled fill model (LEGACY_CLOSE). The canonical clock
+# (NEXT_OPEN / INTRABAR_LADDER, which need OHLC) is covered by
+# bot/tests/test_dca_phase2.py. Expected values here are unchanged.
+LEGACY = "LEGACY_CLOSE"
+LEGACY_BASELINE = replace(BASELINE_CONFIG, fill_model=LEGACY)
 
 
 def _candles(prices, start="2024-01-01", freq="1h"):
@@ -73,7 +84,7 @@ class TheoreticalLadderMathTest(SimpleTestCase):
     def test_custom_config_scales_correctly(self):
         # A completely different ladder shape must still compute
         # correctly — proves the math isn't hardcoded to the baseline.
-        config = DCAConfig(initial_usdt=10.0, levels=(DCALevel(0.10, 1.0), DCALevel(0.10, 1.0)))
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=10.0, levels=(DCALevel(0.10, 1.0), DCALevel(0.10, 1.0)))
         result = compute_theoretical_ladder(config)
         self.assertEqual(result["total_deployment"], 30.0)  # 10 + 10 + 10
         self.assertEqual(result["investments"], [10.0, 10.0, 10.0])
@@ -82,7 +93,7 @@ class TheoreticalLadderMathTest(SimpleTestCase):
         # The regression test for the bug itself: theoretical and
         # simulated cost basis must agree exactly on the same fill
         # sequence, or one of the two formulas is wrong again.
-        config = DCAConfig(initial_usdt=6.0, levels=BASELINE_LEVELS, fee_rate=0.0, slippage_rate=0.0)
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=BASELINE_LEVELS, fee_rate=0.0, slippage_rate=0.0)
         theoretical = compute_theoretical_ladder(config)
         toy_investments = theoretical["investments"]
         toy_prices = theoretical["price_path_pct"]
@@ -98,7 +109,7 @@ class WeightedAverageSimulationTest(SimpleTestCase):
     (zero fees/slippage isolates the pure averaging math)."""
 
     def test_full_ladder_fill_matches_theoretical_weighted_average(self):
-        config = DCAConfig(
+        config = DCAConfig(fill_model=LEGACY, 
             initial_usdt=6.0, levels=BASELINE_LEVELS,
             profit_activation_pct=1.0,  # never triggers — isolates the fill/averaging logic
             fee_rate=0.0, slippage_rate=0.0,
@@ -112,7 +123,7 @@ class WeightedAverageSimulationTest(SimpleTestCase):
         # computed from these SAME nudged drops (not the clean baseline
         # figures), so the comparison stays exact.
         nudged_levels = tuple(DCALevel(lvl.drop_pct + 0.0005, lvl.multiplier) for lvl in BASELINE_LEVELS)
-        nudged_config = DCAConfig(initial_usdt=6.0, levels=nudged_levels, fee_rate=0.0, slippage_rate=0.0)
+        nudged_config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=nudged_levels, fee_rate=0.0, slippage_rate=0.0)
         theoretical = compute_theoretical_ladder(nudged_config)
 
         prices = list(theoretical["price_path_pct"]) + [theoretical["price_path_pct"][-1]] * 5
@@ -132,7 +143,7 @@ class ExitLogicTest(SimpleTestCase):
     """Profit activation + trailing exit, in isolation."""
 
     def test_exits_after_activation_and_trail_breach(self):
-        config = DCAConfig(initial_usdt=6.0, levels=(), profit_activation_pct=0.025, trailing_pct=0.005,
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), profit_activation_pct=0.025, trailing_pct=0.005,
                             fee_rate=0.0, slippage_rate=0.0)
         # Entry at 100. Rises to 103 (activates, +3% > 2.5%), peaks at 105,
         # then falls to 104.4 (0.5% below the 105 peak) -> should exit.
@@ -147,7 +158,7 @@ class ExitLogicTest(SimpleTestCase):
         self.assertGreater(first["profit"], 0)
 
     def test_never_activates_without_reaching_threshold(self):
-        config = DCAConfig(initial_usdt=6.0, levels=(), profit_activation_pct=0.025, trailing_pct=0.005,
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), profit_activation_pct=0.025, trailing_pct=0.005,
                             fee_rate=0.0, slippage_rate=0.0)
         # Rises to only +1% — never activates — cycle stays open to data end.
         prices = [100, 100.5, 101, 100.8, 100.9]
@@ -164,7 +175,7 @@ class UnresolvedCyclesAreNeverDroppedTest(SimpleTestCase):
 
     def test_still_open_cycle_appears_in_output(self):
         prices = [100, 99, 98, 97]  # drifts down, never exits, never DCAs (no levels configured)
-        config = DCAConfig(initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
         df = _candles(prices)
         trades = simulate_dca_cycles(df, config)
 
@@ -173,7 +184,7 @@ class UnresolvedCyclesAreNeverDroppedTest(SimpleTestCase):
 
     def test_summary_counts_unresolved_separately_from_resolved(self):
         prices = [100, 99, 98, 97]
-        config = DCAConfig(initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
         trades = simulate_dca_cycles(_candles(prices), config)
         summary = summarize_dca_cycles(trades, config)
 
@@ -187,7 +198,7 @@ class UnresolvedCyclesAreNeverDroppedTest(SimpleTestCase):
         # into the unresolved_reasons sub-dict -- these are economically
         # different events ("the dataset ended" vs. "our own research
         # rule force-closed it") and must be separate headline fields.
-        config = DCAConfig(initial_usdt=6.0, levels=(), max_cycle_candles=3,
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), max_cycle_candles=3,
                             fee_rate=0.0, slippage_rate=0.0)
         # Never activates (stays flat). Held for exactly 3 candles ->
         # timeout-closed on the last candle -> a fresh cycle immediately
@@ -216,7 +227,7 @@ class LadderExhaustionBugRegressionTest(SimpleTestCase):
     def test_exhaustion_measured_against_configured_levels_not_observed_max(self):
         # A 2-level ladder, but the price path only ever triggers level 1 --
         # level 2 (the true, configured max) is never reached by any cycle.
-        config = DCAConfig(initial_usdt=6.0, levels=(DCALevel(0.05, 2.0), DCALevel(0.50, 4.0)),
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(DCALevel(0.05, 2.0), DCALevel(0.50, 4.0)),
                             profit_activation_pct=0.20, fee_rate=0.0, slippage_rate=0.0)
         # Falls 6% (triggers level 1, needs a 50% further fall for level 2 -- never happens),
         # then recovers +20% to exit. Repeats.
@@ -242,7 +253,7 @@ class HoldingCandlesBugRegressionTest(SimpleTestCase):
     elapsed between entry and exit."""
 
     def test_holding_candles_is_real_elapsed_candles_not_fill_count(self):
-        config = DCAConfig(initial_usdt=6.0, levels=(), profit_activation_pct=0.025,
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), profit_activation_pct=0.025,
                             trailing_pct=0.005, fee_rate=0.0, slippage_rate=0.0)
         # Only 1 fill (the initial entry, level 0 -- never DCAs, no levels
         # configured), but the cycle stays open for 5 candles before exiting.
@@ -263,7 +274,7 @@ class CatastrophicCrashTest(SimpleTestCase):
         # Monotonic 80% decline over 200 candles, no bounces at all.
         prices = [100 * (0.99 ** i) for i in range(200)]  # ~86% decline
         df = _candles(prices)
-        trades = simulate_dca_cycles(df, BASELINE_CONFIG)
+        trades = simulate_dca_cycles(df, LEGACY_BASELINE)
 
         self.assertEqual(len(trades), 1)
         trade = trades[0]
@@ -276,7 +287,7 @@ class CatastrophicCrashTest(SimpleTestCase):
         # However adversarial the price path, deployment is capped by the
         # ladder's own level count — this must hold structurally, not by luck.
         prices = [100 * (0.98 ** i) for i in range(500)]
-        trades = simulate_dca_cycles(_candles(prices), BASELINE_CONFIG)
+        trades = simulate_dca_cycles(_candles(prices), LEGACY_BASELINE)
         theoretical_max = compute_theoretical_ladder(BASELINE_CONFIG)["total_deployment"]
         for t in trades:
             self.assertLessEqual(t["cycle_max_capital_deployed"], theoretical_max)
@@ -289,8 +300,8 @@ class FeesAndSlippageTest(SimpleTestCase):
 
     def test_costed_run_has_lower_profit_than_zero_cost_run(self):
         prices = [100, 101, 103, 105, 104.4, 104, 103.9]
-        zero_cost_config = DCAConfig(initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
-        real_cost_config = DCAConfig(initial_usdt=6.0, levels=(), fee_rate=0.001, slippage_rate=0.0005)
+        zero_cost_config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), fee_rate=0.0, slippage_rate=0.0)
+        real_cost_config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, levels=(), fee_rate=0.001, slippage_rate=0.0005)
 
         zero_cost_trades = simulate_dca_cycles(_candles(prices), zero_cost_config)
         real_cost_trades = simulate_dca_cycles(_candles(prices), real_cost_config)
@@ -306,7 +317,7 @@ class RunStrategyFnContractTest(SimpleTestCase):
     otherwise — see its own docstring)."""
 
     def test_every_trade_has_entry_and_exit_time(self):
-        run_fn = make_run_strategy_fn(BASELINE_CONFIG)
+        run_fn = make_run_strategy_fn(LEGACY_BASELINE)
         prices = [100, 95, 88, 105, 106, 105.4]
         trades = run_fn(_candles(prices), {})
         for t in trades:
@@ -314,7 +325,7 @@ class RunStrategyFnContractTest(SimpleTestCase):
             self.assertIsNotNone(t["exit_time"])
 
     def test_ignores_fitted_params_without_error(self):
-        run_fn = make_run_strategy_fn(BASELINE_CONFIG)
+        run_fn = make_run_strategy_fn(LEGACY_BASELINE)
         prices = [100, 101, 103, 105, 104.4]
         # Passing an arbitrary, unrelated fitted_params dict must not break anything —
         # this baseline has no data-fitted parameters (matches MeanReversionStrategy's shape).
@@ -331,10 +342,10 @@ class ShortDirectionTest(SimpleTestCase):
 
     def test_invalid_direction_raises(self):
         with self.assertRaises(ValueError):
-            DCAConfig(direction="SIDEWAYS")
+            DCAConfig(fill_model=LEGACY, direction="SIDEWAYS")
 
     def test_dca_triggers_on_price_rise_not_drop(self):
-        config = DCAConfig(initial_usdt=6.0, direction="SHORT", levels=(DCALevel(0.05, 2.0),),
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, direction="SHORT", levels=(DCALevel(0.05, 2.0),),
                             profit_activation_pct=1.0, fee_rate=0.0, slippage_rate=0.0)
         # Price DROPS 10% — must NOT trigger a SHORT's DCA level (that's the LONG condition).
         trades = simulate_dca_cycles(_candles([100, 90, 90, 90, 90]), config)
@@ -345,7 +356,7 @@ class ShortDirectionTest(SimpleTestCase):
         self.assertEqual(trades[0]["cycle_n_fills"], 2)
 
     def test_short_profits_when_price_falls_below_cost_basis(self):
-        config = DCAConfig(initial_usdt=6.0, direction="SHORT", levels=(),
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, direction="SHORT", levels=(),
                             profit_activation_pct=0.025, trailing_pct=0.005, fee_rate=0.0, slippage_rate=0.0)
         # Entry at 100 (short). Falls to 97 (+3% short profit > 2.5% activation),
         # troughs at 96, bounces to 96.5 (0.5% above the 96 trough) -> exit.
@@ -360,7 +371,7 @@ class ShortDirectionTest(SimpleTestCase):
         # Mirror of a LONG loss: a SHORT that never gets its favorable
         # (falling) move and is forced closed at a higher price than entry
         # must show a real, negative profit — not silently clipped to zero.
-        config = DCAConfig(initial_usdt=6.0, direction="SHORT", levels=(), max_cycle_candles=3,
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, direction="SHORT", levels=(), max_cycle_candles=3,
                             profit_activation_pct=0.025, trailing_pct=0.005, fee_rate=0.0, slippage_rate=0.0)
         prices = [100, 105, 110, 115, 115]
         trades = simulate_dca_cycles(_candles(prices), config)
@@ -372,7 +383,7 @@ class ShortDirectionTest(SimpleTestCase):
         # adverse direction), so the weighted-average cost basis must rise
         # above the initial entry price — the mirror of LONG's basis
         # falling below its initial entry.
-        config = DCAConfig(initial_usdt=6.0, direction="SHORT", levels=BASELINE_LEVELS,
+        config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, direction="SHORT", levels=BASELINE_LEVELS,
                             profit_activation_pct=1.0, fee_rate=0.0, slippage_rate=0.0)
         prices = [100, 105.1, 112.5, 123.9, 142.5, 163.9, 182.2] + [182.2] * 5
         trades = simulate_dca_cycles(_candles(prices), config)
@@ -384,9 +395,9 @@ class ShortDirectionTest(SimpleTestCase):
         # mirrored (rising-then-falling) path should produce the same
         # magnitude of profit — proves the two directions are true
         # mirror images, not independently-drifted implementations.
-        long_config = DCAConfig(initial_usdt=6.0, direction="LONG", levels=(),
+        long_config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, direction="LONG", levels=(),
                                  profit_activation_pct=0.025, trailing_pct=0.005, fee_rate=0.0, slippage_rate=0.0)
-        short_config = DCAConfig(initial_usdt=6.0, direction="SHORT", levels=(),
+        short_config = DCAConfig(fill_model=LEGACY, initial_usdt=6.0, direction="SHORT", levels=(),
                                   profit_activation_pct=0.025, trailing_pct=0.005, fee_rate=0.0, slippage_rate=0.0)
 
         long_prices = [100, 99, 97, 96, 96.5, 105, 105]                    # falls then rises

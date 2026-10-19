@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+{% comment %}
+   claude code changed: new template — 2026-10-07 Decision Journal UI: list of recorded backtest runs
+   (bot.journal.models.JournalRun), read-only. Data: bot/views/decision_journal_data.py::get_runs().
+{% endcomment %}
+
+{% include "partials/_topbar.html" with active="decision_journal" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Decision Journal</span>
+            <span class="term-section-meta">source: journal database (canonical) — {{ n_runs }} recorded run{{ n_runs|pluralize }}</span>
+        </div>
+        <div class="term-section-body">
+            {% include "partials/_journal_banner.html" %}
+            {% if runs %}
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>Run</th><th>Status</th><th>Symbol</th><th>Environment</th><th class="num">Decisions</th><th class="num">Candles</th><th>Started (UTC)</th><th>Code</th></tr></thead>
+                    <tbody>
+                        {% for r in runs %}
+                        <tr>
+                            <td class="label-cell mono"><a href="{% url 'decision_journal_run' r.run_id %}">{{ r.run_id }}</a></td>
+                            <td><span class="badge {{ r.badge }}">{{ r.status }}</span>{% if r.incomplete_reasons %} <span class="text-dim mono" style="font-size:11px">{{ r.incomplete_reasons|join:", " }}</span>{% endif %}</td>
+                            <td>{{ r.symbol }} <span class="badge dim">{{ r.venue|upper }}</span></td>
+                            <td><span class="badge dim">{{ r.environment }}</span> <span class="text-dim mono" style="font-size:11px">{{ r.execution_mode }}</span></td>
+                            <td class="num">{{ r.n_decisions }}</td>
+                            <td class="num">{{ r.coverage.n_candles|default:"—" }}</td>
+                            <td class="text-dim mono">{{ r.started_at|date:"Y-m-d H:i" }}</td>
+                            <td class="text-dim mono" style="font-size:11px">{{ r.code_commit|slice:":10"|default:"no git" }}{% if r.code_dirty %} +dirty{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="unavailable">
+                No recorded runs yet. The recorder is off by default; record one with<br>
+                <span class="mono">python manage.py record_journal_backtest --symbol BTC_USDT --candles 2000</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "partials/_footer.html" with label="Decision Journal" note="what the backtester evaluated — descriptive" %}
+{% endblock %}

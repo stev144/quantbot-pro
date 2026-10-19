@@ -26,6 +26,7 @@
         </div>
         <div class="term-section-body">
             {% if strategy_comparison.leaderboard.available %}
+            {% include "partials/_evidence_banner.html" with ev=strategy_comparison.leaderboard.evidence %}{# claude code changed: Post-CRRP Task 4 #}
             <div class="term-table-wrap" style="margin-bottom:16px">
                 <table class="term-table">
                     <thead><tr><th>Pair</th><th class="num">OOS Trades</th><th class="num">OOS Win %</th><th class="num">OOS Sharpe</th><th class="num">OOS Profit Factor</th><th class="num">WF Efficiency</th><th>Verdict</th></tr></thead>
@@ -38,7 +39,7 @@
                             <td class="num stat-number {% if r.oos_sharpe > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.oos_sharpe }}" data-decimals="2">0</td>
                             <td class="num stat-number" data-target="{{ r.oos_profit_factor }}" data-decimals="2">0</td>
                             <td class="num stat-number" data-target="{{ r.walk_forward_efficiency }}" data-decimals="3">0</td>
-                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                            <td>{% if strategy_comparison.leaderboard.evidence.is_current_evidence %}<span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span>{% else %}<span class="text-dim mono" style="font-size:11px">legacy: {{ r.verdict }}</span>{% endif %}</td>{# claude code changed: Post-CRRP Task 4 #}
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -49,7 +50,7 @@
             {% endif %}
 
             {% if strategy_comparison.strategy_summaries %}
-            <div class="metric-label" style="margin-bottom:6px">Full-Period Strategy Summaries</div>
+            <div class="metric-label" style="margin-bottom:6px">Full-Period Strategy Summaries {% include "partials/_evidence_badge.html" with ev=strategy_comparison.summaries_evidence %}</div>{# claude code changed: Post-CRRP Task 4 #}
             <div class="term-table-wrap">
                 <table class="term-table">
                     <thead><tr><th>Pair</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">Profit Factor</th><th class="num">Sharpe</th><th class="num">Entry IC</th><th class="num">Entry IC p-value</th></tr></thead>
@@ -80,7 +81,8 @@
         </div>
         <div class="term-section-body">
             {% if robustness.available %}
-            <div class="chart-caption" style="margin-bottom:10px">The strictest test in the pipeline: the real (unshuffled) result must beat {{ robustness.n_shuffles_per_pair }} randomized re-simulations on win rate, Sharpe, and profit factor, AND show a meaningfully positive entry IC. This is the test that overrides an earlier PROMISING walk-forward pass if the edge doesn't hold up here.</div>
+            {% include "partials/_evidence_banner.html" with ev=robustness.evidence %}{# claude code changed: Post-CRRP Task 4 #}
+            <div class="chart-caption" style="margin-bottom:10px">{% if not robustness.evidence.is_current_evidence %}<strong>Historical description of the legacy test (not current evidence):</strong> {% endif %}The strictest test in the pipeline: the real (unshuffled) result must beat {{ robustness.n_shuffles_per_pair }} randomized re-simulations on win rate, Sharpe, and profit factor, AND show a meaningfully positive entry IC. This is the test that overrides an earlier PROMISING walk-forward pass if the edge doesn't hold up here.</div>
             <div class="term-table-wrap">
                 <table class="term-table">
                     <thead><tr><th>Pair</th><th class="num">Real Win %</th><th class="num">Win % Percentile</th><th class="num">Real Sharpe</th><th class="num">Sharpe Percentile</th><th class="num">Entry IC</th><th>IC Meaningfully +</th><th>Edge Appears Real</th><th>Verdict</th></tr></thead>
@@ -93,9 +95,9 @@
                             <td class="num stat-number" data-target="{{ r.sharpe_ratio }}" data-decimals="2">0</td>
                             <td class="num stat-number {% if r.sharpe_ratio_percentile <= 5 %}neg{% endif %}" data-target="{{ r.sharpe_ratio_percentile }}" data-decimals="1">0</td>
                             <td class="num stat-number {% if r.entry_ic > 0 %}pos{% else %}neg{% endif %}" data-target="{{ r.entry_ic }}" data-decimals="4">0</td>
-                            <td>{% if r.real_entry_ic_meaningfully_positive %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
-                            <td>{% if r.edge_appears_real %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}</td>
-                            <td><span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span></td>
+                            <td>{% if robustness.evidence.is_current_evidence %}{% if r.real_entry_ic_meaningfully_positive %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}{% else %}<span class="text-dim mono" style="font-size:11px">legacy: {{ r.real_entry_ic_meaningfully_positive|yesno:"yes,no" }}</span>{% endif %}</td>{# claude code changed: Post-CRRP Task 4 — spread-label IC (C-02) is never a green YES #}
+                            <td>{% if robustness.evidence.is_current_evidence %}{% if r.edge_appears_real %}<span class="badge pos">YES</span>{% else %}<span class="badge neg">NO</span>{% endif %}{% else %}<span class="text-dim mono" style="font-size:11px">legacy: {{ r.edge_appears_real|yesno:"yes,no" }}</span>{% endif %}</td>{# claude code changed: Post-CRRP Task 4 — a C-03 'edge appears real' is never a green YES #}
+                            <td>{% if robustness.evidence.is_current_evidence %}<span class="badge {{ r.verdict|verdict_class }}">{{ r.verdict }}</span>{% else %}<span class="text-dim mono" style="font-size:11px">legacy: {{ r.verdict }}</span>{% endif %}</td>{# claude code changed: Post-CRRP Task 4 #}
                         </tr>
                         {% endfor %}
                     </tbody>

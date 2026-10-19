@@ -128,7 +128,10 @@ class EngineBooksSpecificationPnLTest(SimpleTestCase):
         engine2, t2, summary2 = self._run(
             engine_kwargs={"borrow_rate_hourly_a": 0.0001, "borrow_rate_hourly_b": 0.0001},
             zscores=(-2.2, -4.0), spreads=(-0.01, -0.05, -0.05), close_a=(10.0, 11.0, 11.0), close_b=(20.0, 21.0, 21.0))
-        self.assertTrue(bool(summary2["borrow_cost_modeled"]))
+        # claude code changed: owner decision (borrow row) — a constant rate is still CHARGED, but it is an assumption,
+        # not a recorded financing source: the run is BORROW_RATE_ASSUMED and not cost-complete (never CANONICAL).
+        self.assertFalse(bool(summary2["borrow_cost_modeled"]))
+        self.assertEqual(summary2["borrow_status"], "BORROW_RATE_ASSUMED")
         self.assertGreater(t2["borrow_usdt"], 0.0)
 
 

@@ -14,7 +14,10 @@
 # Crypto ~100 symbols: several minutes) by nature of testing a real
 # research pipeline end to end, not a design flaw.
 
+import glob
 import os
+import shutil
+import tempfile
 
 from django.test import SimpleTestCase
 
@@ -26,7 +29,27 @@ def _tmp_verdict_path(name):
     return os.path.join(os.environ.get("TEMP", "/tmp"), f"test_stage3_verdict_{name}.json")
 
 
+def _real_research_outputs():   # claude code changed: 2026-10-05 — {path: (mtime, size)} of the REAL research outputs these runs used to overwrite
+    paths = glob.glob(os.path.join("research_data", "*_cross_section.csv")) + \
+            glob.glob(os.path.join("research_data", "forex", "*_cross_section.csv"))
+    return {p: (os.path.getmtime(p), os.path.getsize(p)) for p in paths}
+
+
 class AssetClassDispatchTest(SimpleTestCase):
+    # claude code changed: 2026-10-05 — test-isolation fix. Both full runs below used the default
+    # research_data_dir ("research_data"), so EVERY full-suite run rewrote the real research outputs
+    # (155 research_data/*_cross_section.csv + 58 research_data/forex/*_cross_section.csv, git-ignored, so not
+    # recoverable). Outputs now go to a temporary directory; real price DATA is still read (read-only), and each
+    # test asserts that no real research output changed.
+    def setUp(self):
+        self.tmp_research = tempfile.mkdtemp(prefix="xs_research_")
+        self.before = _real_research_outputs()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_research, ignore_errors=True)
+
+    def _assert_real_research_untouched(self):
+        self.assertEqual(_real_research_outputs(), self.before, "a test wrote into the real research_data/")
 
     def test_invalid_asset_class_fails_closed_before_any_computation(self):
         # claude code changed: cheap — this check happens before any real
@@ -44,7 +67,10 @@ class AssetClassDispatchTest(SimpleTestCase):
             asset_class=ASSET_CLASS_FOREX,
             top_k_values=(1,), n_permutations=2, checkpoint=False,
             verdict_output_path=_tmp_verdict_path("forex_dispatch"),
+            research_data_dir=self.tmp_research,   # claude code changed: 2026-10-05 — never the real research_data/
         )
+        self._assert_real_research_untouched()
+        self.assertTrue(glob.glob(os.path.join(self.tmp_research, "forex", "*_cross_section.csv")))   # outputs went to the temp dir
         self.assertEqual(result["asset_class"], "FOREX")
         self.assertGreaterEqual(result["n_assets"], 8)  # the full registered Forex universe, never a crypto-scoped count
         # claude code changed: real Forex round-trip cost is roughly
@@ -65,7 +91,10 @@ class AssetClassDispatchTest(SimpleTestCase):
             hypothesis_name="cross_sectional_zscore",
             top_k_values=(1,), n_permutations=2, checkpoint=False,
             verdict_output_path=_tmp_verdict_path("crypto_dispatch"),
+            research_data_dir=self.tmp_research,   # claude code changed: 2026-10-05 — never the real research_data/
         )
+        self._assert_real_research_untouched()
+        self.assertTrue(glob.glob(os.path.join(self.tmp_research, "*_cross_section.csv")))   # outputs went to the temp dir
         self.assertEqual(result["asset_class"], "CRYPTO")
         self.assertEqual(result["cost_rate"], 0.0015)
 

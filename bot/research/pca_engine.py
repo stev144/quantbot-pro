@@ -128,6 +128,15 @@ class PCAConfig:
     ic_alpha: float = 0.05
     ic_forward_return_col: str = "forward_return_4h"  # which horizon IC validation (STEP 5) is scored against
 
+    # claude code changed: F-01 (2026-10-03 five-gate audit) — causal fit. The
+    # residual at candle t is computed with mean/std/correlation/loadings fitted
+    # ONLY on returns strictly before the refit point that covers t (expanding
+    # window). Both values reuse frozen project conventions, not tuned numbers:
+    # 1000 = the canonical Kalman init window L (REVB-3), 168 = the project-wide
+    # z-score minimum (weekly cadence). Baseline convention; sensitivity untested.
+    min_fit_candles: int = 1000
+    refit_every: int = 168
+
 
 PCA_CONFIG = PCAConfig()
 
@@ -136,7 +145,7 @@ PCA_CONFIG = PCAConfig()
 # STEP 1: PCA DECOMPOSITION
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-def load_close_prices(universe: List[str]) -> Dict[str, pd.Series]:
+def load_close_prices(universe: List[str], column: str = "close") -> Dict[str, pd.Series]:   # claude code changed: D-1 — column
     """Loads each symbol's close-price series from data/*.csv via
     bot.instruments.resolve_ohlcv_path() — the project's real, existing
     canonical path resolver (used by cointegration_engine.py/cross_
@@ -160,7 +169,7 @@ def load_close_prices(universe: List[str]) -> Dict[str, pd.Series]:
             )
         df = pd.read_csv(path, parse_dates=["timestamp"])
         df = df.set_index("timestamp").sort_index()
-        prices[symbol] = df["close"]
+        prices[symbol] = df[column]   # claude code changed: D-1 — column parameter (close for the factor model, open for labels)
         logger.info(f"  Loaded {symbol}: {len(df):,} candles ({df.index.min()} -> {df.index.max()})")
     return prices
 
@@ -333,6 +342,98 @@ def compute_residuals(
     return residual_df
 
 
+def compute_residuals_causal(returns: pd.DataFrame, config: PCAConfig) -> Tuple[pd.DataFrame, pd.DataFrame]:   # claude code changed: F-01 — new
+    """Causal (walk-forward) residuals: at each refit point r (every
+    config.refit_every rows, starting at config.min_fit_candles), fit
+    mean/std/correlation/loadings on returns.iloc[:r] (rows strictly BEFORE
+    r) and apply that fit to rows r … r+refit_every−1. Rows before the first
+    fit are NaN. A change to any return at row ≥ t therefore cannot change
+    any residual at a row < t (tested: test_pca_causal).
+
+    The residual uses the projection L·Lᵀ, which is invariant to eigenvector
+    sign flips and to rotations inside the retained subspace, so refits do
+    not flip residual signs. The number of retained components may change
+    between refits (each refit runs choose_n_components on its own window);
+    the refit log records it.
+
+    Returns (residual_df, refit_log) — refit_log has one row per refit:
+    fit_end (last row used, exclusive boundary = applied_from), applied_from,
+    applied_to, n_fit_rows, n_retained."""
+    values = returns.values
+    out = np.full(values.shape, np.nan)
+    log_rows = []
+    for r, end, mean, std, loadings, k in _causal_fits(returns, config):   # claude code changed: D-1 — shared fit loop (behaviour unchanged)
+        std_block = (values[r:end] - mean) / std
+        out[r:end] = (std_block - std_block @ loadings @ loadings.T) * std
+        log_rows.append({"applied_from": returns.index[r], "applied_to": returns.index[end - 1],
+                         "fit_end": returns.index[r - 1], "n_fit_rows": r, "n_retained": int(k)})
+    return (pd.DataFrame(out, index=returns.index, columns=returns.columns),
+            pd.DataFrame(log_rows))
+
+
+def _causal_fits(returns: pd.DataFrame, config: PCAConfig):   # claude code changed: D-1 — extracted from compute_residuals_causal
+    """Yields (r, end, mean, std, loadings, k) for each refit point r: the fit uses returns rows strictly
+    before r and is in force for rows r … end−1. The single causal factor model of this engine."""
+    if config.refit_every < 1 or config.min_fit_candles < 2:
+        raise ValueError("refit_every must be >= 1 and min_fit_candles >= 2")
+    n_rows = len(returns)
+    if n_rows <= config.min_fit_candles:
+        raise ValueError(f"need more than min_fit_candles={config.min_fit_candles} return rows for a causal fit; got {n_rows}")
+    values = returns.values
+    for r in range(config.min_fit_candles, n_rows, config.refit_every):
+        fit = values[:r]                                   # strictly before r
+        mean = fit.mean(axis=0)
+        std = fit.std(axis=0, ddof=1)
+        if np.any(~np.isfinite(std)) or np.any(std <= 0):
+            raise ValueError(f"zero/undefined return std in the fit window ending before row {r}")
+        corr = np.corrcoef((fit - mean) / std, rowvar=False)
+        eigenvalues, eigenvectors = np.linalg.eigh(corr)
+        order = np.argsort(eigenvalues)[::-1]
+        eigenvalues, eigenvectors = eigenvalues[order], eigenvectors[:, order]
+        k = config.n_components or choose_n_components(eigenvalues, config.variance_threshold)
+        yield r, min(r + config.refit_every, n_rows), mean, std, eigenvectors[:, :k], k
+
+
+def compute_open_labels_causal(close_returns: pd.DataFrame, open_returns: pd.DataFrame,
+                               config: PCAConfig) -> pd.DataFrame:   # claude code changed: owner decision D-1 (PCA, option 1) — new
+    """Executable factor-residual labels under the D-1 contract (signal at bar t's close, fill at bar t+1's
+    open, exit at bar t+1+h's open).
+
+    The factor model is the engine's single causal fit on CLOSE returns (_causal_fits). For a signal at row
+    t the fit in force at t — fitted strictly before its refit point r ≤ t — is FROZEN for the whole holding
+    period (the factor-neutral position is defined at the decision). Its mean/std/loadings are applied to
+    OPEN-to-OPEN log returns, open_ret[j] = ln(open_j / open_{j−1}):
+
+        label_h[t] = Σ_{j = t+2}^{t+1+h} residual_open[j]  =  factor-residual of ln(open_{t+1+h} / open_{t+1})
+
+    so the label spans exactly open(t+1) → open(t+1+h). No row ≥ r enters the fit; close_t never enters the
+    label. NaN where the exit open does not exist or no fit covers t. Columns: f"{label_name}_{symbol}"."""
+    if not close_returns.index.equals(open_returns.index) or list(close_returns.columns) != list(open_returns.columns):
+        raise ValueError("close_returns and open_returns must share one index and column order")
+    n, m = close_returns.shape
+    ov = open_returns.values
+    out = {name: np.full((n, m), np.nan) for name in config.forward_horizons}
+    hmax = max(config.forward_horizons.values())
+    for r, end, mean, std, loadings, _ in _causal_fits(close_returns, config):
+        lo, hi = r + 2, min(end + 1 + hmax, n)            # open-return rows any label of this block can use
+        if lo >= hi:
+            continue
+        z = (ov[lo:hi] - mean) / std
+        res = (z - z @ loadings @ loadings.T) * std        # residual open returns under the FROZEN fit
+        csum = np.vstack([np.zeros((1, m)), np.nancumsum(res, axis=0)])   # csum[i] = Σ res[0:i]
+        valid = np.vstack([np.zeros((1, m)), np.cumsum(np.isfinite(res), axis=0)])
+        for name, h in config.forward_horizons.items():
+            for t in range(r, end):
+                a, b = t + 2 - lo, t + 2 + h - lo          # rows j = t+2 … t+1+h in res coordinates
+                if t + 1 + h >= n:
+                    break
+                cnt = valid[b] - valid[a]
+                out[name][t] = np.where(cnt == h, csum[b] - csum[a], np.nan)
+    return pd.concat({name: pd.DataFrame(v, index=close_returns.index, columns=close_returns.columns)
+                      for name, v in out.items()}, axis=1).pipe(
+        lambda df: df.set_axis([f"{a}_{b}" for a, b in df.columns], axis=1))
+
+
 def compute_residual_zscores(residual_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame:
     """Rolling z-score of each symbol's residual, via the SAME
     RollingZScore class bot/pairs/kalman_online.py already uses for the
@@ -392,6 +493,8 @@ def generate_signals(zscore_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 def add_forward_returns(residual_df: pd.DataFrame, config: PCAConfig) -> pd.DataFrame:
+    # claude code changed: D-1 — LEGACY, no longer called by run_pca_engine (same-close, zero-latency label,
+    # F-04). Kept so historical outputs stay reproducible; canonical labels: compute_open_labels_causal.
     """Adds forward_return_{1h,4h,24h}_{SYMBOL} columns computed on each
     symbol's IDIOSYNCRATIC (residual) return series — NOT the raw price
     return. This is the deliberate, spec-required label: the hypothesis
@@ -508,6 +611,7 @@ def save_outputs(
     ic_results: pd.DataFrame,
     output_dir: Path = OUTPUT_DIR,
     output_prefix: str = "",
+    inputs: Optional[dict] = None,   # claude code changed: 2026-10-05 — provenance (input_files_fingerprint of the price files read)
 ) -> None:
     """Saves the 4 output files the spec requests, matching this
     project's existing research_data/ naming convention.
@@ -542,6 +646,14 @@ def save_outputs(
     logger.info(f"  Saved: {output_dir / f'{output_prefix}pca_variance_explained.csv'}")
 
     ic_results.to_csv(output_dir / f"{output_prefix}pca_ic_validation.csv", index=False)
+    # claude code changed: 2026-10-05 — LEGACY provenance sidecar on each of the 4 outputs (one run id)
+    from bot.quant_core import provenance as _prov
+    _code = _prov.code_state()
+    for _name in ("pca_residuals.csv", "pca_components.csv", "pca_variance_explained.csv", "pca_ic_validation.csv"):
+        _prov.write_research_output_provenance(output_dir / f"{output_prefix}{_name}", kind="PCA_" + _name[4:-4].upper(),
+                                               producer="bot.research.pca_engine.save_outputs", inputs=inputs,
+                                               config={"symbols": sorted(symbols), "n_retained": int(n_retained),
+                                                       "output_prefix": output_prefix}, code=_code)
     logger.info(f"  Saved: {output_dir / f'{output_prefix}pca_ic_validation.csv'}")
 
 
@@ -632,19 +744,35 @@ def run_pca_engine(
     prices = load_close_prices(universe)
     price_df = align_universe(prices)
     returns = compute_log_returns(price_df)
+    # claude code changed: owner decision D-1 (PCA option 1) — open prices on the SAME aligned grid, for the
+    # executable label only (open(t+1) → open(t+1+h)); the factor model stays fitted on close returns.
+    open_df = align_universe(load_close_prices(universe, column="open")).reindex(price_df.index)
+    open_returns = np.log(open_df).diff().reindex(returns.index)
 
+    # claude code changed: F-01 — the full-history fit below is kept ONLY for the
+    # descriptive scree/loadings files; residuals (and so signals and IC) now come
+    # from the causal walk-forward fit. The old path used the future (audit PCA1).
     eigenvalues, eigenvectors, loadings, n_retained, ret_mean, ret_std = run_pca(returns, config)
 
-    residual_df = compute_residuals(returns, loadings, ret_mean, ret_std, config)
+    residual_df, refit_log = compute_residuals_causal(returns, config)
+    residual_df = residual_df.dropna(how="all")              # rows before the first causal fit have no residual
     residual_df = residual_df.iloc[config.warmup_candles:]  # remove warmup — spec's explicit requirement
+    logger.info(f"  Causal PCA: {len(refit_log)} refits (every {config.refit_every} candles, expanding window, "
+                f"first fit on {config.min_fit_candles} candles); retained k range "
+                f"{int(refit_log['n_retained'].min())}–{int(refit_log['n_retained'].max())}")
 
     zscore_df = compute_residual_zscores(residual_df, config)
     signal_df = generate_signals(zscore_df, config)
-    label_df = add_forward_returns(residual_df, config)
+    # claude code changed: owner decision D-1 — was add_forward_returns(residual_df) (close residuals summed
+    # from the signal close: zero latency, F-04). Now the frozen-decision-fit residual of open-to-open returns.
+    label_df = compute_open_labels_causal(returns, open_returns, config).reindex(residual_df.index)
 
     ic_results = validate_ic_per_symbol(signal_df, label_df, list(returns.columns), config)
 
-    save_outputs(zscore_df, eigenvalues, loadings, list(returns.columns), n_retained, ic_results, output_prefix=output_prefix)
+    from bot.quant_core.provenance import input_files_fingerprint   # claude code changed: 2026-10-05 — provenance
+    _inputs = input_files_fingerprint([resolve_ohlcv_path(s.replace("_", "/")) for s in universe])
+    save_outputs(zscore_df, eigenvalues, loadings, list(returns.columns), n_retained, ic_results, output_prefix=output_prefix,
+                 inputs=_inputs)   # claude code changed: 2026-10-05
     print_comparison_report(ic_results)
 
     return ic_results

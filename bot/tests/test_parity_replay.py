@@ -75,23 +75,26 @@ class ParityReplayTests(SimpleTestCase):
         self.assertFalse(r.fields["beta_prior"].matches)
 
     # ── Stage 2C §17 requirements not met yet ────────────────────────────────
-    @unittest.expectedFailure
-    def test_decision_clock_parity(self):
-        """Required: research and live decide on the same cutoff. Blocked on
-        OPEN-25 (live loop scheduling) / OPEN-1b (delay definition)."""
-        self.assertTrue(self.report.fields["decision_zscore_same_candle"].matches)
+    # claude code changed: Phase O correction — the former expectedFailure
+    # "test_decision_clock_parity" was mis-specified. Live decides while
+    # processing candle c ON candle c−1's values and fills at close(c); research
+    # decides at cutoff c−1 and fills at close(c) (d = 1). Same information
+    # cutoff, same fill candle (bot/tests/test_parity_forensics.py proves the
+    # fills match to 1e-12), so the one-candle offset is an equivalent
+    # architecture, not a divergence. The real remaining issue is live LATENCY
+    # (loop phase after close(c), OPEN-1c / OPEN-25), which no offline replay
+    # can model.
+    def test_live_decision_uses_the_previous_candle_cutoff(self):
+        self.assertFalse(self.report.fields["decision_zscore_same_candle"].matches)
+        self.assertEqual(self.report.decision_lag_candles, 1)
 
-    @unittest.expectedFailure
-    def test_beta_uncertainty_parity(self):
-        """Required: one uncertainty definition (posterior P[0,0]). Live uses the
-        prior; changing it is a live-path change (OPEN-34 boundary decision)."""
+    def test_beta_uncertainty_parity(self):   # claude code changed: Stage 2D Rev B (D1) — was expectedFailure
+        """One uncertainty definition (posterior P[0,0]) on both sides."""
         self.assertTrue(self.report.fields["beta_uncertainty"].matches)
 
-    @unittest.expectedFailure
-    def test_entry_and_exit_sequences_identical(self):
-        """Required: identical trade sequences. Live exits on its decision candle
-        and can re-enter one candle later; research exits fill at u+d (d ≥ 1)
-        and partial exits exist only in research. Blocked on OPEN-6a/OPEN-29
-        (exit architecture and live alignment) and OPEN-1c (production d)."""
+    def test_entry_and_exit_sequences_identical(self):   # claude code changed: Stage 2D Rev B Steps 9–10 — was expectedFailure; one shared lifecycle now
+        """Identical trade sequences: live entry fills one candle after the
+        research decision cutoff, and every exit reason matches."""
         live = [(t - H, d) for t, d in self.report.live_entries]
         self.assertEqual(live, self.report.research_entries)
+        self.assertEqual([r for _, r in self.report.live_exits], [r for _, r in self.report.research_exits])

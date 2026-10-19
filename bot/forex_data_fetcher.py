@@ -41,6 +41,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone  # claude code changed: timedelta added — Data-Layer Audit "wire forex_data_fetcher.py too" needs it for the rolling (start, end) window
 from pathlib import Path
+from bot.quant_core.research_zones import seal_before_write   # claude code changed: D-8
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -285,6 +286,7 @@ def download_all_forex_symbols() -> dict:
 
             filename = symbol_to_filename(symbol)
             filepath = OUTPUT_DIR / filename
+            df = seal_before_write(df, filepath)   # claude code changed: D-8 — sealed forward holdout
             df.to_csv(filepath, index=False)
 
             candle_count = len(df)

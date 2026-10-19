@@ -463,8 +463,15 @@ def explain_evidence(experiment) -> str:
     lines.append(f"Deterministic verdict: {verdict}.")
     if verdict in ("REJECTED", "INCONCLUSIVE", "INSUFFICIENT_DATA", "INVALID_RESEARCH"):
         lines.append("This evidence does not support the hypothesis as stated.")
-    elif verdict in ("SUPPORTED", "PARTIALLY_SUPPORTED"):
-        lines.append("This evidence is consistent with the hypothesis, within the limits of a single-experiment test.")
+    elif verdict == "OBSERVATION":   # claude code changed: owner decision D-7
+        lines.append("An effect in the hypothesised direction was observed, but it is not confirmed: a single "
+                     "experiment has no registered hypothesis family, no complete cost model and no forward-holdout "
+                     "test, so it cannot support a stronger claim.")
+    elif verdict in ("STATISTICAL", "ECONOMIC", "TRADEABLE", "CANONICAL"):   # claude code changed: D-7
+        lines.append(f"Verdict-ladder level {verdict}: every requirement of this level and all lower levels was met.")
+    elif verdict in ("SUPPORTED", "PARTIALLY_SUPPORTED"):   # claude code changed: D-7 — stored legacy rows only
+        lines.append("Legacy verdict (pre-D-7, unverified): it was issued without the evidence the current verdict "
+                     "ladder requires and must not be read as support.")
     elif verdict == "REQUIRES_REVIEW":
         lines.append("The requested research question may not have been fully tested — see the warnings on this experiment before treating this as a confident result.")
     return " ".join(lines)

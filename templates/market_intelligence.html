@@ -35,6 +35,7 @@
                 </div>
                 {% endfor %}
             </div>
+            {% if regime_overview.fetch_aborted %}<div class="unavailable" style="margin-bottom:10px">{{ regime_overview.aborted_reason }}</div>{% endif %}{# claude code changed: 2026-10-07 — fail-fast notice #}
             {% if regime_overview.n_errors %}
             <div class="chart-caption" style="margin-bottom:10px">{{ regime_overview.n_errors }} symbol(s) failed to fetch/classify and are omitted below.</div>
             {% endif %}

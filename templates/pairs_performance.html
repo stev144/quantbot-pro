@@ -36,6 +36,7 @@
             <span class="term-section-meta">source: research_data/{{ performance.prefix }}_*.csv — {{ performance.long_name }}</span>
         </div>
         <div class="term-section-body">
+            {% include "partials/_evidence_banner.html" with ev=performance.evidence.equity %}{# claude code changed: Post-CRRP Task 4 — the metrics, curves and trade log below come from this dataset #}
 
             <div class="term-grid term-grid-4" style="margin-bottom:16px">
                 <div class="metric-tile"><div class="metric-label">Trades</div><div class="metric-value stat-number" data-target="{{ performance.summary.n_total_trades|default_if_none:0 }}" data-decimals="0">0</div></div>
@@ -74,15 +75,25 @@
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px">
                     <span style="font-weight:600">Statistical Verdict</span>
                     <span>
+                        {% comment %}claude code changed: Post-CRRP Task 4 — these verdicts are shown in colour only when their dataset is current evidence; otherwise as dim legacy text next to the evidence badge.{% endcomment %}
+                        {% if performance.evidence.permutation.is_current_evidence %}
                         {% if performance.permutation.edge_appears_real %}
                         <span class="badge pos">EDGE APPEARS REAL</span>
                         {% else %}
                         <span class="badge neg">EDGE DOES NOT APPEAR REAL</span>
                         {% endif %}
+                        {% else %}
+                        {% include "partials/_evidence_badge.html" with ev=performance.evidence.permutation %}
+                        <span class="text-dim mono" style="font-size:11px">legacy permutation: edge_appears_real={{ performance.permutation.edge_appears_real|yesno:"yes,no,—" }}</span>
+                        {% endif %}
+                        {% if performance.evidence.walk_forward.is_current_evidence %}
                         {% if performance.walk_forward.passed %}
                         <span class="badge pos" style="margin-left:6px">WALK-FORWARD PASSED</span>
                         {% elif performance.walk_forward %}
                         <span class="badge neg" style="margin-left:6px">WALK-FORWARD FAILED</span>
+                        {% endif %}
+                        {% elif performance.walk_forward %}
+                        <span class="text-dim mono" style="font-size:11px; margin-left:6px">legacy walk-forward: passed={{ performance.walk_forward.passed|yesno:"yes,no,—" }}</span>
                         {% endif %}
                     </span>
                 </div>

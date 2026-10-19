@@ -62,6 +62,24 @@ class ForexCrossSectionalDispersionTest(SimpleTestCase):
         source = inspect.getsource(forex_terminal_data.get_forex_cross_sectional_dispersion)
         self.assertIn("FOREX_RESEARCH_DATA_DIR", source)
 
+    def test_forex_compares_pairs_at_one_common_timestamp(self):   # claude code changed: 2026-10-05
+        import os
+        import shutil
+        import tempfile
+        from unittest import mock
+        import pandas as pd
+        d = tempfile.mkdtemp()
+        try:
+            for sym, ts, z in (("EUR_USD", "2026-09-18 22:00:00+00:00", 1.0), ("GBP_USD", "2026-09-18 22:00:00+00:00", -0.5),
+                               ("USD_JPY", "2026-09-18 22:00:00+00:00", 0.2), ("XAU_USD", "2026-09-18 23:00:00+00:00", 8.0)):
+                pd.DataFrame({"timestamp": [ts], "cs_zscore": [z]}).to_csv(os.path.join(d, f"{sym}_cross_section.csv"), index=False)
+            with mock.patch.object(forex_terminal_data, "FOREX_RESEARCH_DATA_DIR", d):
+                r = forex_terminal_data.get_forex_cross_sectional_dispersion()
+            self.assertEqual((r["n_symbols"], r["n_excluded_other_timestamp"], r["as_of"]), (3, 1, "2026-09-18 22:00 UTC"))
+            self.assertEqual([e["symbol"] for e in r["top_extremes"]], ["EUR_USD", "GBP_USD", "USD_JPY"])   # all ranked, XAU excluded
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_forex_output_directory_is_segregated_from_crypto(self):
         self.assertNotEqual(forex_terminal_data.FOREX_RESEARCH_DATA_DIR, terminal_data.RESEARCH_DATA_DIR)
         self.assertTrue(forex_terminal_data.FOREX_RESEARCH_DATA_DIR.startswith(terminal_data.RESEARCH_DATA_DIR))
@@ -88,7 +106,9 @@ class ForexDataProvenanceTest(SimpleTestCase):
         instrument = get_instrument("EUR/USD")
         result = forex_terminal_data.get_forex_data_provenance("EUR/USD", instrument, df)
         self.assertTrue(result["available"])
-        self.assertEqual(result["provider"], "yahoo_finance")
+        # claude code changed: 2026-10-06 — was "yahoo_finance" (only true while a test kept deleting EUR/USD's real
+        # MT5 marker); the provider must be the instrument's real, marker-recorded venue.
+        self.assertEqual(result["provider"], instrument.venue)
         self.assertEqual(result["row_count"], len(df))
         self.assertIsInstance(result["fingerprint"], str)
         self.assertGreater(len(result["fingerprint"]), 0)

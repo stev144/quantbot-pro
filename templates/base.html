@@ -139,6 +139,20 @@
                     details.removeAttribute("open");
                 }
             });
+            // claude code changed: 2026-10-07 — also close the group as soon as one of its menu items is
+            // chosen (before the next page arrives, e.g. behind the slow-navigation overlay)
+            var item = event.target.closest(".term-nav-group .term-nav-dropdown a");
+            if (item) {
+                item.closest(".term-nav-group").removeAttribute("open");
+            }
+        });
+        // claude code changed: 2026-10-07 — Esc closes any open navbar group
+        document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") {
+                document.querySelectorAll(".term-nav-group[open]").forEach(function (details) {
+                    details.removeAttribute("open");
+                });
+            }
         });
 
         // claude code changed: new — dashboard hardening. Real user report:

@@ -534,40 +534,168 @@ CORRELATION_FEATURE_COLUMNS = [
 ]
 
 
-def get_feature_correlation_matrix(symbol):
-    cache_key = f"feature_corr_matrix_{symbol}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
+# claude code changed: feature-correlation upgrade — units of every column,
+# read off bot/research/feature_calculator.py's own formulas. Correlating
+# raw price LEVELS (or dollar amounts that scale with price) measures the
+# shared long-run price trend, not shared information — the textbook
+# spurious correlation of non-stationary series. The "stationary" basis
+# (default) puts every column in unitless, price-free terms first.
+PRICE_LEVEL_COLUMNS = ("ema_12", "ema_26", "bb_upper", "bb_middle", "bb_lower")   # → level / close − 1 (distance from price)
+PRICE_UNIT_COLUMNS = ("atr", "adr", "atr_indicator", "bb_width", "macd", "macd_signal", "macd_histogram")   # $ amounts → ÷ close
+CORRELATION_BASES = ("stationary", "raw")
+CORRELATION_METHODS = ("pearson", "spearman")
+MIN_COLUMN_OBSERVATIONS = 100      # fewer non-null values than this → column reported as unavailable, not shown as nan
+STABILITY_MIN_YEAR_OBS = 1000      # a calendar year needs this many paired candles to enter the per-year stability range
+
+# claude code changed: pairs related BY CONSTRUCTION (feature_calculator.py's
+# formulas) — a high correlation here is arithmetic, not a market finding.
+_MAS = "moving averages of the same close"
+DEFINITIONAL_RELATIONS = {
+    frozenset(("atr", "atr_indicator")): "identical formula — _calculate_atr() is called twice",
+    frozenset(("efficiency", "atr_ratio")): "atr_ratio = 1 / efficiency (each clipped)",
+    frozenset(("adr", "range_used")): "range_used = (high − low) / adr",
+    frozenset(("atr", "adr")): "both average the bar range (ATR 14 incl. gaps, ADR 20)",
+    frozenset(("adr", "atr_indicator")): "both average the bar range (ATR 14 incl. gaps, ADR 20)",
+    frozenset(("ema_12", "ema_26")): _MAS,
+    frozenset(("ema_12", "bb_middle")): _MAS,
+    frozenset(("ema_26", "bb_middle")): _MAS,
+    frozenset(("bb_upper", "bb_middle")): "bands = middle ± 2σ",
+    frozenset(("bb_lower", "bb_middle")): "bands = middle ± 2σ",
+    frozenset(("bb_upper", "bb_lower")): "bands = middle ± 2σ",
+    frozenset(("bb_width", "bb_upper")): "width = upper − lower",
+    frozenset(("bb_width", "bb_lower")): "width = upper − lower",
+    frozenset(("macd", "ema_12")): "macd = ema_12 − ema_26",
+    frozenset(("macd", "ema_26")): "macd = ema_12 − ema_26",
+    frozenset(("macd", "macd_signal")): "signal = EMA9(macd)",
+    frozenset(("macd", "macd_histogram")): "histogram = macd − signal",
+    frozenset(("macd_signal", "macd_histogram")): "histogram = macd − signal",
+}
+
+
+def _stationary_frame(df):   # claude code changed: new — feature-correlation upgrade
+    """Price-free version of every column (see PRICE_LEVEL_COLUMNS /
+    PRICE_UNIT_COLUMNS); unitless columns pass through unchanged.
+    Returns (frame, {column: display label})."""
+    close = df["close"].where(df["close"] > 0)
+    out, labels = pd.DataFrame(index=df.index), {}
+    for c in df.columns:
+        if c in ("close", "timestamp"):
+            continue
+        if c in PRICE_LEVEL_COLUMNS:
+            out[c], labels[c] = df[c] / close - 1.0, f"{c} ÷ close − 1"
+        elif c in PRICE_UNIT_COLUMNS:
+            out[c], labels[c] = df[c] / close, f"{c} ÷ close"
+        else:
+            out[c], labels[c] = df[c], c
+    return out, labels
+
+
+def _yearly_corr_range(x, y, years, method):   # claude code changed: new — feature-correlation upgrade
+    """(min, max, n_years) of the pair's correlation within each calendar
+    year holding >= STABILITY_MIN_YEAR_OBS paired candles; None if fewer
+    than two such years (no stability claim possible)."""
+    vals = []
+    for _, idx in years.groupby(years).groups.items():
+        xs, ys = x.loc[idx], y.loc[idx]
+        ok = xs.notna() & ys.notna()
+        if ok.sum() >= STABILITY_MIN_YEAR_OBS:
+            v = xs[ok].corr(ys[ok], method=method)
+            if pd.notna(v):
+                vals.append(float(v))
+    if len(vals) < 2:
+        return None
+    return {"min": min(vals), "max": max(vals), "n_years": len(vals), "sign_flip": min(vals) < 0 < max(vals)}
+
+
+def get_feature_correlation_matrix(symbol, basis="stationary", method="pearson"):
+    # claude code changed: feature-correlation upgrade — was raw Pearson over
+    # every column as stored: price levels correlated through the shared
+    # trend, an all-empty column (adx) filled the grid with nan, an exact
+    # duplicate (atr_indicator) read as a finding, and a by-construction
+    # pair (efficiency/atr_ratio) looked like market structure. Now:
+    # stationary basis by default (raw still selectable), Spearman option,
+    # empty/constant columns and exact duplicates reported separately,
+    # every redundancy pair labelled BY CONSTRUCTION or EMPIRICAL with its
+    # per-year stability range. Cache key includes the file's mtime, so a
+    # regenerated observations file is picked up immediately.
+    basis = basis if basis in CORRELATION_BASES else "stationary"
+    method = method if method in CORRELATION_METHODS else "pearson"
 
     path = os.path.join(RESEARCH_DATA_DIR, f"{symbol}_observations.csv")
     if not os.path.exists(path):
         return {"available": False, "reason": f"{symbol}_observations.csv not found in research_data/"}
+    mtime = os.path.getmtime(path)
+
+    cache_key = f"feature_corr_matrix_v2_{symbol}_{basis}_{method}_{int(mtime)}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
-        df = pd.read_csv(path, usecols=lambda c: c in CORRELATION_FEATURE_COLUMNS)
+        df = pd.read_csv(path, usecols=lambda c: c in CORRELATION_FEATURE_COLUMNS or c in ("close", "timestamp"))
     except Exception as e:
         return {"available": False, "reason": str(e)[:120]}
 
-    cols = [c for c in CORRELATION_FEATURE_COLUMNS if c in df.columns]
-    corr = df[cols].corr(method="pearson")
+    present = [c for c in CORRELATION_FEATURE_COLUMNS if c in df.columns]
+    if basis == "stationary" and "close" not in df.columns:
+        return {"available": False, "reason": f"{symbol}_observations.csv has no close column — the stationary basis cannot be built"}
+    if basis == "stationary":
+        frame, labels = _stationary_frame(df[present + ["close"]])
+    else:
+        frame, labels = df[present].copy(), {c: c for c in present}
+
+    unavailable, usable = [], []
+    for c in present:
+        n = int(frame[c].notna().sum())
+        if n < MIN_COLUMN_OBSERVATIONS:
+            unavailable.append({"feature": c, "reason": f"only {n:,} of {len(frame):,} values present"})
+        elif frame[c].nunique(dropna=True) <= 1:
+            unavailable.append({"feature": c, "reason": "constant — zero variance, correlation undefined"})
+        else:
+            usable.append(c)
+
+    duplicates, cols = [], []
+    for c in usable:
+        twin = next((k for k in cols if frame[c].isna().equals(frame[k].isna())
+                     and (frame[c] - frame[k]).abs().max() == 0), None)
+        if twin is None:
+            cols.append(c)
+        else:
+            duplicates.append({"feature": c, "duplicate_of": twin,
+                               "why": DEFINITIONAL_RELATIONS.get(frozenset((c, twin)), "numerically identical in every row")})
+
+    corr = frame[cols].corr(method=method)
+    years = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dt.year if "timestamp" in df.columns else None
 
     redundant_pairs = []
     for i, a in enumerate(cols):
         for b in cols[i + 1:]:
             val = corr.loc[a, b]
             if pd.notna(val) and abs(val) >= REDUNDANCY_THRESHOLD:
-                redundant_pairs.append({"feature_a": a, "feature_b": b, "corr": float(val)})
+                why = DEFINITIONAL_RELATIONS.get(frozenset((a, b)))
+                redundant_pairs.append({
+                    "feature_a": a, "feature_b": b, "corr": float(val),
+                    "kind": "BY CONSTRUCTION" if why else "EMPIRICAL", "why": why or "",
+                    "yearly": _yearly_corr_range(frame[a], frame[b], years, method) if years is not None else None,
+                })
     redundant_pairs.sort(key=lambda r: -abs(r["corr"]))
 
     result = {
         "available": True,
         "symbol": symbol,
+        "basis": basis,
+        "method": method,
         "features": cols,
+        "labels": [labels[c] for c in cols],
         "matrix": corr.round(4).values.tolist(),
         "redundant_pairs": redundant_pairs,
+        "unavailable": unavailable,
+        "duplicates": duplicates,
         "threshold": REDUNDANCY_THRESHOLD,
         "n_candles": len(df),
+        "first_timestamp": str(df["timestamp"].iloc[0]) if "timestamp" in df.columns and len(df) else "",
+        "last_timestamp": str(df["timestamp"].iloc[-1]) if "timestamp" in df.columns and len(df) else "",
+        "file_date": pd.Timestamp(mtime, unit="s").strftime("%Y-%m-%d"),
     }
     cache.set(cache_key, result, 3600)
     return result

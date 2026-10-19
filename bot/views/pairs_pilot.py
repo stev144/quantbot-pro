@@ -23,6 +23,9 @@ def pairs_pilot(request):
     context = {
         "pairs": pairs,
         "health_snapshot_available": state["health_snapshot_available"],  # claude code changed: new — see bot/pairs/health.py
+        "health_snapshot_stale": state["health_snapshot_stale"],          # claude code changed: show stale data with warning rather than hiding it
         "health_snapshot_reason": state["health_snapshot_reason"],
+        "execution_mode": state["execution_mode"],          # claude code changed: Post-audit Phase 1 journal-mode separation
+        "other_mode_counts": state["other_mode_counts"],    # claude code changed: Post-audit Phase 1
     }
     return render(request, "pairs_pilot.html", context)

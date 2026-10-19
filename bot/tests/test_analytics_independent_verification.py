@@ -16,15 +16,17 @@ from django.test import SimpleTestCase
 import pandas as pd
 
 from bot.backtesting.backtester import Backtester, calculate_sharpe_ratio, calculate_sortino_ratio
-from bot.research.entry_exit_engine import KalmanPositionSizer
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SHARPE / SORTINO — pure functions, real formulas confirmed from source:
-#   sharpe   = (mean(R) - rf_per_trade) / std(R, ddof=1) * sqrt(trades_per_year)
-#   sortino  = same, but std computed over LOSING trades' R only
-#   rf_per_trade = risk_free_rate / trades_per_year ; trades_per_year = N / years_elapsed
-#   Unannualised (years_elapsed=None) => rf_per_trade=0, annualisation=1
+# SHARPE / SORTINO — pure functions.
+# claude code changed: Phase 3 H-11 — the formulas below are the CORRECTED,
+# textbook ones (the previous expectations pinned the defects themselves):
+#   sharpe   = mean(R) / std(R, ddof=1) * sqrt(trades_per_year)     (no risk-free term:
+#              an annual return fraction cannot be subtracted from an R-multiple)
+#   sortino  = mean(R) / DD * sqrt(trades_per_year),  DD = sqrt(mean_all(min(R,0)^2))
+#              (downside deviation over ALL trades, target 0); undefined (None) with no losses
+#   Unannualised (years_elapsed=None) => annualisation=1
 # ═══════════════════════════════════════════════════════════════════════
 
 class SharpeRatioIndependentVerificationTest(SimpleTestCase):
@@ -52,9 +54,8 @@ class SharpeRatioIndependentVerificationTest(SimpleTestCase):
         mean_r = 0.0   # alternating +1/-1 averages to exactly zero
         std_r = statistics.stdev(r_values)   # = 1.0257... (ddof=1 on [1,-1]*5)
         trades_per_year = 10 / 1.0
-        rf_per_trade = 0.05 / trades_per_year   # default risk_free_rate=0.05
         annualisation = trades_per_year ** 0.5
-        expected = round((mean_r - rf_per_trade) / std_r * annualisation, 4)
+        expected = round(mean_r / std_r * annualisation, 4)   # claude code changed: Phase 3 H-11 — no unit-mismatched rf term (was − 0.05/10)
 
         self.assertAlmostEqual(calculate_sharpe_ratio(trades, years_elapsed=years_elapsed), expected, places=4)
 
@@ -78,90 +79,38 @@ class SharpeRatioIndependentVerificationTest(SimpleTestCase):
 
 class SortinoRatioIndependentVerificationTest(SimpleTestCase):
 
-    def test_no_losing_trades_returns_the_documented_sentinel(self):
+    def test_no_losing_trades_is_undefined_not_a_sentinel(self):
+        # claude code changed: Phase 3 H-11 — was a 999.0 sentinel that reads like a result
         trades = [{"r_multiple": 1.0}, {"r_multiple": 2.0}, {"r_multiple": 0.5}]
-        self.assertEqual(calculate_sortino_ratio(trades, years_elapsed=1.0), 999.0)
+        self.assertIsNone(calculate_sortino_ratio(trades, years_elapsed=1.0))
 
-    def test_exactly_one_losing_trade_returns_zero_not_a_nan(self):
-        # claude code changed: THE specific guard this project's own
-        # comment says was added — np.std(ddof=1) on a single value is
-        # NaN, not an exception, which would silently leak into the
-        # dashboard. Confirms it's actually caught.
+    def test_exactly_one_losing_trade_is_well_defined_not_nan(self):
+        # claude code changed: Phase 3 H-11 — the textbook downside deviation is defined with
+        # one loss (it averages over ALL trades), so the old "return 0.0" guard is gone.
+        # R = [1, 2, -0.5]: mean = 0.8333…, DD = sqrt(0.25/3) = 0.288675…, ×sqrt(3/1) → 5.0 exactly
         trades = [{"r_multiple": 1.0}, {"r_multiple": 2.0}, {"r_multiple": -0.5}]
         result = calculate_sortino_ratio(trades, years_elapsed=1.0)
-        self.assertEqual(result, 0.0)
+        self.assertAlmostEqual(result, 5.0, places=4)
         self.assertFalse(result != result)   # NaN != NaN is True; explicitly prove it's NOT NaN
 
     def test_downside_only_std_matches_independent_stdlib_calculation(self):
         r_values = [3.0, 2.0, -1.0, 1.0, -2.0, -0.5]
         trades = [{"r_multiple": r} for r in r_values]
-        losses = [r for r in r_values if r < 0]
-
+        # claude code changed: Phase 3 H-11 — textbook downside deviation (target 0, over ALL trades):
+        # DD = sqrt((1 + 4 + 0.25)/6) = sqrt(0.875) = 0.935414…; mean = 0.416667 → 0.4454
+        # (the old formula — stdev of the LOSSES around their own mean — gave 0.5455)
         expected_mean_all = statistics.mean(r_values)
-        expected_down_std = statistics.stdev(losses)   # stdev over LOSSES only, not all trades
-        expected = round(expected_mean_all / expected_down_std, 4)   # unannualised
+        expected_down_dev = (sum(min(r, 0.0) ** 2 for r in r_values) / len(r_values)) ** 0.5
+        expected = round(expected_mean_all / expected_down_dev, 4)   # unannualised
 
         self.assertAlmostEqual(calculate_sortino_ratio(trades, years_elapsed=None), expected, places=4)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# KELLY — real formula confirmed from KalmanPositionSizer.__init__:
-#   loss_rate = 1 - win_rate
-#   win_loss_ratio = win_rate / loss_rate
-#   base_kelly = win_rate - loss_rate / win_loss_ratio
-#
-# claude code changed: real DISCREPANCY found while independently
-# re-deriving this — algebraically, win_rate - loss_rate/win_loss_ratio
-# (with win_loss_ratio = win_rate/loss_rate) simplifies to
-# (2*win_rate - 1) / win_rate, NOT "2*win_rate - 1" as the module's own
-# comment at entry_exit_engine.py:650 claims. Confirmed against the
-# CODE's real behavior (not the comment) using this project's own real
-# constants: VALIDATED_WIN_RATE=0.69 produces base_kelly=0.5507 (matches
-# every real log line seen this engagement, e.g. "Full Kelly: 0.5507"),
-# NOT 0.38 (=2*0.69-1, the comment's claimed value). The CODE is
-# internally consistent Kelly math for its own stated win_loss_ratio
-# assumption; the COMMENT's simplification is the actual error. Fixed
-# the comment only (see entry_exit_engine.py) — the executable formula
-# was never wrong, so there is no behavior change here.
-# ═══════════════════════════════════════════════════════════════════════
-
-class KellyFractionIndependentVerificationTest(SimpleTestCase):
-
-    def _hand_derive_base_kelly(self, win_rate: float) -> float:
-        """The CORRECT closed-form simplification of this project's own
-        formula: win_rate - (1-win_rate)/(win_rate/(1-win_rate))
-                = win_rate - (1-win_rate)^2 / win_rate
-                = (2*win_rate - 1) / win_rate      [algebra, not the code's own comment]
-        """
-        return (2 * win_rate - 1) / win_rate
-
-    def test_matches_hand_derivation_at_the_projects_own_validated_win_rate(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.69)
-        expected = self._hand_derive_base_kelly(0.69)
-        self.assertAlmostEqual(sizer.base_kelly, expected, places=6)
-        self.assertAlmostEqual(sizer.base_kelly, 0.550725, places=6)   # the real, previously-logged value
-        self.assertNotAlmostEqual(sizer.base_kelly, 0.38, places=2)   # the comment's WRONG claimed value
-
-    def test_matches_hand_derivation_at_a_second_independent_win_rate(self):
-        # claude code changed: a second win_rate, not just the project's
-        # own constant, to prove this is a real formula match and not a
-        # coincidence at one specific number.
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.80)
-        expected = self._hand_derive_base_kelly(0.80)   # (1.6-1)/0.8 = 0.75
-        self.assertAlmostEqual(sizer.base_kelly, expected, places=6)
-        self.assertAlmostEqual(sizer.base_kelly, 0.75, places=6)
-
-    def test_safe_kelly_is_exactly_base_kelly_times_safety_fraction(self):
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.69)
-        self.assertAlmostEqual(sizer.safe_kelly, sizer.base_kelly * 0.25, places=10)
-
-    def test_win_rate_of_50_percent_produces_zero_kelly_not_a_divide_by_zero(self):
-        # claude code changed: edge case — (2*0.5-1)/0.5 = 0/0.5 = 0.0
-        # exactly (denominator win_rate=0.5 is fine; only win_rate=0 would
-        # divide by zero, and that's not a real win rate any strategy
-        # would be initialised with).
-        sizer = KalmanPositionSizer(capital_usdt=10_000.0, kelly_safety=0.25, validated_win_rate=0.50)
-        self.assertAlmostEqual(sizer.base_kelly, 0.0, places=10)
+# claude code changed: Stage 2D Rev B step 8 — the KELLY independent-
+# verification section was removed together with KalmanPositionSizer (owner
+# decision: fixed-fraction sizing, no Kelly). There is no Kelly formula left in
+# any sizing path to verify; the fixed-fraction arithmetic is verified in
+# bot/tests/test_entry_exit_engine.py (FixedFractionSizerTest).
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -247,8 +196,11 @@ class BacktesterMetricsIndependentVerificationTest(SimpleTestCase):
         # — verifies _build_results() reports exactly what was tracked,
         # rather than recomputing it a second, possibly-inconsistent way.
         bt = self._make_backtester_with_trades([{"profit": -500.0, "r_multiple": -1.0}], max_drawdown=15.3456)
+        bt.max_drawdown_mtm = 21.0049   # claude code changed: Phase 3 M-02 — the headline is the MTM drawdown
         results = bt._build_results()
-        self.assertEqual(results["max_drawdown"], 15.35)   # rounded to 2dp, matching source
+        self.assertEqual(results["max_drawdown"], 21.0)                       # MTM, rounded to 2dp
+        self.assertEqual(results["max_drawdown_closed_trade_basis"], 15.35)   # the former measure, under its own name
+        self.assertEqual(results["drawdown_basis"], "MTM_LIQUIDATION_AT_EVERY_CLOSE")
 
     def test_drawdown_formula_hand_derivation(self):
         # claude code changed: independently re-derives the ACTUAL dd
