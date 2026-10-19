@@ -429,7 +429,7 @@
                 scales: {
                     x: {
                         type: 'time',
-                        time: { unit: 'month', displayFormats: { month: 'MMM yy' } },
+                        time: { unit: 'month', displayFormats: { month: 'MMM yy' }, tooltipFormat: 'MMM d, yyyy' },  // claude code changed: tooltipFormat hides the 12:00:00 a.m. that appears when date-only strings are parsed as midnight UTC
                         grid: { color: gridCol, drawTicks: false },
                         ticks: { color: fgDim, font: { size: 10 } },
                         border: { color: gridCol },
