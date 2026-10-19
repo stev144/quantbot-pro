@@ -28,30 +28,28 @@ from bot.instruments import symbols_for_asset_class, ASSET_CLASS_CRYPTO, ASSET_C
 
 # ── Symbols ───────────────────────────────────────────────────────────────────
 
-# claude code changed: was an independent hand-typed 20-symbol list — a
-# FOURTH copy of the universe alongside cointegration_engine.py's and
-# cross_section_engine.py's own former copies (see those files' identical
-# fix for the full rationale). This one mattered most for the universe
-# expansion mission specifically: this file is the orchestrator that runs
-# feature_calculator/feature_validator across "all symbols" per its own
-# module docstring — left hardcoded at 20, it would have silently never
-# processed the 30 newly-added symbols' data at all. Now derived from the
-# single instrument registry, converted to this module's pre-existing
-# underscore convention.
-# claude code changed: updated 2026-10-19 — was the original 5 calibration
-# pairs (EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD); those pairs are
-# obsolete. Active QC portfolio is now EUR_USD, EUR_JPY, GBP_JPY, EUR_CAD,
-# NZD_CHF (GBP/JPY QC-1 pass 2026-10-18; EUR/CAD QC-2 nominee 2026-10-19;
-# AUD/CAD dropped QC-1). Family-wide correction scoped to the live portfolio,
-# not dead pairs.
-_FX_DCA_PAIRS = ["EUR_USD", "EUR_JPY", "GBP_JPY", "EUR_CAD", "NZD_CHF"]
+# _FX_DCA_PAIRS is the 5-pair active QC portfolio — used ONLY by the DCA
+# cycle extractor (dca_cycle_extractor.py). run_research_all.py --asset-class
+# FOREX runs on ALL available FX CSVs in data/forex/, not just the DCA pairs.
+# claude code changed: _FX_DCA_PAIRS removed from _symbols_for — was incorrectly
+# scoping the full feature validation run to 5 pairs instead of all 58 FX symbols
+
+
+_FOREX_DATA_DIR = Path('data/forex')
 
 
 def _symbols_for(asset_class: str):
-    return (
-        _FX_DCA_PAIRS if asset_class == ASSET_CLASS_FOREX
-        else [s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)]
-    )
+    if asset_class == ASSET_CLASS_FOREX:
+        # Derive from available 1h CSVs — single source of truth, stays in sync
+        # with refresh_forex_data without a separate list to maintain.
+        if _FOREX_DATA_DIR.exists():
+            return sorted(
+                p.stem[:-3]  # strip trailing '_1h'
+                for p in _FOREX_DATA_DIR.glob('*_1h.csv')
+            )
+        # Fallback to registry if directory missing (e.g. fresh checkout)
+        return [s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_FOREX)]
+    return [s.replace("/", "_") for s in symbols_for_asset_class(ASSET_CLASS_CRYPTO)]  # claude code changed: FX path now scans data/forex/ for all available CSVs; 5-pair DCA list removed
 
 
 # Default (used when imported by tests or other modules — not the CLI path)
