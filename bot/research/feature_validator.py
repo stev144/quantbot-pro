@@ -139,10 +139,19 @@ def _build_stability_windows(df: pd.DataFrame, timestamp_col: str = "timestamp")
     vs tz-naive mismatch. Returns {} if timestamp_col isn't present or
     has no parseable dates — an honest empty result (no stability score
     computed) rather than a misleading placeholder.
+
+    Falls back to a DatetimeIndex when timestamp_col is absent — df_features
+    carries timestamps as its index (not a column), so without this fallback
+    all stability windows were silently empty and stability_std was always NaN,
+    blocking every feature from KEEP.
     """
-    if timestamp_col not in df.columns:
+    if timestamp_col in df.columns:  # claude code changed: fix DatetimeIndex fallback — was "not in → return {}", now column → use it, index → use it, neither → {}
+        ts = pd.to_datetime(df[timestamp_col], errors="coerce")
+    elif isinstance(df.index, pd.DatetimeIndex):
+        ts = df.index.to_series()  # does not mutate df
+    else:
         return {}
-    ts = pd.to_datetime(df[timestamp_col], errors="coerce")
+    ts = pd.to_datetime(ts, errors="coerce")
     ts = ts.dropna()
     if ts.empty:
         return {}
@@ -898,9 +907,13 @@ class FeatureValidator:
         for year, (start_date, end_date) in windows.items():
             try:
                 # Filter data to this year (if timestamp available)
-                if 'timestamp' in df.columns:
+                if 'timestamp' in df.columns:  # claude code changed: add DatetimeIndex fallback — without it, windows built from index were used but year-filter used full data every year, producing identical ICs and stability_std=0
                     year_mask = (pd.to_datetime(df['timestamp']) >= start_date) & \
                                (pd.to_datetime(df['timestamp']) <= end_date)
+                    year_feature = feature_data[year_mask].copy()
+                    year_returns_raw = returns_series[year_mask]
+                elif isinstance(df.index, pd.DatetimeIndex):
+                    year_mask = (df.index >= start_date) & (df.index <= end_date)
                     year_feature = feature_data[year_mask].copy()
                     year_returns_raw = returns_series[year_mask]
                 else:

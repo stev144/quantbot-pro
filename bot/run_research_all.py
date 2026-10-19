@@ -293,6 +293,11 @@ if __name__ == '__main__':
         choices=[ASSET_CLASS_CRYPTO, ASSET_CLASS_FOREX],
         help='Which universe to process (default: CRYPTO)',
     )
+    _parser.add_argument(  # claude code changed: versioned output — appended after the asset-class suffix so _fx_v2.csv doesn't overwrite _fx.csv
+        '--output-tag',
+        default='',
+        help='Optional tag appended to the pooled output filename, e.g. "v2" → _fx_v2.csv',
+    )
     _args = _parser.parse_args()
     ASSET_CLASS = _args.asset_class  # local; not overwriting module-level SYMBOLS
     SYMBOLS = _symbols_for(ASSET_CLASS)
@@ -333,7 +338,8 @@ if __name__ == '__main__':
     # family-wide correction was actually run across.
     # claude code changed: separate pooled file per asset class so FX run doesn't overwrite crypto results
     _ac_suffix = "_fx" if ASSET_CLASS == ASSET_CLASS_FOREX else ""
-    pooled_path = f'research_data/all_symbols_validated_features_pooled{_ac_suffix}.csv'
+    _tag = f"_{_args.output_tag}" if getattr(_args, 'output_tag', '') else ""  # claude code changed: versioned output support
+    pooled_path = f'research_data/all_symbols_validated_features_pooled{_ac_suffix}{_tag}.csv'
     pooled_corrected.to_csv(pooled_path, index=False)
     # claude code changed: 2026-10-05 — provenance; the family-wide correction makes every output depend on every symbol
     from bot.quant_core import provenance as _prov
