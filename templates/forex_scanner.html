@@ -140,6 +140,24 @@
 }
 .scanner-sum-count { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
 
+/* position badge */
+.pos-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    font-family: monospace;
+    white-space: nowrap;
+}
+.pos-badge-open   { background: rgba(91,141,201,.15); color: var(--accent,#5b8dc9); border: 1px solid rgba(91,141,201,.3); }
+.pos-pnl-pos      { color: var(--term-pos,#3fb87f); }
+.pos-pnl-neg      { color: var(--term-neg,#d9534f); }
+.pos-detail       { font-size: 10px; color: var(--text-dim,#636c76); font-family: monospace; margin-top: 2px; }
+
 @media (max-width: 700px) {
     .scanner-table { font-size: 11px; }
     .scanner-table th, .scanner-table td { padding: 5px 6px; }
@@ -187,6 +205,12 @@
         <span class="scanner-sum-count">{{ total_pairs }}</span>
         <span class="metric-label">Total pairs</span>
     </div>
+    {% if open_count %}
+    <div class="scanner-sum-badge" style="border-color:rgba(91,141,201,.4)">
+        <span class="scanner-sum-count" style="color:var(--accent,#5b8dc9)" id="cnt-positions">{{ open_count }}</span>
+        <span class="metric-label">Open Position{{ open_count|pluralize }}</span>
+    </div>
+    {% endif %}
 </div>
 
 {# ── filter bar ───────────────────────────────────────────────────────────── #}
@@ -195,6 +219,7 @@
     <button class="scanner-filter-btn f-ranging" data-filter="RANGING" onclick="setFilter(this,'RANGING')">Ranging only</button>
     <button class="scanner-filter-btn f-highvol" data-filter="HIGH_VOLATILITY" onclick="setFilter(this,'HIGH_VOLATILITY')">High Vol</button>
     <button class="scanner-filter-btn f-trending" data-filter="TRENDING" onclick="setFilter(this,'TRENDING')">Trending</button>
+    <button class="scanner-filter-btn" data-filter="POSITION" onclick="setFilter(this,'POSITION')" style="border-color:rgba(91,141,201,.3)">With Position</button>
     <input class="scanner-search" id="pair-search" type="text" placeholder="Search pair…" oninput="applyFilter()">
 </div>
 
@@ -214,6 +239,7 @@
             <th class="num" onclick="sortTable('change_24h')">24h Chg %</th>
             <th class="num" onclick="sortTable('price')">Price</th>
             <th onclick="sortTable('last_ts')">Last Bar</th>
+            <th onclick="sortTable('has_position')">Position</th>
         </tr>
     </thead>
     <tbody id="scanner-tbody">
@@ -253,6 +279,16 @@
             </td>
             <td class="num mono" style="font-size:11px">{{ row.price }}</td>
             <td class="mono" style="font-size:11px;color:var(--text-dim,#636c76)">{{ row.last_ts }}</td>
+            <td>
+                {% if row.has_position %}
+                <span class="pos-badge pos-badge-open">● L{{ row.pos_fills }}</span>
+                <div class="pos-detail">e:{{ row.pos_entry }}
+                    <span class="{% if row.pos_pnl >= 0 %}pos-pnl-pos{% else %}pos-pnl-neg{% endif %}">
+                        {% if row.pos_pnl >= 0 %}+{% endif %}${{ row.pos_pnl }}
+                    </span>
+                </div>
+                {% else %}—{% endif %}
+            </td>
         </tr>
         {% endfor %}
     </tbody>
@@ -289,7 +325,8 @@ function applyFilter() {
     _filtered = ROWS.filter(function(r) {
         var regimeOk = _activeFilter === 'ALL'
             || r.regime === _activeFilter
-            || (_activeFilter === 'TRENDING' && (r.regime === 'TRENDING_UP' || r.regime === 'TRENDING_DOWN'));
+            || (_activeFilter === 'TRENDING' && (r.regime === 'TRENDING_UP' || r.regime === 'TRENDING_DOWN'))
+            || (_activeFilter === 'POSITION' && r.has_position);  // claude code changed: position filter
         var searchOk = !search || r.pair.replace('/', '').includes(search) || r.pair.includes(search);
         return regimeOk && searchOk;
     });
@@ -345,6 +382,16 @@ function renderRows() {
         var chgSign = r.change_24h > 0 ? '+' : '';
         var chgHtml = r.change_24h !== null ? '<span class="' + chgCls + '">' + chgSign + r.change_24h + '%</span>' : '—';
 
+        // position cell  // claude code changed: new — show open paper cycle badge
+        var posHtml = '—';
+        if (r.has_position) {
+            var pnlCls  = r.pos_pnl >= 0 ? 'pos-pnl-pos' : 'pos-pnl-neg';
+            var pnlSign = r.pos_pnl >= 0 ? '+' : '';
+            posHtml = '<span class="pos-badge pos-badge-open">● L' + r.pos_fills + '</span>'
+                    + '<div class="pos-detail">e:' + r.pos_entry
+                    + ' <span class="' + pnlCls + '">' + pnlSign + '$' + r.pos_pnl + '</span></div>';
+        }
+
         return '<tr class="' + rowCls + '" data-regime="' + r.regime + '" data-pair="' + r.pair + '">'
             + '<td><span class="pair-name">' + r.pair + '</span></td>'
             + '<td><span class="regime-badge regime-' + r.regime + '">' + regimeLabel + '</span></td>'
@@ -357,6 +404,7 @@ function renderRows() {
             + '<td class="num">' + chgHtml + '</td>'
             + '<td class="num mono" style="font-size:11px">' + r.price + '</td>'
             + '<td class="mono" style="font-size:11px;color:var(--text-dim,#636c76)">' + r.last_ts + '</td>'
+            + '<td>' + posHtml + '</td>'
             + '</tr>';
     }).join('');
 }

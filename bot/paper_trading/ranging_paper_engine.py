@@ -408,6 +408,10 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 max_cycle_candles=QC1_MAX_CYCLE_CANDLES,
             )
             closed = [t for t in trades_raw if t.get("exit_reason") != "DATA_END_STILL_OPEN"]
+            # open position = cycle still running at end of data  # claude code changed: expose for scanner
+            _raw_open = next(
+                (t for t in trades_raw if t.get("exit_reason") == "DATA_END_STILL_OPEN"), None
+            )
             cum = 0.0
             equity = []
             for t in sorted(closed, key=lambda x: x["exit_time"]):
@@ -477,6 +481,17 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             max_margin   = PAPER_ENTRY_USDT * (1.0 + sum(all_mults))          # claude code changed: worst-case margin
             max_notional = round(max_margin * PAPER_LEVERAGE, 2)               # claude code changed: worst-case notional
 
+            open_position = (  # claude code changed: compact form for scanner display
+                {
+                    "entry_time":  str(_raw_open["entry_time"])[:10],
+                    "entry_price": round(float(_raw_open["entry_price"]), 5),
+                    "wap":         round(float(_raw_open["wap"]), 5),
+                    "fills":       int(_raw_open["fills"]),
+                    "profit_usdt": round(float(_raw_open["profit_usdt"]), 2),
+                }
+                if _raw_open else None
+            )
+
             results[pair] = {   # claude code changed: simplified — single unrestricted simulation, no gated/free split
                 "equity":         equity,
                 "drawdown":       drawdown,
@@ -493,6 +508,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 "entry_notional": int(_PAPER_NOTIONAL),
                 "max_margin":     round(max_margin, 2),
                 "max_notional":   max_notional,
+                "open_position":  open_position,  # claude code changed: current open cycle; None if flat
             }
 
         except Exception as exc:

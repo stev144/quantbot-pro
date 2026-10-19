@@ -24,6 +24,9 @@ _ROOT      = Path(__file__).resolve().parents[2]
 _FOREX_DIR = _ROOT / "data" / "forex"
 _CACHE_KEY = "forex_scanner_v1"
 _CACHE_TTL = 1800   # 30 minutes
+
+_POS_CACHE_KEY = "paper_positions_v1"   # written here; also readable by other views
+_POS_CACHE_TTL = 3600                   # 1 hour
 _CANDLES   = 200    # candles loaded per pair for indicator computation
 _ZSCORE_W  = 20     # z-score lookback window
 _ATR_W     = 14
@@ -248,6 +251,32 @@ def _build_scanner_data() -> list[dict]:
     return rows
 
 
+def _get_paper_positions() -> dict:  # claude code changed: new — paper position cache reader
+    """
+    Return {pair: position_dict} for pairs with an active paper cycle.
+
+    Reads from cache if warm; runs run_ranging_paper_simulation() on miss (slow first
+    load ~5-15 s).  A 5-minute negative cache prevents tight retry loops on errors.
+    """
+    cached = cache.get(_POS_CACHE_KEY)
+    if cached is not None:
+        return cached
+    try:
+        from bot.paper_trading.ranging_paper_engine import run_ranging_paper_simulation
+        sim = run_ranging_paper_simulation()
+        pos = {
+            pair: r["open_position"]
+            for pair, r in sim.items()
+            if r.get("open_position")
+        }
+    except Exception as exc:
+        logger.warning("forex_scanner: positions fetch failed: %s", exc)
+        cache.set(_POS_CACHE_KEY, {}, 300)   # negative cache — 5 min
+        return {}
+    cache.set(_POS_CACHE_KEY, pos, _POS_CACHE_TTL)
+    return pos
+
+
 # ── view ──────────────────────────────────────────────────────────────────────
 
 def forex_scanner(request):  # claude code changed: new — Forex Market Scanner view
@@ -256,15 +285,34 @@ def forex_scanner(request):  # claude code changed: new — Forex Market Scanner
         rows = _build_scanner_data()
         cache.set(_CACHE_KEY, rows, _CACHE_TTL)
 
+    # Inject paper positions — shallow-copy each row to avoid mutating cached dicts  # claude code changed: new
+    positions = _get_paper_positions()
+    display_rows = []
+    for row in rows:
+        r = dict(row)
+        pos = positions.get(r["pair"])
+        if pos:
+            r["has_position"] = True
+            r["pos_fills"]    = pos["fills"]
+            r["pos_entry"]    = pos["entry_price"]
+            r["pos_wap"]      = pos["wap"]
+            r["pos_pnl"]      = pos["profit_usdt"]
+            r["pos_entry_dt"] = pos["entry_time"]
+        else:
+            r["has_position"] = False
+        display_rows.append(r)
+
     # Count by regime for summary badges
     regime_counts = {}
-    for r in rows:
+    for r in display_rows:
         regime_counts[r["regime"]] = regime_counts.get(r["regime"], 0) + 1
+    open_count = sum(1 for r in display_rows if r["has_position"])
 
     context = {
-        "rows":          rows,
-        "rows_json":     json.dumps(rows),
+        "rows":          display_rows,
+        "rows_json":     json.dumps(display_rows),
         "regime_counts": regime_counts,
-        "total_pairs":   len(rows),
+        "total_pairs":   len(display_rows),
+        "open_count":    open_count,
     }
     return render(request, "forex_scanner.html", context)
