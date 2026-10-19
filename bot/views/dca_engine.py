@@ -22,7 +22,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _ROOT      = Path(__file__).resolve().parents[2]
-_CACHE_KEY = "dca_engine_results_v6"  # claude code changed: v6 — 1:30 leverage applied to display scaling
+_CACHE_KEY = "dca_engine_results_v7"  # claude code changed: v7 — LCEX-1 5-fill cap; busts v6 7-fill cache
 _CACHE_TTL = 3600  # 1 hour
 
 _PERM_RESULT = {
@@ -53,16 +53,16 @@ _PROTOCOL = {
     "profit_act_pct": 0.5,
     "trailing_pct":   0.2,
     "mae_horizon":    6,
-    "ladder_levels":  7,
-    "multipliers":    "1 · 2 · 4 · 8 · 16 · 32 · 64×",
+    "ladder_levels":  5,                       # claude code changed: LCEX-1 — 5 fills (was 7)
+    "multipliers":    "1 · 2 · 4 · 8 · 16×",  # claude code changed: LCEX-1 — 5-element (was 7)
     "folds":          5,
     "embargo_bars":   48,
-    "max_margin":     12700,    # claude code changed: $100 × (1+2+4+8+16+32+64) = $12,700 margin
-    "max_notional":   381000,   # claude code changed: $12,700 × 30 = $381,000 notional (worst-case)
+    "max_margin":     3100,    # claude code changed: LCEX-1 — $100 × (1+2+4+8+16) = $3,100 margin (was $12,700)
+    "max_notional":   93000,   # claude code changed: LCEX-1 — $3,100 × 30 = $93,000 notional (was $381,000)
 }
 
 # Cumulative NOTIONAL deployed at each ladder level ($100 margin × 30 leverage)
-_LEVEL_CAPITAL = [3000, 9000, 21000, 45000, 93000, 189000, 381000]  # claude code changed: notional per level
+_LEVEL_CAPITAL = [3000, 9000, 21000, 45000, 93000]  # claude code changed: LCEX-1 — 5 levels (was 7)
 
 
 # ── data build (single pass per pair per fold) ────────────────────────────────
@@ -99,7 +99,7 @@ def _build_results():
         equity_pts      = []   # {"d": "YYYY-MM-DD", "p": cumPnl}
         fold_boundaries = []
         fold_stats      = []
-        fills_dist      = [0] * 7
+        fills_dist      = [0] * 5  # claude code changed: LCEX-1 — 5 levels (was 7)
         all_costs       = []
         cum_pnl         = 0.0
 
@@ -126,7 +126,7 @@ def _build_results():
                 if t["profit_usdt"] > 0:
                     fold_wins += 1
                 equity_pts.append({"d": str(t["exit_time"])[:10], "p": round(cum_pnl, 4)})
-                lvl = min(t.get("fills", 1), 7) - 1
+                lvl = min(t.get("fills", 1), 5) - 1  # claude code changed: LCEX-1 — cap at 5 (was 7)
                 fills_dist[lvl] += 1
                 all_costs.append(t.get("total_cost_usdt", 0.0))
 

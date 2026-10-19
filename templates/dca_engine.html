@@ -199,7 +199,7 @@
 <div class="term-section" style="margin-bottom:16px">
     <div class="term-section-head">
         <span class="term-section-title">Capital deployment — DCA ladder fill depth</span>
-        <span class="term-section-meta">cycles reaching each ladder level · L7 = $381,000 notional ($12,700 margin · 1:30)</span>
+        <span class="term-section-meta">cycles reaching each ladder level · L5 = $93,000 notional ($3,100 margin · 1:30)</span>{# claude code changed: LCEX-1 — updated to L5 max (was L7 $381K) #}
     </div>
     <div class="term-section-body">
         <div class="dca-chart-box chart-box" style="height:200px">
@@ -461,7 +461,7 @@
         new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['L1  $3K', 'L2  $9K', 'L3  $21K', 'L4  $45K', 'L5  $93K', 'L6  $189K', 'L7  $381K'],  // claude code changed: notional at 1:30 leverage on $100 margin
+                labels: ['L1  $3K', 'L2  $9K', 'L3  $21K', 'L4  $45K', 'L5  $93K'],  // claude code changed: LCEX-1 — 5 levels (was 7: dropped L6 $189K and L7 $381K)
                 datasets: [
                     {
                         label: 'GBP/JPY',
