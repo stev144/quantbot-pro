@@ -456,19 +456,39 @@ PLACEHOLDER_NZDCHF = ForexInstrumentSpec(  # claude code changed: new — QC por
     validated=False,
 )
 
+PLACEHOLDER_EURCAD = ForexInstrumentSpec(  # claude code changed: new — QC-2 replacement for AUD/CAD (pre-registered 2026-10-19)
+    canonical_symbol="EUR/CAD",
+    pip_size=0.0001,         # standard 4-decimal-place pair
+    price_precision=5,
+    contract_size=100_000.0,
+    min_volume=0.01,
+    volume_increment=0.01,
+    quantity_precision=2,
+    account_currency="USD",
+    spread_typical_pips=None,
+    commission_per_lot=None,
+    swap_long=None,
+    swap_short=None,
+    leverage_max=30.0,
+    margin_rate=1.0 / 30.0,
+    source="PLACEHOLDER_QC2_2026-10-19",
+    validated=False,
+)
+
 # Diversified 5-pair QC portfolio: only 1 USD pair; 4 pure crosses with different regional drivers
-QC_PORTFOLIO_SPECS: dict = {  # claude code changed: new — quick-cycle diversified pair set
+# AUD/CAD replaced by EUR/CAD (QC-2, pre-registered 2026-10-19)  # claude code changed: QC-2 nomination
+QC_PORTFOLIO_SPECS: dict = {  # claude code changed: updated — EUR/CAD replaces AUD/CAD per QC-2 pre-registration
     "EUR/USD": MT5_EURUSD,          # EUR/USD — MT5 verified (spread=0, commission=0)
     "EUR/JPY": PLACEHOLDER_EURJPY,  # cross — ECB/BoJ; no USD
-    "GBP/JPY": PLACEHOLDER_GBPJPY,  # cross — BoE/BoJ; no USD; high volatility
-    "AUD/CAD": PLACEHOLDER_AUDCAD,  # cross — commodity; RBA/BoC; no USD/EUR/GBP/JPY
+    "GBP/JPY": PLACEHOLDER_GBPJPY,  # cross — BoE/BoJ; no USD; high volatility; QC-1 validated
+    "EUR/CAD": PLACEHOLDER_EURCAD,  # cross — ECB/BoC; QC-2 nominee replacing AUD/CAD; no GBP/JPY overlap
     "NZD/CHF": PLACEHOLDER_NZDCHF,  # cross — RBNZ/SNB; risk/safe-haven; no USD/EUR/GBP/JPY/AUD/CAD
 }
 
-QC_PORTFOLIO_CSV_FILES: dict = {  # claude code changed: new — data/forex/ filename for each QC pair
+QC_PORTFOLIO_CSV_FILES: dict = {  # claude code changed: updated — EUR/CAD replaces AUD/CAD
     "EUR/USD": "EUR_USD_1h.csv",
     "EUR/JPY": "EUR_JPY_1h.csv",
     "GBP/JPY": "GBP_JPY_1h.csv",
-    "AUD/CAD": "AUD_CAD_1h.csv",
+    "EUR/CAD": "EUR_CAD_1h.csv",
     "NZD/CHF": "NZD_CHF_1h.csv",
 }

@@ -3197,3 +3197,21 @@ produce near-zero EMA spread (consistently ~0.01%) which always falls below the 
 
 ### H4 CLOSED NEGATIVE.
 
+
+---
+
+## QC-2 Pre-Registration: EUR/CAD Nomination
+**Date:** 2026-10-19  
+**Protocol ID:** QC-FX-2-EURCAD-2026-10-19  
+**Document:** `QC2_PRE_REGISTRATION_2026-10-19.md`  
+**SHA-256:** `7454b53e586609f45c75c438c5454cedccc5f263e139881bdc701604fbf92e1a`
+
+EUR/CAD nominated as QC-2 replacement for dropped AUD/CAD. Candidate selected
+on regime data only (RANGING, ADX 17.3, ECB/BoC, no GBP/JPY overlap).
+
+**Sealed criterion:** `total_pnl_usdt > 0` AND `total_trades ≥ 15` over
+holdout window 2026-10-19 → 2027-01-17 (minimum 90 days). Historical data
+is descriptive only per CRRP-2026-10-02.
+
+**EUR/CAD added to QC_PORTFOLIO_SPECS** (replaces AUD/CAD). CSV already in
+MT5 universe; `refresh_forex_data` will append candles hourly.
