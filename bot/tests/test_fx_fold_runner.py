@@ -36,7 +36,7 @@ class FxLadderSpecValidationTests(SimpleTestCase):  # claude code changed: new t
     def _valid_spec(self, **kwargs):
         defaults = dict(
             pair="EUR/USD", direction="LONG", pip_size=0.0001,
-            atr_ref=0.00128, base_pips=(21.3, 35.4, 50.4, 65.4, 79.9, 100.5),
+            atr_ref=0.00128, base_pips=(21.3, 35.4, 50.4, 65.4),  # claude code changed: LCEX-1 — 4 levels (was 6)
         )
         defaults.update(kwargs)
         return FxLadderSpec(**defaults)
@@ -44,7 +44,7 @@ class FxLadderSpecValidationTests(SimpleTestCase):  # claude code changed: new t
     def test_valid_long(self):
         spec = self._valid_spec(direction="LONG")
         self.assertEqual(spec.direction, "LONG")
-        self.assertEqual(len(spec.base_pips), 6)
+        self.assertEqual(len(spec.base_pips), 4)  # claude code changed: LCEX-1 — 4 levels (was 6)
 
     def test_valid_short(self):
         spec = self._valid_spec(direction="SHORT")
@@ -56,7 +56,7 @@ class FxLadderSpecValidationTests(SimpleTestCase):  # claude code changed: new t
 
     def test_wrong_base_pips_length(self):
         with self.assertRaises(ValueError):
-            self._valid_spec(base_pips=(21.3, 35.4, 50.4))  # only 3, needs 6
+            self._valid_spec(base_pips=(21.3, 35.4, 50.4))  # only 3, needs 4  # claude code changed: LCEX-1
 
     def test_zero_atr_ref_rejected(self):
         with self.assertRaises(ValueError):
@@ -156,17 +156,17 @@ class BuildLadderSpecFromAnalysisTests(SimpleTestCase):  # claude code changed: 
         self.assertEqual(spec.direction, "LONG")
         self.assertAlmostEqual(spec.base_pips[0], 22.8)  # p40 → L2
         self.assertAlmostEqual(spec.base_pips[1], 37.9)  # p60 → L3
-        self.assertAlmostEqual(spec.base_pips[5], 117.9) # p97 → L7
+        self.assertAlmostEqual(spec.base_pips[3], 70.9)  # p85 → L5  # claude code changed: LCEX-1 — index 3 (was 5/p97)
 
     def test_atr_ref_passed_through(self):
         analysis = self._fake_analysis()
         spec = build_ladder_spec_from_analysis(analysis, "LONG", 0.0001, "EUR/USD")
         self.assertAlmostEqual(spec.atr_ref, 0.001280)
 
-    def test_six_base_pips(self):
+    def test_four_base_pips(self):  # claude code changed: LCEX-1 — renamed from test_six_base_pips
         analysis = self._fake_analysis()
         spec = build_ladder_spec_from_analysis(analysis, "LONG", 0.0001, "EUR/USD")
-        self.assertEqual(len(spec.base_pips), 6)
+        self.assertEqual(len(spec.base_pips), 4)  # claude code changed: LCEX-1 — 4 levels (was 6)
 
 
 # ── _simulate_data_derived_next_open ─────────────────────────────────────────
@@ -187,7 +187,7 @@ def _make_trending_df(n: int, start_price: float, trend_per_candle: float,
 def _eurusd_long_spec() -> FxLadderSpec:
     return FxLadderSpec(
         pair="EUR/USD", direction="LONG", pip_size=0.0001, atr_ref=0.00128,
-        base_pips=(22.8, 37.9, 54.4, 70.9, 90.1, 117.9),
+        base_pips=(22.8, 37.9, 54.4, 70.9),  # claude code changed: LCEX-1 — 4 levels (was 6)
     )
 
 
@@ -211,7 +211,7 @@ class SimulateDataDerivedNextOpenTests(SimpleTestCase):  # claude code changed: 
         """SHORT should profit when price declines monotonically."""
         spec = FxLadderSpec(
             pair="EUR/USD", direction="SHORT", pip_size=0.0001, atr_ref=0.00128,
-            base_pips=(22.2, 36.2, 51.9, 67.3, 85.8, 119.0),
+            base_pips=(22.2, 36.2, 51.9, 67.3),  # claude code changed: LCEX-1 — 4 levels (was 6)
         )
         # price falls from 1.20 to ~1.10 over 1000 candles — SHORT should eventually profit
         df = _make_trending_df(1000, 1.20, 0.0001, direction="down")
@@ -229,7 +229,7 @@ class SimulateDataDerivedNextOpenTests(SimpleTestCase):  # claude code changed: 
         # SHORT on rising market to force a profit trade quickly
         spec_short = FxLadderSpec(
             pair="EUR/USD", direction="SHORT", pip_size=0.0001, atr_ref=0.00128,
-            base_pips=(22.2, 36.2, 51.9, 67.3, 85.8, 119.0),
+            base_pips=(22.2, 36.2, 51.9, 67.3),  # claude code changed: LCEX-1 — 4 levels (was 6)
         )
         df = _make_trending_df(2000, 1.20, 0.0001, direction="down")
         trades, _ = _simulate_data_derived_next_open(
@@ -381,7 +381,7 @@ def _spec_no_dca() -> FxLadderSpec:
     return FxLadderSpec(
         pair="EUR/USD", direction="LONG", pip_size=0.0001,
         atr_ref=0.00128,
-        base_pips=(9999.0, 9999.0, 9999.0, 9999.0, 9999.0, 9999.0),  # effectively unreachable
+        base_pips=(9999.0, 9999.0, 9999.0, 9999.0),  # effectively unreachable  # claude code changed: LCEX-1 — 4 levels (was 6)
     )
 
 

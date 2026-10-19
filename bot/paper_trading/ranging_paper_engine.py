@@ -59,7 +59,7 @@ _PROFIT_ACTIVATION  = 0.005   # 0.5%
 _TRAILING_PCT       = 0.002   # 0.2%
 _MAX_CYCLE_CANDLES  = 72
 _MAE_HORIZON        = 6
-_MULTIPLIERS        = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
+_MULTIPLIERS        = (2.0, 4.0, 8.0, 16.0)  # claude code changed: LCEX-1 2026-10-19 — 5-fill cap; levels 2-5 only (was 2-7)
 
 # ── G3: FX-calibrated regime thresholds (causal; same as forex_scanner.py) ───
 _ADX_TRENDING   = 25.0   # ADX > this → TRENDING (no new cycle open)

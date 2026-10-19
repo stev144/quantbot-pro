@@ -33,12 +33,12 @@ _CLAMP_LO = 0.5             # claude code changed: per v3 Step 3
 _CLAMP_HI = 2.0             # claude code changed: per v3 Step 3
 _MIN_PIPS = 5.0             # claude code changed: per v3 Step 4
 _MAX_SPACING = 0.25         # claude code changed: per v3 Step 5
-_MULTIPLIERS = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0)   # claude code changed: levels 2-7, per protocol; unchanged from v1
+_MULTIPLIERS = (2.0, 4.0, 8.0, 16.0)   # claude code changed: LCEX-1 2026-10-19 — 5-fill cap (was 6 levels 2-7); now 4 levels 2-5 only
 
 # ── risk-control constants (v5/A4) ────────────────────────────────────────────
 MAX_CYCLE_CANDLES = 720         # claude code changed: v5/A4 — time exit after 30×H=24 candles (30 trading days); see FX_DCA_PROTOCOL_2026-10-16_v5.md Part 3B §1
-_MAX_LEVELS = 7                 # claude code changed: v5/A4 — explicit cap: 1 entry + 6 DCA add-ons; already enforced by len(spec.base_pips); documented here per §2
-_MAX_DEPLOYED_MULTIPLIER = 127  # claude code changed: v5/A4 — 1+2+4+8+16+32+64; max notional = initial_usdt × 127 = 762 USDT at initial_usdt=6
+_MAX_LEVELS = 5                 # claude code changed: LCEX-1 2026-10-19 — 5-fill cap (was 7); 1 entry + 4 DCA add-ons; enforced by len(spec.base_pips)
+_MAX_DEPLOYED_MULTIPLIER = 31   # claude code changed: LCEX-1 2026-10-19 — 1+2+4+8+16 (was 127 = 1+2+4+8+16+32+64)
 
 
 @dataclass(frozen=True)
@@ -46,26 +46,26 @@ class FxLadderSpec:
     """
     Data-derived ladder spec for one pair/direction/fold.
 
-    base_pips: 6-element tuple — level-2 through level-7 base spacings in pips
-    (correspond to p40/p60/p75/p85/p92/p97 of the H=24 MAE distribution,
+    base_pips: 4-element tuple — level-2 through level-5 base spacings in pips
+    (correspond to p40/p60/p75/p85 of the H=24 MAE distribution,
     computed from the fold's training rows only — per-fold, never full-calibration).
     atr_ref: full-price ATR_ref from the same training rows.
     pip_size: instrument pip size (e.g. 0.0001 for EUR/USD, 0.01 for USD/JPY).
-    """  # claude code changed: new dataclass — holds per-fold data-derived ladder parameters
+    """  # claude code changed: LCEX-1 2026-10-19 — updated to 4-element (was 6; levels 2-5 only)
     pair: str
     direction: str               # "LONG" | "SHORT"
     pip_size: float
     atr_ref: float               # price-unit ATR_ref from training data
-    base_pips: Tuple[float, ...] # 6 values: p40/p60/p75/p85/p92/p97
+    base_pips: Tuple[float, ...] # 4 values: p40/p60/p75/p85  # claude code changed: LCEX-1 — 4 values (was 6: p40-p97)
     multipliers: Tuple[float, ...] = _MULTIPLIERS
 
     def __post_init__(self):  # claude code changed: basic validation
         if self.direction not in ("LONG", "SHORT"):
             raise ValueError(f"FxLadderSpec.direction must be 'LONG' or 'SHORT', got {self.direction!r}")
-        if len(self.base_pips) != 6:
-            raise ValueError(f"FxLadderSpec.base_pips must have 6 elements (levels 2-7), got {len(self.base_pips)}")
-        if len(self.multipliers) != 6:
-            raise ValueError(f"FxLadderSpec.multipliers must have 6 elements, got {len(self.multipliers)}")
+        if len(self.base_pips) != 4:  # claude code changed: LCEX-1 — 4 elements (was 6; levels 2-5 only)
+            raise ValueError(f"FxLadderSpec.base_pips must have 4 elements (levels 2-5), got {len(self.base_pips)}")
+        if len(self.multipliers) != 4:  # claude code changed: LCEX-1 — 4 multipliers (was 6)
+            raise ValueError(f"FxLadderSpec.multipliers must have 4 elements, got {len(self.multipliers)}")
         if self.atr_ref <= 0:
             raise ValueError(f"FxLadderSpec.atr_ref must be positive, got {self.atr_ref}")
         if self.pip_size <= 0:
@@ -186,7 +186,7 @@ def compute_wilder_adx(df: pd.DataFrame, period: int = _ADX_PERIOD) -> np.ndarra
 
 @dataclass
 class _Fill:
-    level: int          # 0 = entry, 1-6 = add-ons
+    level: int          # 0 = entry, 1-4 = add-ons  # claude code changed: LCEX-1 — 1-4 (was 1-6)
     price: float
     usdt_amount: float
     quantity: float
@@ -481,7 +481,7 @@ def build_ladder_spec_from_analysis(
     """
     Build FxLadderSpec from the output of fx_movement_analysis.analyse_pair().
 
-    Extracts MAE quantiles (p40/p60/p75/p85/p92/p97) in pip units at the given
+    Extracts MAE quantiles (p40/p60/p75/p85) in pip units at the given  # claude code changed: LCEX-1 — p40-p85 only (was p40-p97)
     horizon and the ATR_ref for the given direction.
     mae_horizon: H value to read from analysis (6 for quick-cycle QC-1, 24 for A3).
     """  # claude code changed: added mae_horizon param — 2026-10-18; allows H=6 for quick-cycle QC-1 protocol
@@ -491,9 +491,7 @@ def build_ladder_spec_from_analysis(
         mae_pips["p60"],
         mae_pips["p75"],
         mae_pips["p85"],
-        mae_pips["p92"],
-        mae_pips["p97"],
-    )  # claude code changed: levels 2-7 per v3 Table (p40=L2, p60=L3, p75=L4, p85=L5, p92=L6, p97=L7)
+    )  # claude code changed: LCEX-1 2026-10-19 — levels 2-5 only (was 2-7: p40/p60/p75/p85/p92/p97)
     return FxLadderSpec(
         pair=pair or analysis.get("pair", ""),
         direction=direction,
@@ -702,7 +700,7 @@ def print_fold_result(result: Dict) -> None:
     print(f"  Fold {result['fold_num']}  |  {result['pair']}  |  {result['direction']}")
     print(f"  Train: {result['train_rows']:,} rows  |  Test: {result['test_rows']:,} rows")
     print(f"  ATR_ref: {sp.atr_ref:.6f} ({sp.atr_ref/sp.pip_size:.2f} pips)")
-    print(f"  Base pips (L2-L7): {', '.join(f'{p:.1f}' for p in sp.base_pips)}")
+    print(f"  Base pips (L2-L5): {', '.join(f'{p:.1f}' for p in sp.base_pips)}")  # claude code changed: LCEX-1 — L2-L5 (was L2-L7)
     print(f"{'='*70}")
     print(f"  -- Closed-trade summary --")
     print(f"  Trades closed   : {s['total_trades']}")
