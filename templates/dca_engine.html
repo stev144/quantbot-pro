@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
-{% load static %}  {# claude code changed: removed dead feature_intel_extras load — no filters used in this template #}
+{% load static %}
+{% load feature_intel_extras %}  {# claude code changed: restored — get_item filter IS used on lines 138 and 215; earlier removal was incorrect #}
 {# claude code changed: new — QC-1 Forex DCA Engine dashboard page #}
 
 {% block head %}
