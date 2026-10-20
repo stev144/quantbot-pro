@@ -60,10 +60,10 @@ class CryptoForexNavLinksTest(TestCase):
     # own established convention (no mocking of the templates/routes
     # themselves).
 
-    def test_crypto_and_forex_links_present_on_dashboard(self):
+    def test_forex_link_present_on_dashboard(self):  # claude code changed: F-02 — Crypto link removed; test renamed to Forex-only
         resp = self.client.get('/')
         html = resp.content.decode()
-        self.assertIn('>Crypto</a>', html)
+        self.assertNotIn('>Crypto</a>', html)  # claude code changed: F-02 — assert Crypto is gone
         self.assertIn('>Forex</a>', html)
 
     def test_topbar_comment_text_never_leaks_into_the_rendered_page(self):
@@ -96,15 +96,7 @@ class CryptoForexNavLinksTest(TestCase):
             html = self.client.get(url).content.decode()
             self.assertNotIn('Navigation Discoverability', html, f"a template comment leaked into the rendered HTML of {url}")
 
-    def test_crypto_link_points_at_the_real_dashboard_route(self):
-        resp = self.client.get('/')
-        html = resp.content.decode()
-        # claude code changed: the exact <a> tag, not just the word
-        # "Crypto" appearing somewhere — proves it's a real link to '/',
-        # not text that happens to be on the page for another reason.
-        self.assertIn('href="/">Crypto</a>', html)
-
-    def test_forex_link_points_at_the_forex_dashboard(self):
+    def test_forex_link_points_at_the_forex_dashboard(self):  # claude code changed: F-02 — removed test_crypto_link_points_at_the_real_dashboard_route (Crypto link deleted)
         # claude code changed: Forex Research Dashboard mission — Forex
         # used to point straight at Research Lab's hypothesis-entry page
         # (?asset_class=FOREX hint and all); now it opens a real,
@@ -116,24 +108,7 @@ class CryptoForexNavLinksTest(TestCase):
         html = resp.content.decode()
         self.assertIn(f'href="{reverse("forex_dashboard")}">Forex</a>', html)
 
-    def test_crypto_link_highlights_on_the_dashboard_page(self):
-        # claude code changed: the <a> tag's class/href span two lines in
-        # the template (matching every other nav link's own formatting),
-        # so assert on the class attribute and the href/label separately
-        # rather than one exact single-line string.
-        # claude code changed: dashboard hardening added a data-slow-nav
-        # attribute on this same <a> tag (see templates/base.html's
-        # loading-overlay handler) between the class and href lines — this
-        # now matches on the Crypto link's own <a> block as a whole
-        # (isolated by splitting on ">Crypto</a>") rather than one exact,
-        # now-stale three-line string.
-        resp = self.client.get('/')
-        html = resp.content.decode()
-        crypto_tag = html.split(">Crypto</a>")[0].rsplit("<a class=", 1)[-1]
-        self.assertIn('"term-nav-link active"', crypto_tag)
-        self.assertIn('href="/"', crypto_tag)
-
-    def test_forex_link_present_and_not_highlighted_on_an_unrelated_page(self):
+    def test_forex_link_present_and_not_highlighted_on_an_unrelated_page(self):  # claude code changed: F-02 — removed test_crypto_link_highlights_on_the_dashboard_page (Crypto link deleted)
         from django.urls import reverse
         resp = self.client.get('/research/backtests/')
         html = resp.content.decode()
@@ -151,7 +126,7 @@ class CryptoForexNavLinksTest(TestCase):
         html = resp.content.decode()
         self.assertIn('class="term-nav"', html)
         nav_section = html.split('class="term-nav"', 1)[1].split('</nav>', 1)[0]
-        self.assertIn('>Crypto</a>', nav_section)
+        self.assertNotIn('>Crypto</a>', nav_section)  # claude code changed: F-02 — Crypto link removed
         self.assertIn('>Forex</a>', nav_section)
 
 
