@@ -1,0 +1,72 @@
+{% comment %}
+    claude code changed: new — mobile bottom navigation bar.
+    Only rendered at ≤860px (the same breakpoint terminal.css already
+    uses for .term-topbar flex-wrap). Hidden on desktop via CSS.
+    Passes the same `active` slug as the topbar to highlight the
+    current destination. Does NOT duplicate research/risk nav items —
+    those remain accessible via the desktop topbar. Mobile users reach
+    the core five destinations here; the More/Tools pattern is not
+    needed for this platform's primary user flow.
+
+    Usage: {% include "partials/_bottom_nav.html" with active="markets" %}
+    Valid active slugs: dashboard, markets, watchlist, portfolio_risk, academy
+{% endcomment %}
+<nav class="term-bottom-nav" aria-label="Primary mobile navigation">
+    <a href="{% url 'dashboard' %}"
+       class="term-bottom-nav-item {% if active == 'dashboard' %}active{% endif %}"
+       {% if active == 'dashboard' %}aria-current="page"{% endif %}
+       aria-label="Home">
+        <svg class="term-bnav-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7A1 1 0 003 11h1v6a1 1 0 001 1h3a1 1 0 001-1v-3h2v3a1 1 0 001 1h3a1 1 0 001-1v-6h1a1 1 0 00.707-1.707l-7-7z"/>
+        </svg>
+        <span class="term-bnav-label">Home</span>
+    </a>
+    <a href="{% url 'markets' %}"
+       class="term-bottom-nav-item {% if active == 'markets' %}active{% endif %}"
+       {% if active == 'markets' %}aria-current="page"{% endif %}
+       aria-label="Markets">
+        <svg class="term-bnav-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/>
+        </svg>
+        <span class="term-bnav-label">Markets</span>
+    </a>
+    {% if user.is_authenticated %}
+    <a href="{% url 'watchlist' %}"
+       class="term-bottom-nav-item {% if active == 'watchlist' %}active{% endif %}"
+       {% if active == 'watchlist' %}aria-current="page"{% endif %}
+       aria-label="Watchlist">
+        <svg class="term-bnav-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clip-rule="evenodd"/>
+        </svg>
+        <span class="term-bnav-label">Watchlist</span>
+    </a>
+    {% else %}
+    <a href="{% url 'login' %}"
+       class="term-bottom-nav-item"
+       aria-label="Watchlist (sign in required)">
+        <svg class="term-bnav-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" style="opacity:0.4">
+            <path fill-rule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clip-rule="evenodd"/>
+        </svg>
+        <span class="term-bnav-label" style="opacity:0.4">Watchlist</span>
+    </a>
+    {% endif %}
+    <a href="{% url 'portfolio_risk' %}"
+       class="term-bottom-nav-item {% if active == 'portfolio_risk' %}active{% endif %}"
+       {% if active == 'portfolio_risk' %}aria-current="page"{% endif %}
+       aria-label="Portfolio">
+        <svg class="term-bnav-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"/>
+            <path fill-rule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd"/>
+        </svg>
+        <span class="term-bnav-label">Portfolio</span>
+    </a>
+    <a href="{% url 'academy_dashboard' %}"
+       class="term-bottom-nav-item {% if active == 'academy' %}active{% endif %}"
+       {% if active == 'academy' %}aria-current="page"{% endif %}
+       aria-label="Academy">
+        <svg class="term-bnav-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0zM6 18a1 1 0 001-1v-2.065a8.935 8.935 0 00-2-.712V17a1 1 0 001 1z"/>
+        </svg>
+        <span class="term-bnav-label">Academy</span>
+    </a>
+</nav>

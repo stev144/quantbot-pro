@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% load static %}
+{# claude code changed: new — Watchlist page #}
+
+{% block title %}Watchlist — Steph Quant Technologies{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="watchlist" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Watchlist</span>
+            <span class="term-section-meta">{{ n_items }} instrument{{ n_items|pluralize }}</span>
+        </div>
+        <div class="term-section-body">
+
+            {% if n_items == 0 %}
+            <div class="unavailable" style="text-align:center;padding:40px 0">
+                <div style="font-size:32px;margin-bottom:12px;opacity:0.3">♡</div>
+                <div>Your watchlist is empty.</div>
+                <div style="margin-top:8px">
+                    <a href="{% url 'markets' %}" class="term-btn mono" style="font-size:12px">
+                        Browse Markets
+                    </a>
+                </div>
+            </div>
+
+            {% else %}
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--sp-3)">
+                {% for q in quotes %}
+                {% if q.available %}
+                <div class="term-panel" style="padding:var(--sp-3) var(--sp-4);display:flex;flex-direction:column;gap:var(--sp-2)">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <div>
+                            <span style="font-size:14px;font-weight:700;font-family:var(--font-mono)">{{ q.display_symbol }}</span>
+                            {% if q.display_name %}<div style="font-size:11px;color:var(--text-dim);margin-top:2px">{{ q.display_name }}</div>{% endif %}
+                        </div>
+                        <button class="mkt-watchlist-btn active"
+                                data-symbol="{{ q.symbol }}"
+                                data-class="{{ q.asset_class }}"
+                                aria-label="Remove from watchlist"
+                                onclick="removeItem(this, '{{ q.symbol }}')">♥</button>
+                    </div>
+                    <div style="display:flex;align-items:flex-end;justify-content:space-between">
+                        <div>
+                            <div style="font-size:16px;font-weight:700;font-family:var(--font-mono);font-variant-numeric:tabular-nums">{{ q.price }}</div>
+                            <div style="font-size:12px;font-family:var(--font-mono);{% if q.positive %}color:var(--positive){% else %}color:var(--negative){% endif %}">
+                                {% if q.positive %}▲ +{% else %}▼ {% endif %}{{ q.change_pct }}%
+                            </div>
+                        </div>
+                        <div style="opacity:0.85">{{ q.sparkline }}</div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+
+{% include "partials/_bottom_nav.html" with active="watchlist" %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+.mkt-watchlist-btn {
+    background: none; border: none; padding: 4px; cursor: pointer;
+    color: var(--text-dim); font-size: 16px; line-height: 1;
+    border-radius: 4px; transition: color .15s, background .15s;
+}
+.mkt-watchlist-btn:hover { color: var(--negative); }
+.mkt-watchlist-btn.active { color: var(--accent); }
+</style>
+<script>
+var CSRF = '{{ csrf_token }}';
+var WL_REMOVE_URL = '{% url "watchlist_remove" %}';
+
+function removeItem(btn, symbol) {  // claude code changed: new — remove from watchlist on watchlist page
+    btn.disabled = true;
+    fetch(WL_REMOVE_URL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+        body: JSON.stringify({symbol: symbol}),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            var card = btn.closest('[data-symbol], .term-panel');
+            if (!card) card = btn.parentElement.parentElement.parentElement;
+            if (card) card.style.opacity = '0';
+            setTimeout(function() { if (card) card.remove(); }, 250);
+        }
+    })
+    .catch(function() {})
+    .finally(function() { btn.disabled = false; });
+}
+</script>
+{% endblock %}

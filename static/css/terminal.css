@@ -596,6 +596,63 @@
 }
 
 /* ============================================================
+ * BOTTOM NAVIGATION — mobile-only fixed bar
+ * claude code changed: new — Markets UI upgrade. Inspired by Capital.com
+ * mobile nav patterns. Only visible at ≤860px so it does not interfere
+ * with the existing desktop topbar. Body gets matching bottom-padding so
+ * content is never hidden behind the bar.
+ * ============================================================ */
+.term-bottom-nav {
+  display: none;  /* hidden on desktop */
+}
+
+@media (max-width: 860px) {
+  .term-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--bg-1);
+    border-top: 1px solid var(--border);
+    z-index: 200;
+    justify-content: space-around;
+    align-items: stretch;
+  }
+  body {
+    padding-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+  }
+  .term-bottom-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    padding: 8px 4px;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 10px;
+    font-family: var(--font-ui);
+    gap: 3px;
+    transition: color 0.15s;
+    min-height: 50px;
+    min-width: 44px;  /* WCAG 2.5.5 touch target */
+  }
+  .term-bottom-nav-item:hover { color: var(--text-secondary); }
+  .term-bottom-nav-item.active { color: var(--accent); }
+  .term-bnav-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+  .term-bnav-label {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+}
+
+/* ============================================================
  * TYPED STRIP — the one real typed-text feature (static/js/typed.js).
  * claude code changed: went through several placements/restyles this
  * session — full-width strip on dashboard.html only, then briefly

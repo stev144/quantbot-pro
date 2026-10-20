@@ -12,11 +12,12 @@
     `active` is a slug (see the ACTIVE SLUGS list below) used only to
     highlight the current section — it does not affect routing.
 
-    ACTIVE SLUGS: dashboard, market_intelligence, research_lab, features,
-    strategy_research, strategy_pipeline, pairs_performance, backtesting,
+    ACTIVE SLUGS: dashboard, markets, watchlist, market_intelligence, research_lab,
+    features, strategy_research, strategy_pipeline, pairs_performance, backtesting,
     robustness_analysis, rejected_research, research_archive, portfolio_risk,
     execution_monitor, pairs_pilot, dca_engine, venue_comparison, system_health,
     forex_scanner
+    {# claude code changed: added markets, watchlist slugs for new Markets discovery screen #}
 
     claude code changed: new — 'crypto' and 'forex' also highlight their
     respective nav link, though no page passes them today: Crypto shares
@@ -85,9 +86,13 @@
            data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
            href="{% url 'dashboard' %}">Executive</a>
 
+        <a class="term-nav-link {% if active == 'markets' %}active{% endif %}"
+           {% if active == 'markets' %}aria-current="page"{% endif %}
+           href="{% url 'markets' %}">Markets</a>  {# claude code changed: new — Markets discovery screen #}
+
         <a class="term-nav-link {% if active == 'market_intelligence' %}active{% endif %}"
            {% if active == 'market_intelligence' %}aria-current="page"{% endif %}
-           href="{% url 'market_intelligence' %}">Market</a>
+           href="{% url 'market_intelligence' %}">Regime</a>  {# claude code changed: renamed Market → Regime to avoid confusion with new Markets screen #}
 
         {# claude code changed: new -- Academy entry, one top-level link #}
         {# mirroring the Market link pattern above. #}

@@ -852,3 +852,26 @@ class DecisionAttempt(_InsertOnlyModel):   # claude code changed: new — 2026-1
     candle_open_time = models.DateTimeField()
     attempted_at = models.DateTimeField(auto_now_add=True)
 
+
+# claude code changed: new — Markets UI watchlist. Per-user instrument list
+# persisted in the DB so it survives sessions and is scoped to the
+# authenticated user. asset_class distinguishes crypto vs. forex at read time
+# without re-deriving it from the symbol string. unique_together prevents
+# adding the same instrument twice for the same user.
+class WatchlistItem(models.Model):
+    user = models.ForeignKey(
+        "auth.User",
+        on_delete=models.CASCADE,
+        related_name="watchlist_items",
+    )
+    symbol = models.CharField(max_length=32)          # e.g. "BTC_USDT" or "EUR_USD"
+    asset_class = models.CharField(max_length=16)     # "crypto" | "forex"
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("user", "symbol")]
+        ordering = ["added_at"]
+
+    def __str__(self):
+        return f"{self.user.username} / {self.symbol} ({self.asset_class})"
+

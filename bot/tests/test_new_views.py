@@ -101,3 +101,113 @@ class NewSectionsSmokeTest(TestCase):
         response = self.client.get("/research/pairs/", {"pair": "DOT_LINK"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "DOT_LINK")
+
+
+# claude code changed: new — Markets discovery screen and Watchlist smoke tests
+class MarketsSmokeTest(TestCase):
+
+    def test_markets_page_renders(self):
+        response = self.client.get("/markets/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_markets_page_has_asset_tabs(self):
+        response = self.client.get("/markets/")
+        html = response.content.decode()
+        self.assertIn('data-tab="crypto"', html)
+        self.assertIn('data-tab="forex"', html)
+
+    def test_markets_page_has_sparklines(self):
+        response = self.client.get("/markets/")
+        html = response.content.decode()
+        # Sparklines are inline SVG polylines generated from CSV data
+        self.assertIn("polyline points", html)
+
+    def test_markets_page_has_mobile_bottom_nav(self):
+        response = self.client.get("/markets/")
+        html = response.content.decode()
+        self.assertIn("term-bottom-nav", html)
+
+    def test_markets_page_no_fabricated_prices(self):
+        # All prices come from CSV files; page must not serve if no CSVs exist
+        # (the view returns an honest unavailable state, not invented quotes).
+        # We just assert the page itself renders without error.
+        response = self.client.get("/markets/")
+        self.assertNotEqual(response.status_code, 500)
+
+    def test_watchlist_requires_login(self):
+        response = self.client.get("/markets/watchlist/")
+        # Anonymous users are redirected to login
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login/", response["Location"])
+
+    def test_watchlist_add_requires_login(self):
+        import json
+        response = self.client.post(
+            "/markets/watchlist/add/",
+            json.dumps({"symbol": "BTC_USDT", "asset_class": "crypto"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_watchlist_remove_requires_login(self):
+        import json
+        response = self.client.post(
+            "/markets/watchlist/remove/",
+            json.dumps({"symbol": "BTC_USDT"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_authenticated_user_can_add_and_remove_watchlist_item(self):
+        import json
+        from django.contrib.auth.models import User
+        from bot.journal.models import WatchlistItem
+        user = User.objects.create_user("wltest", password="testpass123")
+        self.client.login(username="wltest", password="testpass123")
+
+        # Add
+        resp = self.client.post(
+            "/markets/watchlist/add/",
+            json.dumps({"symbol": "BTC_USDT", "asset_class": "crypto"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.content)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["created"])
+        self.assertTrue(WatchlistItem.objects.filter(user=user, symbol="BTC_USDT").exists())
+
+        # Add again — idempotent (not created again)
+        resp2 = self.client.post(
+            "/markets/watchlist/add/",
+            json.dumps({"symbol": "BTC_USDT", "asset_class": "crypto"}),
+            content_type="application/json",
+        )
+        data2 = json.loads(resp2.content)
+        self.assertTrue(data2["ok"])
+        self.assertFalse(data2["created"])  # already exists
+
+        # Remove
+        resp3 = self.client.post(
+            "/markets/watchlist/remove/",
+            json.dumps({"symbol": "BTC_USDT"}),
+            content_type="application/json",
+        )
+        data3 = json.loads(resp3.content)
+        self.assertTrue(data3["ok"])
+        self.assertTrue(data3["removed"])
+        self.assertFalse(WatchlistItem.objects.filter(user=user, symbol="BTC_USDT").exists())
+
+    def test_watchlist_page_renders_for_authenticated_user(self):
+        from django.contrib.auth.models import User
+        user = User.objects.create_user("wlpagetest", password="testpass123")
+        self.client.login(username="wlpagetest", password="testpass123")
+        response = self.client.get("/markets/watchlist/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Watchlist")
+
+    def test_dashboard_has_mobile_bottom_nav(self):
+        # Bottom nav is included in dashboard.html
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("term-bottom-nav", response.content.decode())

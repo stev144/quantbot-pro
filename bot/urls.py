@@ -23,6 +23,8 @@ from bot.views.dca_engine import dca_engine     # claude code changed: new — Q
 from bot.views.paper_trading import paper_trading  # claude code changed: new — Ranging Paper Trader
 from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
 from bot.views.forex_scanner import forex_scanner         # claude code changed: new — Forex Market Scanner
+from bot.views.markets import markets                     # claude code changed: new — Markets discovery screen
+from bot.views.watchlist import watchlist, watchlist_add, watchlist_remove  # claude code changed: new — Watchlist
 from bot.views.system_health import system_health
 
 # claude code changed: regrouped into the RESEARCH -> MEASUREMENT ->
@@ -35,7 +37,13 @@ urlpatterns = [
     # ---- EXECUTIVE ----
     path('', dashboard, name='dashboard'),
 
-    # ---- MARKET ----
+    # ---- MARKETS (discovery screen) ----   # claude code changed: new
+    path('markets/', markets, name='markets'),
+    path('markets/watchlist/', watchlist, name='watchlist'),
+    path('markets/watchlist/add/', watchlist_add, name='watchlist_add'),
+    path('markets/watchlist/remove/', watchlist_remove, name='watchlist_remove'),
+
+    # ---- MARKET (regime intelligence — existing) ----
     path('market/', market_intelligence, name='market_intelligence'),
 
     # ---- FOREX ----

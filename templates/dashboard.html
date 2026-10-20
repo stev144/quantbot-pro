@@ -590,6 +590,7 @@ state, not an error the page failed to handle.
 </div>
 
 {% include "partials/_footer.html" with label="Executive Dashboard" note=symbol|add:" · backtest cache: 1h" %}
+{% include "partials/_bottom_nav.html" with active="dashboard" %}  {# claude code changed: new — mobile bottom nav #}
 
 {% endif %}
 {% endblock %}
