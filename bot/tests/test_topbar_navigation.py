@@ -64,7 +64,7 @@ class CryptoForexNavLinksTest(TestCase):
         resp = self.client.get('/')
         html = resp.content.decode()
         self.assertNotIn('>Crypto</a>', html)  # claude code changed: F-02 — assert Crypto is gone
-        self.assertIn('>Forex</a>', html)
+        self.assertIn('>Forex</summary>', html)  # claude code changed: Forex is now a <details> dropdown (since Scanner added in 02d7788)
 
     def test_topbar_comment_text_never_leaks_into_the_rendered_page(self):
         # claude code changed: new — real bug, found live in production
@@ -106,14 +106,16 @@ class CryptoForexNavLinksTest(TestCase):
         from django.urls import reverse
         resp = self.client.get('/')
         html = resp.content.decode()
-        self.assertIn(f'href="{reverse("forex_dashboard")}">Forex</a>', html)
+        # Forex is now a <details> dropdown — the summary says "Forex", the Dashboard link inside points at forex_dashboard
+        self.assertIn('>Forex</summary>', html)  # claude code changed: Forex became dropdown in 02d7788
+        self.assertIn(f'href="{reverse("forex_dashboard")}">Dashboard</a>', html)  # claude code changed: dashboard link is inside dropdown
 
     def test_forex_link_present_and_not_highlighted_on_an_unrelated_page(self):  # claude code changed: F-02 — removed test_crypto_link_highlights_on_the_dashboard_page (Crypto link deleted)
         from django.urls import reverse
         resp = self.client.get('/research/backtests/')
         html = resp.content.decode()
-        self.assertIn('>Forex</a>', html)
-        self.assertNotIn(f'term-nav-link active"\n           href="{reverse("forex_dashboard")}">Forex</a>', html)
+        self.assertIn('>Forex</summary>', html)  # claude code changed: Forex became <details> dropdown in 02d7788
+        self.assertNotIn('term-nav-link active"\n                     aria-current="page">Forex</summary>', html)  # claude code changed: Forex is unhighlighted on unrelated page
 
     def test_crypto_and_forex_appear_in_the_wrapped_mobile_nav_too(self):
         # claude code changed: this app has no separate hamburger-menu
@@ -127,7 +129,7 @@ class CryptoForexNavLinksTest(TestCase):
         self.assertIn('class="term-nav"', html)
         nav_section = html.split('class="term-nav"', 1)[1].split('</nav>', 1)[0]
         self.assertNotIn('>Crypto</a>', nav_section)  # claude code changed: F-02 — Crypto link removed
-        self.assertIn('>Forex</a>', nav_section)
+        self.assertIn('>Forex</summary>', nav_section)  # claude code changed: Forex became <details> dropdown in 02d7788
 
 
 class DropdownCloseOnOutsideClickTest(TestCase):
@@ -159,7 +161,7 @@ class DropdownNotPreOpenedAfterSelectionTest(TestCase):   # claude code changed:
             request = RequestFactory().get("/")
             request.user = AnonymousUser()
             html = render_to_string("partials/_topbar.html", {"active": active, "request": request})
-            self.assertEqual(html.count('<details class="term-nav-group">'), 3, active)   # never rendered with `open`
+            self.assertEqual(html.count('<details class="term-nav-group">'), 4, active)   # never rendered with `open` — claude code changed: 4 groups (Forex dropdown added in 02d7788)
             self.assertNotRegex(html, r'<details class="term-nav-group"[^>]*open', active)
             self.assertIn('class="term-nav-link active"', html, active)                   # the section is still marked
 
