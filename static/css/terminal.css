@@ -424,7 +424,7 @@
 
 .term-brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;  /* claude code changed: baseline → center so the logo mark and back arrow share the same vertical midpoint */
   gap: var(--sp-3);
 }
 
