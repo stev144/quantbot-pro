@@ -25,6 +25,7 @@
     own comments below for why). Listed here as valid slugs a future
     dedicated page could pass directly.
 {% endcomment %}
+{% load static %}  {# claude code changed: required for {% static %} in the logo mark img src #}
 <div class="term-topbar">
     <div class="term-brand">
         {% if active != 'dashboard' and active != 'research_lab_mvp' %}
