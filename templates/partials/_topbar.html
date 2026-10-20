@@ -69,9 +69,12 @@
            onclick="if (window.history.length > 1 && document.referrer && document.referrer.indexOf(window.location.origin) === 0) { window.history.back(); return false; }">&larr;</a>
         {% endif %}
         <a href="{% url 'dashboard' %}" class="term-brand-link">
-            <span class="term-brand-name">STEPH QUANT TECHNOLOGIES</span>
-            {# claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies #}
-            <span class="term-brand-sub">Research &amp; Systematic Trading</span>
+            <img src="{% static 'img/sqt-mark.svg' %}" alt="SQT" class="term-brand-mark" width="32" height="32">  {# claude code changed: new — SVG logo mark #}
+            <span class="term-brand-text">
+                <span class="term-brand-name">STEPH QUANT TECHNOLOGIES</span>
+                {# claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies #}
+                <span class="term-brand-sub">Research &amp; Systematic Trading</span>
+            </span>
         </a>
     </div>
 

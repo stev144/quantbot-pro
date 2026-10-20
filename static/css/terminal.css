@@ -430,12 +430,26 @@
 
 .term-brand-link {
   display: flex;
-  align-items: baseline;
+  align-items: center;  /* claude code changed: logo mark — center-align so the image aligns with the text block */
   gap: var(--sp-3);
   color: inherit;
 }
 .term-brand-link:hover { color: inherit; }
 .term-brand-link:hover .term-brand-name { color: var(--accent); }
+
+.term-brand-mark {  /* claude code changed: new — SVG logo mark sizing and alignment */
+  display: block;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+}
+
+.term-brand-text {  /* claude code changed: new — wraps the two text spans vertically */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
 
 .term-brand-name {
   font-weight: 700;
