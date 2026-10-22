@@ -330,6 +330,10 @@ def run_pair_canonical(symbol_a: str, symbol_b: str, close_a, close_b, *, output
         stages["financing"] = {"status": "BORROW_UNAVAILABLE", "reason": str(e)}
         out["stopped_at"] = "financing"
         return out
+    except AssetClassMismatch as e:   # claude code changed: 2026-10-21 — FX profile complete since 2026-10-16, so FX now reaches this stage; perpetual funding cannot finance FX and the decided MT5 swap source (OD-FX-FS-1) is not implemented here → stop BLOCKED (was an uncaught crash)
+        stages["financing"] = {"status": "BLOCKED", "reason": f"{e}; FX swap financing (OD-FX-FS-1) is not implemented in the canonical pairs ladder"}
+        out["stopped_at"] = "financing"
+        return out
 
     # 4 — canonical lifecycle
     kc = Path(output_dir) / "canonical" / f"{symbol_a}_{symbol_b}_kalman.csv"

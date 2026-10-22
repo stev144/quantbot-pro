@@ -332,8 +332,16 @@ def get_forex_portfolio_risk():
     """
     correlation = _compute_price_correlation(directory=FOREX_DATA_DIR)
 
+    # claude code changed: 2026-10-21 — tally only the owner's research universe (FX-FLOATING-51: no hard pegs, no
+    # metals). It used to count every registered instrument, so XAU/XAG were tallied as "currencies" and excluded
+    # pegs inflated USD/EUR. Excluded instruments are listed, not hidden.
+    from bot.quant_core.market_profile import FOREX_PROFILE, in_universe
     currency_counts = {}
+    excluded = []
     for instrument in symbols_for_asset_class(ASSET_CLASS_FOREX):
+        if not in_universe(FOREX_PROFILE, instrument):
+            excluded.append(instrument)
+            continue
         inst = get_instrument(instrument)
         for ccy in (inst.base_currency, inst.quote_currency):
             if ccy:
@@ -346,6 +354,8 @@ def get_forex_portfolio_risk():
     return {
         "correlation": correlation,
         "currency_exposure": currency_exposure,
+        "universe_rule": FOREX_PROFILE.universe_rule,   # claude code changed: 2026-10-21
+        "excluded_from_universe": sorted(excluded),     # claude code changed: 2026-10-21 — pegs / metals outside FX-FLOATING-51
         "max_drawdown": {"available": False, "reason": "No Forex backtest exists"},
         "crash_risk": {"available": False, "reason": "contagion_engine.py exists but has no persisted output and is not wired into any pipeline (same as Crypto)"},
     }

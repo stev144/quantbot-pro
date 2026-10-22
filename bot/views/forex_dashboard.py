@@ -93,4 +93,13 @@ def forex_dashboard(request):
         "execution": get_forex_execution_state(),
         "system_health": get_forex_system_health(),
     }
+    # claude code changed: 2026-10-22 — Markets cards for the z-score list (same quotes as the Markets tab's Forex
+    # tab); the z-scores themselves are unchanged
+    from bot.views import markets_data as md
+    if cross_section_dispersion.get("available"):
+        fx_quotes = md.card_quotes("forex", request.user)
+        cards = [{"q": fx_quotes[e["symbol"]], "z": e["cs_zscore"]}
+                 for e in cross_section_dispersion.get("top_extremes", []) if e["symbol"] in fx_quotes]
+        cross_section_dispersion["cards"] = cards
+        cross_section_dispersion["n_without_quote"] = len(cross_section_dispersion.get("top_extremes", [])) - len(cards)
     return render(request, "forex_dashboard.html", context)

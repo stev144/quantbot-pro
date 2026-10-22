@@ -207,17 +207,25 @@ class ForexPortfolioRiskTest(SimpleTestCase):
         currencies specifically to fix this — every currency now appears
         in exactly 7 of 28 pairs (25%), symmetric. Asserts the fix
         actually holds structurally, not just that data exists."""
+        # claude code changed: 2026-10-21 — the 28-pair default universe was replaced by owner rule FX-FLOATING-51
+        # (2026-10-06, 51 floating pairs). The audit's structural fix — a complete, symmetric C(8,2) cross of the
+        # 8 majors, so dispersion is not a USD proxy — must still be contained in it; that is what is asserted now
+        # (no new concentration threshold is invented after seeing the 51-pair counts).
+        import itertools
+        from bot.instruments import ASSET_CLASS_FOREX, symbols_for_asset_class
+        from bot.quant_core.market_profile import FOREX_PROFILE, in_universe
         result = forex_terminal_data.get_forex_portfolio_risk()
-        counts = {row["currency"]: row["pair_count"] for row in result["currency_exposure"]}
-        if sum(counts.values()) < 2 * 28:
+        registered = {s for s in symbols_for_asset_class(ASSET_CLASS_FOREX) if in_universe(FOREX_PROFILE, s)}
+        if len(registered) < 28:
             self.skipTest("fewer than 28 Forex pairs registered on this machine — universe expansion not applied here")
-        # claude code changed: every one of the 8 major currencies must
-        # appear the SAME number of times (a genuinely balanced cross
-        # matrix), not just "USD isn't overwhelming" — the max-minus-min
-        # spread across currencies should be zero for the exact 28-pair
-        # construction, but allow a small tolerance for a differently
-        # sized/composed real universe on another machine.
-        self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)
+        majors = ["USD", "EUR", "JPY", "GBP", "AUD", "CHF", "CAD", "NZD"]
+        cross = [p for a, b in itertools.combinations(majors, 2) for p in (f"{a}/{b}", f"{b}/{a}") if p in registered]
+        self.assertEqual(len(cross), 28, "the complete 8-major cross matrix must be inside the research universe")
+        counts = {c: sum(1 for p in cross if c in p.split("/")) for c in majors}
+        self.assertEqual(set(counts.values()), {7})                              # each major on exactly 7 of 28
+        tallied = {row["currency"] for row in result["currency_exposure"]}
+        self.assertFalse({"XAU", "XAG"} & tallied, "metals are not currencies and are outside the universe")
+        self.assertIn("XAU/USD", result["excluded_from_universe"])
 
     def test_max_drawdown_and_crash_risk_are_honestly_unavailable(self):
         result = forex_terminal_data.get_forex_portfolio_risk()

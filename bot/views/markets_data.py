@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 from django.conf import settings
 from django.core.cache import cache
+from django.utils.safestring import mark_safe  # claude code changed: 2026-10-21 — sparkline SVG was auto-escaped (raw markup shown on /markets/ and /markets/watchlist/)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,12 @@ _CACHE_KEY     = "markets_list_v1"
 _CACHE_TTL     = 300   # 5 minutes
 
 _SPARK_BARS    = 24    # close values used for sparkline
+_TAIL_BARS     = 72    # claude code changed: 2026-10-21 — recent closes kept for the live forex 24 h change (covers a weekend)
+
+# claude code changed: 2026-10-21 — LIVE display prices (Binance 24 h ticker, MT5 ticks). Memory cache only: these
+# prices are never written to data/ — the D-8 crypto holdout and the v7 / QC-2 FX holdouts stay sealed.
+_LIVE_CACHE_KEY = "markets_live_v1"
+_LIVE_TTL       = 30    # seconds
 
 # ── Human-readable display names for the most common crypto symbols ──────────
 _CRYPTO_NAMES = {
@@ -59,13 +66,32 @@ def _sparkline_svg(values: list, width: int = 80, height: int = 28) -> str:
         pts.append(f"{x},{y}")
     color = "#3fb87f" if values[-1] >= values[0] else "#e0564c"
     pt_str = " ".join(pts)
-    return (
+    return mark_safe(  # claude code changed: 2026-10-21 — safe by construction: only rounded floats and two fixed colours, no user input
         f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
         f'xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="overflow:visible;display:block">'
         f'<polyline points="{pt_str}" fill="none" stroke="{color}" '
         f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
         f'</svg>'
     )
+
+
+def _read_csv_tail(path, n: int = 120) -> pd.DataFrame:  # claude code changed: 2026-10-21 — new
+    """Last `n` data rows of an OHLC CSV (timestamp + close), sorted. Every quote field uses at most the last
+    _TAIL_BARS rows, so parsing the whole multi-year file was wasted work; the result is identical."""
+    import io
+    with open(path, "rb") as fh:   # seek near the end: read ~64 KB instead of the whole multi-MB file
+        header = fh.readline().decode("utf-8")
+        fh.seek(0, 2)
+        size = fh.tell()
+        start = max(len(header.encode("utf-8")), size - 65536)
+        fh.seek(start)
+        chunk = fh.read().decode("utf-8", errors="replace").splitlines()
+    if start > len(header.encode("utf-8")):
+        chunk = chunk[1:]   # first line is a partial row after the seek
+    rows = [r for r in chunk if r.strip()][-n:]
+    df = pd.read_csv(io.StringIO(header + "\n".join(rows) + "\n"), usecols=["timestamp", "close"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    return df.sort_values("timestamp")
 
 
 def _quote_from_df(df: pd.DataFrame, symbol: str, asset_class: str) -> dict:
@@ -81,6 +107,7 @@ def _quote_from_df(df: pd.DataFrame, symbol: str, asset_class: str) -> dict:
         spark_vals = df["close"].tail(_SPARK_BARS).tolist()
         # Price formatting: forex pairs typically < 10, crypto can be > 10k
         decimals = 5 if asset_class == "forex" else (2 if last > 100 else 6)
+        tail = df.tail(_TAIL_BARS)   # claude code changed: 2026-10-21 — recent closes for the live 24 h change (forex)
         return {
             "available": True,
             "symbol": symbol,
@@ -92,6 +119,9 @@ def _quote_from_df(df: pd.DataFrame, symbol: str, asset_class: str) -> dict:
             "positive": change_pct >= 0,
             "sparkline": _sparkline_svg(spark_vals),
             "source": "csv",
+            "price_decimals": decimals,                                               # claude code changed: 2026-10-21
+            "as_of": pd.Timestamp(df["timestamp"].iloc[-1]).isoformat(),               # claude code changed: 2026-10-21 — last CSV candle time
+            "tail": [[pd.Timestamp(t).isoformat(), float(c)] for t, c in zip(tail["timestamp"], tail["close"])],   # claude code changed: 2026-10-21
         }
     except Exception as exc:
         logger.warning("markets_data: quote failed for %s: %s", symbol, exc)
@@ -106,8 +136,7 @@ def _load_crypto_quotes() -> list:
     for p in paths:
         sym = p.stem.replace("_1h", "")   # "BTC_USDT_1h" → "BTC_USDT"
         try:
-            df = pd.read_csv(p, usecols=["timestamp", "close"],
-                             parse_dates=["timestamp"]).sort_values("timestamp")
+            df = _read_csv_tail(p)   # claude code changed: 2026-10-21 — tail only (was a full 30-45k-row parse per file, ~55 s cold for ~220 files)
             quotes.append(_quote_from_df(df, sym, "crypto"))
         except Exception as exc:
             logger.warning("markets_data: failed to read %s: %s", p.name, exc)
@@ -124,8 +153,7 @@ def _load_forex_quotes() -> list:
     for p in paths:
         sym = p.stem.replace("_1h", "")   # "EUR_USD_1h" → "EUR_USD"
         try:
-            df = pd.read_csv(p, usecols=["timestamp", "close"],
-                             parse_dates=["timestamp"]).sort_values("timestamp")
+            df = _read_csv_tail(p)   # claude code changed: 2026-10-21 — tail only (was a full 30-45k-row parse per file, ~55 s cold for ~220 files)
             quotes.append(_quote_from_df(df, sym, "forex"))
         except Exception as exc:
             logger.warning("markets_data: failed to read %s: %s", p.name, exc)
@@ -163,6 +191,19 @@ def get_markets_list(force_refresh: bool = False) -> dict:
     return result
 
 
+def card_quotes(asset_class: str, user=None) -> dict:  # claude code changed: 2026-10-22 — new; shared by every page that shows Markets cards
+    """{symbol: quote} for one asset class — the exact quotes the Markets tab renders — each tagged with
+    `in_watchlist` for `user` (False for anonymous users). Copies, so the cached list is never mutated."""
+    quotes = {q["symbol"]: dict(q) for q in get_markets_list().get(asset_class, []) if q.get("available")}
+    watchlisted = set()
+    if user is not None and getattr(user, "is_authenticated", False):
+        from bot.journal.models import WatchlistItem
+        watchlisted = set(WatchlistItem.objects.filter(user=user).values_list("symbol", flat=True))
+    for q in quotes.values():
+        q["in_watchlist"] = q["symbol"] in watchlisted
+    return quotes
+
+
 def get_watchlist_quotes(symbols_by_class: dict) -> list:
     """
     Returns quote dicts for a specific list of {asset_class: [symbol, ...]} pairs.
@@ -179,3 +220,66 @@ def get_watchlist_quotes(symbols_by_class: dict) -> list:
                 result.append({"available": False, "symbol": sym,
                                "asset_class": asset_class, "reason": "not found"})
     return result
+
+
+def _change_vs_24h(tail: list, price: float, now: pd.Timestamp):  # claude code changed: 2026-10-21 — new
+    """% change of `price` vs the last CSV close at or before now − 24 h; None when the tail does not reach back."""
+    target = now - pd.Timedelta(hours=24)
+    base = None
+    for t, c in tail:
+        if pd.Timestamp(t) <= target:
+            base = c
+    return None if not base else (price - base) / base * 100
+
+
+def get_live_quotes(force_refresh: bool = False) -> dict:  # claude code changed: 2026-10-21 — new
+    """Live display prices for every Markets card: crypto from Binance's all-symbol 24 h ticker (one request),
+    forex from the running MT5 terminal's ticks (mid = (bid + ask) / 2; 24 h change vs the CSV close ~24 h earlier).
+    Each source reports its own status; a failure falls back to the CSV price on the page (labelled stale)."""
+    if not force_refresh:
+        cached = cache.get(_LIVE_CACHE_KEY)
+        if cached is not None:
+            return cached
+    from bot.data_fetcher import get_all_24hr_tickers
+    listing = get_markets_list()
+    now = pd.Timestamp.now(tz="UTC")
+    out = {"fetched_at": now.isoformat(), "crypto": {}, "forex": {}, "status": {}}
+
+    crypto_syms = {q["symbol"].replace("_", ""): q["symbol"] for q in listing.get("crypto", []) if q.get("available")}
+    tickers = get_all_24hr_tickers()
+    for t in tickers:
+        sym = crypto_syms.get(t.get("symbol"))
+        if not sym:
+            continue
+        try:
+            price = float(t["lastPrice"])
+            if price <= 0:
+                continue
+            out["crypto"][sym] = {"price": price, "change_pct": float(t["priceChangePercent"]),
+                                  "as_of": pd.Timestamp(int(t["closeTime"]), unit="ms", tz="UTC").isoformat(),
+                                  "source": "BINANCE_LIVE"}
+        except (KeyError, TypeError, ValueError):
+            continue
+    halted = sorted(s for s, v in out["crypto"].items()
+                    if (now - pd.Timestamp(v["as_of"])).total_seconds() > 2 * 3600)   # in the ticker list but no recent trade (e.g. Binance status BREAK)
+    out["status"]["crypto"] = (f"LIVE ({len(out['crypto']) - len(halted)}/{len(crypto_syms)} trading"
+                               + (f"; not trading: {', '.join(s.replace('_USDT', '') for s in halted)})" if halted else ")")
+                               if out["crypto"] else "UNAVAILABLE: Binance ticker request failed")
+
+    fx = {q["symbol"]: q for q in listing.get("forex", []) if q.get("available")}
+    try:
+        from bot.mt5_data_fetcher import get_mt5_live_ticks
+        ticks = get_mt5_live_ticks([s.replace("_", "/") for s in fx])
+        for canonical, tk in ticks.items():
+            sym = canonical.replace("/", "_")
+            mid = (tk["bid"] + tk["ask"]) / 2
+            out["forex"][sym] = {"price": mid, "bid": tk["bid"], "ask": tk["ask"],
+                                 "change_pct": _change_vs_24h(fx[sym].get("tail", []), mid, now),
+                                 "as_of": tk["time_utc"], "source": "MT5_LIVE"}
+        out["status"]["forex"] = (f"LIVE ({len(out['forex'])}/{len(fx)} pairs)" if out["forex"]
+                                  else "UNAVAILABLE: MT5 returned no ticks")
+    except Exception as exc:   # terminal closed / package missing: the page keeps the CSV price, labelled stale
+        out["status"]["forex"] = f"UNAVAILABLE: {exc}"[:200]
+
+    cache.set(_LIVE_CACHE_KEY, out, _LIVE_TTL)
+    return out

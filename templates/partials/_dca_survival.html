@@ -1,0 +1,737 @@
+{# templates/partials/_dca_survival.html — claude code changed: 2026-10-21 — new; DCA capital-survival replay (fixed capital, ledger, costs, margin, stress, events) #}
+<style>
+.sv-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+.sv-btn { background:var(--bg-1); border:1px solid var(--border); color:var(--text-primary); border-radius:4px; padding:5px 10px; font-size:12px; cursor:pointer; font-variant-numeric:tabular-nums; }
+.sv-btn.on { border-color:var(--accent); color:var(--accent); font-weight:600; }
+.sv-banner { padding:12px 14px; border-radius:6px; margin-bottom:14px; font-size:13px; line-height:1.5; border:1px solid var(--border); background:var(--bg-1); }
+.sv-banner.bad { border-color:var(--negative); }
+.sv-banner.warn { border-color:var(--warning); }
+.sv-banner strong { font-size:14px; }
+.sv-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-bottom:16px; }
+/* claude code changed: 2026-10-21 — golden design for metric grid + tables; green = good, red = poor */
+#sv-root, #lg-card, #lg-fold-table { --sv-gold: var(--gold-heading, #f0b90b); }
+.sv-card { background:var(--bg-1); border:1px solid rgba(240,185,11,.35); border-top:2px solid var(--sv-gold, #f0b90b); border-radius:4px; padding:8px 10px; min-width:0; }
+.sv-card .k { font-size:10px; color:var(--sv-gold, #f0b90b); text-transform:uppercase; letter-spacing:.4px; margin-bottom:3px; }
+.sv-card.good { border-left:3px solid var(--positive); }
+.sv-card.bad  { border-left:3px solid var(--negative); }
+.sv-good, #sv-root .pos, #lg-card .pos, #lg-fold-table .pos { color:var(--positive) !important; }
+.sv-bad,  #sv-root .neg, #lg-card .neg, #lg-fold-table .neg { color:var(--negative) !important; }
+.sv-card .v { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.sv-card .s { font-size:10px; color:var(--text-dim); margin-top:2px; }
+.sv-table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.sv-table { width:100%; border-collapse:collapse; font-size:12px; }
+.sv-table, #lg-fold-table { border:1px solid rgba(240,185,11,.45); border-radius:4px; }
+.sv-table th, #lg-fold-table th { text-align:left; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:var(--sv-gold, #f0b90b) !important; background:rgba(240,185,11,.12); padding:6px 8px; border-bottom:1px solid rgba(240,185,11,.55) !important; white-space:nowrap; }
+.sv-table td, #lg-fold-table td { border-bottom:1px solid rgba(240,185,11,.16) !important; }
+.sv-table tbody tr:nth-child(even) td, #lg-fold-table tbody tr:nth-child(even) td { background:rgba(240,185,11,.035); }
+.sv-table td { padding:5px 8px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; vertical-align:top; }
+.sv-table td.num, .sv-table th.num { text-align:right; white-space:nowrap; }
+.sv-table tr.click { cursor:pointer; }
+.sv-table tr.click:hover td { background:rgba(240,185,11,.10); }
+.sv-table tr.sel td { background:rgba(240,185,11,.16); }
+.sv-def { font-size:11px; color:var(--text-dim); }
+.sv-chart { position:relative; height:300px; width:100%; }
+.sv-chart.small { height:200px; }
+.sv-toggles { display:flex; flex-wrap:wrap; gap:12px; font-size:12px; margin-bottom:8px; }
+.sv-toggles label { display:flex; align-items:center; gap:4px; cursor:pointer; }
+.sv-detail { border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-top:10px; background:var(--bg-1); }
+.sv-pager { display:flex; gap:6px; align-items:center; margin-top:8px; font-size:12px; flex-wrap:wrap; }
+.sv-tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:3px; border:1px solid var(--border); white-space:nowrap; }
+.sv-tag.LIQUIDATED, .sv-tag.BANKRUPTCY_OR_INSOLVENCY { border-color:var(--negative); color:var(--negative); }
+.sv-tag.LOSING_EXIT { color:var(--negative); }
+.sv-tag.PROFITABLE_EXIT { color:var(--positive); }
+.sv-tag.OPEN_UNRESOLVED_AT_DATA_END { border-color:var(--warning); color:var(--warning); }
+.sv-limits li { margin-bottom:4px; font-size:12px; line-height:1.45; }
+@media (max-width:700px) { .sv-chart { height:240px; } .sv-cards { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+</style>
+
+<div class="term-section" id="sv-root" style="margin-bottom:20px">
+  <div class="term-section-head">
+    <div>
+      <span class="term-section-title">Capital-survival replay — fixed account, real costs, ESMA margin</span>
+      <span class="term-section-meta" id="sv-meta"></span>
+    </div>
+    <span class="badge">historical simulation · paper only</span>
+  </div>
+  <div class="term-section-body">
+  {% if survival %}
+    <div class="sv-controls" id="sv-run-buttons"></div>
+    <div class="sv-banner" id="sv-banner"></div>
+    <div class="sv-cards" id="sv-cards"></div>
+
+    <div class="term-section-head" style="padding-inline:0"><span class="term-section-title">Where the profit went — costs</span><span class="term-section-meta" id="sv-cost-meta"></span></div>
+    <div class="sv-banner" id="sv-cost-statement"></div>
+    <div class="sv-table-wrap"><table class="sv-table" id="sv-cost-table"></table></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:16px"><span class="term-section-title">Account trajectory</span><span class="term-section-meta">daily · hover for balance, equity, open P&amp;L, free margin, costs · click a marker for its cycle ledger</span></div>
+    <div class="sv-controls" id="sv-range"></div>
+    <div class="sv-toggles">
+      <label><input type="checkbox" id="sv-t-events" checked> market events</label>
+      <label><input type="checkbox" id="sv-t-markers" checked> failure markers</label>
+      <label><input type="checkbox" id="sv-t-price"> GBP/JPY price (right axis)</label>
+      <label><input type="checkbox" id="sv-t-worst" checked> intrabar worst equity</label>
+    </div>
+    <div class="sv-chart"><canvas id="sv-equity"></canvas></div>
+    <div class="two-col" style="margin-top:12px">
+      <div><div class="metric-label" style="margin-bottom:6px">Drawdown from equity peak (%)</div><div class="sv-chart small"><canvas id="sv-dd"></canvas></div></div>
+      <div><div class="metric-label" style="margin-bottom:6px">Margin used vs free margin ($)</div><div class="sv-chart small"><canvas id="sv-margin"></canvas></div></div>
+    </div>
+    <div style="margin-top:12px"><div class="metric-label" style="margin-bottom:6px">Cumulative gross P&amp;L, costs, swap and net P&amp;L ($)</div><div class="sv-chart small"><canvas id="sv-pnl"></canvas></div></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:18px"><span class="term-section-title">Failures, liquidations and large losses</span><span class="term-section-meta">every forced closure with the rule that triggered it</span></div>
+    <div class="sv-table-wrap"><table class="sv-table" id="sv-failures"></table></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:18px"><span class="term-section-title">Cycle ledger</span><span class="term-section-meta">click a row for its fills and cash ledger</span></div>
+    <div class="sv-controls">
+      <select id="sv-f-outcome" class="sv-btn"><option value="">all outcomes</option></select>
+      <select id="sv-f-fills" class="sv-btn"><option value="0">any depth</option><option value="4">≥ 4 fills</option><option value="5">5 fills (exhausted)</option></select>
+      <span class="sv-def" id="sv-cycle-count"></span>
+    </div>
+    <div class="sv-table-wrap"><table class="sv-table" id="sv-cycles"></table></div>
+    <div class="sv-pager" id="sv-pager"></div>
+    <div class="sv-detail" id="sv-cycle-detail" hidden></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:18px"><span class="term-section-title">Historical market events</span><span class="term-section-meta">sourced facts · measured price move · what the account did · coincidence ≠ cause</span></div>
+    <div class="sv-table-wrap"><table class="sv-table" id="sv-events"></table></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:18px"><span class="term-section-title">Legacy page vs upgraded replay</span><span class="term-section-meta">what each correction changes · {{ survival.primary_pair }}</span></div>
+    <div class="sv-table-wrap"><table class="sv-table" id="sv-decomp"></table></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:18px"><span class="term-section-title">Stress tests</span><span class="term-section-meta">{{ survival.primary_pair }} · every scenario is hypothetical and labelled · ending equity / net % of capital / max drawdown / liquidations</span></div>
+    <div class="sv-table-wrap"><table class="sv-table" id="sv-stress"></table></div>
+
+    <div class="term-section-head" style="padding-inline:0;margin-top:18px"><span class="term-section-title">Known limitations</span></div>
+    <ul class="sv-limits" id="sv-limits"></ul>
+  {% else %}
+    <div class="unavailable-inline">
+      {% if survival_error %}Survival report could not be loaded: {{ survival_error }}{% else %}No capital-survival report yet.{% endif %}
+      Generate it with <code>python manage.py run_dca_survival_study</code> (about 4 minutes; add <code>--refresh-costs</code> to re-read spreads and swap from MT5 first).
+    </div>
+  {% endif %}
+  </div>
+</div>
+
+<script>
+(function () {
+  const SV = {{ survival_json|safe }};
+  if (!SV) return;
+  const LEDGER_URL = "{% url 'dca_survival_ledger' %}";
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const money = (v, d = 0) => v == null ? 'N/A' : (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+  const signed = (v, d = 0) => v == null ? 'N/A' : (v > 0 ? '+' : '') + money(v, d);
+  const pct = (v, d = 1) => v == null ? 'N/A' : v.toFixed(d) + '%';
+  const cls = v => v == null ? '' : (v < 0 ? 'sv-bad' : (v > 0 ? 'sv-good' : ''));   // sign colour: profits green, losses red
+  const G = 'good', B = 'bad';
+  const grade = (good, bad) => good ? G : (bad ? B : '');                            // explicit thresholds per metric
+  const gcls = g => g === G ? 'sv-good' : (g === B ? 'sv-bad' : '');
+  // owner rule (2026-10-21): every drawdown shows the dollar amount with its percentage in brackets
+  const ddFmt = (usd, p, basis) => `${money(usd, 0)} (${p == null ? 'n/a — no capital base' : p.toFixed(1).replace('-', '−') + '%' + (basis ? ' ' + basis : '')})`;
+  const day = t => String(t).slice(0, 10);
+  const tsOrNull = v => (v && v !== 'NaT' && v !== 'NaN' && v !== 'None') ? String(v).slice(0, 16) : null;   // pandas NaT for open cycles
+
+  const fromColumnar = c => (c && c.cols) ? c.rows.map(r => Object.fromEntries(c.cols.map((k, i) => [k, r[i]]))) : c;
+  Object.values(SV.runs).forEach(r => { if (r.cycles) r.cycles = fromColumnar(r.cycles); });
+  const runKeys = Object.keys(SV.runs);
+  let runKey = runKeys.includes('gbpjpy_5000') ? 'gbpjpy_5000' : runKeys[0];
+  let range = null;      // [fromIndex, toIndex] into the run's daily series
+  let page = 0;
+  const charts = {};
+
+  $('sv-meta').textContent = `data frozen at ${SV.cutoff.slice(0, 16)} UTC · report ${SV.report_dir} · ESMA 50 % close-out · costs: spread ${SV.cost_labels.spread.split(' (')[0]}, swap ${SV.cost_labels.swap.split(' (')[0]}, commission ${SV.cost_labels.commission.split(' (')[0]}`;
+
+  // ── run selector ──────────────────────────────────────────────────────
+  function buildRunButtons() {
+    const box = $('sv-run-buttons');
+    const groups = [['GBP/JPY only', k => k.startsWith('gbpjpy_')], ['5-pair shared account', k => k.startsWith('portfolio_')]];
+    box.innerHTML = '';
+    groups.forEach(([label, f]) => {
+      const keys = runKeys.filter(f);
+      if (!keys.length) return;
+      const span = document.createElement('span');
+      span.className = 'sv-def'; span.textContent = label + ':';
+      box.appendChild(span);
+      keys.forEach(k => {
+        const b = document.createElement('button');
+        b.className = 'sv-btn' + (k === runKey ? ' on' : '');
+        b.textContent = '$' + SV.runs[k].capital.toLocaleString();
+        b.onclick = () => { selectRun(k); try { history.replaceState(null, "", "?run=" + k); } catch (e) {} };   // keep the URL in step with the selected run
+        box.appendChild(b);
+      });
+    });
+  }
+
+  // ── headline + cards ──────────────────────────────────────────────────
+  function renderBanner(run) {
+    const m = run.metrics, cap = run.capital;
+    const b = $('sv-banner');
+    const liq = m.liquidation_count, ins = m.insolvent;
+    let html;
+    if (ins) {
+      b.className = 'sv-banner bad';
+      html = `<strong>Account destroyed.</strong> Starting with ${money(cap)}, the account was force-closed ${liq} time(s) and ended insolvent (balance below the margin of a single entry; no deposits are modelled). Ending equity ${money(m.ending_equity, 2)}.`;
+    } else if (liq > 0 || m.max_equity_drawdown_pct <= -80) {
+      b.className = 'sv-banner bad';
+      html = `<strong>Survived only narrowly.</strong> ${liq} ESMA margin close-out(s); worst drawdown ${ddFmt(m.max_drawdown_usd, m.max_equity_drawdown_pct)}. Ending equity ${money(m.ending_equity, 2)} (${m.net_return_pct > 0 ? '+' : ''}${pct(m.net_return_pct, 0)} on ${money(cap)}).`;
+    } else if (m.max_equity_drawdown_pct <= -40) {
+      b.className = 'sv-banner warn';
+      html = `<strong>Survived with a deep drawdown.</strong> No close-out, but equity fell ${ddFmt(m.max_drawdown_usd, m.max_equity_drawdown_pct)} below its peak and the lowest margin level was ${pct(m.min_margin_level_pct, 0)}. Ending equity ${money(m.ending_equity, 2)}.`;
+    } else {
+      b.className = 'sv-banner';
+      html = `<strong>No close-out at this capital.</strong> Worst drawdown ${ddFmt(m.max_drawdown_usd, m.max_equity_drawdown_pct)}; ending equity ${money(m.ending_equity, 2)}. Capital never limited an order (${m.capital_insufficiency_events} rejections).`;
+    }
+    html += ` <span class="sv-def">Closed-cycle win rate ${pct(m.win_rate_after_costs_pct)} — a high win rate is not evidence of a safe or profitable strategy; see the worst losses below.</span>`;
+    b.innerHTML = html;
+  }
+
+  function renderCards(run) {
+    const m = run.metrics, cap = m.starting_capital;
+    const tc = m.total_costs != null ? m.total_costs : (m.costs || {}).total;
+    const dd = m.max_equity_drawdown_pct, ddi = m.max_drawdown_intrabar_pct;
+    const ddG = p => p == null ? '' : grade(p > -10, p <= -25);                        // better than −10 % good, −25 % or worse poor
+    const capPct = v => v != null ? pct(v / cap * 100, 0) : 'N/A';
+    // [label, value, subtitle, grade]   good = green, bad = red, '' = neutral (no judgement implied)
+    const items = [
+      ['Starting capital', money(cap), '', ''],
+      ['Ending balance', money(m.ending_balance, 2), 'cash after closed cycles', grade(m.ending_balance > cap, m.ending_balance < cap)],
+      ['Ending equity', money(m.ending_equity, 2), 'balance + open P&L', grade(m.ending_equity > cap, m.ending_equity < cap)],
+      ['Net P&L', signed(m.net_pnl, 2), 'after all modelled costs', grade(m.net_pnl > 0, m.net_pnl < 0)],
+      ['Net return', pct(m.net_return_pct), 'on starting capital', grade(m.net_return_pct > 0, m.net_return_pct < 0)],
+      ['Gross trading P&L', signed(m.gross_trading_pnl_all, 2), 'before costs and swap', grade(m.gross_trading_pnl_all > 0, m.gross_trading_pnl_all < 0)],
+      ['Total costs', money(tc, 2), 'spread + slippage + commission + financing', grade(false, tc > 0)],
+      ['Swap (net)', signed(m.swap_net, 2), 'ESTIMATED · credit if positive', grade(m.swap_net > 0, m.swap_net < 0)],
+      ['Unrealised P&L', signed(m.unrealised_pnl_open_cycles, 2), `${m.unresolved_cycles} cycle(s) open at data end`, grade(m.unrealised_pnl_open_cycles > 0, m.unrealised_pnl_open_cycles < 0)],
+      ['Max drawdown', ddFmt(m.max_drawdown_usd, dd), 'from peak equity, daily close', ddG(dd)],
+      ['Max drawdown (intrabar)', ddFmt(m.max_drawdown_intrabar_usd, ddi), 'at the worst hourly price', ddG(ddi)],
+      ['Longest underwater', m.longest_drawdown_hours != null ? (m.longest_drawdown_hours / 24).toFixed(0) + ' days' : 'N/A', m.longest_drawdown_unrecovered ? 'NOT recovered at data end' : 'peak to recovery', grade(m.longest_drawdown_hours != null && m.longest_drawdown_hours < 30 * 24, m.longest_drawdown_hours > 90 * 24 || m.longest_drawdown_unrecovered)],
+      ['Max capital deployed', money(m.max_capital_deployed_notional_usd), 'open notional', ''],
+      ['Max margin used', money(m.max_margin_used_usd), `${capPct(m.max_margin_used_usd)} of starting capital`, grade(m.max_margin_used_usd != null && m.max_margin_used_usd < 0.25 * cap, m.max_margin_used_usd > 0.5 * cap)],
+      ['Min free margin', money(m.min_free_margin_usd, 0), 'negative = margin-call territory', grade(m.min_free_margin_usd > 0.25 * cap, m.min_free_margin_usd < 0)],
+      ['Min margin level', pct(m.min_margin_level_pct, 0), 'close-out at 50 %', grade(m.min_margin_level_pct >= 200, m.min_margin_level_pct != null && m.min_margin_level_pct < 100)],
+      ['Liquidations', String(m.liquidation_count), 'ESMA margin close-outs', grade(m.liquidation_count === 0, m.liquidation_count > 0)],
+      ['Insolvent', m.insolvent ? 'YES' : 'no', 'cannot fund a new entry', grade(!m.insolvent, m.insolvent)],
+      ['Capital insufficiency', String(m.capital_insufficiency_events), 'orders refused for margin', grade(m.capital_insufficiency_events === 0, m.capital_insufficiency_events > 0)],
+      ['Margin calls', String(m.margin_call_events), 'margin level < 100 %', grade(m.margin_call_events === 0, m.margin_call_events > 0)],
+      ['Ladder exhaustion', `${m.ladder_exhaustion_count} (${pct(m.ladder_exhaustion_rate_pct)})`, 'cycles that used all 5 fills', grade(m.ladder_exhaustion_rate_pct != null && m.ladder_exhaustion_rate_pct < 2, m.ladder_exhaustion_rate_pct >= 5)],
+      ['Completed cycles', String(m.completed_cycles), `${m.unresolved_cycles} unresolved`, ''],
+      ['Max simultaneous cycles', String(m.max_simultaneous_open_cycles != null ? m.max_simultaneous_open_cycles : 1), '', ''],
+      ['Longest cycle', m.longest_cycle_hours != null ? m.longest_cycle_hours.toFixed(0) + ' h' : 'N/A', '72 h time exit (bars, not hours)', ''],
+      ['Worst floating loss', money(m.worst_floating_loss_usd, 0), `${capPct(m.worst_floating_loss_usd)} of starting capital`, grade(m.worst_floating_loss_usd != null && m.worst_floating_loss_usd > -0.05 * cap, m.worst_floating_loss_usd <= -0.2 * cap)],
+      ['Worst realised loss', money(m.worst_realised_cycle_loss_usd, 0), `one cycle, net · ${capPct(m.worst_realised_cycle_loss_usd)} of capital`, grade(m.worst_realised_cycle_loss_usd != null && m.worst_realised_cycle_loss_usd > -0.05 * cap, m.worst_realised_cycle_loss_usd <= -0.2 * cap)],
+      ['Profit factor', m.gross_profit_factor != null ? m.gross_profit_factor.toFixed(2) : 'N/A', `net ${m.net_profit_factor != null ? m.net_profit_factor.toFixed(2) : 'N/A'} · good ≥ 1.5, poor < 1`, grade(m.net_profit_factor >= 1.5, m.net_profit_factor != null && m.net_profit_factor < 1)],
+      ['Win rate', pct(m.win_rate_before_costs_pct), `after costs ${pct(m.win_rate_after_costs_pct)} · not coloured: a high win rate says nothing about risk`, ''],
+    ];
+    $('sv-cards').innerHTML = items.map(([k, v, sub, g]) =>
+      `<div class="sv-card ${g}"><div class="k">${esc(k)}</div><div class="v ${gcls(g)}">${esc(v)}</div>${sub ? `<div class="s">${esc(sub)}</div>` : ''}</div>`).join('');
+  }
+
+  // ── cost attribution ──────────────────────────────────────────────────
+  function renderCosts(run) {
+    const m = run.metrics;
+    const c = m.costs || {spread: null, slippage: null, commission: null, financing_cost: null, liquidation_fees: null, total: m.total_costs};
+    const st = $('sv-cost-statement');
+    if (m.cost_to_gross_profit_pct == null) {
+      st.className = 'sv-banner';
+      st.innerHTML = 'Cost-to-gross-profit ratio: <strong>N/A — no positive gross P&amp;L denominator.</strong> See cost as a share of notional and of absolute P&amp;L below.';
+    } else {
+      st.className = 'sv-banner' + (m.costs_turned_profit_into_loss ? ' bad' : '');
+      st.innerHTML = `<strong>Execution and financing costs consumed ${pct(m.cost_to_gross_profit_pct)} of gross positive trading P&amp;L.</strong> ` +
+        `Gross ${signed(m.gross_trading_pnl_all, 2)} · costs ${money(c.total, 2)} · swap ${signed(m.swap_net, 2)} · net ${signed(m.net_pnl, 2)}. ` +
+        (m.costs_turned_profit_into_loss ? '<strong>Costs turned a grossly profitable result into a net loss.</strong>' : 'Costs did not turn the result negative at these cost assumptions.') +
+        ` <span class="sv-def">Commission is unavailable from MT5 and is charged as $0 here — see the commission stress rows.</span>`;
+    }
+    $('sv-cost-meta').textContent = 'every figure from the simulated ledger · ' + Object.entries(SV.cost_labels).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    const rows = [
+      ['Gross trading P&L (all cycles)', signed(m.gross_trading_pnl_all, 2), 'Σ (exit − entry) × units at bid prices, before spread/slippage/commission/swap; includes open cycles marked to market.'],
+      ['Gross positive P&L', money(m.gross_positive_pnl, 2), 'Σ gross P&L of completed cycles with gross > 0.'],
+      ['Gross negative P&L', money(m.gross_negative_pnl, 2), 'Σ gross P&L of completed cycles with gross < 0.'],
+      ['Spread cost', money(c.spread, 2), 'Ask − bid paid on every buy (MT5 bar spread; LONG sells at bid).', grade(false, c.spread > 0)],
+      ['Slippage cost', money(c.slippage, 2), 'Adverse pips × units on every fill, both sides.', grade(false, c.slippage > 0)],
+      ['Commission', money(c.commission, 2), SV.cost_labels.commission, grade(false, c.commission > 0)],
+      ['Financing (swap) cost', money(c.financing_cost, 2), 'Only negative swap counts as a cost; a carry credit is shown in the swap row.', grade(false, c.financing_cost > 0)],
+      ['Swap net', signed(m.swap_net, 2), SV.cost_labels.swap],
+      ['Liquidation fees', money(c.liquidation_fees, 2), SV.cost_labels.liquidation_fee],
+      ['Total modelled costs', money(c.total, 2), 'spread + slippage + commission + financing cost.', grade(false, c.total > 0)],
+      ['Net P&L', signed(m.net_pnl, 2), 'gross − total costs + swap credit (= ending equity − starting capital − NBP credit).'],
+      ['Cost / gross positive P&L', pct(m.cost_to_gross_profit_pct), 'B: total costs ÷ gross positive P&L. Can exceed 100 %. Good < 10 %, poor > 50 %.', grade(m.cost_to_gross_profit_pct != null && m.cost_to_gross_profit_pct < 10, m.cost_to_gross_profit_pct > 50)],
+      ['Cost / gross absolute P&L', pct(m.cost_pct_of_gross_absolute_pnl), 'C: total costs ÷ (gross positive + |gross negative|).'],
+      ['Traded notional', money(m.traded_notional_usd), 'Σ |units| × base→USD rate over every fill, entries and exits.'],
+      ['Cost / traded notional', pct(m.cost_pct_of_notional, 4), 'D: total costs ÷ traded notional.'],
+      ['Profit retention', pct(m.profit_retention_pct), 'E: net ÷ gross (only when gross > 0). Above 100 % means the swap credit exceeded costs.', grade(m.profit_retention_pct >= 90, m.profit_retention_pct != null && m.profit_retention_pct < 50)],
+      ['Gross vs net return', `${pct(m.gross_return_pct)} → ${pct(m.net_return_pct)}`, 'on starting capital, no deposits or withdrawals.', grade(m.net_return_pct > 0, m.net_return_pct < 0)],
+      ['Cost drag', m.cost_drag_pp != null ? m.cost_drag_pp.toFixed(2) + ' pp' : 'N/A', 'F: gross return − net return, percentage points of starting capital (negative = swap credit exceeded costs).'],
+      ['Cost per completed cycle', money(m.cost_per_completed_cycle_usd, 2), 'spread + slippage + commission ÷ completed cycles.'],
+    ];
+    $('sv-cost-table').innerHTML = '<thead><tr><th>Metric</th><th class="num">Value</th><th>Definition</th></tr></thead><tbody>' +
+      rows.map(([k, v, d, g]) => {   // explicit grade (4th element) wins; otherwise the sign of a signed money value
+        const c = g !== undefined ? gcls(g) : (/^[+−]\$/.test(v) ? (v[0] === '+' ? 'sv-good' : 'sv-bad') : '');
+        return `<tr><td>${esc(k)}</td><td class="num ${c}">${esc(v)}</td><td class="sv-def">${esc(d)}</td></tr>`;
+      }).join('') + '</tbody>';
+  }
+
+  // ── charts ────────────────────────────────────────────────────────────
+  function sliceSeries(s) {
+    const n = s.d.length;
+    const [a, b] = range || [0, n - 1];
+    const out = {};
+    Object.keys(s).forEach(k => { out[k] = Array.isArray(s[k]) ? s[k].slice(a, b + 1) : s[k]; });
+    return out;
+  }
+
+  function buildRange(run) {
+    const s = run.series, box = $('sv-range');
+    const years = [...new Set(s.d.map(d => d.slice(0, 4)))];
+    const opts = [['All', null]].concat(years.map(y => [y, [s.d.findIndex(d => d.startsWith(y)), s.d.length - 1 - [...s.d].reverse().findIndex(d => d.startsWith(y))]]));
+    box.innerHTML = '';
+    const lab = document.createElement('span'); lab.className = 'sv-def'; lab.textContent = 'Range:'; box.appendChild(lab);
+    opts.forEach(([label, r]) => {
+      const b = document.createElement('button');
+      b.className = 'sv-btn' + (JSON.stringify(r) === JSON.stringify(range) ? ' on' : '');
+      b.textContent = label;
+      b.onclick = () => { range = r; buildRange(run); drawCharts(run); };
+      box.appendChild(b);
+    });
+  }
+
+  function eventAnnotations(s) {
+    if (!$('sv-t-events').checked) return {};
+    const ann = {}, lo = s.d[0], hi = s.d[s.d.length - 1];
+    (SV.events || []).forEach((e, i) => {
+      const a = day(e.start), b = day(e.end);
+      if (b < lo || a > hi) return;
+      ann['ev' + i] = { type: 'box', xMin: a, xMax: b < a ? a : b, backgroundColor: 'rgba(232,168,56,0.10)', borderColor: 'rgba(232,168,56,0.45)', borderWidth: 1,
+        label: { display: true, content: e.id.split('-').slice(0, 2).join(' '), position: 'start', font: { size: 9 }, color: css('--text-dim') } };
+    });
+    return ann;
+  }
+
+  const MARKER_STYLE = {
+    LIQUIDATED: ['--negative', 'crossRot', 9], BANKRUPTCY_OR_INSOLVENCY: ['--negative', 'rectRot', 10],
+    DCA_LADDER_EXHAUSTED: ['--warning', 'triangle', 5], MARGIN_CALL: ['--warning', 'rect', 6],
+    INSUFFICIENT_FREE_CASH: ['--neutral', 'circle', 4], LOSING_EXIT_GT_500: ['--negative', 'circle', 5],
+    OPEN_UNRESOLVED_AT_DATA_END: ['--warning', 'star', 8],
+  };
+
+  function baseOptions(yTitle, extra) {
+    const dim = css('--text-dim'), grid = css('--border');
+    return Object.assign({
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: dim, boxWidth: 10, font: { size: 10 } } } },
+      scales: {
+        x: { type: 'time', time: { unit: 'month' }, ticks: { color: dim, font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: grid } },
+        y: { ticks: { color: dim, font: { size: 10 } }, grid: { color: grid }, title: { display: !!yTitle, text: yTitle, color: dim, font: { size: 10 } } },
+      },
+    }, extra || {});
+  }
+
+  function destroy(k) { if (charts[k]) { charts[k].destroy(); charts[k] = null; } }
+
+  function drawCharts(run) {
+    if (typeof Chart === 'undefined') return;
+    const s = sliceSeries(run.series);
+    const acc = css('--accent'), pos = css('--positive'), neg = css('--negative'), warn = css('--warning'), neu = css('--neutral') || css('--text-dim'), dim = css('--text-dim');
+    const pts = k => s.d.map((d, i) => ({ x: d, y: s[k][i] }));
+    const idxOf = {}; s.d.forEach((d, i) => { idxOf[d] = i; });
+
+    // equity + balance + peak (+ intrabar worst, price, markers)
+    destroy('eq');
+    const ds = [
+      { label: 'Equity', data: pts('equity'), borderColor: acc, backgroundColor: acc + '22', fill: false, borderWidth: 2, pointRadius: 0, tension: 0 },
+      { label: 'Balance', data: pts('balance'), borderColor: neu, borderWidth: 1.2, pointRadius: 0, tension: 0 },
+      { label: 'Peak equity', data: pts('peak'), borderColor: dim, borderDash: [4, 3], borderWidth: 1, pointRadius: 0, tension: 0 },
+    ];
+    if ($('sv-t-worst').checked) ds.push({ label: 'Intrabar worst equity', data: pts('equity_low'), borderColor: neg, borderWidth: 0.8, pointRadius: 0, tension: 0 });
+    if ($('sv-t-price').checked && s.price) ds.push({ label: SV.primary_pair + ' close', data: pts('price'), borderColor: warn, borderWidth: 1, pointRadius: 0, yAxisID: 'y1', tension: 0 });
+    if ($('sv-t-markers').checked) {
+      const groups = {};
+      (run.markers || []).forEach(mk => {
+        const d = day(mk.t);
+        if (!(d in idxOf)) return;
+        (groups[mk.type] = groups[mk.type] || []).push({ x: d, y: s.equity_low[idxOf[d]], cycle_id: mk.cycle_id, pair: mk.pair, type: mk.type, t: mk.t });
+      });
+      Object.entries(groups).forEach(([type, data]) => {
+        const st = MARKER_STYLE[type] || ['--text-dim', 'circle', 4];
+        ds.push({ type: 'scatter', label: type.replace(/_/g, ' ').toLowerCase(), data, pointStyle: st[1], pointRadius: st[2], pointHoverRadius: st[2] + 3,
+                  backgroundColor: css(st[0]), borderColor: css(st[0]), showLine: false, isMarker: true });
+      });
+    }
+    const optsEq = baseOptions('USD', {
+      onClick: (evt, els) => {
+        const el = els.find(e => charts.eq.data.datasets[e.datasetIndex].isMarker);
+        if (!el) return;
+        const p = charts.eq.data.datasets[el.datasetIndex].data[el.index];
+        if (p.cycle_id != null) openCycle(p.cycle_id);
+      },
+    });
+    optsEq.plugins.annotation = { annotations: eventAnnotations(s) };
+    optsEq.plugins.tooltip = { callbacks: {
+      title: items => items.length ? day(items[0].raw.x) : '',
+      label: c => c.dataset.isMarker ? `${c.raw.type.replace(/_/g, ' ')}${c.raw.pair ? ' · ' + c.raw.pair : ''}${c.raw.cycle_id != null ? ' · cycle #' + c.raw.cycle_id : ''}` :
+                  `${c.dataset.label}: ${c.dataset.yAxisID === 'y1' ? c.parsed.y.toFixed(3) : money(c.parsed.y, 2)}`,
+      footer: items => {
+        const it = items.find(i => !i.dataset.isMarker); if (!it) return '';
+        const i = it.dataIndex;
+        return [`Open P&L: ${signed(s.equity[i] - s.balance[i], 2)}`, `Free margin (day min): ${money(s.free_margin[i], 2)}`,
+                `Margin used (day max): ${money(s.margin_used[i], 2)}`, `Open notional (day max): ${money(s.open_notional[i])}`,
+                `Cumulative costs: ${money(s.costs[i], 2)} · swap ${signed(s.swap[i], 2)}`, `Cumulative net P&L: ${signed(s.net[i], 2)}`,
+                `Drawdown: ${ddFmt(s.equity[i] - s.peak[i], s.dd_pct[i])}`];
+      } } };
+    if ($('sv-t-price').checked && s.price) optsEq.scales.y1 = { position: 'right', grid: { display: false }, ticks: { color: warn, font: { size: 10 } } };
+    charts.eq = new Chart($('sv-equity'), { type: 'line', data: { datasets: ds }, options: optsEq });
+
+    destroy('dd');
+    const optsDd = baseOptions('%');
+    optsDd.plugins.tooltip = { callbacks: { title: items => items.length ? day(items[0].raw.x) : '', label: c => 'Drawdown: ' + ddFmt(s.equity[c.dataIndex] - s.peak[c.dataIndex], c.parsed.y) } };
+    optsDd.plugins.annotation = { annotations: eventAnnotations(s) };
+    charts.dd = new Chart($('sv-dd'), { type: 'line', data: { datasets: [
+      { label: 'Drawdown %', data: pts('dd_pct'), borderColor: neg, backgroundColor: neg + '30', fill: 'origin', borderWidth: 1.2, pointRadius: 0, tension: 0 }] }, options: optsDd });
+
+    destroy('mg');
+    charts.mg = new Chart($('sv-margin'), { type: 'line', data: { datasets: [
+      { label: 'Margin used (max)', data: pts('margin_used'), borderColor: warn, borderWidth: 1.2, pointRadius: 0, tension: 0 },
+      { label: 'Free margin (min)', data: pts('free_margin'), borderColor: pos, borderWidth: 1.2, pointRadius: 0, tension: 0 }] }, options: baseOptions('USD') });
+
+    destroy('pl');
+    charts.pl = new Chart($('sv-pnl'), { type: 'line', data: { datasets: [
+      { label: 'Gross P&L', data: pts('gross'), borderColor: neu, borderDash: [4, 3], borderWidth: 1.2, pointRadius: 0, tension: 0 },
+      { label: 'Costs', data: s.d.map((d, i) => ({ x: d, y: -s.costs[i] })), borderColor: neg, borderWidth: 1.2, pointRadius: 0, tension: 0 },
+      { label: 'Swap', data: pts('swap'), borderColor: pos, borderWidth: 1.2, pointRadius: 0, tension: 0 },
+      { label: 'Net P&L', data: pts('net'), borderColor: acc, borderWidth: 2, pointRadius: 0, tension: 0 }] }, options: baseOptions('USD') });
+  }
+
+  // ── failures ──────────────────────────────────────────────────────────
+  function renderFailures(run) {
+    const t = $('sv-failures');
+    const rows = run.failures || [];
+    if (!rows.length) { t.innerHTML = run.portfolio ? '<tbody><tr><td class="sv-def">Per-cycle failure detail is shown for the GBP/JPY runs; the portfolio run\'s liquidation markers are on the chart and its ledgers are saved in the report folder.</td></tr></tbody>' : '<tbody><tr><td class="sv-def">No forced closures or losses above $500.</td></tr></tbody>'; return; }
+    t.innerHTML = '<thead><tr><th>Cycle</th><th>Outcome</th><th>Entry</th><th>Closed</th><th class="num">Fills</th><th class="num">Peak margin</th><th class="num">Equity before</th><th class="num">Worst float</th><th class="num">Net</th><th>Rule / limitation</th></tr></thead><tbody>' +
+      rows.map(c => `<tr class="click" data-c="${c.cycle_id}"><td>#${c.cycle_id}</td><td><span class="sv-tag ${esc(c.outcome)}">${esc(c.outcome)}</span></td>
+        <td class="mono">${esc(String(c.entry_ts).slice(0, 16))}<br><span class="sv-def">@ ${c.entry_price != null ? Number(c.entry_price).toFixed(3) : ''}</span></td>
+        <td class="mono">${esc(tsOrNull(c.exit_ts) || 'open at data end')}${c.trigger_price != null ? `<br><span class="sv-def">trigger ${Number(c.trigger_price).toFixed(3)} · fill ${Number(c.exit_exec_price).toFixed(3)}</span>` : ''}</td>
+        <td class="num">${c.fills}</td><td class="num">${money(c.peak_margin_usd)}</td><td class="num">${c.equity_before_usd != null ? money(c.equity_before_usd) : '—'}</td>
+        <td class="num sv-bad">${money(c.mae_usd)}</td><td class="num ${cls(c.net_pnl_usd)}">${signed(c.net_pnl_usd, 2)}</td>
+        <td class="sv-def">${esc(c.rule || c.exit_reason || '')}${c.confidence ? '<br>' + esc(c.confidence) : ''}${c.outcome === 'OPEN_UNRESOLVED_AT_DATA_END' ? 'marked to market; counterfactual close ' + signed(c.counterfactual_close_net_usd, 2) : ''}</td></tr>`).join('') + '</tbody>';
+    t.querySelectorAll('tr.click').forEach(tr => tr.onclick = () => openCycle(+tr.dataset.c));
+  }
+
+  // ── cycle table + ledger ──────────────────────────────────────────────
+  function filteredCycles(run) {
+    const o = $('sv-f-outcome').value, f = +$('sv-f-fills').value;
+    return (run.cycles || []).filter(c => (!o || c.outcome === o) && c.fills >= f);
+  }
+
+  function renderCycles(run) {
+    const sel = $('sv-f-outcome');
+    const outcomes = [...new Set((run.cycles || []).map(c => c.outcome))];
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">all outcomes</option>' + outcomes.map(o => `<option${o === cur ? ' selected' : ''}>${esc(o)}</option>`).join('');
+    const rows = filteredCycles(run);
+    const per = 40, pages = Math.max(1, Math.ceil(rows.length / per));
+    page = Math.min(page, pages - 1);
+    $('sv-cycle-count').textContent = run.cycles ? `${rows.length} of ${run.cycles.length} cycles` : 'cycle table available for the GBP/JPY runs';
+    const t = $('sv-cycles');
+    if (!run.cycles) { t.innerHTML = ''; $('sv-pager').innerHTML = ''; return; }
+    t.innerHTML = '<thead><tr><th>#</th><th>Entry</th><th>Exit</th><th>Outcome</th><th class="num">Fills</th><th class="num">Lots</th><th class="num">Hours</th><th class="num">Gross</th><th class="num">Costs</th><th class="num">Swap</th><th class="num">Net</th><th class="num">Worst float</th></tr></thead><tbody>' +
+      rows.slice(page * per, page * per + per).map(c => `<tr class="click" data-c="${c.cycle_id}"><td>${c.cycle_id}</td>
+        <td class="mono">${esc(String(c.entry_ts).slice(0, 16))}</td><td class="mono">${esc(tsOrNull(c.exit_ts) || 'open')}</td>
+        <td><span class="sv-tag ${esc(c.outcome)}">${esc(c.outcome.replace(/_/g, ' ').toLowerCase())}</span></td><td class="num">${c.fills}</td><td class="num">${Number(c.lots).toFixed(2)}</td>
+        <td class="num">${Number(c.duration_h).toFixed(0)}</td><td class="num ${cls(c.gross_pnl_usd)}">${signed(c.gross_pnl_usd, 2)}</td>
+        <td class="num">${money(c.spread_usd + c.slippage_usd + c.commission_usd, 2)}</td><td class="num ${cls(c.swap_usd)}">${signed(c.swap_usd, 2)}</td>
+        <td class="num ${cls(c.net_pnl_usd)}">${signed(c.net_pnl_usd, 2)}</td><td class="num sv-bad">${money(c.mae_usd)}</td></tr>`).join('') + '</tbody>';
+    t.querySelectorAll('tr.click').forEach(tr => tr.onclick = () => openCycle(+tr.dataset.c));
+    const pg = $('sv-pager');
+    pg.innerHTML = '';
+    if (pages > 1) {
+      [['‹ prev', page - 1], [`page ${page + 1} / ${pages}`, null], ['next ›', page + 1]].forEach(([lab, target]) => {
+        if (target === null) { const s = document.createElement('span'); s.className = 'sv-def'; s.textContent = lab; pg.appendChild(s); return; }
+        const b = document.createElement('button'); b.className = 'sv-btn'; b.textContent = lab; b.disabled = target < 0 || target >= pages;
+        b.onclick = () => { page = target; renderCycles(run); markCountText(); }; pg.appendChild(b);
+      });
+    }
+  }
+
+  async function openCycle(id) {
+    const run = SV.runs[runKey];
+    const box = $('sv-cycle-detail');
+    if (run.cycles) {
+      const rows = filteredCycles(run);
+      const ix = rows.findIndex(c => c.cycle_id === id);
+      if (ix < 0) { $('sv-f-outcome').value = ''; $('sv-f-fills').value = '0'; }
+      const all = filteredCycles(run);
+      page = Math.floor(all.findIndex(c => c.cycle_id === id) / 40);
+      renderCycles(run); markCountText();   // claude code changed: 2026-10-21 — re-rendered rows were left un-animated
+      document.querySelectorAll('#sv-cycles tr.sel').forEach(r => r.classList.remove('sel'));
+      const tr = document.querySelector(`#sv-cycles tr[data-c="${id}"]`);
+      if (tr) tr.classList.add('sel');
+    }
+    box.hidden = false;
+    box.innerHTML = `<span class="sv-def">Loading ledger for cycle #${id}…</span>`;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    try {
+      const r = await fetch(`${LEDGER_URL}?run=${encodeURIComponent(runKey)}&cycle=${id}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      const fills = j.fills.map(f => `<tr><td class="mono">${esc(String(f.timestamp).slice(0, 16))}</td><td class="num">L${f.level}</td><td class="num">${Number(f.lots).toFixed(2)}</td>
+        <td class="num">${Number(f.ref_price).toFixed(3)}</td><td class="num">${Number(f.exec_price).toFixed(3)}</td><td class="num">${money(f.spread_usd, 2)}</td>
+        <td class="num">${money(f.notional_usd)}</td><td class="num">${money(f.margin_required_usd, 2)}</td><td class="num">${money(f.free_margin_before_usd, 2)}</td></tr>`).join('');
+      const led = j.ledger.map(l => `<tr><td class="mono">${esc(String(l.timestamp).slice(0, 16))}</td><td>${esc(l.type)}</td><td class="num ${cls(l.amount_usd)}">${signed(l.amount_usd, 2)}</td>
+        <td class="num">${money(l.balance_after, 2)}</td><td class="sv-def">${esc(l.note)}</td></tr>`).join('');
+      box.innerHTML = `<div class="metric-label" style="margin-bottom:6px">Cycle #${id} — fills (bid reference vs executed price)</div>
+        <div class="sv-table-wrap"><table class="sv-table"><thead><tr><th>Time</th><th class="num">Level</th><th class="num">Lots</th><th class="num">Bid</th><th class="num">Paid</th><th class="num">Spread</th><th class="num">Notional</th><th class="num">Margin req.</th><th class="num">Free margin before</th></tr></thead><tbody>${fills}</tbody></table></div>
+        <div class="metric-label" style="margin:10px 0 6px">Cash ledger (balance changes only — spread is inside the fill price, never charged twice)</div>
+        <div class="sv-table-wrap"><table class="sv-table"><thead><tr><th>Time</th><th>Type</th><th class="num">Amount</th><th class="num">Balance after</th><th>Note</th></tr></thead><tbody>${led || '<tr><td colspan="5" class="sv-def">no cash movements yet (cycle still open)</td></tr>'}</tbody></table></div>`;
+      markCountText();   // claude code changed: 2026-10-21 — fills + cash-ledger numbers count up too
+    } catch (e) {
+      box.innerHTML = `<span class="neg">Ledger unavailable: ${esc(e.message)}</span>`;
+    }
+  }
+
+  // ── events ────────────────────────────────────────────────────────────
+  function renderEvents(run) {
+    const byId = {}; (SV.events || []).forEach(e => { byId[e.id] = e; });
+    const t = $('sv-events');
+    const rows = run.event_windows || [];
+    t.innerHTML = '<thead><tr><th>Event (sourced)</th><th>Pair</th><th class="num">Price move</th><th class="num">Max adverse (long)</th><th class="num">Ladder fills</th><th class="num">Max notional</th><th class="num">Worst open P&L</th><th class="num">Realised losses</th><th>Account outcome</th></tr></thead><tbody>' +
+      rows.map(w => {
+        const e = byId[w.event_id] || {};
+        const src = (e.sources || []).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.publisher)}</a>`).join(', ');
+        if (w.coverage === 'OUTSIDE_REPLAY_OR_NO_DATA') return `<tr><td>${esc(w.title)}<br><span class="sv-def">${esc(day(e.start))} · ${src}</span></td><td>${esc(w.pair)}</td><td colspan="7" class="sv-def">outside the replayed window — not simulated</td></tr>`;
+        return `<tr><td>${esc(w.title)}<br><span class="sv-def">${esc(day(e.start))} → ${esc(day(e.end))} · ${esc(e.category || '')} · ${src}</span><br><span class="sv-def">${esc(e.description || '')}</span></td>
+          <td>${esc(w.pair)}</td><td class="num ${cls(w.measured_return_pct)}">${pct(w.measured_return_pct, 2)}</td><td class="num sv-bad">${pct(w.max_adverse_move_long_pct, 2)}</td>
+          <td class="num">${w.max_ladder_fills != null ? w.max_ladder_fills : '—'}</td><td class="num">${money(w.account_max_open_notional_usd)}</td>
+          <td class="num ${cls(w.account_worst_unrealised_usd)}">${signed(w.account_worst_unrealised_usd, 0)}</td><td class="num ${cls(w.realised_losses_usd)}">${w.realised_losses_usd != null ? money(w.realised_losses_usd, 0) : '—'}</td>
+          <td>${(w.coincided_with || []).map(x => `<span class="sv-tag ${esc(x)}">${esc(x.replace(/_/g, ' ').toLowerCase())}</span>`).join(' ') || '<span class="sv-def">none</span>'}<br><span class="sv-def">window −24 h / +72 h · coverage ${esc(w.coverage)}</span></td></tr>`;
+      }).join('') + '</tbody>';
+  }
+
+  // ── decomposition + stress (run-independent) ─────────────────────────
+  function renderDecomp() {
+    $('sv-decomp').innerHTML = '<thead><tr><th>Step</th><th>What changes</th><th class="num">Net P&L</th><th class="num">Max drawdown</th><th>Drawdown basis</th><th class="num">Cycles</th><th class="num">Win rate</th></tr></thead><tbody>' +
+      SV.decomposition.map(r => `<tr><td>${esc(r.step)}</td><td>${esc(r.label)}</td><td class="num ${cls(r.net_pnl)}">${signed(r.net_pnl, 2)}</td>
+        <td class="num sv-bad">${ddFmt(r.max_drawdown_usd, r.max_drawdown_pct)}${r.max_drawdown_intrabar_usd != null ? `<br><span class="sv-def">intrabar ${ddFmt(r.max_drawdown_intrabar_usd, r.max_drawdown_intrabar_pct)}</span>` : ''}</td>
+        <td class="sv-def">${esc(r.drawdown_basis)}${r.drawdown_pct_basis ? '; % = ' + esc(r.drawdown_pct_basis) : ''}</td><td class="num">${r.cycles}</td><td class="num">${pct(r.win_rate_pct)}</td></tr>`).join('') +
+      `<tr><td>S5</td><td>+ fixed capital, ESMA 1:30 margin, 50 % close-out, no deposits</td><td colspan="5" class="sv-def">see the account cards above — ${SV.capital_levels.map(c => { const r = SV.runs['gbpjpy_' + c]; return r ? `$${c.toLocaleString()}: ${signed(r.metrics.net_pnl, 0)}, DD ${ddFmt(r.metrics.max_drawdown_usd, r.metrics.max_equity_drawdown_pct)}, ${r.metrics.liquidation_count} close-out(s)` : ''; }).join(' · ')}</td></tr></tbody>`;
+  }
+
+  function renderStress() {
+    const caps = SV.capital_levels.map(c => String(Math.round(c)));
+    const base = caps.map(c => SV.runs['gbpjpy_' + c] && SV.runs['gbpjpy_' + c].metrics);
+    const cell = m => !m ? '<td>—</td>' : `<td class="num"><span class="${cls(m.net_pnl)}" style="font-weight:600">${money(m.ending_equity, 0)}</span><br><span class="${cls(m.net_pnl)}">${pct(m.net_pnl / m.starting_capital * 100, 0)}</span> · <span class="${gcls(m.max_equity_drawdown_pct > -10 ? G : (m.max_equity_drawdown_pct <= -25 ? B : ''))}">DD ${ddFmt(m.max_drawdown_usd, m.max_equity_drawdown_pct)}</span><br>${m.liquidation_count ? `<span class="sv-tag LIQUIDATED">${m.liquidation_count} close-out</span>` : '<span class="sv-good">0 close-outs</span>'}${m.insolvent ? ' <span class="sv-tag BANKRUPTCY_OR_INSOLVENCY">insolvent</span>' : ''}</td>`;
+    $('sv-stress').innerHTML = `<thead><tr><th>Scenario</th>${caps.map(c => `<th class="num">$${(+c).toLocaleString()}</th>`).join('')}</tr></thead><tbody>` +
+      `<tr><td><strong>Baseline</strong><br><span class="sv-def">historical replay, MT5 spread history, current swap, no commission</span></td>${base.map(cell).join('')}</tr>` +
+      SV.stress.map(s => `<tr><td>${esc(s.label)} <span class="sv-tag">${esc(s.class)}</span><br><span class="sv-def">${esc(s.rationale)}${s.detail && s.detail.gap_bar ? ' · gap at ' + esc(String(s.detail.gap_bar).slice(0, 16)) : ''}${s.detail && s.detail.bars_dropped ? ' · ' + s.detail.bars_dropped + ' bars dropped (seed ' + s.detail.seed + ')' : ''}</span></td>${caps.map(c => cell(s.results[c])).join('')}</tr>`).join('') + '</tbody>';
+  }
+
+  function renderLimits() {
+    const p = SV.provenance[SV.primary_pair] || {};
+    const items = [
+      `Replay window ${String(p.replay_start || '').slice(0, 10)} → ${String(p.replay_end || '').slice(0, 16)} (${(p.bars || 0).toLocaleString()} hourly bars). Data before the first walk-forward test fold is training data and is not traded; nothing at or after ${SV.cutoff.slice(0, 16)} UTC is read (v7 and QC-2 holdout seals).`,
+      'Hourly bars: the order of the high and low inside a bar is unknown. Close-outs are checked against the bar\'s worst price, which is conservative; liquidation fills are at the trigger price or at the open when the bar gaps through it.',
+      'Spread: MT5 stores one spread value per bar (for most brokers, the bar minimum), and many bars record 0. The baseline cost is therefore optimistic; the spread x2 / x3 / live-floor stress rows bracket it.',
+      'Swap: the broker\'s current swap rates (2026-10-21 snapshot) are applied to all of 2022–2026. Historical interest-rate differentials were different, so the swap line is an ESTIMATE. GBP/JPY long currently earns a credit — remove it in the "No swap credit" row.',
+      'Commission: not exposed by MT5 and no trade history exists on the account, so it is charged as $0. The recorded spreads look raw, and raw-spread accounts usually charge commission; see the commission stress rows.',
+      'Leverage and close-out follow ESMA retail rules (1:30 majors, 1:20 others, 50 % close-out, negative-balance protection). The connected broker account itself reports 1:100 leverage with a 50 % stop-out, so ESMA is the stricter model. This is an approximation, not the broker\'s liquidation engine.',
+      'Several open positions at once (portfolio runs): the largest loser is closed first at its bar extreme and the margin level is re-checked. Assuming the pairs\' worst prices coincide in the same hour is conservative.',
+      'Order sizing: the entry is floored to the 0.01-lot grid (≈ $2.4–2.8k notional, not exactly $3,000); every add-on is an exact 2/4/8/16 multiple of the executed entry, so the ladder shape is preserved.',
+      'Swap and P&L in JPY/CAD/CHF are converted to USD at the contemporaneous rate from the project\'s own MT5 files; missing bars are forward-filled (causal).',
+      'Results are historical and descriptive. They are not out-of-sample evidence of an edge: the strategy and pairs were chosen after earlier looks at much of this data.',
+    ];
+    $('sv-limits').innerHTML = items.map(t => `<li>${esc(t)}</li>`).join('');
+  }
+
+  async function selectRun(k) {   // non-default runs: series + cycles fetched on first use
+    const run = SV.runs[k];
+    if (run.lazy) {
+      $('sv-banner').innerHTML = '<span class="sv-def">Loading run…</span>';
+      try {
+        const r = await fetch(`${LEDGER_URL}?run=${encodeURIComponent(k)}&part=run`);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || r.status);
+        run.series = j.series; if (j.cycles) run.cycles = fromColumnar(j.cycles); if (j.failures) run.failures = j.failures; run.lazy = false;
+      } catch (e) { $('sv-banner').innerHTML = `<span class="neg">Run unavailable: ${esc(e.message)}</span>`; return; }
+    }
+    runKey = k; range = null; page = 0; buildRunButtons(); render();
+  }
+
+  // ── classic sections below the replay: recomputed from the SELECTED run (claude code changed: 2026-10-21) ──
+  function closedCycles(run) {
+    return (run.cycles || []).filter(c => c.outcome !== 'OPEN_UNRESOLVED_AT_DATA_END' && tsOrNull(c.exit_ts))
+      .sort((a, b) => String(a.exit_ts).localeCompare(String(b.exit_ts)));
+  }
+
+  function chartOn(id, cfg) {
+    const el = $(id);
+    if (!el || typeof Chart === 'undefined') return;
+    const old = Chart.getChart(el);
+    if (old) old.destroy();
+    new Chart(el, cfg);
+  }
+
+  function renderLegacy(run) {
+    const card = $('lg-card');
+    if (!card || !run) return;
+    const m = run.metrics, cap = run.capital, cyc = closedCycles(run);
+    const label = run.portfolio ? '5-pair shared account' : `${SV.primary_pair} LONG`;
+    const notional = (run.cycles || []).map(c => c.peak_notional_usd).filter(v => v != null);
+    const avgN = notional.length ? notional.reduce((a, b) => a + b, 0) / notional.length : null;
+    const maxN = notional.length ? Math.max(...notional) : null;
+    const ddC = gcls(m.max_equity_drawdown_pct > -10 ? G : (m.max_equity_drawdown_pct <= -25 ? B : ''));
+    const s0 = (SV.decomposition || [])[0] || {};
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="metric-label" style="margin-bottom:6px"><span class="dca-dot" style="background:var(--accent)"></span>${esc(label)} · ${money(cap)} account
+            <span class="term-section-meta" style="margin-left:8px">${m.completed_cycles} completed cycles · ${m.unresolved_cycles} open · after costs</span></div>
+          <div class="dca-big-pnl ${cls(m.net_pnl)}">${signed(m.net_pnl, 2)}</div>
+          <div class="sv-def">ending equity <span class="${cls(m.ending_equity - cap)}">${money(m.ending_equity, 2)}</span>
+            (<span class="${cls(m.net_return_pct)}">${m.net_return_pct > 0 ? '+' : ''}${pct(m.net_return_pct)}</span> on capital)
+            · original page figure (S0, no costs): ${signed(s0.net_pnl, 2)}</div>
+        </div>
+        <div class="dca-mini-grid" style="min-width:280px">
+          <div class="dca-mini-item"><span class="metric-label">Win rate (after costs)</span><span class="metric-value small">${pct(m.win_rate_after_costs_pct)}</span></div>
+          <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small ${ddC}">${ddFmt(m.max_drawdown_usd, m.max_equity_drawdown_pct)}</span></div>
+          <div class="dca-mini-item"><span class="metric-label">Avg notional / cycle</span><span class="metric-value small">${money(avgN, 0)}</span></div>
+          <div class="dca-mini-item"><span class="metric-label">Max notional / cycle</span><span class="metric-value small">${money(maxN, 0)}</span></div>
+          <div class="dca-mini-item"><span class="metric-label">Liquidations</span><span class="metric-value small ${m.liquidation_count ? 'sv-bad' : 'sv-good'}">${m.liquidation_count}</span></div>
+          <div class="dca-mini-item"><span class="metric-label">Profit factor (net)</span><span class="metric-value small ${gcls(m.net_profit_factor >= 1.5 ? G : (m.net_profit_factor != null && m.net_profit_factor < 1 ? B : ''))}">${m.net_profit_factor != null ? m.net_profit_factor.toFixed(2) : 'N/A'}</span></div>
+        </div>
+      </div>`;
+
+    if (typeof Chart === 'undefined') return;
+    const neg = css('--negative'), pos = css('--positive'), dim = css('--text-dim'), grid = css('--border');
+    const gold = css('--gold-heading') || '#f0b90b';
+    const base = (xTitle) => ({
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: dim, font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: grid }, title: { display: !!xTitle, text: xTitle, color: dim, font: { size: 10 } } },
+        y: { ticks: { color: dim, font: { size: 10 } }, grid: { color: grid } },
+      },
+    });
+
+    // trade-index equity + drawdown ($ with % of peak equity)
+    let cum = 0;
+    const eqPts = cyc.map(c => (cum += c.net_pnl_usd));
+    let peak = cap;
+    const ddUsd = [], ddPct = [];
+    eqPts.forEach(v => { const e = cap + v; peak = Math.max(peak, e); ddUsd.push(peak - e); ddPct.push((e - peak) / peak * 100); });
+    const labels = cyc.map((_, i) => i + 1);
+    const eqOpts = base('Cycle #');
+    eqOpts.plugins.tooltip = { callbacks: {
+      title: it => it.length ? `Cycle #${it[0].label} · closed ${tsOrNull(cyc[it[0].dataIndex].exit_ts)}` : '',
+      label: c => `Cumulative net: ${signed(c.parsed.y, 2)} · this cycle ${signed(cyc[c.dataIndex].net_pnl_usd, 2)}` } };
+    chartOn('gbpjpyEquityChart', { type: 'line', data: { labels, datasets: [{ label: 'Cumulative net P&L ($)', data: eqPts,
+      borderColor: gold, backgroundColor: 'rgba(240,185,11,.12)', fill: 'origin', borderWidth: 1.5, pointRadius: 0, tension: 0 }] }, options: eqOpts });
+    const ddOpts = base('Cycle #');
+    ddOpts.plugins.tooltip = { callbacks: { label: c => 'Drawdown: ' + ddFmt(-c.parsed.y, ddPct[c.dataIndex]) } };
+    chartOn('gbpjpyDrawdownChart', { type: 'line', data: { labels, datasets: [{ label: 'Drawdown ($)', data: ddUsd,
+      borderColor: neg, backgroundColor: 'rgba(224,86,76,.18)', fill: true, borderWidth: 1.5, pointRadius: 0, tension: 0 }] }, options: ddOpts });
+    const em = $('lg-eq-meta');
+    if (em) {
+      em.textContent = `${money(cap)} account · cumulative net P&L by cycle · drawdown $ (% of peak equity) · cycle index`;
+      const t = em.closest('.term-section-head') && em.closest('.term-section-head').querySelector('.term-section-title');
+      if (t) t.innerHTML = `<span class="dca-dot" style="background:var(--accent)"></span>${esc(label)} — equity &amp; drawdown`;
+    }
+    const sectionOf = id => { const el = $(id); return el && el.closest('.term-section'); };
+    const cumSec = sectionOf('lg-cum-title');
+    if (cumSec) {
+      const lg = cumSec.querySelector('.dca-legend');
+      if (lg) lg.innerHTML = `<span class="dca-legend-item"><span class="dca-dot" style="background:${gold}"></span>${esc(label)} · ${money(cap)}</span>`;
+      const meta = cumSec.querySelector('.term-section-meta');
+      if (meta) meta.textContent = run.portfolio ? 'daily · after costs · USD' : 'daily · after costs · bands = walk-forward folds (OOS = consumed holdout) · USD';
+    }
+    const fillSec = sectionOf('lg-fills-title');
+    if (fillSec) {
+      const meta = fillSec.querySelector('.term-section-meta');
+      if (meta) meta.textContent = `cycles reaching each ladder level · largest cycle notional ${money(maxN, 0)} · ESMA margin 1:30 majors / 1:20 others`;
+    }
+
+    // cumulative net P&L over time, with the walk-forward fold bands
+    if (run.series) {
+      const sr = run.series;
+      const ann = {};
+      const folds = (!run.portfolio && SV.provenance[SV.primary_pair] && SV.provenance[SV.primary_pair].folds) || [];
+      folds.forEach((f, i) => {
+        const a = String(f[0]).slice(0, 10), b = i + 1 < folds.length ? String(folds[i + 1][0]).slice(0, 10) : sr.d[sr.d.length - 1];
+        ann['fb' + i] = { type: 'box', xMin: a, xMax: b, backgroundColor: f[1] === 'holdout' ? 'rgba(240,185,11,.08)' : (i % 2 ? 'rgba(128,128,128,.10)' : 'rgba(128,128,128,.04)'),
+          borderWidth: 0, label: { display: true, content: f[1] === 'holdout' ? 'OOS' : 'F' + (i + 1), position: 'start', font: { size: 9 }, color: dim } };
+      });
+      const cOpts = base('');
+      cOpts.scales.x = { type: 'time', time: { unit: 'month' }, ticks: { color: dim, font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: grid } };
+      cOpts.plugins.annotation = { annotations: ann };
+      cOpts.plugins.tooltip = { callbacks: { label: c => `Net P&L: ${signed(c.parsed.y, 2)} · equity ${money(cap + c.parsed.y, 2)}` } };
+      chartOn('dca-equity-chart', { type: 'line', data: { datasets: [{ label: 'Cumulative net P&L', data: sr.d.map((d, i) => ({ x: d, y: sr.net[i] })),
+        borderColor: gold, backgroundColor: 'rgba(240,185,11,.10)', fill: 'origin', borderWidth: 1.8, pointRadius: 0, tension: 0 }] }, options: cOpts });
+      const ct = $('lg-cum-title');
+      if (ct) ct.textContent = `Cumulative net P&L — ${label} · ${money(cap)} account (after costs)`;
+    }
+
+    // ladder depth: cycles per fill level, net P&L per level in the tooltip
+    const lv = [1, 2, 3, 4, 5].map(k => (run.cycles || []).filter(c => c.fills === k));
+    const fOpts = base('Fills reached');
+    fOpts.plugins.tooltip = { callbacks: { label: c => { const g = lv[c.dataIndex], net = g.reduce((a, x) => a + x.net_pnl_usd, 0);
+      return `${g.length} cycles (${pct(g.length / Math.max(1, (run.cycles || []).length) * 100)}) · net ${signed(net, 2)}`; } } };
+    chartOn('dca-fills-chart', { type: 'bar', data: { labels: ['L1', 'L2', 'L3', 'L4', 'L5 (exhausted)'],
+      datasets: [{ data: lv.map(g => g.length), backgroundColor: lv.map(g => g.reduce((a, x) => a + x.net_pnl_usd, 0) >= 0 ? pos : neg), borderColor: gold, borderWidth: 1 }] }, options: fOpts });
+    const ft = $('lg-fills-title');
+    if (ft) ft.textContent = `Capital deployment — ladder fill depth · ${label} · bar colour = net P&L of that level (green profit, red loss)`;
+
+    // fold table (by pair for the shared account)
+    const tbl = $('lg-fold-table');
+    if (tbl) {
+      const key = run.portfolio ? 'pair' : 'fold_spec';
+      const groups = {};
+      cyc.forEach(c => { (groups[c[key]] = groups[c[key]] || []).push(c); });
+      const order = Object.keys(groups).sort((a, b) => (a === 'holdout') - (b === 'holdout') || a.localeCompare(b));
+      const rowsHtml = order.map(k => {
+        const g = groups[k], wins = g.filter(c => c.net_pnl_usd > 0).length, net = g.reduce((a, c) => a + c.net_pnl_usd, 0);
+        const first = String(g[0].entry_ts).slice(0, 10), last = String(tsOrNull(g[g.length - 1].exit_ts) || '').slice(0, 10);
+        const name = run.portfolio ? k : (k === 'holdout' ? '<span class="accent" style="font-size:10px;letter-spacing:.5px">OOS</span>' : 'F' + String(k).replace('fold', ''));
+        return `<tr><td>${name}</td><td class="mono" style="font-size:11px">${first}→${last}</td><td class="num">${g.length}</td>
+          <td class="num">${pct(wins / g.length * 100)}</td><td class="num ${cls(net)}" style="font-weight:600">${signed(net, 2)}</td></tr>`;
+      }).join('');
+      tbl.innerHTML = `<thead><tr><th>${run.portfolio ? 'Pair' : 'Fold'}</th><th>Period</th><th class="num">Cycles</th><th class="num">Win%</th><th class="num">Net P&amp;L</th></tr></thead>
+        <tbody>${rowsHtml || '<tr><td colspan="5" class="sv-def">no completed cycles</td></tr>'}</tbody>`;
+      const head = tbl.closest('.term-section') && tbl.closest('.term-section').querySelector('.term-section-title');
+      if (head) head.innerHTML = `<span class="dca-dot" style="background:var(--accent)"></span>${esc(label)} · ${money(cap)} — ${run.portfolio ? 'per-pair' : 'fold'} breakdown (net, after costs)`;
+    }
+  }
+  window.svRenderLegacy = () => { renderLegacy(SV.runs[runKey]); markCountText(); };
+
+  // every number counts up from 0 (on render, then every 5 s via counters.js); leaf value cells only — never dates
+  const COUNT_SELECTORS = ['#sv-cards .v', '#sv-root td.num', '#sv-root td.num span:not(.sv-tag)',   // badges stay static: a red '0 close-out' mid-count would mislead
+                           '#lg-card .dca-big-pnl', '#lg-card .metric-value', '#lg-card .sv-def span', '#lg-fold-table td.num'];
+  function markCountText() {
+    const fresh = [];
+    document.querySelectorAll(COUNT_SELECTORS.join(',')).forEach(el => {
+      if (el.children.length || el.classList.contains('mono') || el.classList.contains('count-text') || !/\d/.test(el.textContent)) return;
+      el.classList.add('count-text');
+      fresh.push(el);
+    });
+    if (typeof animateText === 'function') fresh.forEach(animateText);
+  }
+
+  function render() {
+    const run = SV.runs[runKey];
+    renderBanner(run); renderCards(run); renderCosts(run); buildRange(run); drawCharts(run);
+    renderFailures(run); renderCycles(run); renderEvents(run);
+    renderLegacy(run);   // claude code changed: 2026-10-21 — the classic sections follow the capital buttons
+    markCountText();
+    $('sv-t-price').disabled = !run.series.price;
+  }
+
+  ['sv-t-events', 'sv-t-markers', 'sv-t-price', 'sv-t-worst'].forEach(id => $(id).addEventListener('change', () => drawCharts(SV.runs[runKey])));
+  ['sv-f-outcome', 'sv-f-fills'].forEach(id => $(id).addEventListener('change', () => { page = 0; renderCycles(SV.runs[runKey]); markCountText(); }));
+
+  function start() {
+    buildRunButtons(); render(); renderDecomp(); renderStress(); renderLimits(); markCountText();
+    if (typeof onThemeChange === 'function') onThemeChange(() => { drawCharts(SV.runs[runKey]); renderLegacy(SV.runs[runKey]); });
+    const wanted = new URLSearchParams(location.search).get('run');   // claude code changed: 2026-10-21 — shareable ?run=portfolio_5000
+    if (wanted && wanted !== runKey && SV.runs[wanted]) selectRun(wanted);
+  }
+  if (document.readyState === 'complete') start(); else window.addEventListener('load', start);
+})();
+</script>

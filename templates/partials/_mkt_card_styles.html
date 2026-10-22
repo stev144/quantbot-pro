@@ -1,0 +1,114 @@
+{# claude code changed: 2026-10-22 — Markets card styles moved here verbatim from markets.html so the Markets tab and the Regime page share ONE card look #}
+<style>
+/* ── Market cards grid ─────────────────────────────────────────────────── */
+.mkt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--sp-3);
+    padding: 0 var(--sp-5) var(--sp-4);
+}
+@media (max-width: 600px) {
+    .mkt-grid { grid-template-columns: 1fr; padding: 0 var(--sp-4) var(--sp-4); }
+    .mkt-header, .mkt-tabs { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+}
+
+.mkt-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: var(--sp-3) var(--sp-4);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+.mkt-card:hover { border-color: var(--border-strong); background: var(--bg-2); }
+
+.mkt-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-2);
+}
+.mkt-card-identity { min-width: 0; }
+.mkt-symbol {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    letter-spacing: 0.01em;
+}
+.mkt-name {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.mkt-class-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--neutral-dim);
+    color: var(--neutral);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+}
+.mkt-class-badge.forex { background: var(--warning-dim); color: var(--warning); }
+
+.mkt-watchlist-btn {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 16px;
+    line-height: 1;
+    flex-shrink: 0;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+.mkt-watchlist-btn:hover { color: var(--accent); background: var(--neutral-dim); }
+.mkt-watchlist-btn.active { color: var(--accent); }
+.mkt-watchlist-btn:disabled { opacity: 0.4; cursor: default; }
+
+.mkt-card-bottom {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--sp-2);
+}
+.mkt-price-block { display: flex; flex-direction: column; gap: 3px; }
+.mkt-price {
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+.mkt-change {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+.mkt-change.pos { color: var(--positive); }
+.mkt-change.neg { color: var(--negative); }
+.mkt-sparkline { flex-shrink: 0; opacity: 0.85; }
+
+/* claude code changed: 2026-10-22 — optional research strip under a card (Regime page: regime + votes; z-score) */
+.mkt-strip {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-top: var(--sp-2); border-top: 1px solid var(--border);
+}
+.mkt-strip-conf { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
+.mkt-strip-metrics {
+    display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; gap: 6px;
+    font-size: 11px; font-family: var(--font-mono); color: var(--text-dim); font-variant-numeric: tabular-nums;
+}
+.mkt-strip-metrics b { color: var(--text-primary); font-weight: 600; }
+.mkt-strip-metrics .warn b { color: var(--warning); }
+</style>

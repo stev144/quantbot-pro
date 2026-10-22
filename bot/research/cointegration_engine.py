@@ -1642,6 +1642,77 @@ def run_cointegration_research(
     return pairs_df, spread_data
 
 
+ORIENTATION_SUPPLEMENT_FILE = "cointegration_pairs_orientation_supplement.csv"  # claude code changed: 2026-10-21 — new
+
+
+def build_orientation_supplement(
+    pairs: List[Tuple[str, str]],
+    scan_end,
+    output_dir: str = "research_data",
+    interval: str = "1h",
+) -> pd.DataFrame:
+    """
+    claude code changed: 2026-10-21 — new. Engle-Granger is NOT symmetric: OLS of log(A) on log(B) gives a different
+    β, α, residual and p-value than log(B) on log(A), so a pair stored in cointegration_pairs.csv as B/A cannot be
+    turned into A/B by inverting β. When a configured pair (bot/pairs/config.py) is only present reversed, this runs
+    the SAME _test_pair() on the SAME window the scan used (`scan_end` = the scan's `end`; start = end − 5 years) for
+    the configured orientation and writes it to a separate supplement file — the scan artifact and its provenance
+    sidecar are never edited.
+
+    Fail-closed governance: a supplement row was not part of the scan's FDR / OOS-FDR family, so it can never be
+    claimed to pass them: passes_fdr / passes_oos_persistence are blank and passes_filters is forced False
+    (monitoring-only). The raw single-pair result is kept in reject_reason. Before writing, the reversed orientation
+    is re-run and must reproduce the stored row's training-window fields (β, α, EG p, ADF p, half-life) — otherwise
+    the window is not the scan's and nothing is written.
+    """
+    from datetime import timedelta
+    from pathlib import Path
+
+    end = pd.Timestamp(scan_end)
+    end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+    start = end - timedelta(days=5 * 365)   # same convention as run_cointegration_research()
+    scan = pd.read_csv(Path(output_dir) / "cointegration_pairs.csv")
+    symbols = sorted({s for p in pairs for s in p})
+    data = {}
+    for s in symbols:
+        df = load_ohlcv_via_provider(s, ASSET_CLASS_CRYPTO, interval, start.to_pydatetime(), end.to_pydatetime())
+        if df is None:
+            raise ValueError(f"no {interval} data for {s} in the scan window")
+        data[s] = df
+    engine = CointegrationEngine(universe=symbols)
+    prices = engine._validate_and_extract_prices(data)
+
+    rows = []
+    for a, b in pairs:
+        stored = scan[scan["pair_name"] == f"{b}/{a}"]
+        if stored.empty:
+            raise ValueError(f"{b}/{a} is not in the scan — the supplement only re-orients pairs the scan tested")
+        check = engine._test_pair(b, a, prices[b], prices[a]).to_dict()
+        for col in ("hedge_ratio", "intercept", "coint_pvalue", "adf_pvalue", "half_life_hours"):
+            want, got = float(stored.iloc[0][col]), float(check[col])
+            if not (np.isclose(want, got, rtol=1e-4, atol=1e-6) or (np.isinf(want) and np.isinf(got))):
+                raise ValueError(f"window does not reproduce the scan for {b}/{a}: {col} stored {want} vs {got} "
+                                 f"(scan_end {end} is not the scan's)")
+        r = engine._test_pair(a, b, prices[a], prices[b]).to_dict()
+        raw_reason = r.get("reject_reason") or ("passes raw single-pair filters" if r["passes_filters"] else "")
+        r.update({
+            "passes_fdr": None, "adf_pvalue_fdr": None, "coint_pvalue_fdr": None,
+            "oos_adf_pvalue_fdr": None, "passes_oos_persistence": None,
+            "passes_filters": False,
+            "reject_reason": f"orientation supplement — not in the scan's FDR family, monitoring only (raw: {raw_reason})",
+            "selection_basis": "ORIENTATION_SUPPLEMENT_LEGACY_FIRST_N_TRAINING_WINDOW",
+            "scan_end": end.isoformat(),
+            "reproduced_reverse_row": f"{b}/{a}",
+        })
+        rows.append(r)
+
+    out = pd.DataFrame(rows)
+    path = Path(output_dir) / ORIENTATION_SUPPLEMENT_FILE
+    out.to_csv(path, index=False)
+    write_legacy_provenance(path, kind="COINTEGRATION_ORIENTATION_SUPPLEMENT", producer="bot.research.cointegration_engine")
+    return out
+
+
 # claude code changed: real bug fix — the print loop above used to collapse
 # every "is_cointegrated=True but passes_filters=False" pair under one
 # label, "⚠ COINT/NO HL", regardless of WHICH filter actually rejected it
@@ -1805,8 +1876,9 @@ def pair_test_in_selection_zone(symbol_a: str, symbol_b: str, close_a: pd.Series
             "seed_eligible": eligible, "seed_reason": seed_reason}
     if cal is not None:   # claude code changed: 2026-10-06 — FX rows say what they are (crypto rows unchanged)
         base.update({"asset_class": market.asset_class, "market_profile_hash": market.profile_hash(),
-                     "selection_mode": "FX_SELECTION_ONLY — costs, financing, holding horizon and protocol values "
-                                       "undecided; exploratory, never claimable"})
+                     "selection_mode": "FX_SELECTION_ONLY — FX profile decisions recorded 2026-10-16, but the "
+                                       "canonical pairs ladder does not implement FX swap financing (OD-FX-FS-1); "
+                                       "exploratory, never claimable"})   # claude code changed: 2026-10-21 — text said costs/financing/horizon/protocol were undecided, stale since commit 610e536
     s, reason = _zone_s_slice(log_a, log_b, zones=zones, protocol=protocol, calendar=cal,
                               gap_max_candles=market.gap_max_candles if cal is not None else None)   # claude code changed: 2026-10-06
     if s is None:

@@ -608,5 +608,88 @@ def get_mt5_symbol_info(symbol: str, *, attach_only: bool = True) -> dict:  # cl
         mt5.shutdown()  # claude code changed: always release
 
 
+def get_mt5_live_ticks(symbols) -> dict:  # claude code changed: 2026-10-21 — new; Markets live forex prices
+    """Latest bid/ask tick per canonical symbol from the already-running MT5 terminal (attach, read-only, no
+    orders). {symbol: {"bid", "ask", "time_utc"}}; symbols without a tick are omitted. Display use only — never
+    written to data/. Raises MT5ConnectionError if the terminal is not reachable."""
+    mt5 = _attach_running_terminal()
+    out = {}
+    try:
+        for symbol in symbols:
+            mt5_sym = _to_mt5_symbol(symbol)
+            if not mt5.symbol_select(mt5_sym, True):
+                continue
+            tick = mt5.symbol_info_tick(mt5_sym)
+            if tick is None or not tick.bid or not tick.ask:
+                continue
+            ts = mt5_server_time_to_utc(pd.Series([int(tick.time)])).iloc[0]   # server wall clock -> true UTC (same as the OHLC files)
+            out[symbol] = {"bid": float(tick.bid), "ask": float(tick.ask), "time_utc": ts.isoformat()}
+    finally:
+        mt5.shutdown()
+    return out
+
+
+SPREAD_DIR = OUTPUT_DIR / "spreads"   # claude code changed: 2026-10-21 — sidecar spread history; never touches the OHLC CSVs
+
+
+def download_mt5_spread_history(symbols, date_from="2020-12-31", out_dir=None) -> dict:  # claude code changed: 2026-10-21 — new; FX cost attribution input
+    """
+    Save MT5's per-bar spread history (MqlRates.spread, integer POINTS) for each symbol to
+    `<out_dir>/<PAIR>_1h_spread.csv` with columns timestamp (true UTC, same clock conversion as the OHLC
+    files), spread_points, point, plus a broker cost snapshot JSON (current swap/contract/account rules).
+
+    Read-only against the broker: copy_rates_range / symbol_info / account_info only, no orders.
+    Caveat recorded in the provenance: MT5 stores ONE spread value per bar (for most brokers the bar's
+    lowest observed spread), so costs built from it are an optimistic ESTIMATE, not tick-level truth.
+    """
+    import json
+    from pathlib import Path
+    from bot.instruments import write_provenance_marker
+    out = Path(out_dir) if out_dir is not None else SPREAD_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    start = pd.Timestamp(date_from).to_pydatetime()
+    now = datetime.now(tz=timezone.utc)
+    mt5 = _attach_running_terminal()
+    summary, snapshot = {}, {"fetched_at": now.isoformat(), "symbols": {}}
+    try:
+        acct = mt5.account_info()
+        if acct is None:
+            raise MT5ConnectionError(f"account_info() returned None: {mt5.last_error()}")
+        a = acct._asdict()
+        snapshot["account"] = {k: a.get(k) for k in ("company", "server", "currency", "leverage", "margin_mode",
+                                                      "margin_so_mode", "margin_so_call", "margin_so_so")}
+        for symbol in symbols:
+            mt5_sym = _to_mt5_symbol(symbol)
+            if not mt5.symbol_select(mt5_sym, True):
+                raise MT5ConnectionError(f"symbol_select({mt5_sym!r}) failed: {mt5.last_error()}")
+            info = mt5.symbol_info(mt5_sym)._asdict()
+            rates = mt5.copy_rates_range(mt5_sym, _mt5_timeframe(mt5, INTERVAL), start, now)
+            if rates is None or len(rates) == 0:
+                raise MT5ConnectionError(f"no rates for {mt5_sym}: {mt5.last_error()}")
+            df = pd.DataFrame(rates)
+            df = pd.DataFrame({
+                "timestamp": mt5_server_time_to_utc(df["time"]).dt.strftime("%Y-%m-%d %H:%M:%S+00:00").to_numpy(),
+                "spread_points": df["spread"].astype(int).to_numpy(),
+                "point": info["point"],
+            }).drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
+            path = out / symbol_to_filename(symbol).replace("_1h.csv", "_1h_spread.csv")
+            df.to_csv(path, index=False)
+            write_provenance_marker(path, venue="mt5", data_source="download_mt5_spread_history", source="mt5_terminal_ipc",
+                                    symbol=symbol, timeframe=INTERVAL, start_date=df["timestamp"].iloc[0][:10],
+                                    end_date=df["timestamp"].iloc[-1][:10], row_count=len(df),
+                                    clock=MT5_CLOCK_LABEL + "; MqlRates.spread = one value per bar (typically bar minimum) — ESTIMATE")
+            snapshot["symbols"][symbol] = {k: info.get(k) for k in (
+                "name", "digits", "point", "spread", "trade_contract_size", "currency_base", "currency_profit",
+                "currency_margin", "swap_mode", "swap_long", "swap_short", "swap_rollover3days", "volume_min",
+                "volume_step", "volume_max")}
+            summary[symbol] = {"rows": len(df), "file": str(path)}
+    finally:
+        mt5.shutdown()
+    snap_path = out / f"broker_cost_snapshot_{now.strftime('%Y-%m-%d')}.json"
+    snap_path.write_text(json.dumps(snapshot, indent=2, default=str))
+    summary["snapshot"] = str(snap_path)
+    return summary
+
+
 if __name__ == "__main__":
     download_all_mt5_symbols()

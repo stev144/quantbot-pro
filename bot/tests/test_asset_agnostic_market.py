@@ -1,7 +1,8 @@
 # claude code changed: new file — 2026-10-04, asset-agnostic research infrastructure (bot/quant_core/market_profile.py).
 # Proves: crypto (REVB-4) is unchanged; FX scheduled closures are not crypto-style missing candles (decision lock
-# Decision 5 A) while missing TRADING hours still are (5 B); the session seed is causal; FX can never become
-# canonical while Decision 5's owner rules are undecided (FX_CALENDAR_UNAVAILABLE, not negative evidence);
+# Decision 5 A) while missing TRADING hours still are (5 B); the session seed is causal; the FX profile is complete
+# since 2026-10-16 (canonical Kalman runs on the FX trading calendar) but engines that cannot price FX financing or
+# run a 24/7 clock refuse it (2026-10-21 update — was "FX can never become canonical while undecided");
 # financing/cost/universe/symbol rules cannot leak between asset classes; the holdout seal applies to every class.
 # The SessionCalendar used here is a TEST FIXTURE (Fri 22:00 → Sun 22:00 UTC) — not an FX calendar decision.
 import json   # claude code changed: 2026-10-06
@@ -189,7 +190,7 @@ class SessionSeedIsCausalTests(SimpleTestCase):
             causal_init(self.la, self.lb, CANONICAL.with_overrides(selection_start_utc=None), calendar=TEST_CAL)
 
 
-class ForexCannotBeCanonicalTests(SimpleTestCase):
+class ForexCanonicalGateTests(SimpleTestCase):
     """Every CANONICAL consumer refuses FX with FX_CALENDAR_UNAVAILABLE (not negative evidence). claude code changed:
     2026-10-06 — the owner-delegated selection rules (calendar, gap limit, seed rule, universe) now allow the
     exploratory zone-S SELECTION screen for in-universe FX pairs; Kalman state, lifecycle and evidence stay blocked."""
@@ -202,10 +203,11 @@ class ForexCannotBeCanonicalTests(SimpleTestCase):
     def test_profile_and_symbol_resolution(self):
         # claude code changed: 2026-10-06 — calendar (OD-FX-1) and the delegated selection rules (OD-FX-2/3/7) are
         # decided; horizon, financing, costs and protocol are not, so FX stays FX_CALENDAR_UNAVAILABLE for canonical use.
-        self.assertEqual(set(FOREX_PROFILE.missing_decisions()), set(FOREX_PROFILE.DECISION_FIELDS) - set(FOREX_PROFILE.SELECTION_FIELDS))
+        # claude code changed: 2026-10-21 — owner decisions OD-FX-HB-1 / FS-1 / CM-1 + protocol hash locked 2026-10-16
+        # (commit 610e536): the FX profile is complete, so require_canonical() now passes.
+        self.assertEqual(FOREX_PROFILE.missing_decisions(), [])
         self.assertIs(FOREX_PROFILE.require_selection("test"), FOREX_PROFILE)
-        with self.assertRaisesRegex(OwnerDecisionMissing, FX_CALENDAR_UNAVAILABLE):
-            FOREX_PROFILE.require_canonical("test")
+        self.assertIs(FOREX_PROFILE.require_canonical("test"), FOREX_PROFILE)
         for s, c in (("EUR/USD", "FOREX"), ("EUR_USD", "FOREX"), ("XAU/USD", "FOREX"), ("BTC/USDT", "CRYPTO"),
                      ("AVAX_USDT", "CRYPTO"), ("X_USDT", "CRYPTO"), ("X", "CRYPTO")):
             self.assertEqual(asset_class_for_symbol(s), c, s)
@@ -235,27 +237,33 @@ class ForexCannotBeCanonicalTests(SimpleTestCase):
             a = self.a.drop(self.a.index[(self.a.index >= wed) & (self.a.index < wed + hole * H)])
             self.assertEqual(pair_test_in_selection_zone("EUR/USD", "GBP/USD", a, self.b)["status"], expect, hole)
 
-    def test_kalman_pipeline_and_lab_refuse(self):
+    def test_kalman_runs_on_the_fx_calendar_and_pipeline_stops_at_financing(self):   # claude code changed: 2026-10-21 — was test_kalman_pipeline_and_lab_refuse
         from bot.research.cointegration_pipeline_runner import run_pair_canonical
         from bot.research.kalman_filter_engine import KalmanFilterEngine
         from bot.research_lab.tools import research_tools as rt
-        with self.assertRaisesRegex(OwnerDecisionMissing, FX_CALENDAR_UNAVAILABLE):
-            KalmanFilterEngine(pair_name="EUR_USD/GBP_USD", symbol_a="EUR_USD", symbol_b="GBP_USD",
-                               ols_beta=1.0, ols_alpha=0.0).run_canonical(self.a, self.b)
+        eng = KalmanFilterEngine(pair_name="EUR_USD/GBP_USD", symbol_a="EUR_USD", symbol_b="GBP_USD",
+                                 ols_beta=1.0, ols_alpha=0.0)
+        res = eng.run_canonical(self.a, self.b)
+        seed = pd.Timestamp(eng.seed_record.seed_timestamp)
+        cal = FOREX_PROFILE.calendar
+        self.assertEqual(seed, cal.first_trading_at_or_after(ZONES.S0))           # FIRST_TRADING_CANDLE_AT_OR_AFTER_S, not the closed S0
+        self.assertTrue(cal.is_trading(pd.DatetimeIndex([seed]))[0])
+        self.assertEqual(int(res["kalman_segment"].max()), 0)                      # weekend closures are not gaps -> no re-seeds
+        self.assertTrue(bool(res["is_observed"].all()))                            # aligned on the trading grid, no closure rows
         d = Path(tempfile.mkdtemp())
         try:
             r = run_pair_canonical("EUR_USD", "GBP_USD", self.a, self.b, output_dir=str(d), funding_dir=str(d))
-            self.assertEqual((r["stopped_at"], r["stages"]["market"]["status"]), ("market", "BLOCKED"))
-            self.assertNotIn("kalman", r["stages"])
+            self.assertEqual(r["stages"]["kalman"]["status"], "OK")
+            self.assertEqual((r["stopped_at"], r["stages"]["financing"]["status"]), ("financing", "BLOCKED"))
+            self.assertIn("OD-FX-FS-1", r["stages"]["financing"]["reason"])        # FX swap financing not implemented here
+            self.assertNotIn("lifecycle", r["stages"])
         finally:
             shutil.rmtree(d, ignore_errors=True)
         frames = {"EUR/USD": pd.DataFrame({"close": self.a}), "GBP/USD": pd.DataFrame({"close": self.b})}
         with mock.patch.object(rt, "load_ohlcv", lambda s: frames[s]):
             k = rt.run_kalman_pairs_test("EUR/USD", "GBP/USD")
             c = rt.run_cointegration_test("EUR/USD", "GBP/USD")
-        self.assertEqual(k["verdict"], "REQUIRES_REVIEW")
-        self.assertIsNone(k["observation"])
-        self.assertIn(FX_CALENDAR_UNAVAILABLE, k["reject_reason"])               # claude code changed: 2026-10-06 — canonical Kalman still blocked
+        self.assertEqual(k["verdict"], "OBSERVATION")                            # claude code changed: 2026-10-21 — canonical Kalman runs; descriptive level only, never a claim
         self.assertEqual(c["status"], "OK")                                       # claude code changed: 2026-10-06 — selection now allowed (exploratory)
         self.assertIn("FX_SELECTION_ONLY", c["selection_mode"])
 
@@ -283,7 +291,7 @@ class NoCrossAssetLeakTests(SimpleTestCase):
         with self.assertRaisesRegex(AssetClassMismatch, "symbols are"):            # crypto default cannot price an FX pair
             EntryExitEngine(pair_name="EUR_USD/GBP_USD", symbol_a="EUR_USD", symbol_b="GBP_USD",
                             output_dir=tempfile.gettempdir(), rule_set="CANONICAL")
-        with self.assertRaisesRegex(OwnerDecisionMissing, FX_CALENDAR_UNAVAILABLE):
+        with self.assertRaisesRegex(AssetClassMismatch, "OD-FX-FS-1"):          # claude code changed: 2026-10-21 — profile complete, but FX swap financing is not implemented in this engine
             EntryExitEngine(pair_name="EUR_USD/GBP_USD", symbol_a="EUR_USD", symbol_b="GBP_USD",
                             output_dir=tempfile.gettempdir(), rule_set="CANONICAL", asset_class="FOREX")
         with self.assertRaisesRegex(AssetClassMismatch, "CRYPTO universe rule"):

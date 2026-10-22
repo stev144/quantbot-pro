@@ -1,0 +1,107 @@
+{
+  "_about": "Historical FX market events for the DCA capital-survival replay (claude code changed: 2026-10-21 — new). Facts below are as reported by the cited sources (retrieved 2026-10-21). Annotation only: the replay never reads this file when making trading decisions, and a coincidence of an event with a loss is not proof that the event caused it.",
+  "events": [
+    {
+      "id": "JP-MOF-2022-09-22",
+      "title": "Japan intervenes to support the yen (first time since 1998)",
+      "start": "2022-09-22T00:00:00Z", "end": "2022-09-23T00:00:00Z",
+      "category": "fx_intervention", "assets": ["JPY"],
+      "description": "Japan's authorities bought yen for the first time since 1998, shortly after the BoJ kept ultra-low rates; USD/JPY reversed from ~145 to ~141.",
+      "sources": [
+        {"url": "https://www.centralbanking.com/central-banks/monetary-policy/7953169/japan-intervenes-in-fx-market-for-first-time-in-24-years", "publisher": "Central Banking", "published": "2022-09-22"},
+        {"url": "https://kvia.com/news/2022/09/22/japan-intervenes-to-prop-up-the-yen-for-first-time-in-24-years/", "publisher": "CNN Business via KVIA", "published": "2022-09-22"}
+      ]
+    },
+    {
+      "id": "UK-MINIBUDGET-2022-09-23",
+      "title": "UK 'mini-budget' and sterling record low",
+      "start": "2022-09-23T00:00:00Z", "end": "2022-09-28T00:00:00Z",
+      "category": "fiscal_shock", "assets": ["GBP"],
+      "description": "Chancellor Kwarteng announced ~GBP 45bn of unfunded tax cuts on 23 Sep 2022; sterling fell to a record low near $1.035 in early Asian trade on 26 Sep 2022 and gilt yields jumped.",
+      "sources": [
+        {"url": "https://investmentweek.co.uk/news/4056882/kwartengs-mini-budget-sterling-slump-record-low-versus-dollar", "publisher": "Investment Week", "published": "2022-09-26"},
+        {"url": "https://news.abs-cbn.com/business/09/26/22/pound-hits-record-low-against-dollar-on-recession-fears", "publisher": "ABS-CBN (AFP)", "published": "2022-09-26"}
+      ]
+    },
+    {
+      "id": "BOJ-YCC-2022-12-20",
+      "title": "BoJ unexpectedly widens the yield-curve-control band to +/-0.5 %",
+      "start": "2022-12-20T00:00:00Z", "end": "2022-12-22T00:00:00Z",
+      "category": "monetary_policy", "assets": ["JPY"],
+      "description": "The BoJ kept rates at -0.1 % but widened the 10-year yield band from +/-0.25 to +/-0.50 points; the yen rose nearly 4 % against the dollar.",
+      "sources": [
+        {"url": "https://www.focus-economics.com/countries/japan/news/monetary-policy/boj-unexpectedly-changes-yield-curve-control-policy-sending-shockwaves-through-financial-markets/", "publisher": "FocusEconomics", "published": "2022-12-20"},
+        {"url": "https://www.spglobal.com/market-intelligence/en/news-insights/articles/2022/12/japan-central-bank-s-unexpected-policy-change-offers-little-succor-to-lenders-73573559", "publisher": "S&P Global Market Intelligence", "published": "2022-12"}
+      ]
+    },
+    {
+      "id": "US-SVB-2023-03-10",
+      "title": "Silicon Valley Bank failure and March 2023 banking turmoil",
+      "start": "2023-03-10T00:00:00Z", "end": "2023-03-20T00:00:00Z",
+      "category": "banking_crisis", "assets": ["USD", "global_risk"],
+      "description": "California's regulator closed SVB on 10 Mar 2023 and appointed the FDIC as receiver — the largest US bank failure since 2008.",
+      "sources": [
+        {"url": "https://en.wikipedia.org/wiki/Collapse_of_Silicon_Valley_Bank", "publisher": "Wikipedia (secondary)", "published": "n/a"},
+        {"url": "https://www.nbcbayarea.com/news/business/money-report/silicon-valley-bank-is-shut-down-by-regulators-fdic-to-protect-insured-deposits/3176655/", "publisher": "NBC Bay Area / CNBC", "published": "2023-03-10"}
+      ]
+    },
+    {
+      "id": "BOJ-NIRP-END-2024-03-19",
+      "title": "BoJ ends negative interest rates",
+      "start": "2024-03-19T00:00:00Z", "end": "2024-03-20T00:00:00Z",
+      "category": "monetary_policy", "assets": ["JPY"],
+      "description": "First BoJ hike in 17 years (to 0-0.1 %), end of yield-curve control; widely expected, the yen weakened slightly.",
+      "sources": [
+        {"url": "https://www.businesstoday.in/latest/economy/story/bank-of-japan-raises-interest-rates-for-the-first-time-in-17-years-421995-2024-03-19", "publisher": "Business Today", "published": "2024-03-19"},
+        {"url": "https://marketnews.com/mni-boj-review-march-2024-end-of-an-era", "publisher": "MNI", "published": "2024-03-20"}
+      ]
+    },
+    {
+      "id": "JP-MOF-2024-04-29",
+      "title": "Japan yen-buying intervention (record JPY 5.92trn on 29 Apr, 3.87trn on 1 May 2024)",
+      "start": "2024-04-29T00:00:00Z", "end": "2024-05-02T00:00:00Z",
+      "category": "fx_intervention", "assets": ["JPY"],
+      "description": "USD/JPY touched ~160 on 29 Apr 2024; the MoF later confirmed JPY 5,918.5bn on 29 Apr and 3,870.0bn on 1 May.",
+      "sources": [
+        {"url": "https://www.mof.go.jp/english/policy/international_policy/reference/feio/quarter/2024_2Qe.html", "publisher": "Japan Ministry of Finance", "published": "2024-08-07"},
+        {"url": "https://bernama.com/en/news.php?id=2326431", "publisher": "Bernama", "published": "2024-08"}
+      ]
+    },
+    {
+      "id": "BOJ-HIKE-CARRY-UNWIND-2024-07-31",
+      "title": "BoJ hike to 0.25 % and the yen carry-trade unwind (Nikkei -12.4 % on 5 Aug 2024)",
+      "start": "2024-07-31T00:00:00Z", "end": "2024-08-07T00:00:00Z",
+      "category": "monetary_policy_liquidity_shock", "assets": ["JPY", "global_risk"],
+      "description": "BoJ raised its policy rate to ~0.25 % on 31 Jul 2024; carry trades unwound, USD/JPY fell from ~162 (early July) to ~141.7 on 5 Aug, when the Nikkei closed down 12.4 % amid weak US jobs data.",
+      "sources": [
+        {"url": "https://www.hdfcfund.com/knowledge-stack/deep-dives/tuesdays-talking-points/yen-carry-trade-unwinding-story-global-event", "publisher": "HDFC Mutual Fund", "published": "2024-08"},
+        {"url": "https://www.arabnews.jp/en/business/article_128169", "publisher": "Arab News Japan", "published": "2024-08"}
+      ]
+    },
+    {
+      "id": "US-TARIFFS-2025-04-02",
+      "title": "US 'Liberation Day' tariffs and global risk-off",
+      "start": "2025-04-02T00:00:00Z", "end": "2025-04-10T00:00:00Z",
+      "category": "trade_policy_shock", "assets": ["USD", "JPY", "global_risk"],
+      "description": "Announced tariffs (10 % baseline plus country rates) triggered the largest two-day US stock loss on record; the yen acted as a safe haven; pressure eased from 9 Apr with a 90-day pause.",
+      "sources": [
+        {"url": "https://amro-asia.org/wp-content/uploads/2025/04/Analytical-Note_Liberation-day-and-financial-markets_final.pdf", "publisher": "AMRO", "published": "2025-04"},
+        {"url": "https://www.schroders.com/nl-be/be/individual/inzichten/monthly-markets-review---april-2025/", "publisher": "Schroders", "published": "2025-05"}
+      ]
+    },
+    {
+      "id": "JPY-BOJ-SIGNALS-2026-09-03",
+      "title": "Yen rebounds on hawkish BoJ guidance (market commentary)",
+      "start": "2026-09-01T00:00:00Z", "end": "2026-09-04T00:00:00Z",
+      "category": "monetary_policy_expectations", "assets": ["JPY"],
+      "description": "Commerzbank commentary: USD/JPY fell >1 % to ~158.20 as markets priced a September BoJ hike; intervention ('rate check') was speculated but not confirmed. Lower-confidence source class: broker/bank commentary, not an official release.",
+      "sources": [
+        {"url": "https://fxstreet.com/news/japanese-yen-jpy-surge-on-boj-signals-commerzbank-202609030637", "publisher": "FXStreet (Commerzbank note)", "published": "2026-09-03"}
+      ]
+    }
+  ],
+  "not_covered": [
+    {"id": "COVID-2020-03", "reason": "Before the replay window (first fold test starts 2022-08-10); listed as an external reference only, not simulated."},
+    {"id": "TERRA-LUNA-2022-05 / FTX-2022-11", "reason": "Crypto-specific; no direct FX instrument in the QC-1 universe. Not annotated."}
+  ]
+}

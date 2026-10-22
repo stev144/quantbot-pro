@@ -22,7 +22,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _ROOT      = Path(__file__).resolve().parents[2]
-_CACHE_KEY = "dca_engine_results_v7"  # claude code changed: v7 — LCEX-1 5-fill cap; busts v6 7-fill cache
+_CACHE_KEY = "dca_engine_results_v8"  # claude code changed: v8 — 2026-10-21 frozen data cutoff (was v7: LCEX-1 5-fill cap)
 _CACHE_TTL = 3600  # 1 hour
 
 _PERM_RESULT = {
@@ -67,7 +67,9 @@ _LEVEL_CAPITAL = [3000, 9000, 21000, 45000, 93000]  # claude code changed: LCEX-
 
 # ── data build (single pass per pair per fold) ────────────────────────────────
 
-def _build_results():
+def _build_results(cutoff=None):  # claude code changed: 2026-10-21 — optional frozen data cutoff (audit D6); default = FX_RESEARCH_DATA_CUTOFF
+    from bot.research.fx_holdout_guard import FX_RESEARCH_DATA_CUTOFF  # claude code changed: 2026-10-21 — single seal source
+    cutoff = FX_RESEARCH_DATA_CUTOFF if cutoff is None else cutoff  # claude code changed: 2026-10-21 — page no longer drifts with each hourly MT5 refresh
     from bot.research.fx_multipair_runner import (
         run_multipair_fold,
         QC1_MAX_CYCLE_CANDLES, QC1_PROFIT_ACTIVATION, QC1_TRAILING_PCT,
@@ -83,6 +85,7 @@ def _build_results():
         csv_file  = QC_PORTFOLIO_CSV_FILES[pair]
         pair_spec = QC_PORTFOLIO_SPECS[pair]
         df        = pd.read_csv(_ROOT / "data" / "forex" / csv_file, parse_dates=["timestamp"])
+        df        = df[pd.to_datetime(df["timestamp"], utc=True) < cutoff].reset_index(drop=True)  # claude code changed: 2026-10-21 — frozen cutoff; fold boundaries no longer move hourly and sealed rows are excluded
         splits    = make_fx_splits(df)
 
         # --- single pass over calibration folds + holdout as fold 6 ---
@@ -149,6 +152,8 @@ def _build_results():
         eq_arr = np.array([t["p"] for t in equity_pts]) if equity_pts else np.array([0.0])
         rm     = np.maximum.accumulate(eq_arr)
         max_dd = float((eq_arr - rm).min())
+        _dd_i  = int(np.argmin(eq_arr - rm))  # claude code changed: 2026-10-21 — drawdown % (owner rule: always show % in brackets)
+        max_dd_pct = round(float((eq_arr - rm)[_dd_i] / rm[_dd_i] * 100), 1) if rm[_dd_i] > 0 else None  # claude code changed: % of peak cumulative P&L (no account in the legacy view)
 
         # Dollar drawdown from running equity peak
         drawdown_pts = []
@@ -180,6 +185,8 @@ def _build_results():
                 "win_pct":      round(wins / total * 100, 1) if total else 0.0,
                 "total_pnl":    scaled_pnl,
                 "max_dd":       scaled_max_dd,
+                "max_dd_abs":   abs(scaled_max_dd),  # claude code changed: 2026-10-21 — for "−$X (−Y%)" display
+                "max_dd_pct":   max_dd_pct,  # claude code changed: 2026-10-21 — % of peak cumulative P&L
                 "avg_cost":     scaled_avg_c,
                 "max_cost":     scaled_max_c,
             },
@@ -209,6 +216,134 @@ def _build_results():
 
 # ── view ──────────────────────────────────────────────────────────────────────
 
+# ── capital-survival replay report (precomputed by `manage.py run_dca_survival_study`) ──────────────────────
+_SURVIVAL_CYCLE_FIELDS = (  # claude code changed: 2026-10-21 — slim cycle rows sent to the page
+    "cycle_id", "pair", "fold_spec", "entry_ts", "exit_ts", "outcome", "exit_reason", "fills", "lots", "duration_h",  # claude code changed: 2026-10-21 — fold_spec for the run-driven fold table
+    "gross_pnl_usd", "spread_usd", "slippage_usd", "commission_usd", "swap_usd", "net_pnl_usd", "mae_usd",
+    "peak_margin_usd", "peak_notional_usd", "rejected_order_attempts", "ladder_exhausted",
+)
+_survival_cache = {"mtime": None, "payload": None}  # claude code changed: 2026-10-21 — reload only when report.json changes
+
+
+def _survival_payload():  # claude code changed: 2026-10-21 — new
+    from bot.research.fx_survival_study import OUT_ROOT
+    marker = OUT_ROOT / "LATEST"
+    if not marker.exists():
+        return None
+    path = OUT_ROOT / marker.read_text().strip() / "report.json"
+    if not path.exists():
+        return None
+    mtime = path.stat().st_mtime
+    if _survival_cache["mtime"] == mtime:
+        return _survival_cache["payload"]
+    rep = json.loads(path.read_text())
+
+    def _slim(c):  # claude code changed: 2026-10-21 — 2-dp floats, minute timestamps (page size)
+        out = {}
+        for k in _SURVIVAL_CYCLE_FIELDS:
+            v = c.get(k)
+            if isinstance(v, float):
+                v = round(v, 2)
+            elif k in ("entry_ts", "exit_ts") and isinstance(v, str):
+                v = v[:16]
+            out[k] = v
+        return out
+
+    def _dedupe_markers(markers):  # claude code changed: 2026-10-21 — one marker per (day, type, pair); keeps the first cycle id
+        seen, out = set(), []
+        for mk in markers:
+            period = 7 if mk.get("type") in ("INSUFFICIENT_FREE_CASH", "MARGIN_CALL") else 10  # claude code changed: noisy types -> one per month
+            key = (str(mk.get("t", ""))[:period], mk.get("type"), mk.get("pair"))
+            if key not in seen:
+                seen.add(key)
+                out.append(mk)
+        return out
+
+    def _columnar(rows):  # claude code changed: 2026-10-21 — {cols, rows} instead of repeated keys
+        return {"cols": list(_SURVIVAL_CYCLE_FIELDS), "rows": [[r.get(k) for k in _SURVIVAL_CYCLE_FIELDS] for r in rows]}
+
+    runs = {}
+    for key, run in rep["capital_runs"].items():
+        m = {k: v for k, v in run["metrics"].items() if k not in ("by_month", "by_fold_spec")}
+        runs[key] = {
+            "capital": run["capital"], "metrics": m, "series": run["series"], "markers": _dedupe_markers(run["markers"]),
+            "failures": run["failures"], "event_windows": run["event_windows"],
+            "cycles": _columnar([_slim(c) for c in run["cycles"]]),
+        }
+    for cap, run in rep["portfolio"].items():
+        runs[f"portfolio_{cap}"] = {"capital": float(cap), "metrics": run["metrics"], "series": run["series"],
+                                    "markers": _dedupe_markers(run["markers"]), "by_pair": run["by_pair"],
+                                    "event_windows": run["event_windows"], "portfolio": True}
+        cyc_csv = path.parent / "runs" / f"portfolio_{cap}_cycles.csv"   # claude code changed: 2026-10-21 — portfolio cycles + failures for the run-driven sections
+        if cyc_csv.exists():
+            cdf = pd.read_csv(cyc_csv)
+            recs = json.loads(cdf.to_json(orient="records"))
+            runs[f"portfolio_{cap}"]["cycles"] = _columnar([_slim(c) for c in recs])
+            bad = cdf[cdf["outcome"].isin(["LIQUIDATED", "OPEN_UNRESOLVED_AT_DATA_END"]) | (cdf["net_pnl_usd"] < -500)]
+            runs[f"portfolio_{cap}"]["failures"] = json.loads(bad.to_json(orient="records"))
+    payload = {
+        "cutoff": rep["cutoff"], "generated_at": rep["generated_at"], "primary_pair": rep["primary_pair"],
+        "capital_levels": rep["capital_levels"], "cost_labels": rep["cost_labels"], "account_rules": rep["account_rules"],
+        "strategy": rep["strategy"], "decomposition": rep["decomposition"], "legacy_baseline": rep["legacy_baseline"],
+        "stress": rep["stress"], "events": rep["events"], "runs": runs,
+        "provenance": {k: {kk: v.get(kk) for kk in ("replay_start", "replay_end", "bars", "spread_bars_missing_ffilled",
+                                                     "quote_usd_source", "base_usd_source", "broker_snapshot", "folds")}  # claude code changed: 2026-10-21 — folds for the run-driven fold table / bands
+                       for k, v in rep["provenance"].items()},
+        "report_dir": path.parent.name,
+    }
+    _survival_cache.update(mtime=mtime, payload=payload)
+    return payload
+
+
+_SURVIVAL_DEFAULT_RUN = "gbpjpy_5000"  # claude code changed: 2026-10-21 — only this run is embedded; others load on demand
+
+
+def _survival_page_payload(full):  # claude code changed: 2026-10-21 — strip heavy parts of non-default runs
+    if not full:
+        return None
+    page = dict(full)
+    page["runs"] = {}
+    for key, run in full["runs"].items():
+        if key == _SURVIVAL_DEFAULT_RUN:
+            page["runs"][key] = run
+        else:
+            page["runs"][key] = {k: v for k, v in run.items() if k not in ("series", "cycles", "failures")}  # claude code changed: 2026-10-21 — failures lazy too
+            page["runs"][key]["lazy"] = True
+    return page
+
+
+def dca_survival_ledger(request):  # claude code changed: 2026-10-21 — new; ledger + fills for one cycle of one saved run
+    import re
+    from django.http import JsonResponse
+    from bot.research.fx_survival_study import OUT_ROOT
+    run = request.GET.get("run", "")
+    if not re.fullmatch(r"(gbpjpy|portfolio)_\d{3,6}", run):
+        return JsonResponse({"error": "unknown run"}, status=400)
+    if request.GET.get("part") == "run":  # claude code changed: 2026-10-21 — lazy series + cycles for a non-default run
+        full = _survival_payload()
+        if not full or run not in full["runs"]:
+            return JsonResponse({"error": "unknown run"}, status=404)
+        r = full["runs"][run]
+        return JsonResponse({"run": run, "series": r.get("series"), "cycles": r.get("cycles"), "failures": r.get("failures")})  # claude code changed: 2026-10-21
+    try:
+        cycle_id = int(request.GET.get("cycle", ""))
+    except ValueError:
+        return JsonResponse({"error": "cycle must be an integer"}, status=400)
+    marker = OUT_ROOT / "LATEST"
+    if not marker.exists():
+        return JsonResponse({"error": "no survival report — run manage.py run_dca_survival_study"}, status=404)
+    folder = OUT_ROOT / marker.read_text().strip() / "runs"
+    out = {}
+    for name in ("ledger", "fills"):
+        f = folder / f"{run}_{name}.csv"
+        if not f.exists():
+            return JsonResponse({"error": f"{f.name} missing"}, status=404)
+        df = pd.read_csv(f)
+        out[name] = json.loads(df[df["cycle_id"] == cycle_id].to_json(orient="records"))
+    out.update(run=run, cycle_id=cycle_id)
+    return JsonResponse(out)
+
+
 def dca_engine(request):
     error   = None
     results = cache.get(_CACHE_KEY)
@@ -237,7 +372,17 @@ def dca_engine(request):
     else:
         pairs_json = portfolio_equity_json = fold_boundaries_json = "null"
 
+    try:
+        survival = _survival_payload()  # claude code changed: 2026-10-21 — capital-survival replay (precomputed)
+        survival_error = None
+    except Exception as exc:  # claude code changed: a broken report must not take the legacy page down
+        logger.exception("DCA survival report load failed")
+        survival, survival_error = None, str(exc)
+
     context = {
+        "survival_json":         json.dumps(_survival_page_payload(survival)) if survival else "null",  # claude code changed: 2026-10-21 — default run embedded, others lazy
+        "survival":              survival,  # claude code changed: 2026-10-21
+        "survival_error":        survival_error,  # claude code changed: 2026-10-21
         "error":                 error,
         "results":               results,
         "pairs_json":            pairs_json,

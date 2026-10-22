@@ -1618,7 +1618,11 @@ def _require_market_profile(symbol: Optional[str], purpose: str, asset_class: Op
     gap accounting and financing are 24/7-crypto rules. Raises OwnerDecisionMissing (FX_CALENDAR_UNAVAILABLE)."""
     from bot.quant_core.market_profile import asset_class_for_symbol, profile_for_asset_class
     cls = asset_class or (asset_class_for_symbol(symbol) if symbol else "CRYPTO")
-    profile_for_asset_class(cls).require_canonical(f"{purpose} ({symbol or cls})")
+    profile = profile_for_asset_class(cls).require_canonical(f"{purpose} ({symbol or cls})")
+    if not profile.calendar.is_continuous:   # claude code changed: 2026-10-21 — completing the FX profile (2026-10-16) does not make THIS engine calendar-aware; it still runs a 24/7 clock and crypto gap accounting (G4). FX DCA lives in fx_fold_runner / fx_survival_replay.
+        from bot.quant_core.market_profile import AssetClassMismatch
+        raise AssetClassMismatch(f"{purpose} ({symbol or cls}): the crypto DCA engine runs a 24/7 clock; {cls} is "
+                                 f"session-traded — use the FX DCA path (bot.research.fx_fold_runner / fx_survival_replay)")
 
 
 def build_config_with_real_costs(

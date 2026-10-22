@@ -218,6 +218,83 @@ class _Cycle:
         return sum(f.usdt_amount for f in self.fills)
 
 
+def decide_in_cycle(
+    cycle,
+    close_price: float,
+    i: int,
+    spec: FxLadderSpec,
+    current_atr: float,
+    profit_activation_pct: float,
+    trailing_pct: float,
+    max_cycle_candles: Optional[int],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    In-cycle decision at bar close: profit activation -> trailing exit -> time exit -> ladder trigger.
+
+    Returns (pending, pending_exit_reason): pending is None | "EXIT" | "DCA".
+    Mutates cycle.profit_activated / cycle.peak exactly as the original inline block did.
+    `cycle` needs: weighted_avg_price, fills[-1].price, next_level_idx, entry_candle,
+    profit_activated, peak. Shared by _simulate_data_derived_next_open and
+    bot.research.fx_survival_replay so both run one strategy definition.
+    """  # claude code changed: 2026-10-21 — new; body moved verbatim from _simulate_data_derived_next_open
+    pending: Optional[str] = None
+    pending_exit_reason: Optional[str] = None
+    wap = cycle.weighted_avg_price
+
+    # profit target + trailing stop
+    if spec.direction == "LONG":
+        fav_price = close_price
+        profit_threshold = wap * (1.0 + profit_activation_pct)
+    else:
+        fav_price = close_price
+        profit_threshold = wap * (1.0 - profit_activation_pct)
+
+    if not cycle.profit_activated:
+        if (spec.direction == "LONG" and fav_price >= profit_threshold) or \
+           (spec.direction == "SHORT" and fav_price <= profit_threshold):
+            cycle.profit_activated = True
+            cycle.peak = fav_price
+    else:
+        if cycle.peak is None:
+            cycle.peak = fav_price
+        if spec.direction == "LONG":
+            cycle.peak = max(cycle.peak, fav_price)
+            trail_trigger = cycle.peak * (1.0 - trailing_pct)
+            if close_price <= trail_trigger:
+                pending, pending_exit_reason = "EXIT", "PROFIT_TARGET_TRAILING"
+        else:
+            cycle.peak = min(cycle.peak, fav_price)
+            trail_trigger = cycle.peak * (1.0 + trailing_pct)
+            if close_price >= trail_trigger:
+                pending, pending_exit_reason = "EXIT", "PROFIT_TARGET_TRAILING"
+
+    # time exit check (v5/A4): fires after profit check, before ladder DCA
+    if pending is None and max_cycle_candles is not None:  # claude code changed: v5/A4 — time-based exit per Part 3B §1
+        if (i - cycle.entry_candle) >= max_cycle_candles:  # claude code changed: v5/A4 — candles_held >= MAX_CYCLE_CANDLES
+            pending = "EXIT"  # claude code changed: v5/A4 — schedules exit at NEXT_OPEN
+            pending_exit_reason = "TIME_EXIT"  # claude code changed: v5/A4 — distinct label from PROFIT_TARGET_TRAILING
+
+    # ladder level trigger check (ATR-scaled)
+    if pending is None:
+        lvl_idx = cycle.next_level_idx
+        if lvl_idx < len(spec.base_pips):
+            last_fill_price = cycle.fills[-1].price
+            threshold = compute_dynamic_drop_pct(
+                base_pips=spec.base_pips[lvl_idx],
+                pip_size=spec.pip_size,
+                last_fill_price=last_fill_price,
+                current_atr=current_atr,
+                atr_ref=spec.atr_ref,
+            )  # claude code changed: dynamic ATR-scaled spacing per v3 Steps 3-5
+            if spec.direction == "LONG":
+                adverse = (last_fill_price - close_price) / last_fill_price
+            else:
+                adverse = (close_price - last_fill_price) / last_fill_price
+            if adverse >= threshold:
+                pending = "DCA"
+    return pending, pending_exit_reason
+
+
 def _simulate_data_derived_next_open(
     df: pd.DataFrame,
     spec: FxLadderSpec,
@@ -368,57 +445,10 @@ def _simulate_data_derived_next_open(
                 unreal = (wap - (close_price + spread_fraction)) * qty  # claude code changed: Phase A F-05 — add exit spread cost for SHORT
             rows.append((ts[i], realised, unreal, realised + unreal, True))
 
-            # profit target + trailing stop
-            if spec.direction == "LONG":
-                fav_price = close_price
-                profit_threshold = wap * (1.0 + profit_activation_pct)
-            else:
-                fav_price = close_price
-                profit_threshold = wap * (1.0 - profit_activation_pct)
-
-            if not cycle.profit_activated:
-                if (spec.direction == "LONG" and fav_price >= profit_threshold) or \
-                   (spec.direction == "SHORT" and fav_price <= profit_threshold):
-                    cycle.profit_activated = True
-                    cycle.peak = fav_price
-            else:
-                if cycle.peak is None:
-                    cycle.peak = fav_price
-                if spec.direction == "LONG":
-                    cycle.peak = max(cycle.peak, fav_price)
-                    trail_trigger = cycle.peak * (1.0 - trailing_pct)
-                    if close_price <= trail_trigger:
-                        pending, pending_exit_reason = "EXIT", "PROFIT_TARGET_TRAILING"
-                else:
-                    cycle.peak = min(cycle.peak, fav_price)
-                    trail_trigger = cycle.peak * (1.0 + trailing_pct)
-                    if close_price >= trail_trigger:
-                        pending, pending_exit_reason = "EXIT", "PROFIT_TARGET_TRAILING"
-
-            # time exit check (v5/A4): fires after profit check, before ladder DCA
-            if pending is None and max_cycle_candles is not None:  # claude code changed: v5/A4 — time-based exit per Part 3B §1
-                if (i - cycle.entry_candle) >= max_cycle_candles:  # claude code changed: v5/A4 — candles_held >= MAX_CYCLE_CANDLES
-                    pending = "EXIT"  # claude code changed: v5/A4 — schedules exit at NEXT_OPEN
-                    pending_exit_reason = "TIME_EXIT"  # claude code changed: v5/A4 — distinct label from PROFIT_TARGET_TRAILING
-
-            # ladder level trigger check (ATR-scaled)
-            if pending is None:
-                lvl_idx = cycle.next_level_idx
-                if lvl_idx < len(spec.base_pips):
-                    last_fill_price = cycle.fills[-1].price
-                    threshold = compute_dynamic_drop_pct(
-                        base_pips=spec.base_pips[lvl_idx],
-                        pip_size=spec.pip_size,
-                        last_fill_price=last_fill_price,
-                        current_atr=current_atr,
-                        atr_ref=spec.atr_ref,
-                    )  # claude code changed: dynamic ATR-scaled spacing per v3 Steps 3-5
-                    if spec.direction == "LONG":
-                        adverse = (last_fill_price - close_price) / last_fill_price
-                    else:
-                        adverse = (close_price - last_fill_price) / last_fill_price
-                    if adverse >= threshold:
-                        pending = "DCA"
+            pending, pending_exit_reason = decide_in_cycle(
+                cycle, close_price, i, spec, current_atr,
+                profit_activation_pct, trailing_pct, max_cycle_candles,
+            )  # claude code changed: 2026-10-21 — decision block extracted verbatim into decide_in_cycle() so the account-aware survival replay runs the SAME strategy logic (no duplicate)
         else:
             rows.append((ts[i], realised, 0.0, realised, False))
             # v6/A5 ADX gate: suppress new cycle open if ADX > 25 or in warmup  # claude code changed: v6/A5 A5-2 — NaN (warmup) evaluates as blocked (NaN ≤ 25 = False)

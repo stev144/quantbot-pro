@@ -126,6 +126,17 @@ FRESHNESS_MAX_AGE_DAYS = 7
 
 OUTPUT_DIR      = Path('data')
 
+
+def fetch_window_start(now: datetime, span_hours: float) -> datetime:  # claude code changed: 2026-10-21 — new
+    """Start of the download window: the rolling "most recent HISTORY_CANDLES" start, but never later than the
+    D-8 canonical init window (the L candles before the selection zone, from 2021-09-26 08:00 UTC). A pure rolling
+    window would silently drop that window on the first refresh after ~2026-09-26 and make every canonical seed
+    impossible. Floored to midnight so files keep their existing first candle."""
+    from bot.quant_core.research_zones import ZONES
+    rolling = now - timedelta(hours=span_hours)
+    init_start = ZONES.init_window()[0].to_pydatetime().replace(hour=0, minute=0, second=0, microsecond=0)
+    return min(rolling, init_start)
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def symbol_to_filename(symbol: str) -> str:
@@ -242,7 +253,7 @@ def download_all_symbols() -> dict:
     from bot.instruments import candles_to_wall_clock, get_instrument
 
     span_hours, _unit = candles_to_wall_clock(HISTORY_CANDLES, INTERVAL)
-    start = now - timedelta(hours=span_hours)
+    start = fetch_window_start(now, span_hours)   # claude code changed: 2026-10-21 — never later than the D-8 init window (was: now − 5 y, which would drop it)
     provider = BinanceKlinesProvider()
 
     print('\n' + '=' * 80)

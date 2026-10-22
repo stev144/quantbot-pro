@@ -346,6 +346,16 @@ def dashboard(request):
         "stale_notice": stale_notice,
     }
 
+    # claude code changed: 2026-10-22 — Markets cards for the cross-sectional list (same quotes and partial as /forex/);
+    # the z-scores themselves are unchanged
+    from bot.views import markets_data as md
+    csd = (market_state or {}).get("cross_section_dispersion") or {}
+    if csd.get("available"):
+        crypto_quotes = md.card_quotes("crypto", request.user)
+        csd["cards"] = [{"q": crypto_quotes[e["symbol"]], "z": e["cs_zscore"]}
+                        for e in csd.get("top_extremes", []) if e["symbol"] in crypto_quotes]
+        csd["n_without_quote"] = len(csd.get("top_extremes", [])) - len(csd["cards"])
+
     return render(request, "dashboard.html", context)
 
 def live_data(request):

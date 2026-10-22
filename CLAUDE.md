@@ -10,7 +10,7 @@ A Django project ("Steph Quant Technologies") that is really three things sharin
 2. **Backtesting/dashboard web app** (Django views + `templates/dashboard.html`) — fetches historical klines, runs the backtester, renders equity curve / stats / trade table.
 3. **Offline research pipeline** (`bot/research/*`, `run_research_all.py`) — feature engineering, cointegration/Kalman-filter pair analysis, walk-forward and permutation testing over CSVs in `data/` and `research_data/`.
 
-There is no `requirements.txt`/`Pipfile` — dependencies live only in `venv/`. Key libs: Django 6.0, `ccxt`, `pandas`, `numpy`, `statsmodels`, `scipy`, `requests`, `aiohttp`.
+There is no `requirements.txt`/`Pipfile` — dependencies live only in `venv/`. Key libs: Django 6.0, `ccxt`, `pandas`, `numpy`, `statsmodels`, `scipy`, `requests`, `aiohttp`, `anthropic` 1.x (+ `pydantic`, `httpx2`; added 2026-10-21 for the Market Intelligence workspace's backend-only Claude news service — `bot/market_intel/news_ai.py`, key `ANTHROPIC_API_KEY` in `.env`, see `MARKET_INTELLIGENCE_WORKSPACE_2026-10-21.md`).
 
 ## Commands
 

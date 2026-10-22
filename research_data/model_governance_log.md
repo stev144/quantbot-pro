@@ -3215,3 +3215,81 @@ is descriptive only per CRRP-2026-10-02.
 
 **EUR/CAD added to QC_PORTFOLIO_SPECS** (replaces AUD/CAD). CSV already in
 MT5 universe; `refresh_forex_data` will append candles hourly.
+
+
+---
+
+## 2026-10-21 — Test-suite repair under the five gates (19 pre-existing failures)
+
+Full suite 2026-10-21: 2,321 tests, 6 failures + 13 errors, all reproduced with the day's other changes stashed
+(pre-existing). Owner instruction: "do all the fixes and don't forget our 5 gates". Root causes and fixes:
+
+1. **Pairs pilot could not start (13 errors).** The 2026-10-13 legacy cointegration scan stores AVA/PHA, DEXE/ALGO and
+   DOT/LINK REVERSED (B/A). G2: Engle-Granger is not symmetric, so B/A's β/α cannot be inverted. Fix: the scan's own
+   window was recovered exactly (end 2026-10-13 05:00 UTC; the reversed rows reproduce β, α, EG p, ADF p, half-life to
+   1e-6), `build_orientation_supplement()` re-ran `_test_pair()` for the configured orientation and wrote
+   `research_data/cointegration_pairs_orientation_supplement.csv` (+ LEGACY sidecar); the scan file is untouched
+   (sha256 abb2d5f8… still matches its provenance). G5: supplement rows were not in the scan's FDR family → forced
+   `passes_filters=False` (monitoring only). Unexplained residual: ALGO/DEXE OOS ADF p reproduces as 0.1418 vs stored
+   0.1404 (data files unchanged since 2026-10-03); it cannot change any outcome (fails either way). The config loader
+   now refuses a reversed-only pair with an explicit message instead of "not found". Consequence of the 10-13 scan
+   (not of this fix): only DODO/FIDA is entry-eligible now (MINA/ONG fails in that scan). Pilot remains DRY_RUN.
+2. **FX canonical gate (4 failures) — stale tests AND a hidden bug.** Owner decisions of 2026-10-16 (commit 610e536)
+   completed FOREX_PROFILE, so require_canonical() passes by design. With the gate open, `run_canonical` was found to
+   look up the FX calendar but never pass it on (G4/G5): prices were aligned on the 24/7 grid (every weekend a gap →
+   re-seeds) and the seed fell on a CLOSED hour (2021-11-07 00:00). Fixed: trading-grid alignment + calendar seed
+   (now 2021-11-07 22:00, 0 re-seeds). Engines that still cannot price FX now refuse it for the true reason: crypto
+   DCA engine (24/7 clock), canonical pairs EntryExitEngine and canonical pairs ladder (decided FX swap financing
+   OD-FX-FS-1 not implemented → ladder stops BLOCKED at "financing" instead of crashing). Stale FX_SELECTION_ONLY text
+   corrected. Tests rewritten to the 10-16 contract.
+3. **Crypto data freshness.** D-8 seals every candle ≥ F (2026-10-04) away from data/, so "within 7 days of now" could
+   never pass; the test now measures against min(now, F). Data refreshed (archive: data/_archive_pre_refresh_2026-10-21/).
+   G5 hazard found first: the fetcher's rolling "now − 5 y" window would have dropped the D-8 init window
+   (2021-09-26 08:00 → 2021-11-06 23:00) and made every canonical seed impossible; `fetch_window_start()` now never
+   starts later than it (new test). Files now span 2021-09-26 00:00 → 2026-10-03 23:00.
+4. **Research-lab "byte-identical" baseline.** Obsolete twice over: D-10 changed the block to max(4h, 24) = 96, and the
+   frozen number drifts with every refresh. Replaced by data-independent invariants (D-10 block, determinism,
+   p = (k+1)/(B+1)) — not a re-baseline.
+5. **Forex universe balance.** The 28-pair default was replaced by owner rule FX-FLOATING-51 (2026-10-06). The test now
+   asserts the audit's structural fix (complete 8-major C(8,2) cross inside the universe, each major 7/28) — no new
+   threshold chosen after seeing data. Bug fixed: the dashboard exposure tally counted XAU/XAG as currencies and
+   included excluded pegs; it now tallies FX-FLOATING-51 only and lists the excluded instruments.
+
+Evidence class: software/governance repair only. No strategy result, edge claim, live setting or holdout changed.
+
+---
+
+## 2026-10-21 — Markets page: live DISPLAY prices, holdouts stay sealed
+
+Owner request: live prices on /markets/ and /markets/watchlist/, "leave the holdout sealed". The page previously showed
+the last research-CSV close with no timestamp (crypto 2026-10-03 23:00 — the D-8 seal boundary, so it could never
+update; forex the hourly MT5 CSV). Now: Binance all-symbol 24 h ticker (one request) for crypto, MT5 terminal ticks for
+forex, served by /markets/live/ from a 30 s memory cache and polled by the page. These prices are NEVER written to
+data/ (test_markets_live asserts data/ and data/forex/ are byte-unchanged by a live fetch), so no sealed candle enters
+any research dataset. Every card states its age (LIVE / STALE + "as of"); 6 Binance pairs with no trade since
+2026-10-06 (ARDR, ICX, MATIC, MBOX, POND, STORJ — MATIC/STORJ status BREAK) are shown STALE, not live. Display only:
+no strategy, research input or holdout changed.
+
+---
+
+## 2026-10-21 — Market Intelligence workspace (display + education; no research or trading change)
+
+Per-asset workspace `/markets/<crypto|forex>/<SYMBOL>/` (report: MARKET_INTELLIGENCE_WORKSPACE_2026-10-21.md). Seal
+handling: the "What happened next?" lab and the research-evidence section read only research CSVs strictly before the
+holdouts (crypto ZONES.F 2026-10-04; FX FX_RESEARCH_DATA_CUTOFF 2026-10-16 08:00) and refuse any outcome window that
+would reach them; live analysis of current bars (Binance klines / MT5) is display-only and never written to data/.
+Strategy results are shown only with their evidence-registry class (all current entries UNVERIFIED / INVALIDATED /
+LEGACY); none is presented as validated. Claude (news) output is labelled AI INTERPRETATION and never feeds any
+calculation, signal, limit or order. Evidence class of the workspace: DESCRIPTIVE / EDUCATIONAL.
+
+## 2026-10-21 — PT-OG-DCA-1 test calibration (preregistration DRAFT, §5a)
+Calibrated the confirmatory test for the draft profit-target / 84-bar time-exit family BEFORE any arm exists
+(`bot/research/pt_og_dca_calibration.py`, 10 tests; `research_data/pt_og_dca/calibration_2026-10-21.json` + addendum).
+Under D-2/D-10/D-3 (paired block sign-flip, block 288/336, B = 999, Holm m = 5): size FAILS on skewed zero-mean lumps
+(7.5–13 % at nominal 5 %, in the arm's favour) and AR(0.99) persistence (9–13 %); a bootstrap-t candidate also fails
+(6–11 %); the semi-real baseline null is ~0.1 % (negative multi-week dependence). Power at $5–20/week ≤ 5 % up to 18
+months. G3 BLOCKED; the draft's 6 arms exceed the D-3 cap of 5. No arm, strategy, configuration or holdout touched;
+the semi-real null reads only development rows (< FX_RESEARCH_DATA_CUTOFF). Evidence class: METHOD CALIBRATION.
+Owner decision (same day): route B — PT-OG-DCA-1 is descriptive only (no p-values; ceiling D-7 OBSERVATION); T5 ($30)
+dropped, 5 arms (T1–T4, H6). Forward window: sealed from signing, single read at 12 months, not before 2027-01-17.
+Still open: broker commission (G4 PARTIAL), code approval, owner signature. Preregistration revision 2.

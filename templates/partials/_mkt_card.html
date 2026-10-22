@@ -1,0 +1,62 @@
+{% comment %}
+claude code changed: 2026-10-22 — ONE Markets card (moved from the two inline copies in markets.html), shared by the
+Markets tab and the Regime page. Takes `q` (a markets_data quote). Optional extras rendered as a strip under the
+standard card: `regime` (a RegimeDetector row) and `zscore` + `zscore_asof` (latest cross-sectional z-score).
+{% endcomment %}
+<div class="mkt-card"
+     data-symbol="{{ q.symbol }}"
+     data-class="{{ q.asset_class }}"
+     data-live-symbol="{{ q.symbol }}" data-live-class="{{ q.asset_class }}" data-decimals="{{ q.price_decimals }}" data-asof="{{ q.as_of }}"
+     data-name="{% if q.asset_class == 'forex' %}{{ q.display_symbol }}{% else %}{{ q.display_name }}{% endif %}"
+     data-display="{{ q.display_symbol }}"{% if regime %} data-regime="{{ regime.regime }}"{% endif %}
+     tabindex="0" role="link" aria-label="Open {{ q.display_symbol }} market intelligence"
+     onkeydown="if (event.key === 'Enter') mktOpenDetail('{{ q.symbol }}', '{{ q.asset_class }}')"
+     onclick="mktOpenDetail('{{ q.symbol }}', '{{ q.asset_class }}')">
+    <div class="mkt-card-top">
+        <div class="mkt-card-identity">
+            <div class="mkt-symbol">{{ q.display_symbol }}</div>
+            {% if q.asset_class != 'forex' and q.display_name %}<div class="mkt-name">{{ q.display_name }}</div>{% endif %}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+            {% if q.asset_class == 'forex' %}<span class="mkt-class-badge forex">Forex</span>{% else %}<span class="mkt-class-badge">Crypto</span>{% endif %}
+            <button class="mkt-watchlist-btn {% if q.in_watchlist %}active{% endif %}"
+                    data-symbol="{{ q.symbol }}"
+                    data-class="{{ q.asset_class }}"
+                    aria-label="{% if q.in_watchlist %}Remove from watchlist{% else %}Add to watchlist{% endif %}"
+                    onclick="event.stopPropagation(); toggleWatchlist(this)"
+                    {% if not user.is_authenticated %}disabled title="Sign in to use watchlist"{% endif %}>
+                {% if q.in_watchlist %}♥{% else %}♡{% endif %}
+            </button>
+        </div>
+    </div>
+    <div class="mkt-card-bottom">
+        <div class="mkt-price-block">
+            <span class="mkt-price{% if q.asset_class == 'forex' %} mono{% endif %} live-price">{{ q.price }}</span>
+            <span class="mkt-change live-change {% if q.positive %}pos{% else %}neg{% endif %}">
+                {% if q.positive %}▲{% else %}▼{% endif %}
+                {% if q.positive %}+{% endif %}{{ q.change_pct }}%
+            </span>
+            <span class="live-asof"></span>
+        </div>
+        <div class="mkt-sparkline live-spark">{{ q.sparkline }}</div>
+    </div>
+    {% if regime %}
+    <div class="mkt-strip">
+        <span class="badge {% if regime.regime == 'TRENDING_UP' %}pos{% elif regime.regime == 'TRENDING_DOWN' %}neg{% elif regime.regime == 'HIGH_VOLATILITY' %}warn{% else %}neu{% endif %}">{{ regime.regime }}</span>
+        <span class="mkt-strip-conf" title="RegimeDetector agreement: how many of its indicator votes agree — not a probability">{{ regime.confidence }}</span>
+        {% if regime.volatility_extreme %}<span class="badge warn" title="Volatility extreme flag">VOL</span>{% endif %}
+    </div>
+    <div class="mkt-strip-metrics">
+        <span title="Average Directional Index (trend strength; ≥ 25 votes trending)">ADX <b>{{ regime.adx }}</b></span>
+        <span title="ATR ratio (≥ 1.7 = HIGH_VOLATILITY)"{% if regime.atr_ratio > 1.7 %} class="warn"{% endif %}>ATR× <b>{{ regime.atr_ratio }}</b></span>
+        <span title="EMA spread % (≥ 0.5 % votes trending)">EMA <b>{{ regime.ema_spread_pct }}%</b></span>
+        <span title="Bollinger Band width % (≤ 2 % votes ranging)">BB <b>{{ regime.bb_width_pct }}%</b></span>
+    </div>
+    {% endif %}
+    {% if zscore_asof %}
+    <div class="mkt-strip">
+        <span class="badge neu" {# claude code changed: 2026-10-22 — neutral colour, as the 2026-10-05 forex decision: a z-score is position, not good/bad #}title="Cross-sectional z-score of this instrument's 1-hour return vs the universe at {{ zscore_asof }}">z {{ zscore }}</span>
+        <span class="mkt-strip-conf">{% if zscore > 0 %}stronger{% else %}weaker{% endif %} than the universe · {{ zscore_asof }}</span>
+    </div>
+    {% endif %}
+</div>

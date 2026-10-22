@@ -84,7 +84,7 @@
         <a class="term-nav-link {% if active == 'dashboard' %}active{% endif %}"
            {% if active == 'dashboard' %}aria-current="page"{% endif %}
            data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."
-           href="{% url 'dashboard' %}">Executive</a>
+           href="{% url 'dashboard' %}">Cryptos</a>  {# claude code changed: 2026-10-21 — owner request: label "Executive" → "Cryptos" (same crypto dashboard; keeps F-02 single link) #}
 
         <a class="term-nav-link {% if active == 'markets' %}active{% endif %}"
            {% if active == 'markets' %}aria-current="page"{% endif %}
@@ -229,3 +229,6 @@
 {# so anything outside that span is inherently stationary) ahead of the #}
 {# animated gold message. #}
 <div class="term-typed-strip mono" id="typed-line"><span class="typed-static">We</span> <span id="typed-text"></span><span class="typed-cursor">▌</span></div>
+{# claude code changed: 2026-10-21 — Home / Markets / Watchlist / Portfolio / Academy bar included ONCE here, so every page #}
+{# with the topbar has it (was 5 pages only) and it shows on laptops too (desktop pill styling in terminal.css). #}
+{% include "partials/_bottom_nav.html" %}

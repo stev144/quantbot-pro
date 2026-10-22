@@ -105,7 +105,7 @@ def get_cross_sectional_dispersion():
     Reads only the last valid row of the 'cs_zscore' column per file
     (not the whole file) to keep this cheap on every dashboard load.
     """
-    return cross_sectional_dispersion_at_common_timestamp(RESEARCH_DATA_DIR, top_n=5)   # claude code changed: 2026-10-05 — one shared implementation (also used by the Forex dashboard)
+    return cross_sectional_dispersion_at_common_timestamp(RESEARCH_DATA_DIR, top_n=None)   # claude code changed: 2026-10-05 — one shared implementation (also used by the Forex dashboard); 2026-10-22 — top_n 5 → None: every coin at the common hour, ranked by |z| (as Forex)
 
 
 def cross_sectional_dispersion_at_common_timestamp(directory, *, top_n=5, asset_label="symbols",

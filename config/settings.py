@@ -57,6 +57,32 @@ _railway_domain = config('RAILWAY_PUBLIC_DOMAIN', default='')
 if _railway_domain:
     ALLOWED_HOSTS.append(_railway_domain)
 
+
+def _this_machines_lan_hosts():  # claude code changed: 2026-10-21 — phone access survives Wi-Fi DHCP IP changes (was a hand-edited IP, stale 4+ times)
+    """IPv4 addresses (and hostname) of THIS computer, read at server start. Never another device's address."""
+    import socket
+    hosts = set()
+    name = socket.gethostname()
+    try:
+        hosts.update(info[4][0] for info in socket.getaddrinfo(name, None, socket.AF_INET))
+    except OSError:
+        pass
+    try:  # the address of the interface that routes to the LAN (UDP connect sends no packet)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            hosts.add(s.getsockname()[0])
+    except OSError:
+        pass
+    hosts = {h for h in hosts if not h.startswith("127.")}
+    hosts.update({name.lower(), f"{name.lower()}.local"})
+    return sorted(hosts)
+
+
+# Local runs only (no DATABASE_URL = not Railway): allow this PC's current LAN address so a phone on the same
+# Wi-Fi can open http://<PC IP>:8000/ without editing this file. Restart runserver after reconnecting to Wi-Fi.
+if not config('DATABASE_URL', default=''):  # claude code changed: 2026-10-21 — same local/Railway gate as the DB and SSL settings
+    ALLOWED_HOSTS.extend(h for h in _this_machines_lan_hosts() if h not in ALLOWED_HOSTS)
+
 # claude code changed: new — Railway terminates TLS at its edge and
 # forwards to the container over plain HTTP, so without this Django can't
 # tell the original request was HTTPS — request.is_secure() would always

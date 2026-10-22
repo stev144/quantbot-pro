@@ -1055,7 +1055,11 @@ class EntryExitEngine:
         if rule_set in CANONICAL_RULE_SETS:
             if any(c != asset_class for c in _sym_classes.values()):
                 raise AssetClassMismatch(f"rule_set={rule_set!r} with asset_class={asset_class!r} but symbols are {_sym_classes}")
-            profile_for_asset_class(asset_class).require_canonical(f"EntryExitEngine rule_set={rule_set} {pair_name}")
+            _profile = profile_for_asset_class(asset_class).require_canonical(f"EntryExitEngine rule_set={rule_set} {pair_name}")
+            if not _profile.calendar.is_continuous:   # claude code changed: 2026-10-21 — the FX profile became complete on 2026-10-16 (OD-FX-FS-1 swap financing), but this engine only implements perpetual-funding / constant-borrow financing; a CANONICAL FX run would silently have financing NONE (G4). Fail closed until MT5 swap financing is implemented here.
+                raise AssetClassMismatch(f"rule_set={rule_set!r} for {asset_class} needs the decided FX financing "
+                                         f"(OD-FX-FS-1, MT5 swap), which EntryExitEngine does not implement — "
+                                         f"canonical FX pairs runs are refused; use a non-canonical rule_set for exploration")
         self.venue_id      = venue_id
         self.asset_class   = asset_class
         _canonical_symbol_a = self.symbol_a.replace("_", "/", 1) if self.symbol_a else self.symbol_a

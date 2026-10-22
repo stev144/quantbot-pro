@@ -117,7 +117,7 @@ class RiskTierEnforcementTest(SimpleTestCase):
 # bot.instruments.candles_per_calendar_day(timeframe).
 class ConditionalTestBlockSizeTest(SimpleTestCase):
 
-    def test_real_1h_crypto_result_is_byte_identical_to_pre_fix_baseline(self):
+    def test_real_1h_crypto_result_is_deterministic_under_d10(self):   # claude code changed: 2026-10-21 — was ..._is_byte_identical_to_pre_fix_baseline
         """The exact backward-compatibility guarantee — candles_per_calendar_day('1h')
         == 24.0 == the old hardcoded constant, so real 1h crypto experiments
         must produce numerically identical evidence to before this fix.
@@ -136,13 +136,27 @@ class ConditionalTestBlockSizeTest(SimpleTestCase):
         re-baselining like this one, captured 2026-09-13 immediately after
         a full `python bot/fetch_all_symbols.py` refresh.
         """
-        result = run_tool(
-            "run_conditional_test", "LOW", asset="BTC/USDT", feature_name="rsi",
-            operator="<", threshold=30, horizon=24, random_seed=42,
-        )
-        self.assertEqual(result.status, "success")
-        self.assertAlmostEqual(result.output["block_permutation_p_value"], 0.3465346534653465, places=12)
-        self.assertAlmostEqual(result.output["mean_return_when_true"], -0.0002692584149560593, places=12)
+        # claude code changed: 2026-10-21 — the frozen numbers (0.3465…, −0.000269…) are no longer a valid regression
+        # target for two independent reasons: (1) owner decision D-10 replaced the one-day block with
+        # max(4·h, 24) candles = 96 for h = 24, so "identical to the old 24-candle constant" is obsolete by design;
+        # (2) the number drifts with every data refresh (documented above; fourth drift observed 2026-10-21).
+        # The test now pins what must hold on ANY data: D-10 block length, exact determinism, and a valid
+        # permutation p-value of the form (k + 1)/(B + 1).
+        from bot.quant_core.inference import d10_block_length
+        from bot.research_lab.tools.conditional_tools import BLOCK_PERMUTATION_N, BLOCK_SIZE_CANDLES
+        self.assertEqual(d10_block_length(24), 96)
+        self.assertNotEqual(d10_block_length(24), BLOCK_SIZE_CANDLES)        # the pre-D-10 one-day block is not used
+        kwargs = dict(asset="BTC/USDT", feature_name="rsi", operator="<", threshold=30, horizon=24, random_seed=42)
+        first = run_tool("run_conditional_test", "LOW", **kwargs)
+        second = run_tool("run_conditional_test", "LOW", **kwargs)
+        self.assertEqual(first.status, "success")
+        p = first.output["block_permutation_p_value"]
+        self.assertEqual(p, second.output["block_permutation_p_value"])          # byte-identical on identical input
+        self.assertEqual(first.output["mean_return_when_true"], second.output["mean_return_when_true"])
+        k = p * (BLOCK_PERMUTATION_N + 1) - 1
+        self.assertAlmostEqual(k, round(k), places=6)                           # p = (k + 1)/(B + 1)
+        self.assertGreaterEqual(p, 1 / (BLOCK_PERMUTATION_N + 1))
+        self.assertLessEqual(p, 1.0)
 
     def test_block_size_is_timeframe_derived_not_hardcoded(self):
         from bot.instruments import candles_per_calendar_day

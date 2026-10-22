@@ -750,17 +750,17 @@ class KalmanFilterEngine:
         Fails closed (ProtocolValueMissing) while L is unset.
         """
         protocol = protocol or self.protocol()
-        aligned = self._align_prices(price_a, price_b)
-        ZONES.assert_no_sealed_data(aligned.index, purpose=f"run_canonical {self.pair_name}")   # claude code changed: D-8 — sealed forward holdout
         # claude code changed: 2026-10-04 asset-agnostic — the canonical state may only run under a COMPLETE market
-        # profile (FX: FX_CALENDAR_UNAVAILABLE until Decision 5's owner rules exist), and the 24/7 crypto rules
-        # refuse session-traded data that arrives under an unregistered name. Crypto behaviour is otherwise unchanged.
+        # profile, and the 24/7 crypto rules refuse session-traded data that arrives under an unregistered name.
         from bot.quant_core.market_profile import assert_continuous_market, profile_for_pair
         market = profile_for_pair(self.symbol_a, self.symbol_b).require_canonical(f"run_canonical {self.pair_name}")
+        session_cal = None if market.calendar.is_continuous else market.calendar   # claude code changed: 2026-10-21 — FX calendar was looked up but never used: prices were aligned on the 24/7 grid (every weekend a "gap") and the seed fell on a closed hour
+        aligned = self._align_prices(price_a, price_b, calendar=session_cal)   # claude code changed: 2026-10-21 — trading grid for session markets; crypto unchanged (None)
+        ZONES.assert_no_sealed_data(aligned.index, purpose=f"run_canonical {self.pair_name}")   # claude code changed: D-8 — sealed forward holdout
         if market.calendar.is_continuous:
             assert_continuous_market(aligned.dropna().index, purpose=f"run_canonical {self.pair_name}")
         log_a, log_b = self._to_log_prices(aligned)
-        init = causal_init(log_a, log_b, protocol)
+        init = causal_init(log_a, log_b, protocol, calendar=session_cal)   # claude code changed: 2026-10-21 — seed = first TRADING candle at/after S for FX (seed_rule FIRST_TRADING_CANDLE_AT_OR_AFTER_S)
         k = log_a.index.get_loc(init.seed_timestamp)
         la, lb = log_a.iloc[k:], log_b.iloc[k:]
         state = KalmanState(theta=init.theta0.copy(), P=np.eye(2) * protocol.p0_scale)

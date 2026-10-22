@@ -1,6 +1,19 @@
 {% extends 'base.html' %}
 {% load static %}
 
+{% block head %}
+{% include "partials/_mkt_card_styles.html" %}{# claude code changed: 2026-10-22 — same cards as the Markets tab #}
+<style>
+/* claude code changed: 2026-10-22 — search + regime filter row (Markets-style) */
+.mi-filter { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:4px 0 12px; }
+.mi-search { flex:1; min-width:160px; max-width:340px; padding:8px 12px; border-radius:var(--radius); border:1px solid var(--border-strong); background:var(--bg-2); color:var(--text-primary); font-size:13px; outline:none; }
+.mi-search:focus { border-color:var(--accent); }
+.mi-chip { padding:5px 12px; border-radius:20px; border:1px solid var(--border); background:transparent; color:var(--text-secondary); font-size:11px; font-family:var(--font-mono); cursor:pointer; }
+.mi-chip.active { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+.mi-grid-flush { padding:0; }
+</style>
+{% endblock %}
+
 {% block content %}
 
 {% comment %}
@@ -39,24 +52,17 @@
             {% if regime_overview.n_errors %}
             <div class="chart-caption" style="margin-bottom:10px">{{ regime_overview.n_errors }} symbol(s) failed to fetch/classify and are omitted below.</div>
             {% endif %}
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Symbol</th><th>Regime</th><th>Confidence</th><th class="num">ADX</th><th class="num">ATR Ratio</th><th class="num">EMA Spread %</th><th class="num">BB Width %</th><th>Vol. Extreme</th></tr></thead>
-                    <tbody>
-                        {% for r in regime_overview.rows %}
-                        <tr>
-                            <td class="label-cell"><a href="{% url 'dashboard' %}?symbol={{ r.symbol|cut:'_' }}">{{ r.symbol }}</a></td>
-                            <td><span class="badge {% if r.regime == 'TRENDING_UP' %}pos{% elif r.regime == 'TRENDING_DOWN' %}neg{% elif r.regime == 'HIGH_VOLATILITY' %}warn{% else %}neu{% endif %}">{{ r.regime }}</span></td>
-                            <td class="text-dim">{{ r.confidence }}</td>
-                            <td class="num stat-number" data-target="{{ r.adx }}" data-decimals="2">0</td>
-                            <td class="num stat-number {% if r.atr_ratio > 1.7 %}warn{% endif %}" data-target="{{ r.atr_ratio }}" data-decimals="2">0</td>
-                            <td class="num stat-number" data-target="{{ r.ema_spread_pct }}" data-decimals="3">0</td>
-                            <td class="num stat-number" data-target="{{ r.bb_width_pct }}" data-decimals="3">0</td>
-                            <td>{% if r.volatility_extreme %}<span class="badge warn">YES</span>{% else %}<span class="badge dim">no</span>{% endif %}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            {# claude code changed: 2026-10-22 — Markets cards instead of a symbol list; regime + indicator votes in a strip under each card #}
+            <div class="mi-filter">
+                <input id="mkt-search" class="mi-search" type="search" placeholder="Search symbol or name…" aria-label="Search coins" autocomplete="off">
+                <button class="mi-chip active" data-regime="">All</button>
+                {% for regime, count in regime_overview.regime_counts.items %}<button class="mi-chip" data-regime="{{ regime }}">{{ regime }} · {{ count }}</button>{% endfor %}
+            </div>
+            {% if regime_overview.n_without_quote %}<div class="chart-caption" style="margin-bottom:8px">{{ regime_overview.n_without_quote }} classified symbol(s) have no local price file and are not shown as cards.</div>{% endif %}
+            <div class="mkt-grid mi-grid-flush">
+                {% for c in regime_overview.cards %}
+                {% include "partials/_mkt_card.html" with q=c.q regime=c.r zscore_asof=None %}
+                {% endfor %}
             </div>
             {% else %}
             <div class="unavailable">{{ regime_overview.reason }}</div>
@@ -76,19 +82,17 @@
                 <div class="metric-tile"><div class="metric-label">Dispersion (std of z-scores)</div><div class="metric-value stat-number" data-target="{{ cross_section.dispersion_std }}" data-decimals="4">0</div></div>
                 <div class="metric-tile"><div class="metric-label">Symbols in Universe</div><div class="metric-value stat-number" data-target="{{ cross_section.n_symbols }}" data-decimals="0">0</div></div>
             </div>
-            <div class="chart-caption" style="margin-bottom:8px">Highest |z-score| symbols — furthest from the cross-sectional mean return right now.</div>
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Symbol</th><th class="num">Cross-Sectional Z-Score</th></tr></thead>
-                    <tbody>
-                        {% for e in cross_section.top_extremes %}
-                        <tr>
-                            <td class="label-cell">{{ e.symbol }}</td>
-                            <td class="num stat-number {% if e.cs_zscore > 0 %}pos{% else %}neg{% endif %}" data-target="{{ e.cs_zscore }}" data-decimals="3">0</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            {# claude code changed: 2026-10-22 — cards; caption states the real reading time (was "right now") #}
+            <div class="chart-caption" style="margin-bottom:8px">
+                All {{ cross_section.n_symbols }} coins ranked by |z-score| at <b>{{ cross_section.as_of }}</b> — the latest hour shared by the research files
+                (a single 1-hour return; research data stop before the sealed 2026-10-04 holdout, so this is not live).
+                {% if cross_section.n_excluded_other_timestamp %}{{ cross_section.n_excluded_other_timestamp }} coins whose files end at another hour are excluded.{% endif %}
+                Dispersion ≈ 1 by construction: z-scores are already divided by the universe's spread.
+            </div>
+            <div class="mkt-grid mi-grid-flush">
+                {% for c in cross_section.cards %}
+                {% include "partials/_mkt_card.html" with q=c.q regime=None zscore=c.z zscore_asof=cross_section.as_of %}
+                {% endfor %}
             </div>
             {% else %}
             <div class="unavailable">{{ cross_section.reason }}</div>
@@ -104,4 +108,28 @@
 
 {% block scripts %}
 <script src="{% static 'js/counters.js' %}"></script>
+{% include "partials/_mkt_card_scripts.html" %}{# claude code changed: 2026-10-22 — same card behaviour as Markets #}
+<script>
+// claude code changed: 2026-10-22 — regime filter chips (combined with the search box)
+(function() {
+    var chips = document.querySelectorAll('.mi-chip');
+    var box = document.getElementById('mkt-search');
+    function apply() {
+        var active = document.querySelector('.mi-chip.active');
+        var want = active ? active.dataset.regime : '';
+        filterCards(box ? box.value : '');
+        if (want) document.querySelectorAll('.mkt-card[data-regime]').forEach(function(card) {
+            if (card.dataset.regime !== want) card.style.display = 'none';
+        });
+    }
+    chips.forEach(function(chip) {
+        chip.addEventListener('click', function() {
+            chips.forEach(function(c) { c.classList.remove('active'); });
+            chip.classList.add('active');
+            apply();
+        });
+    });
+    if (box) box.addEventListener('input', apply);
+})();
+</script>
 {% endblock %}

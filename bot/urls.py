@@ -19,11 +19,12 @@ from bot.views.decision_journal import decision_journal, decision_journal_run, d
 from bot.views.portfolio_risk import portfolio_risk
 from bot.views.execution_monitor import execution_monitor
 from bot.views.pairs_pilot import pairs_pilot   # claude code changed: new — Pairs Pilot live monitor page
-from bot.views.dca_engine import dca_engine     # claude code changed: new — QC-1 Forex DCA Engine dashboard
+from bot.views.dca_engine import dca_engine, dca_survival_ledger     # claude code changed: new — QC-1 Forex DCA Engine dashboard; 2026-10-21 survival ledger endpoint
 from bot.views.paper_trading import paper_trading  # claude code changed: new — Ranging Paper Trader
 from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
 from bot.views.forex_scanner import forex_scanner         # claude code changed: new — Forex Market Scanner
-from bot.views.markets import markets                     # claude code changed: new — Markets discovery screen
+from bot.views.markets import markets, markets_live       # claude code changed: new — Markets discovery screen; 2026-10-21 live prices
+from bot.views import market_workspace as mw             # claude code changed: 2026-10-21 — Market Intelligence workspace
 from bot.views.watchlist import watchlist, watchlist_add, watchlist_remove  # claude code changed: new — Watchlist
 from bot.views.system_health import system_health
 
@@ -39,9 +40,18 @@ urlpatterns = [
 
     # ---- MARKETS (discovery screen) ----   # claude code changed: new
     path('markets/', markets, name='markets'),
+    path('markets/live/', markets_live, name='markets_live'),   # claude code changed: 2026-10-21 — live display prices (never stored)
     path('markets/watchlist/', watchlist, name='watchlist'),
     path('markets/watchlist/add/', watchlist_add, name='watchlist_add'),
     path('markets/watchlist/remove/', watchlist_remove, name='watchlist_remove'),
+    # claude code changed: 2026-10-21 — Market Intelligence workspace (kept AFTER the watchlist routes: first match wins)
+    path('markets/<str:asset_class>/<str:symbol>/', mw.market_workspace, name='market_workspace'),
+    path('markets/<str:asset_class>/<str:symbol>/api/core/', mw.api_core, name='mw_core'),
+    path('markets/<str:asset_class>/<str:symbol>/api/risk/', mw.api_risk, name='mw_risk'),
+    path('markets/<str:asset_class>/<str:symbol>/api/news/', mw.api_news, name='mw_news'),
+    path('markets/<str:asset_class>/<str:symbol>/api/research/', mw.api_research, name='mw_research'),
+    path('markets/<str:asset_class>/<str:symbol>/api/history/start/', mw.api_history_start, name='mw_history_start'),
+    path('markets/<str:asset_class>/<str:symbol>/api/history/reveal/', mw.api_history_reveal, name='mw_history_reveal'),
 
     # ---- MARKET (regime intelligence — existing) ----
     path('market/', market_intelligence, name='market_intelligence'),
@@ -96,6 +106,7 @@ urlpatterns = [
     path('execution/', execution_monitor, name='execution_monitor'),
     path('execution/pairs-pilot/', pairs_pilot, name='pairs_pilot'),   # claude code changed: new — Pairs Pilot live monitor page
     path('execution/dca-engine/', dca_engine, name='dca_engine'),     # claude code changed: new — QC-1 Forex DCA Engine dashboard
+    path('execution/dca-engine/ledger/', dca_survival_ledger, name='dca_survival_ledger'),   # claude code changed: 2026-10-21 — per-cycle ledger JSON for the survival replay
     path('execution/paper-trading/', paper_trading, name='paper_trading'),  # claude code changed: new — Ranging Paper Trader
     path('execution/venues/', venue_comparison, name='venue_comparison'),   # claude code changed: new — Venue Comparison page
 

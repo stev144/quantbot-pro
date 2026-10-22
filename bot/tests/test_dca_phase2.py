@@ -427,11 +427,11 @@ class HoldoutAndMarketGuardTests(SimpleTestCase):
         with self.assertRaisesRegex(AssetClassMismatch, "UTC Saturdays"):
             simulate_dca_path(_ohlc(_flat(1.1, len(idx)), index=idx), replace(de.BASELINE_CONFIG, **Z))
 
-    def test_fx_entry_points_report_fx_calendar_unavailable(self):
-        from bot.quant_core.market_profile import OwnerDecisionMissing
-        with self.assertRaisesRegex(OwnerDecisionMissing, "FX_CALENDAR_UNAVAILABLE"):
+    def test_fx_entry_points_refuse_fx(self):   # claude code changed: 2026-10-21 — was ..._report_fx_calendar_unavailable; the FX profile is complete since 2026-10-16 (commit 610e536), but THIS engine still runs a 24/7 clock, so FX is refused for that reason
+        from bot.quant_core.market_profile import AssetClassMismatch
+        with self.assertRaisesRegex(AssetClassMismatch, "24/7 clock"):
             de.build_config_with_real_costs(de.BASELINE_CONFIG, "FOREX", symbol="EUR/USD")
-        with self.assertRaisesRegex(OwnerDecisionMissing, "FX_CALENDAR_UNAVAILABLE"):
+        with self.assertRaisesRegex(AssetClassMismatch, "24/7 clock"):
             de.compute_volatility_scale_factor("BTC/USDT", "EUR/USD", calibration_end="2024-01-01")
         self.assertIsNotNone(de.build_config_with_real_costs(de.BASELINE_CONFIG, "CRYPTO"))   # crypto unchanged
 

@@ -297,6 +297,26 @@ def get_24hr_ticker(symbol: str) -> Dict[str, Any]:
         LOGGER.error(f"Failed to fetch 24hr ticker for {symbol}: {e}")
         return {}  # Return empty result.
 
+def get_all_24hr_tickers() -> list:  # claude code changed: 2026-10-21 — new; one call for every symbol (Markets live prices)
+    """Binance 24h ticker stats for ALL symbols in one request (weight 80). Display use only — callers must not
+    persist the result into data/ (D-8 sealed holdout). Returns [] on any failure, never partial garbage."""
+    url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr"
+    try:
+        response = _SESSION.get(url, timeout=DEFAULT_TIMEOUT)
+        _monitor_weight(response)
+        if response.status_code in (429, 418):
+            if not _handle_rate_limits(response):
+                return []
+            response = _SESSION.get(url, timeout=DEFAULT_TIMEOUT)
+        if response.status_code != 200:
+            LOGGER.error(f"API ERROR [Status {response.status_code}] for all-symbol 24hr ticker: {response.text[:200]}")
+            return []
+        data = response.json()
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        LOGGER.error(f"Failed to fetch all-symbol 24hr ticker: {e}")
+        return []
+
 # ---------------------------------------------------------------------------
 # Price fetch
 # ---------------------------------------------------------------------------

@@ -221,6 +221,13 @@ def get_default_fx_holdout_guard(csv_paths: Optional[Dict[str, str]] = None) -> 
 
 V7_HOLDOUT_START = pd.Timestamp("2026-10-16 08:00", tz="UTC")  # claude code changed: v7/A6-3 — hard-coded v7 holdout boundary; do NOT move earlier
 
+# QC-2 forward holdout (QC2_PRE_REGISTRATION_2026-10-19.md): EUR/CAD from 2026-10-19 00:00 UTC.
+QC2_HOLDOUT_START = pd.Timestamp("2026-10-19 00:00", tz="UTC")  # claude code changed: 2026-10-21 — new; was only in prose
+
+# Earliest active FX seal. Multi-pair FX research (and any run that converts P&L through EUR/USD or
+# USD/CHF) must drop every row at/after this — strictest reading of A6-3 + QC-2 together.
+FX_RESEARCH_DATA_CUTOFF = min(V7_HOLDOUT_START, QC2_HOLDOUT_START)  # claude code changed: 2026-10-21 — new single source
+
 
 def make_v7_fx_holdout_guard() -> FxHoldoutGuard:  # claude code changed: v7/A6-3 — factory for the v7 holdout guard
     """

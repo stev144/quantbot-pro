@@ -2,6 +2,8 @@
 {% load static %}
 {% load research_extras %}
 
+{% block head %}{% include "partials/_mkt_card_styles.html" %}{% endblock %}{# claude code changed: 2026-10-22 — Markets cards for the cross-sectional list, as on /forex/ #}
+
 {% block content %}
 
 <!--
@@ -138,20 +140,8 @@ state, not an error the page failed to handle.
                 </div>
                 {% if market_state.cross_section_dispersion.available %}
                 <div>
-                    <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Extremes (by |z-score|, as of {{ market_state.cross_section_dispersion.as_of }})</div>{# claude code changed: 2026-10-05 #}
-                    <div class="term-table-wrap">
-                        <table class="term-table">
-                            <thead><tr><th>Symbol</th><th class="num">Z-Score</th></tr></thead>
-                            <tbody>
-                                {% for row in market_state.cross_section_dispersion.top_extremes %}
-                                <tr>
-                                    <td class="label-cell">{{ row.symbol }}</td>
-                                    <td class="num stat-number {% if row.cs_zscore > 0 %}pos{% else %}neg{% endif %}" data-target="{{ row.cs_zscore }}" data-decimals="3">0</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
+                    <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Extremes (by |z-score|, as of {{ market_state.cross_section_dispersion.as_of }})</div>
+                    <div class="chart-caption">{# claude code changed: 2026-10-22 — table replaced; the same coins are shown once, as Markets cards, in 3 · Alpha Intelligence #}Shown as cards under <a href="#cs-relative-value">3 · Alpha Intelligence → Cross-Sectional Relative Value</a>.</div>
                 </div>
                 {% endif %}
             </div>
@@ -226,7 +216,7 @@ state, not an error the page failed to handle.
                 </div>
             </div>
 
-            <div class="two-col">
+            <div>{# claude code changed: 2026-10-22 — single column now that Relative Value is a full-width card grid #}
                 <div>
                     <div class="metric-label" style="margin-bottom:6px">Legacy Feature IC — descriptive, not evidence</div>{# claude code changed: 2026-10-05 — was "Feature Predictive Power & Stability — Top |IC|" #}
                     {% if alpha_intelligence.feature_power_available %}
@@ -251,28 +241,26 @@ state, not an error the page failed to handle.
                     <div class="unavailable">No validated_features.csv files found in research_data/</div>
                     {% endif %}
                 </div>
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Relative Value — descriptive</div>{# claude code changed: 2026-10-05 — was "Cross-Sectional Opportunities" #}
-                    {% if alpha_intelligence.cross_sectional_available %}
-                    <div class="term-table-wrap">
-                        <table class="term-table">
-                            <thead><tr><th>Symbol</th><th class="num">Z-Score</th><th>Read</th></tr></thead>
-                            <tbody>
-                                {% for row in alpha_intelligence.cross_sectional_opportunities %}
-                                <tr>
-                                    <td class="label-cell">{{ row.symbol }}</td>
-                                    <td class="num stat-number" data-target="{{ row.cs_zscore }}" data-decimals="3">0</td>
-                                    <td class="text-dim">{% if row.cs_zscore > 0 %}above universe{% else %}below universe{% endif %}</td>{# claude code changed: 2026-10-05 — neutral wording/colour #}
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="chart-caption">Cross-sectional z-score of hourly return vs. the rest of the tracked universe, as of {{ market_state.cross_section_dispersion.as_of }} ({{ market_state.cross_section_dispersion.n_symbols }} symbols at that timestamp; {{ market_state.cross_section_dispersion.n_excluded_other_timestamp }} with data from another time excluded). A relative-value reading, not a trade signal; cross-sectional strategy research found no surviving edge.</div>{# claude code changed: 2026-10-05 #}
-                    {% else %}
-                    <div class="unavailable">Cross-sectional data unavailable</div>
-                    {% endif %}
+            </div>
+            {# claude code changed: 2026-10-22 — Markets cards instead of a symbol list (same partial as /forex/, /market/ and /markets/) #}
+            <div id="cs-relative-value" style="margin-top:16px">
+                <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Relative Value — descriptive</div>
+                {% if market_state.cross_section_dispersion.available %}
+                <div class="chart-caption" style="margin-bottom:8px">
+                    All {{ market_state.cross_section_dispersion.n_symbols }} coins, ranked by |z|: each coin's 1-hour return at <b>{{ market_state.cross_section_dispersion.as_of }}</b> compared with all {{ market_state.cross_section_dispersion.n_symbols }} coins in that same hour
+                    (z = (return − average) ÷ spread across coins; {{ market_state.cross_section_dispersion.n_excluded_other_timestamp }} with data from another time excluded).
+                    One hour of research data, before the sealed 2026-10-04 holdout — not live, not a trade signal; cross-sectional strategy research found no surviving edge.
+                    Card prices and changes are today's Markets quotes.
+                    {% if market_state.cross_section_dispersion.n_without_quote %}{{ market_state.cross_section_dispersion.n_without_quote }} coin(s) have no local price file and are not shown.{% endif %}
                 </div>
+                <div class="mkt-grid" style="padding:0">
+                    {% for c in market_state.cross_section_dispersion.cards %}
+                    {% include "partials/_mkt_card.html" with q=c.q regime=None zscore=c.z zscore_asof=market_state.cross_section_dispersion.as_of %}
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="unavailable">Cross-sectional data unavailable</div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -590,12 +578,12 @@ state, not an error the page failed to handle.
 </div>
 
 {% include "partials/_footer.html" with label="Executive Dashboard" note=symbol|add:" · backtest cache: 1h" %}
-{% include "partials/_bottom_nav.html" with active="dashboard" %}  {# claude code changed: new — mobile bottom nav #}
 
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
+{% include "partials/_mkt_card_scripts.html" %}{# claude code changed: 2026-10-22 — same card behaviour as Markets #}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="{% static 'js/chart-theme.js' %}"></script>
 <script src="{% static 'js/counters.js' %}"></script>

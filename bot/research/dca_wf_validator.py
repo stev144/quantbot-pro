@@ -54,6 +54,10 @@ WARMUP_CANDLES:    int = 100     # indicator warmup prepended to each fold
 MIN_CYCLES_FOLD:   int = 3       # fold excluded from stats if fewer cycles
 ALPHA:             float = 0.05  # significance threshold
 
+# ── FX seals: strip every row at/after the earliest active FX holdout boundary ──
+from bot.research.fx_holdout_guard import FX_RESEARCH_DATA_CUTOFF  # claude code changed: 2026-10-21 — single source; v7 (2026-10-16 08:00, EUR/USD+USD/CHF) precedes QC-2 (2026-10-19)
+QC2_HOLDOUT_START = FX_RESEARCH_DATA_CUTOFF  # claude code changed: kept name for callers; now the stricter combined cutoff
+
 # ── simulation parameters (mirror QC-1 paper engine constants) ────────────────
 _INITIAL_USDT       = 3_000.0  # $100 × 30× leverage
 _PROFIT_ACTIVATION  = 0.005    # 0.5%
@@ -322,6 +326,7 @@ def validate_dca_walk_forward(
                     parse_dates=["timestamp"],
                 )
                 df_full = df_full.sort_values("timestamp").reset_index(drop=True)
+                df_full = df_full[pd.to_datetime(df_full["timestamp"], utc=True) < QC2_HOLDOUT_START].reset_index(drop=True)  # claude code changed: enforce QC-2 seal + freeze split boundaries against hourly appends
                 splits  = make_fx_splits(df_full)
 
                 # spec from calibration data only (same as paper engine)
@@ -335,7 +340,7 @@ def validate_dca_walk_forward(
                     mae_horizon=_MAE_HORIZON,
                 )
 
-                # sim range: fold 1 test start → end of holdout
+                # sim range: fold 1 test start → QC2_HOLDOUT_START (exclusive)  # claude code changed: was "end of holdout" — data now capped at QC-2 seal
                 fold1_test_start = splits.folds[0].test["timestamp"].iloc[0]
                 sim_df = df_full[df_full["timestamp"] >= fold1_test_start].copy()
                 sim_df["timestamp"] = pd.to_datetime(sim_df["timestamp"], utc=True)

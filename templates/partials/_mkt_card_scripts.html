@@ -1,0 +1,57 @@
+{% load static %}
+{# claude code changed: 2026-10-22 — card behaviour moved verbatim from markets.html (search filter, watchlist toggle, open workspace, live prices) so every page showing Markets cards behaves identically #}
+<script>
+var CSRF = '{{ csrf_token }}';
+var WL_ADD_URL    = '{% url "watchlist_add" %}';
+var WL_REMOVE_URL = '{% url "watchlist_remove" %}';
+
+// ── Search filter ──────────────────────────────────────────────────────────
+function filterCards(q) {
+    q = (q || '').toLowerCase().trim();
+    document.querySelectorAll('.mkt-card').forEach(function(card) {
+        var sym  = (card.dataset.symbol  || '').toLowerCase();
+        var name = (card.dataset.name    || '').toLowerCase();
+        var disp = (card.dataset.display || '').toLowerCase();
+        var match = !q || sym.includes(q) || name.includes(q) || disp.includes(q);
+        card.style.display = match ? '' : 'none';
+    });
+}
+(function() {
+    var box = document.getElementById('mkt-search');
+    if (box) box.addEventListener('input', function() { filterCards(this.value); });
+})();
+
+// ── Watchlist toggle ───────────────────────────────────────────────────────
+function toggleWatchlist(btn) {
+    if (btn.disabled) return;
+    var symbol     = btn.dataset.symbol;
+    var assetClass = btn.dataset['class'];
+    var isActive   = btn.classList.contains('active');
+    var url        = isActive ? WL_REMOVE_URL : WL_ADD_URL;
+    btn.disabled = true;
+    fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+        body: JSON.stringify({symbol: symbol, asset_class: assetClass}),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            btn.classList.toggle('active');
+            btn.textContent = btn.classList.contains('active') ? '♥' : '♡';
+            btn.setAttribute('aria-label',
+                btn.classList.contains('active') ? 'Remove from watchlist' : 'Add to watchlist');
+        }
+    })
+    .catch(function() {})
+    .finally(function() { btn.disabled = false; });
+}
+
+// ── Open the Market Intelligence workspace ────────────────────────────────
+function mktOpenDetail(symbol, assetClass) {
+    if ((assetClass === 'crypto' || assetClass === 'forex') && /^[A-Z0-9]{2,12}_[A-Z0-9]{2,6}$/.test(symbol)) {
+        window.location.href = '/markets/' + assetClass + '/' + symbol + '/';
+    }
+}
+</script>
+<script src="{% static 'js/markets_live.js' %}" data-url="{% url 'markets_live' %}" defer></script>

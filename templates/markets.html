@@ -5,6 +5,7 @@
 {% block title %}Markets — Steph Quant Technologies{% endblock %}
 
 {% block head %}
+{% include "partials/_mkt_card_styles.html" %}{# claude code changed: 2026-10-22 — shared card styles #}
 <style>
 /* ── Markets page local styles ─────────────────────────────────────────── */
 
@@ -65,104 +66,6 @@
     cursor: not-allowed;
 }
 
-/* ── Market cards grid ─────────────────────────────────────────────────── */
-.mkt-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: var(--sp-3);
-    padding: 0 var(--sp-5) var(--sp-4);
-}
-@media (max-width: 600px) {
-    .mkt-grid { grid-template-columns: 1fr; padding: 0 var(--sp-4) var(--sp-4); }
-    .mkt-header, .mkt-tabs { padding-left: var(--sp-4); padding-right: var(--sp-4); }
-}
-
-.mkt-card {
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: var(--sp-3) var(--sp-4);
-    cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-}
-.mkt-card:hover { border-color: var(--border-strong); background: var(--bg-2); }
-
-.mkt-card-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--sp-2);
-}
-.mkt-card-identity { min-width: 0; }
-.mkt-symbol {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text-primary);
-    font-family: var(--font-mono);
-    letter-spacing: 0.01em;
-}
-.mkt-name {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.mkt-class-badge {
-    font-size: 10px;
-    font-family: var(--font-mono);
-    padding: 2px 6px;
-    border-radius: 3px;
-    background: var(--neutral-dim);
-    color: var(--neutral);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    flex-shrink: 0;
-}
-.mkt-class-badge.forex { background: var(--warning-dim); color: var(--warning); }
-
-.mkt-watchlist-btn {
-    background: none;
-    border: none;
-    padding: 4px;
-    cursor: pointer;
-    color: var(--text-dim);
-    font-size: 16px;
-    line-height: 1;
-    flex-shrink: 0;
-    border-radius: 4px;
-    transition: color 0.15s, background 0.15s;
-}
-.mkt-watchlist-btn:hover { color: var(--accent); background: var(--neutral-dim); }
-.mkt-watchlist-btn.active { color: var(--accent); }
-.mkt-watchlist-btn:disabled { opacity: 0.4; cursor: default; }
-
-.mkt-card-bottom {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--sp-2);
-}
-.mkt-price-block { display: flex; flex-direction: column; gap: 3px; }
-.mkt-price {
-    font-size: 16px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-}
-.mkt-change {
-    font-size: 12px;
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-}
-.mkt-change.pos { color: var(--positive); }
-.mkt-change.neg { color: var(--negative); }
-.mkt-sparkline { flex-shrink: 0; opacity: 0.85; }
 
 /* ── Unavailable panel ─────────────────────────────────────────────────── */
 .mkt-unavailable {
@@ -223,40 +126,7 @@
         <div class="mkt-grid" id="crypto-grid">
             {% for q in crypto %}
             {% if q.available %}
-            <div class="mkt-card"
-                 data-symbol="{{ q.symbol }}"
-                 data-class="crypto"
-                 data-name="{{ q.display_name }}"
-                 data-display="{{ q.display_symbol }}"
-                 onclick="mktOpenDetail('{{ q.symbol }}', 'crypto')">
-                <div class="mkt-card-top">
-                    <div class="mkt-card-identity">
-                        <div class="mkt-symbol">{{ q.display_symbol }}</div>
-                        {% if q.display_name %}<div class="mkt-name">{{ q.display_name }}</div>{% endif %}
-                    </div>
-                    <div style="display:flex;align-items:center;gap:6px">
-                        <span class="mkt-class-badge">Crypto</span>
-                        <button class="mkt-watchlist-btn {% if q.in_watchlist %}active{% endif %}"
-                                data-symbol="{{ q.symbol }}"
-                                data-class="crypto"
-                                aria-label="{% if q.in_watchlist %}Remove from watchlist{% else %}Add to watchlist{% endif %}"
-                                onclick="event.stopPropagation(); toggleWatchlist(this)"
-                                {% if not user.is_authenticated %}disabled title="Sign in to use watchlist"{% endif %}>
-                            {% if q.in_watchlist %}♥{% else %}♡{% endif %}
-                        </button>
-                    </div>
-                </div>
-                <div class="mkt-card-bottom">
-                    <div class="mkt-price-block">
-                        <span class="mkt-price">{{ q.price }}</span>
-                        <span class="mkt-change {% if q.positive %}pos{% else %}neg{% endif %}">
-                            {% if q.positive %}▲{% else %}▼{% endif %}
-                            {% if q.positive %}+{% endif %}{{ q.change_pct }}%
-                        </span>
-                    </div>
-                    <div class="mkt-sparkline">{{ q.sparkline }}</div>
-                </div>
-            </div>
+            {% include "partials/_mkt_card.html" with q=q %}{# claude code changed: 2026-10-22 — shared card partial (was inline) #}
             {% endif %}
             {% endfor %}
         </div>
@@ -271,39 +141,7 @@
         <div class="mkt-grid" id="forex-grid">
             {% for q in forex %}
             {% if q.available %}
-            <div class="mkt-card"
-                 data-symbol="{{ q.symbol }}"
-                 data-class="forex"
-                 data-name="{{ q.display_symbol }}"
-                 data-display="{{ q.display_symbol }}"
-                 onclick="mktOpenDetail('{{ q.symbol }}', 'forex')">
-                <div class="mkt-card-top">
-                    <div class="mkt-card-identity">
-                        <div class="mkt-symbol">{{ q.display_symbol }}</div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:6px">
-                        <span class="mkt-class-badge forex">Forex</span>
-                        <button class="mkt-watchlist-btn {% if q.in_watchlist %}active{% endif %}"
-                                data-symbol="{{ q.symbol }}"
-                                data-class="forex"
-                                aria-label="{% if q.in_watchlist %}Remove from watchlist{% else %}Add to watchlist{% endif %}"
-                                onclick="event.stopPropagation(); toggleWatchlist(this)"
-                                {% if not user.is_authenticated %}disabled title="Sign in to use watchlist"{% endif %}>
-                            {% if q.in_watchlist %}♥{% else %}♡{% endif %}
-                        </button>
-                    </div>
-                </div>
-                <div class="mkt-card-bottom">
-                    <div class="mkt-price-block">
-                        <span class="mkt-price mono">{{ q.price }}</span>
-                        <span class="mkt-change {% if q.positive %}pos{% else %}neg{% endif %}">
-                            {% if q.positive %}▲{% else %}▼{% endif %}
-                            {% if q.positive %}+{% endif %}{{ q.change_pct }}%
-                        </span>
-                    </div>
-                    <div class="mkt-sparkline">{{ q.sparkline }}</div>
-                </div>
-            </div>
+            {% include "partials/_mkt_card.html" with q=q %}{# claude code changed: 2026-10-22 — shared card partial (was inline) #}
             {% endif %}
             {% endfor %}
         </div>
@@ -314,16 +152,11 @@
 
 </div><!-- /.term-body -->
 
-{% include "partials/_bottom_nav.html" with active="markets" %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-// claude code changed: new — tab switching, search filter, watchlist toggle
-
-var CSRF = '{{ csrf_token }}';
-var WL_ADD_URL    = '{% url "watchlist_add" %}';
-var WL_REMOVE_URL = '{% url "watchlist_remove" %}';
+// claude code changed: 2026-10-22 — tab switching stays here; search / watchlist / open-detail / live prices moved to partials/_mkt_card_scripts.html
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 document.querySelectorAll('.mkt-tab[data-tab]').forEach(function(btn) {
@@ -345,54 +178,6 @@ document.querySelectorAll('.mkt-tab[data-tab]').forEach(function(btn) {
     });
 });
 
-// ── Search filter ──────────────────────────────────────────────────────────
-function filterCards(q) {
-    q = q.toLowerCase().trim();
-    document.querySelectorAll('.mkt-card').forEach(function(card) {
-        var sym  = (card.dataset.symbol  || '').toLowerCase();
-        var name = (card.dataset.name    || '').toLowerCase();
-        var disp = (card.dataset.display || '').toLowerCase();
-        var match = !q || sym.includes(q) || name.includes(q) || disp.includes(q);
-        card.style.display = match ? '' : 'none';
-    });
-}
-document.getElementById('mkt-search').addEventListener('input', function() {
-    filterCards(this.value);
-});
-
-// ── Watchlist toggle ───────────────────────────────────────────────────────
-function toggleWatchlist(btn) {
-    if (btn.disabled) return;
-    var symbol     = btn.dataset.symbol;
-    var assetClass = btn.dataset['class'];
-    var isActive   = btn.classList.contains('active');
-    var url        = isActive ? WL_REMOVE_URL : WL_ADD_URL;
-    btn.disabled = true;
-    fetch(url, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
-        body: JSON.stringify({symbol: symbol, asset_class: assetClass}),
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        if (data.ok) {
-            btn.classList.toggle('active');
-            btn.textContent = btn.classList.contains('active') ? '♥' : '♡';
-            btn.setAttribute('aria-label',
-                btn.classList.contains('active') ? 'Remove from watchlist' : 'Add to watchlist');
-        }
-    })
-    .catch(function() {})
-    .finally(function() { btn.disabled = false; });
-}
-
-// ── Instrument detail (placeholder — routes to regime monitor for now) ─────
-function mktOpenDetail(symbol, assetClass) {
-    // Navigate to the regime monitor or backtesting page for the symbol
-    if (assetClass === 'crypto') {
-        var ticker = symbol.replace('_', '');
-        window.location.href = '/?symbol=' + ticker;
-    }
-}
 </script>
+{% include "partials/_mkt_card_scripts.html" %}
 {% endblock %}

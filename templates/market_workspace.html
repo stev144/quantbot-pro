@@ -1,0 +1,196 @@
+{% extends 'base.html' %}
+{% load static %}
+{# claude code changed: 2026-10-21 — new: Market Intelligence workspace (bot/views/market_workspace.py, bot/market_intel/) #}
+{% block title %}{{ display }} — Market Intelligence · Steph Quant Technologies{% endblock %}
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
+<style>
+.mi-wrap { max-width: 1400px; margin: 0 auto; }
+.mi-head { position: sticky; top: 0; z-index: 50; background: var(--bg-0); border-bottom: 1px solid var(--border); padding: 12px 0 10px; margin-bottom: 14px; }
+.mi-head-row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: space-between; }
+.mi-asset { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mi-asset h1 { font-size: 22px; margin: 0; font-family: var(--font-mono); letter-spacing: .02em; }
+.mi-price { font-size: 24px; font-weight: 700; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.mi-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mi-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.mi-seg button { background: var(--bg-1); color: var(--text-secondary); border: 0; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: var(--font-mono); }
+.mi-seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.mi-select { background: var(--bg-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; max-width: 200px; }
+.mi-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-family: var(--font-mono); font-size: 12px; }
+.mi-chip { border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; background: var(--bg-1); }
+.mi-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.mi-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1080px) { .mi-grid { grid-template-columns: minmax(0, 1fr); } }
+.mi-card { background: var(--bg-1); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; min-width: 0; }
+.mi-card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 10px; color: var(--heading-color, var(--text-primary)); display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mi-sub { font-size: 11px; color: var(--text-dim); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.mi-tag { display: inline-block; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border-radius: 3px; border: 1px solid currentColor; text-transform: uppercase; white-space: nowrap; vertical-align: middle; }
+.mi-tag.verified { color: var(--positive); }
+.mi-tag.fact { color: #4f8fd9; }
+.mi-tag.ai { color: #9b7bd8; }
+.mi-tag.warn { color: var(--warning); }
+.mi-tag.bad { color: var(--negative); }
+.mi-tag.edu { color: var(--text-secondary); }
+.mi-tag.live { color: var(--positive); } .mi-tag.delayed { color: var(--warning); } .mi-tag.stale, .mi-tag.unavailable { color: var(--negative); }
+.pos { color: var(--positive); } .neg { color: var(--negative); }
+.mi-regime { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.mi-regime-name { font-size: 20px; font-weight: 700; font-family: var(--font-mono); }
+.mi-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 10px 0; }
+.mi-kv div { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.mi-kv .k { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+.mi-kv .v { font-family: var(--font-mono); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mi-text { font-size: 13px; line-height: 1.55; }
+.mi-text p { margin: 4px 0; }
+.mi-chart { position: relative; height: 280px; }
+.mi-chart.sm { height: 170px; }
+.mi-table-wrap { overflow-x: auto; }
+.mi-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.mi-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mi-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.mi-table td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mi-table details summary { cursor: pointer; color: var(--text-secondary); }
+.mi-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mi-form label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); display: flex; flex-direction: column; gap: 3px; }
+.mi-form input, .mi-form select { background: var(--bg-0); color: var(--text-primary); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; font-family: var(--font-mono); font-size: 13px; min-width: 0; }
+.mi-btn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font-size: 12px; cursor: pointer; }
+.mi-btn.ghost { background: transparent; color: var(--text-primary); border: 1px solid var(--border); }
+.mi-btn:disabled { opacity: .5; cursor: default; }
+.mi-btn:focus-visible, .mi-seg button:focus-visible, .mi-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mi-note { font-size: 11px; color: var(--text-dim); line-height: 1.5; margin-top: 8px; }
+.mi-banner { border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 6px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; margin-bottom: 10px; background: var(--bg-0); }
+.mi-banner.ok { border-left-color: var(--positive); } .mi-banner.bad { border-left-color: var(--negative); } .mi-banner.info { border-left-color: var(--accent); }
+.mi-news { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+.mi-news h3 { font-size: 14px; margin: 0 0 4px; line-height: 1.4; }
+.mi-news h3 a { color: var(--text-primary); text-decoration: none; } .mi-news h3 a:hover { text-decoration: underline; }
+.mi-block { border-left: 3px solid var(--border); padding: 6px 10px; margin: 8px 0; font-size: 12.5px; line-height: 1.5; }
+.mi-block.fact { border-left-color: #4f8fd9; } .mi-block.ai { border-left-color: #9b7bd8; background: rgba(155, 123, 216, .06); } .mi-block.verified { border-left-color: var(--positive); }
+.mi-block ul { margin: 4px 0 0 16px; padding: 0; }
+.mi-alert { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; line-height: 1.45; }
+.mi-alert.REVIEW { border-left: 3px solid var(--warning); } .mi-alert.INFORMATIONAL { border-left: 3px solid var(--accent); }
+.mi-lesson { border-bottom: 1px solid var(--border); padding: 8px 0; }
+.mi-lesson summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.mi-lesson p { font-size: 12.5px; line-height: 1.55; margin: 6px 0 2px; }
+.mi-skel { background: linear-gradient(90deg, var(--bg-2) 25%, var(--bg-1) 50%, var(--bg-2) 75%); background-size: 200% 100%; animation: mi-shimmer 1.4s infinite; border-radius: 4px; height: 14px; margin: 8px 0; }
+.mi-skel.tall { height: 160px; }
+@keyframes mi-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .mi-skel { animation: none; } }
+.mi-hyp { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.mi-hyp button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 600px) { .mi-form { grid-template-columns: 1fr; } .mi-price { font-size: 20px; } .mi-head { position: static; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="markets" %}
+<div class="term-body">
+<div class="mi-wrap" id="mi-root"
+     data-asset-class="{{ asset_class }}" data-symbol="{{ symbol }}"
+     data-core-url="{% url 'mw_core' asset_class symbol %}" data-risk-url="{% url 'mw_risk' asset_class symbol %}"
+     data-news-url="{% url 'mw_news' asset_class symbol %}" data-research-url="{% url 'mw_research' asset_class symbol %}"
+     data-history-start-url="{% url 'mw_history_start' asset_class symbol %}" data-history-reveal-url="{% url 'mw_history_reveal' asset_class symbol %}"
+     data-workspace-base="/markets/" data-authenticated="{{ user.is_authenticated|yesno:'1,0' }}" data-csrf="{{ csrf_token }}">
+
+  <header class="mi-head" aria-label="Asset overview">
+    <div class="mi-head-row">
+      <div>
+        <div class="mi-asset">
+          <a href="{% url 'markets' %}" class="mi-sub" aria-label="Back to Markets">← Markets</a>
+          <h1>{{ display }}</h1>
+          <span class="mi-tag edu">{{ asset_class }}</span>
+          <span class="mi-price" id="mi-price" aria-live="polite">—</span>
+          <span class="mi-tag" id="mi-price-state">loading</span>
+        </div>
+        <div class="mi-chips" id="mi-changes" aria-label="Price changes"></div>
+        <div class="mi-meta" id="mi-price-meta">Loading market data…</div>
+      </div>
+      <div class="mi-controls">
+        <label class="mi-sub" for="mi-switch">Asset</label>
+        <select id="mi-switch" class="mi-select" aria-label="Change asset">
+          {% for cls, syms in switcher.items %}
+          <optgroup label="{{ cls|title }}">
+            {% for s in syms %}<option value="{{ cls }}/{{ s }}" {% if cls == asset_class and s == symbol %}selected{% endif %}>{{ s }}</option>{% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        <div class="mi-seg" role="group" aria-label="Timeframe">
+          {% for tf in timeframes %}<button type="button" data-tf="{{ tf }}" aria-pressed="{% if forloop.first %}true{% else %}false{% endif %}">{{ tf }}</button>{% endfor %}
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="mi-grid">
+    <main>
+      <section class="mi-card" aria-labelledby="h-regime">
+        <h2 id="h-regime">Quantitative market regime <span><span class="mi-tag verified">system-verified</span></span></h2>
+        <div id="mi-regime"><div class="mi-skel"></div><div class="mi-skel"></div><div class="mi-skel"></div></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-chart">
+        <h2 id="h-chart">Price <span class="mi-sub" id="mi-chart-meta"></span></h2>
+        <div class="mi-chart"><canvas id="mi-chart" aria-label="Closing prices with EMA20 and EMA50" role="img"></canvas></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-evidence">
+        <h2 id="h-evidence">Quantitative evidence <span><span class="mi-tag verified">system-verified</span> <span class="mi-tag edu">descriptive</span></span></h2>
+        <div id="mi-evidence"><div class="mi-skel tall"></div></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-news">
+        <h2 id="h-news">News &amp; event intelligence <span><span class="mi-tag ai">AI-assisted</span> <button class="mi-btn ghost" id="mi-news-refresh" type="button" {% if not user.is_authenticated %}disabled title="Sign in to request a fresh analysis"{% endif %}>Refresh</button></span></h2>
+        <div id="mi-news"><div class="mi-skel"></div><div class="mi-skel tall"></div></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-research">
+        <h2 id="h-research">Strategy research &amp; evidence <span class="mi-sub">evidence class from the research registry</span></h2>
+        <div id="mi-research"><div class="mi-skel tall"></div></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-history">
+        <h2 id="h-history">"What happened next?" history lab <span><span class="mi-tag edu">educational</span></span></h2>
+        {% if history_bounds.available %}
+        <div class="mi-text"><p>Pick a past moment. You see only what was known then; record your hypothesis; then reveal what followed. Sealed holdout data is never used (cut-off {{ history_bounds.cutoff|slice:":16" }} UTC).</p></div>
+        <div class="mi-form" style="margin-top:8px">
+          <label>Observation time (UTC)<input type="datetime-local" id="mi-h-date" min="{{ history_bounds.earliest|slice:':16' }}" max="{{ history_bounds.latest|slice:':16' }}" value="{{ history_bounds.latest|slice:':16' }}"></label>
+          <label>Horizon<select id="mi-h-horizon"><option value="6">6 hours</option><option value="24" selected>24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select></label>
+        </div>
+        <div style="margin-top:8px"><button class="mi-btn" id="mi-h-start" type="button">Show what was known</button></div>
+        <div id="mi-history" aria-live="polite"></div>
+        {% else %}<div class="mi-banner">History lab unavailable: {{ history_bounds.reason }}</div>{% endif %}
+      </section>
+    </main>
+
+    <aside>
+      <section class="mi-card" aria-labelledby="h-risk">
+        <h2 id="h-risk">Risk &amp; trading-cost scenario <span><span class="mi-tag verified">calculated</span></span></h2>
+        <form id="mi-risk-form" class="mi-form" novalidate>
+          <label>Side<select name="side"><option>LONG</option><option>SHORT</option></select></label>
+          <label>Account ($)<input name="balance" inputmode="decimal" required></label>
+          <label>Entry<input name="entry" inputmode="decimal" required></label>
+          <label>Risk %<input name="risk_pct" inputmode="decimal" required></label>
+          <label>Stop<input name="stop" inputmode="decimal" required></label>
+          <label>Target<input name="target" inputmode="decimal" required></label>
+          <div style="grid-column:1/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mi-btn" type="submit">Calculate</button><span class="mi-sub" id="mi-risk-hint"></span></div>
+        </form>
+        <div id="mi-risk" aria-live="polite"></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-alerts">
+        <h2 id="h-alerts">Exposure &amp; risk alerts</h2>
+        <div id="mi-alerts"><div class="mi-skel"></div><div class="mi-skel"></div></div>
+      </section>
+
+      <section class="mi-card" aria-labelledby="h-learn">
+        <h2 id="h-learn">Learn <span><span class="mi-tag edu">education</span></span></h2>
+        <div id="mi-lessons"><div class="mi-skel"></div><div class="mi-skel"></div></div>
+      </section>
+    </aside>
+  </div>
+
+  <p class="mi-note" style="text-align:center;margin:8px 0 24px">Research &amp; education only — this page never places orders, never changes risk limits, and is not personalised financial advice.</p>
+</div>
+</div>
+<script src="{% static 'js/market_workspace.js' %}" defer></script>
+{% endblock %}

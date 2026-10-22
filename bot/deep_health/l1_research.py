@@ -233,10 +233,35 @@ def pit_universe():
     return p.out
 
 
-@health_check("fx_profile", "Forex market profile (OD-FX-1…9)", area=RESEARCH, level="L1", gates=("G4",))
+@health_check("fx_profile", "Forex market profile (OD-FX-1…9)", area=RESEARCH, level="L1", gates=("G4", "G5"))
 def fx_profile():
+    # claude code changed: 2026-10-21 — was a hard-coded BLOCKED ("every canonical FX consumer returns
+    # FX_CALENDAR_UNAVAILABLE", stale since the owner decisions of 2026-10-16, commit 610e536). Now verified.
+    from bot.quant_core.market_profile import AssetClassMismatch, FOREX_PROFILE
+    from bot.quant_core.research_zones import ZONES
+    from bot.research import dca_engine as de
+    from bot.research.entry_exit_engine import EntryExitEngine
+    from bot.research.kalman_filter_engine import KalmanFilterEngine
     p = Probe()
-    p.add("G4", "FX calendar, gaps, costs, financing", BLOCKED, expected="owner-defined FOREX_PROFILE rules",
-          observed="every canonical FX consumer returns FX_CALENDAR_UNAVAILABLE",
-          reason="owner decisions OD-FX-1…9 pending — FX is never negative evidence")
+    p.eq("G4", "FOREX_PROFILE owner decisions complete", [], FOREX_PROFILE.missing_decisions())
+    # canonical Kalman on the FX trading grid: seed = first trading candle at/after S, weekends are not gaps
+    cal = FOREX_PROFILE.calendar
+    grid = cal.trading_grid(ZONES.init_window()[0] - pd.Timedelta(days=120), ZONES.S0 + pd.Timedelta(days=14))
+    rng = np.random.default_rng(7)
+    b = pd.Series(1.30 * np.exp(np.cumsum(rng.normal(0, 4e-4, len(grid)))), index=grid)
+    a = pd.Series(1.10 * np.exp(0.8 * np.log(b / 1.30) + rng.normal(0, 2e-4, len(grid))), index=grid)
+    eng = KalmanFilterEngine(pair_name="EUR_USD/GBP_USD", symbol_a="EUR_USD", symbol_b="GBP_USD", ols_beta=1.0, ols_alpha=0.0)
+    res = eng.run_canonical(a, b, output_dir=tempfile.mkdtemp())
+    p.eq("G5", "FX canonical seed = first TRADING candle at/after S", str(cal.first_trading_at_or_after(ZONES.S0)),
+         str(pd.Timestamp(eng.seed_record.seed_timestamp)))
+    p.eq("G4", "FX weekend closures are not Kalman gaps (re-seeds)", 0, int(res["kalman_segment"].max()))
+    p.raises("G4", "crypto DCA engine refuses FX (24/7 clock)",
+             lambda: de.build_config_with_real_costs(de.BASELINE_CONFIG, "FOREX", symbol="EUR/USD"), AssetClassMismatch, match="24/7 clock")
+    p.raises("G4", "canonical pairs lifecycle refuses FX (no swap financing)",
+             lambda: EntryExitEngine(pair_name="EUR_USD/GBP_USD", symbol_a="EUR_USD", symbol_b="GBP_USD",
+                                     output_dir=tempfile.gettempdir(), rule_set="CANONICAL", asset_class="FOREX"),
+             AssetClassMismatch, match="OD-FX-FS-1")
+    p.add("G4", "FX swap financing in the canonical pairs ladder", BLOCKED,
+          expected="OD-FX-FS-1 (MT5 broker swap, decided 2026-10-16) implemented", observed="not implemented — canonical FX pairs runs refused",
+          reason="implementation gap, not an owner decision: canonical FX pairs evidence stays BLOCKED until swap financing exists")
     return p.out

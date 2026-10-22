@@ -162,13 +162,35 @@ def _to_binance_symbol(underscore_symbol: str) -> str:
     return f"{base}/{quote}"
 
 
-def _load_cointegration_row(pair_name: str) -> dict:
-    with open(COINTEGRATION_CSV, newline="") as f:
+ORIENTATION_SUPPLEMENT_CSV = os.path.join(BASE_DIR, "research_data", "cointegration_pairs_orientation_supplement.csv")  # claude code changed: 2026-10-21 — see build_orientation_supplement()
+
+
+def _find_row(path: str, pair_name: str) -> Optional[dict]:  # claude code changed: 2026-10-21 — shared exact-name lookup
+    if not os.path.exists(path):
+        return None
+    with open(path, newline="") as f:
         for row in csv.DictReader(f):
             if row["pair_name"] == pair_name:
                 return row
+    return None
+
+
+def _load_cointegration_row(pair_name: str, csv_path: Optional[str] = None,
+                            supplement_path: Optional[str] = None) -> dict:  # claude code changed: 2026-10-21 — orientation supplement + explicit reversed-pair error
+    csv_path = csv_path or COINTEGRATION_CSV
+    supplement_path = supplement_path or ORIENTATION_SUPPLEMENT_CSV
+    row = _find_row(csv_path, pair_name) or _find_row(supplement_path, pair_name)
+    if row is not None:
+        return row
+    a, b = pair_name.split("/")
+    if _find_row(csv_path, f"{b}/{a}") is not None:
+        # Engle-Granger is not symmetric: the B/A row's β, α and p-value are NOT the A/B values — never invert them.
+        raise ValueError(
+            f"{pair_name} is only present REVERSED ({b}/{a}) in {csv_path}; its hedge ratio cannot be inverted. "
+            f"Build the orientation supplement with bot.research.cointegration_engine.build_orientation_supplement()."
+        )
     raise ValueError(
-        f"{pair_name} not found in {COINTEGRATION_CSV} — cannot seed Kalman filter "
+        f"{pair_name} not found in {csv_path} — cannot seed Kalman filter "
         f"without a real, current OLS hedge_ratio/intercept for this pair."
     )
 

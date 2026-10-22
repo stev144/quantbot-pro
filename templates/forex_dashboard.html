@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Forex — Research Terminal{% endblock %}
+{% block head %}{% include "partials/_mkt_card_styles.html" %}{% endblock %}{# claude code changed: 2026-10-22 — Markets cards for the z-score list #}
 {% block content %}
 
 {% comment %}
@@ -293,18 +294,17 @@ figure.
         </div>
         <div class="term-section-body">
             {% if cross_section_dispersion.available %}
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Symbol</th><th class="num">Z-Score</th></tr></thead>
-                    <tbody>
-                        {% for row in cross_section_dispersion.top_extremes %}
-                        <tr>
-                            <td class="label-cell">{{ row.symbol }}</td>
-                            <td class="num stat-number" data-target="{{ row.cs_zscore }}" data-decimals="3">0</td>{# claude code changed: 2026-10-05 — neutral colour #}
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            {# claude code changed: 2026-10-22 — Markets cards instead of a symbol list (same partial as /markets/ and /market/) #}
+            <div class="chart-caption" style="margin-bottom:8px">
+                Each pair's 1-hour return at <b>{{ cross_section_dispersion.as_of }}</b> compared with all {{ cross_section_dispersion.n_symbols }} instruments in that same hour
+                (z = (return − average) ÷ spread across instruments). One hour of research data, before the sealed FX window — not live, not a signal.
+                Card prices and changes are today's Markets quotes.
+                {% if cross_section_dispersion.n_without_quote %}{{ cross_section_dispersion.n_without_quote }} instrument(s) have no local price file and are not shown.{% endif %}
+            </div>
+            <div class="mkt-grid" style="padding:0">
+                {% for c in cross_section_dispersion.cards %}
+                {% include "partials/_mkt_card.html" with q=c.q regime=None zscore=c.z zscore_asof=cross_section_dispersion.as_of %}
+                {% endfor %}
             </div>
             {% else %}
             <div class="unavailable">{{ cross_section_dispersion.reason }}</div>
@@ -446,4 +446,8 @@ figure.
 {% include "partials/_footer.html" with label="Forex" note="market/regime data from local cached OHLCV — research state from the Research Lab's own experiment history — no fabricated metrics" %}
 
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% include "partials/_mkt_card_scripts.html" %}{# claude code changed: 2026-10-22 — same card behaviour as Markets #}
 {% endblock %}

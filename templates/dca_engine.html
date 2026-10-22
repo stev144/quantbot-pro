@@ -115,13 +115,13 @@
 <div class="term-section-head" style="margin-bottom:18px">
     <div>
         <span class="term-section-title">Forex DCA Engine</span>
-        <span class="term-section-meta" style="margin-left:10px">QC-1 · walk-forward out-of-sample · 5 folds + holdout · 2022-02-21 → 2026-10-02</span>{# claude code changed: updated to include holdout period #}
+        <span class="term-section-meta" style="margin-left:10px">QC-1 · 5 walk-forward folds + consumed holdout · data frozen at the FX seal (2026-10-16 08:00 UTC)</span>{# claude code changed: 2026-10-21 — stale "2022-02-21 → 2026-10-02" replaced; page now uses a frozen cutoff #}
     </div>
     <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="badge">FX-QC-PROTOCOL-1</span>
         <span class="badge">LONG only</span>
         <span class="badge">GBP/JPY</span>
-        <span class="badge dim">$6 / cycle</span>
+        <span class="badge dim">$3,000 notional / entry · 1:30</span>{# claude code changed: 2026-10-21 — was "$6 / cycle" (the unscaled simulation size) #}
     </span>
 </div>
 
@@ -132,12 +132,20 @@
 </div>
 {% endif %}
 
+{% include "partials/_dca_survival.html" %}{# claude code changed: 2026-10-21 — capital-survival replay (DCA_SURVIVAL_AUDIT_2026-10-21.md) #}
+
 {% if results %}
+
+<div class="sv-banner warn" style="padding:12px 14px;border:1px solid var(--warning);border-radius:6px;margin-bottom:14px;font-size:13px;line-height:1.5">{# claude code changed: 2026-10-21 — legacy-view disclaimer #}
+    <strong>Classic views of the selected run.</strong> The sections below now follow the run chosen above (capital buttons): headline, trade-by-trade
+    equity and drawdown, cumulative P&amp;L, ladder depth and the fold table are all recomputed from that run's ledger. The original page's figures
+    (a $6 simulation × 500, no costs, closed-trade drawdown) are kept as step S0 of the "Legacy page vs upgraded replay" table.
+</div>
 
 {# ── stat card — GBP/JPY solo ────────────────────────────────────────────── #}
 {# claude code changed: AUD/CAD removed after holdout negative; single-pair layout #}
 {% with s=results.pairs|get_item:"GBP/JPY"|get_item:"stats" %}
-<div class="term-section dca-card-gbp" style="padding:16px 20px;margin-bottom:20px">
+<div class="term-section dca-card-gbp" id="lg-card" style="padding:16px 20px;margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
         <div>
             <div class="metric-label" style="margin-bottom:6px">
@@ -148,7 +156,7 @@
         </div>
         <div class="dca-mini-grid" style="min-width:260px">
             <div class="dca-mini-item"><span class="metric-label">Win rate</span><span class="metric-value small stat-number" data-target="{{ s.win_pct }}" data-decimals="1" data-suffix="%">0%</span></div>
-            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">$<span class="stat-number" data-target="{{ s.max_dd }}" data-decimals="2">0.00</span></span></div>
+            <div class="dca-mini-item"><span class="metric-label">Max drawdown</span><span class="metric-value small neg">−${{ s.max_dd_abs|floatformat:"2g" }} ({% if s.max_dd_pct is not None %}−{{ s.max_dd_pct|floatformat:1|cut:"-" }}% of peak P&amp;L{% else %}n/a — no capital base{% endif %})</span></div>{# claude code changed: 2026-10-21 — drawdown % in brackets (owner rule) #}
             <div class="dca-mini-item"><span class="metric-label">Avg capital/trade</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.avg_cost }}" data-decimals="2">0.00</span></span></div>
             <div class="dca-mini-item"><span class="metric-label">Max deployed/cycle</span><span class="metric-value small">$<span class="stat-number" data-target="{{ s.max_cost }}" data-decimals="0">0</span></span></div>
         </div>
@@ -162,7 +170,7 @@
 <div class="term-section" style="margin-bottom:16px">
     <div class="term-section-head">
         <span class="term-section-title"><span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY — Equity &amp; Drawdown</span>
-        <span class="term-section-meta">cumulative P&amp;L · dollar drawdown · trade index</span>
+        <span class="term-section-meta" id="lg-eq-meta">cumulative P&amp;L · dollar drawdown · trade index</span>
     </div>
     <div class="term-section-body">
         <div class="two-col">
@@ -182,7 +190,7 @@
 {# ── equity curves ────────────────────────────────────────────────────────── #}
 <div class="term-section" style="margin-bottom:16px">
     <div class="term-section-head">
-        <span class="term-section-title">Cumulative P&amp;L — out-of-sample walk-forward</span>
+        <span class="term-section-title" id="lg-cum-title">Cumulative P&amp;L — out-of-sample walk-forward</span>
         <span class="term-section-meta">per-trade exit dates · vertical bands = folds · USDT</span>
     </div>
     <div class="term-section-body">
@@ -199,7 +207,7 @@
 {# ── fills / capital deployment ───────────────────────────────────────────── #}
 <div class="term-section" style="margin-bottom:16px">
     <div class="term-section-head">
-        <span class="term-section-title">Capital deployment — DCA ladder fill depth</span>
+        <span class="term-section-title" id="lg-fills-title">Capital deployment — DCA ladder fill depth</span>
         <span class="term-section-meta">cycles reaching each ladder level · L5 = $93,000 notional ($3,100 margin · 1:30)</span>{# claude code changed: LCEX-1 — updated to L5 max (was L7 $381K) #}
     </div>
     <div class="term-section-body">
@@ -219,7 +227,7 @@
             <span class="term-section-title"><span class="dca-dot" style="{{ dot_style }}"></span>{{ pair_label }} — fold breakdown</span>
         </div>
         <div class="term-section-body">
-            <table class="dca-fold-table">
+            <table class="dca-fold-table" id="lg-fold-table">{# claude code changed: 2026-10-21 — run-driven #}
                 <thead>
                     <tr>
                         <th>Fold</th><th>Period</th>
@@ -563,7 +571,7 @@
             });
         }
 
-        function makeDrawdownChart(id, ddArr) {
+        function makeDrawdownChart(id, ddArr, eqArr) {  // claude code changed: 2026-10-21 — eqArr for the % in the tooltip
             _pairCharts[id] = destroyChart(_pairCharts[id]);
             var ctx = document.getElementById(id);
             if (!ctx || !ddArr || !ddArr.length) return;
@@ -586,22 +594,32 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: { legend: { display: false },
-                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } } },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 },
+                            callbacks: { label: function (c) {  // claude code changed: 2026-10-21 — "−$X (−Y% of peak P&L)"
+                                var dd = c.parsed.y, peak = 0;
+                                for (var k = 0; k <= c.dataIndex && eqArr && k < eqArr.length; k++) peak = Math.max(peak, eqArr[k].p);
+                                var pc = peak > 0 ? ' (−' + (dd / peak * 100).toFixed(1) + '% of peak P&L)' : ' (n/a — no capital base)';
+                                return 'Drawdown: −$' + dd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + pc;
+                            } } } },
                     scales: scales,
                 },
             });
         }
 
         makeEquityChart('gbpjpyEquityChart',    PAIRS_DATA['GBP/JPY'].equity);
-        makeDrawdownChart('gbpjpyDrawdownChart', PAIRS_DATA['GBP/JPY'].drawdown);
+        makeDrawdownChart('gbpjpyDrawdownChart', PAIRS_DATA['GBP/JPY'].drawdown, PAIRS_DATA['GBP/JPY'].equity);  // claude code changed: 2026-10-21 — equity for % tooltip
         // claude code changed: AUD/CAD chart calls removed
     }
 
     waitForChartJs(function () {
+        ['dca-equity-chart', 'dca-fills-chart', 'gbpjpyEquityChart', 'gbpjpyDrawdownChart'].forEach(function (id) {   // claude code changed: 2026-10-21 — the survival renderer may have drawn here first; an occupied canvas made Chart.js throw and abort this whole init
+            var c = Chart.getChart(id); if (c) c.destroy();
+        });
         buildEquityChart();
         buildFillsChart();
         renderPairCharts();
-        onThemeChange(renderPairCharts);
+        if (window.svRenderLegacy) window.svRenderLegacy();   // claude code changed: 2026-10-21 — hand off to the selected survival run (never left showing the static legacy data)
+        onThemeChange(function () { if (window.svRenderLegacy) window.svRenderLegacy(); else renderPairCharts(); });   // claude code changed: 2026-10-21 — the selected run owns these canvases
     });
 })();
 </script>

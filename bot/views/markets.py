@@ -29,3 +29,10 @@ def markets(request):  # claude code changed: new
         **data,
         "active": "markets",
     })
+
+
+def markets_live(request):  # claude code changed: 2026-10-21 — new; JSON live prices polled by the Markets / Watchlist pages
+    from django.http import JsonResponse
+    resp = JsonResponse(md.get_live_quotes())
+    resp["Cache-Control"] = "no-store"
+    return resp
