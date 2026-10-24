@@ -82,7 +82,7 @@ class ExecutionEngineKrakenAdapterCostTest(TestCase):
 
         record = TradeRecord.objects.get(symbol="ETH/USDT", status="OPEN")
         effective_fee_rate = record.fee_entry / (record.entry_price * record.quantity)
-        self.assertAlmostEqual(effective_fee_rate, 0.0026, places=6)
+        self.assertAlmostEqual(effective_fee_rate, 0.0080, places=6)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
         # claude code changed: new — Step 15.
         self.assertEqual(record.venue, "kraken")
 

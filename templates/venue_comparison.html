@@ -1,19 +1,53 @@
 {% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
 {% load static %}
+
+{% block head %}
+<style>
+/* claude code changed: 2026-10-22 — exchange cards with blue text (owner request) */
+.vc-wrap { --vc-blue: #4aa3ff; --vc-blue-soft: rgba(74,163,255,0.12); --vc-blue-line: rgba(74,163,255,0.35); }
+.vc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:var(--sp-4); }
+.vc-card { position:relative; background:var(--bg-1); border:1px solid var(--vc-blue-line); border-radius:12px;
+           padding:var(--sp-4) var(--sp-5); display:flex; flex-direction:column; gap:12px; color:var(--vc-blue);
+           box-shadow:0 0 0 1px transparent; transition:transform .15s, box-shadow .15s; }
+.vc-card:hover { transform:translateY(-2px); box-shadow:0 6px 24px rgba(74,163,255,0.18); }
+.vc-card.vc-best { border-color:var(--vc-blue); box-shadow:0 0 0 2px var(--vc-blue-soft), 0 6px 24px rgba(74,163,255,0.22); }
+.vc-card.vc-off { opacity:.75; border-style:dashed; }
+.vc-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.vc-name { font-size:18px; font-weight:800; letter-spacing:.06em; color:var(--vc-blue); text-transform:uppercase; }
+.vc-market { font-family:var(--font-mono); font-size:12px; color:var(--vc-blue); opacity:.85; }
+.vc-ribbon { font-size:11px; font-weight:700; letter-spacing:.08em; padding:3px 10px; border-radius:999px;
+             background:var(--vc-blue); color:#04121f; }
+/* claude code changed: 2026-10-22 — rank colours, same pill shape as CHEAPEST: 1st green, 2nd yellow, 3rd+ red */
+.vc-ribbon.vc-r1 { background:var(--positive); color:#04121f; }
+.vc-ribbon.vc-r2 { background:var(--warning); color:#04121f; }
+.vc-ribbon.vc-r3 { background:var(--negative); color:#ffffff; }
+.vc-rank { font-size:11px; font-family:var(--font-mono); padding:3px 8px; border-radius:999px; border:1px solid var(--vc-blue-line); color:var(--vc-blue); }
+.vc-total { display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:8px; background:var(--vc-blue-soft); }
+.vc-total-label { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--vc-blue); opacity:.85; }
+.vc-total-value { font-size:24px; font-weight:800; font-family:var(--font-mono); color:var(--vc-blue); font-variant-numeric:tabular-nums; }
+.vc-total-sub { font-size:12px; font-family:var(--font-mono); color:var(--vc-blue); opacity:.85; }
+.vc-stats { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; font-size:12px; }
+.vc-stat { display:flex; justify-content:space-between; gap:8px; border-bottom:1px dashed var(--vc-blue-line); padding-bottom:4px; }
+.vc-stat span { color:var(--vc-blue); opacity:.8; }
+.vc-stat b { color:var(--vc-blue); font-family:var(--font-mono); font-weight:600; font-variant-numeric:tabular-nums; }
+.vc-tags { display:flex; flex-wrap:wrap; gap:6px; }
+.vc-tag { font-size:10px; font-family:var(--font-mono); letter-spacing:.05em; padding:2px 7px; border-radius:4px;
+          border:1px solid var(--vc-blue-line); color:var(--vc-blue); }
+.vc-tag.warn { border-color:var(--warning); color:var(--warning); }
+.vc-note { font-size:12px; color:var(--vc-blue); opacity:.9; line-height:1.5; }
+.vc-why { margin-top:var(--sp-4); padding:12px 14px; border-left:3px solid var(--vc-blue); background:var(--vc-blue-soft); border-radius:6px; }
+@media (max-width:600px) { .vc-grid { grid-template-columns:1fr; } .vc-total-value { font-size:20px; } }
+</style>
+{% endblock %}
 
 {% block content %}
 
 {% comment %}
-   claude code changed: new template — Venue Comparison. Real-time
-   Binance vs. Kraken execution comparison (bot/views/venue_comparison_data.py),
-   built entirely on already-tested capability: Step 11's compare_venues()
-   (real order-book-depth cost estimate) and Step 17's
-   assess_venue_readiness() (real dry-run/connectivity/auth classification).
-   This page deliberately makes live exchange calls and can take a few
-   real seconds to load — a documented, accepted trade-off for real
-   numbers on a comparison page, not something the rest of the dashboard
-   does (see terminal_data.py's own "no live calls in a page load" rule
-   for the fast, high-traffic pages).
+   claude code changed: new template — Venue Comparison. Real-time Binance vs. Kraken vs. Coinbase execution
+   comparison (bot/views/venue_comparison_data.py), built on already-tested capability: compare_venues() (real
+   order-book walk) and assess_venue_readiness(). 2026-10-22: one card per exchange (blue text); ranking by the
+   ALL-IN amount paid (quantity × fill price × (1 + fee)) instead of fee% + own-mid slippage.
 {% endcomment %}
 
 {% include "partials/_topbar.html" with active="venue_comparison" %}
@@ -28,63 +62,73 @@
     </form>
 </div>
 
-<div class="term-body">
-
+<div class="term-body vc-wrap">
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title">Venue Comparison</span>
-            <span class="term-section-meta">source: execution_comparison.compare_venues() + venue_readiness.assess_venue_readiness() — real order book, real fees</span>
+            <span class="term-section-meta">live order books · base-tier taker fees · ranked by the all-in amount you would pay</span>
         </div>
         <div class="term-section-body">
             {% if comparison.available %}
-            <div class="chart-caption" style="margin-bottom:10px">
-                Estimated cost to BUY {{ comparison.quantity }} {{ comparison.symbol }} on each venue right now — a real, quantity-weighted walk of each venue's live order book (Step 9/11), not a top-of-book price. Not a routing decision — comparison data only.
+            <div class="vc-note" style="margin-bottom:14px">
+                Cost to <b>BUY {{ comparison.quantity }} {{ comparison.symbol }}</b> on each exchange right now: the order book is walked level by level for this exact size, then the exchange's taker fee is added.
+                Comparison data only — no order is placed and no venue is chosen for you.
             </div>
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead>
-                        <tr>
-                            <th>Venue</th>
-                            <th>Readiness</th>
-                            <th class="num">Best Bid</th>
-                            <th class="num">Best Ask</th>
-                            <th class="num">Spread %</th>
-                            <th class="num">Fee %</th>
-                            <th class="num">Est. Fill Price</th>
-                            <th class="num">Est. Slippage %</th>
-                            <th class="num">Est. Total Cost %</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in comparison.rows %}
-                        <tr class="{% if row.venue_id == comparison.cheapest_venue %}row-win{% endif %}">
-                            <td class="label-cell">
-                                <span class="badge dim">{{ row.venue_id|upper }}</span>
-                                {% if row.venue_id == comparison.cheapest_venue %}<span class="badge pos">CHEAPEST</span>{% endif %}
-                            </td>
-                            {% if row.available %}
-                            <td><span class="badge {% if row.readiness == 'LIVE_READY' %}pos{% elif row.readiness == 'DRY_RUN_READY' %}neu{% else %}warn{% endif %}">{{ row.readiness }}</span></td>
-                            <td class="num stat-number" data-target="{{ row.best_bid }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ row.best_ask }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ row.spread_pct }}" data-decimals="4" data-suffix="%">0%</td>
-                            <td class="num stat-number" data-target="{{ row.fee_rate_pct }}" data-decimals="3" data-suffix="%">0%</td>
-                            <td class="num stat-number" data-target="{{ row.estimated_fill_price }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ row.estimated_slippage_pct }}" data-decimals="4" data-suffix="%">0%</td>
-                            <td class="num stat-number" data-target="{{ row.estimated_total_cost_pct }}" data-decimals="4" data-suffix="%">0%</td>
-                            {% else %}
-                            <td colspan="7" class="unavailable-inline">{{ row.unavailable_reason }}</td>
-                            {% endif %}
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            <div class="vc-grid">
+                {% for row in comparison.rows %}
+                <div class="vc-card {% if row.venue_id == comparison.cheapest_venue %}vc-best{% endif %} {% if not row.available %}vc-off{% endif %}">
+                    <div class="vc-head">
+                        <div>
+                            <div class="vc-name">{{ row.venue_id|upper }}</div>
+                            <div class="vc-market coin-id">{% coin_logo row.market 18 %}{{ row.market }}</div>{# claude code changed: 2026-10-22 — coin logo #}
+                        </div>
+                        {% if row.venue_id == comparison.cheapest_venue %}<span class="vc-ribbon vc-r1">CHEAPEST</span>{# claude code changed: 2026-10-22 — green #}
+                        {% elif row.rank == 2 %}<span class="vc-ribbon vc-r2">2ND</span>{# claude code changed: 2026-10-22 — yellow #}
+                        {% elif row.rank %}<span class="vc-ribbon vc-r3">{% if row.rank == 3 %}3RD{% else %}#{{ row.rank }}{% endif %}</span>{# claude code changed: 2026-10-22 — red #}
+                        {% elif row.available %}<span class="vc-rank" title="quoted in another currency — not ranked">not ranked</span>{% endif %}
+                    </div>
+
+                    {% if row.available %}
+                    <div class="vc-total">
+                        <span class="vc-total-label">All-in cost (price + fee)</span>
+                        <span class="vc-total-value count-text">{{ row.disp.all_in }} {{ row.quote_currency }}</span>{# claude code changed: 2026-10-22 — animates from 0 (counters.js text mode) #}
+                        {% if row.venue_id == comparison.cheapest_venue %}<span class="vc-total-sub">lowest of the ranked venues</span>
+                        {% elif row.rank %}<span class="vc-total-sub count-text">+{{ row.disp.extra }} {{ row.quote_currency }} (+{{ row.disp.extra_pct }}%) vs cheapest</span>{# claude code changed: 2026-10-22 — animates #}
+                        {% else %}<span class="vc-total-sub">different quote currency — not comparable without a USDT/USD rate</span>{% endif %}
+                    </div>
+                    <div class="vc-stats">
+                        <div class="vc-stat"><span>Best bid</span><b class="count-text">{{ row.disp.best_bid }}</b></div>
+                        <div class="vc-stat"><span>Best ask</span><b class="count-text">{{ row.disp.best_ask }}</b></div>
+                        <div class="vc-stat"><span>Avg fill price</span><b class="count-text">{{ row.disp.fill }}</b></div>
+                        <div class="vc-stat"><span>Spread</span><b class="count-text">{{ row.disp.spread }}%</b></div>
+                        <div class="vc-stat"><span>Taker fee</span><b class="count-text">{{ row.disp.fee }}%</b></div>
+                        <div class="vc-stat"><span>Book slippage</span><b class="count-text">{{ row.disp.slippage }}%</b></div>{# claude code changed: 2026-10-22 — card values animate #}
+                    </div>
+                    <div class="vc-tags">
+                        <span class="vc-tag">{{ row.readiness }}</span>
+                        <span class="vc-tag" title="{{ row.fee_basis }}">{% if row.fee_verified %}fee verified{% else %}fee unverified{% endif %}</span>
+                        {% if row.best_book_price %}<span class="vc-tag">best book price</span>{% endif %}
+                        {% if row.quote_mismatch %}<span class="vc-tag warn" title="This exchange does not list {{ comparison.symbol }}">quote differs</span>{% endif %}
+                    </div>
+                    {% else %}
+                    <div class="vc-note">{{ row.unavailable_reason }}</div>
+                    <div class="vc-tags"><span class="vc-tag">{{ row.readiness }}</span></div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="vc-why vc-note">
+                <b>How the winner is chosen:</b> all-in cost = quantity × average fill price × (1 + taker fee), compared only between exchanges quoted in {{ comparison.requested_quote }}.
+                An exchange can have the best book price and still lose on fees — a 0.1 % fee versus 0.6–0.8 % usually outweighs a few cents of price difference.
+                {% if comparison.any_quote_mismatch %}<br><b>Quote currency differs:</b> an exchange that does not list {{ comparison.symbol }} is shown in USD or USDC; it is not ranked, because the USDT/USD rate and the conversion cost are not included.{% endif %}
+                <br>Fees are base-tier taker rates. "Fee unverified" means the exchange's own fee page could not be confirmed; Kraken was corrected on 2026-10-22 from a stale 0.26 % to its published 0.80 % (Tier 1).
             </div>
             {% else %}
             <div class="unavailable">{{ comparison.reason }}</div>
             {% endif %}
         </div>
     </div>
-
 </div>
 
 {% include "partials/_footer.html" with label="Venue Comparison" note="real order-book/fee data, live exchange calls — expect a few seconds to load" %}
@@ -92,5 +136,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{% static 'js/counters.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>{# claude code changed: 2026-10-22 — restored (dropped in the card redesign): count-up like every other page #}
 {% endblock %}

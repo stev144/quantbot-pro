@@ -544,8 +544,28 @@
 .term-nav-link:hover { color: var(--accent); background: var(--bg-2); }
 .term-nav-link.active { color: var(--accent); background: var(--neutral-dim); }
 
+/* claude code changed: 2026-10-22 — owner request: every navbar menu is a pill button, the same shape as the
+   Venue Comparison "CHEAPEST" label (fully rounded, compact, bold). Outlined at rest, tinted on hover, filled with
+   the theme accent when it is the current page or its dropdown is open. Labels no longer wrap inside a pill. */
+.term-nav-link {
+  border-radius: 999px;                                   /* claude code changed: pill shape */
+  padding: 4px 12px;                                      /* claude code changed */
+  border: 1px solid var(--border-strong);                 /* claude code changed */
+  letter-spacing: 0.04em;                                 /* claude code changed */
+  white-space: nowrap;                                    /* claude code changed: "Risk & Execution" stays one pill */
+  line-height: 1.4;                                       /* claude code changed */
+  transition: background .15s, color .15s, border-color .15s;   /* claude code changed */
+}
+.term-nav-link:hover { border-color: var(--accent); background: var(--neutral-dim); }          /* claude code changed */
+.term-nav-link.active,
+.term-nav-group[open] > .term-nav-link { background: var(--accent); border-color: var(--accent); color: var(--bg-1); }   /* claude code changed: filled like CHEAPEST */
+
+@media (max-width: 1280px) {   /* claude code changed: 2026-10-22 — pills never push the topbar wider than the screen */
+  .term-nav { flex-wrap: wrap; row-gap: 6px; }
+  .term-nav-link { padding: 3px 9px; font-size: 11px; }
+}
+
 .term-nav-group { position: relative; }
-.term-nav-group[open] > .term-nav-link { color: var(--accent); }
 
 .term-nav-dropdown {
   position: absolute;
@@ -1303,3 +1323,20 @@
 .live-badge { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .05em; padding: 0 5px; border-radius: 3px; border: 1px solid currentColor; }
 .live-badge.live { color: var(--positive); }
 .live-badge.stale { color: var(--warning); }
+
+/* claude code changed: 2026-10-22 — coin logos ({% coin_logo %}, bot/templatetags/coin_extras.py) */
+.coin-logo { display:inline-block; flex-shrink:0; border-radius:50%; vertical-align:middle; object-fit:cover; }
+.coin-logo-fallback { display:inline-flex; align-items:center; justify-content:center; font-family:var(--font-mono);
+                      font-weight:700; letter-spacing:0; background:var(--neutral-dim); color:var(--accent);
+                      border:1px solid var(--border-strong); }
+.coin-id { display:inline-flex; align-items:center; gap:8px; min-width:0; }
+
+/* claude code changed: 2026-10-22 — forex pair flags + full names ({% fx_pair %} / {% fx_flags %}) */
+.fx-flags { display:inline-flex; align-items:center; flex-shrink:0; }
+.fx-flag { border-radius:50%; object-fit:cover; box-shadow:0 0 0 2px var(--bg-1); }
+.fx-flags .fx-flag + .fx-flag { margin-left:-6px; }          /* the quote flag tucks behind the base flag */
+.fx-flags .fx-flag:first-child { position:relative; z-index:1; }
+.fx-pair { display:inline-flex; align-items:center; gap:7px; max-width:100%; padding:3px 10px 3px 4px;
+           border-radius:999px; border:1px solid var(--border-strong); background:var(--bg-2); }
+.fx-names { font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fx-sep { color:var(--text-dim); }

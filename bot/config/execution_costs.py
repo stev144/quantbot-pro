@@ -31,6 +31,12 @@ SLIPPAGE_RATE = 0.0005
 # entry and exit during backtesting. 0.001 = 0.1%.
 FEE_RATE = 0.001
 
+# claude code changed: 2026-10-22 — new, funding-carry monitor. Binance USDⓈ-M perpetual futures base-tier
+# (VIP 0) TAKER fee, 0.05 % of notional per side (maker 0.02 %; 10 % lower when paid in BNB). An ASSUMPTION
+# from Binance's published tier structure (support article 360033544231, secondary fee guides), not a live
+# account's rate; consumed only by bot/research/funding_carry_monitor.py, which reports cost sensitivity to it.
+PERP_TAKER_FEE_RATE = 0.0005   # claude code changed: 2026-10-22 — see comment above
+
 # claude code changed: new — Kraken Multi-Venue Execution, Step 8. Real,
 # per-venue cost table. Additive only — FEE_RATE/SLIPPAGE_RATE above are
 # UNCHANGED and still consumed directly by bot/engines/simulation.py's
@@ -46,15 +52,32 @@ VENUE_EXECUTION_COSTS = {
         "slippage_rate": SLIPPAGE_RATE,
     },
     "kraken": {
-        # Kraken's published lowest-tier (<$10k 30-day volume) spot taker
-        # fee, per Kraken's public fee schedule — a first-pass, publicly-
-        # documented estimate, not fetched from a live account's actual
-        # negotiated tier.
-        "fee_rate": 0.0026,
+        # claude code changed: 2026-10-22 — Kraken audit: was 0.0026 (a pre-2026 schedule, stale). Kraken's OFFICIAL
+        # fee page (kraken.com/features/fee-schedule, read 2026-10-22) "Spot Crypto" Tier 1 ($0+ 30-day volume):
+        # maker 0.40 %, TAKER 0.80 %. The taker rate is used because every simulated fill here is a market order.
+        "fee_rate": 0.0080,   # claude code changed: 2026-10-22 — verified official base-tier taker
         # No Kraken-specific slippage data exists yet — shares the same
         # estimate as Binance until real data justifies differentiating it.
         "slippage_rate": SLIPPAGE_RATE,
     },
+    "coinbase": {
+        # claude code changed: 2026-10-22 — new venue (Coinbase Advanced Trade via ccxt "coinbase"). Base-tier TAKER
+        # 0.60 % (< $10k 30-day volume) as reported by several independent fee guides; Coinbase's official fee pages
+        # refuse automated reads (HTTP 403) and one account-specific report cites 1.20 % — so this value is
+        # UNVERIFIED (see VENUE_FEE_PROVENANCE) and shown as such wherever it is displayed.
+        "fee_rate": 0.0060,   # claude code changed: 2026-10-22 — unverified base-tier taker assumption
+        "slippage_rate": SLIPPAGE_RATE,
+    },
+}
+
+# claude code changed: 2026-10-22 — where each venue's fee_rate comes from. Kept OUTSIDE VENUE_EXECUTION_COSTS so the
+# {"fee_rate", "slippage_rate"} shape every existing caller and test relies on is unchanged.
+VENUE_FEE_PROVENANCE = {
+    "binance": {"verified": False, "basis": "Binance spot base taker 0.10 % (project assumption FEE_RATE)", "checked": None},
+    "kraken": {"verified": True, "basis": "kraken.com/features/fee-schedule — Spot Crypto Tier 1 ($0+): maker 0.40 %, taker 0.80 %",
+               "checked": "2026-10-22"},
+    "coinbase": {"verified": False, "basis": "secondary fee guides: 0.60 % taker < $10k; official page blocked (HTTP 403); "
+                                             "1.20 % reported for some accounts", "checked": "2026-10-22"},
 }
 
 

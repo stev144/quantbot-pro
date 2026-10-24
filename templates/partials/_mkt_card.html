@@ -1,3 +1,4 @@
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
 {% comment %}
 claude code changed: 2026-10-22 — ONE Markets card (moved from the two inline copies in markets.html), shared by the
 Markets tab and the Regime page. Takes `q` (a markets_data quote). Optional extras rendered as a strip under the
@@ -13,9 +14,12 @@ standard card: `regime` (a RegimeDetector row) and `zscore` + `zscore_asof` (lat
      onkeydown="if (event.key === 'Enter') mktOpenDetail('{{ q.symbol }}', '{{ q.asset_class }}')"
      onclick="mktOpenDetail('{{ q.symbol }}', '{{ q.asset_class }}')">
     <div class="mkt-card-top">
+        <div class="coin-id">{% if q.asset_class != 'forex' %}{% coin_logo q.symbol 32 %}{% endif %}{# claude code changed: 2026-10-22 — coin logo #}
         <div class="mkt-card-identity">
             <div class="mkt-symbol">{{ q.display_symbol }}</div>
             {% if q.asset_class != 'forex' and q.display_name %}<div class="mkt-name">{{ q.display_name }}</div>{% endif %}
+            {% if q.asset_class == 'forex' %}<div style="margin-top:4px">{% fx_pair q.symbol 18 %}</div>{% endif %}{# claude code changed: 2026-10-22 — FX flags + names #}
+        </div>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
             {% if q.asset_class == 'forex' %}<span class="mkt-class-badge forex">Forex</span>{% else %}<span class="mkt-class-badge">Crypto</span>{% endif %}

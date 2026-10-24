@@ -6,6 +6,11 @@
 {% include "partials/_topbar.html" with active="academy" %}
 
 <div class="term-body">
+    <!-- # claude code changed: 2026-10-22 — Academy tools: Leverage Reality calculator -->
+    <div class="term-section">
+        <div class="term-section-head"><span class="term-section-title"><a href="{% url 'academy_leverage_reality' %}">Leverage Reality</a></span><span class="term-section-meta">interactive tool</span></div>
+        <div class="term-section-body"><div class="chart-caption">See how leverage and DCA ladders change exposure, margin and the liquidation price — and what happened historically. Educational, hypothetical positions only.</div></div>
+    </div>
     {% for path in paths %}
     <div class="term-section">
         <div class="term-section-head">

@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos / FX flags #}
 {% block title %}Forex — Research Terminal{% endblock %}
 {% block head %}{% include "partials/_mkt_card_styles.html" %}{% endblock %}{# claude code changed: 2026-10-22 — Markets cards for the z-score list #}
 {% block content %}
@@ -94,7 +95,7 @@ figure.
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title">Market State</span>
-            <span class="term-section-meta">{{ symbol }} · {{ instrument.timeframe }}</span>
+            <span class="term-section-meta coin-id">{% fx_pair symbol 16 %}{{ symbol }} · {{ instrument.timeframe }}</span>{# claude code changed: 2026-10-22 — FX flags + names #}
         </div>
         <div class="term-section-body">
             <div class="term-grid term-grid-6">

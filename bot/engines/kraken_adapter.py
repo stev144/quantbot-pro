@@ -22,10 +22,7 @@ from typing import Optional
 
 import ccxt
 
-from bot.engines.exchange_adapter import ExchangeAdapter
-from bot.engines.order_manager import OrderManager
-from bot.engines.market_data import MarketData
-from bot.config.execution_costs import get_venue_execution_costs
+from bot.engines.ccxt_spot_adapter import CcxtSpotAdapter   # claude code changed: 2026-10-22 — shared ccxt spot base (Coinbase reuses it)
 
 logger = logging.getLogger(__name__)
 
@@ -42,65 +39,21 @@ logger = logging.getLogger(__name__)
 FALLBACK_QUOTES: list = ["USD"]
 
 
-class KrakenAdapter(ExchangeAdapter):
+class KrakenAdapter(CcxtSpotAdapter):   # claude code changed: 2026-10-22 — was ExchangeAdapter; generic methods moved verbatim to CcxtSpotAdapter
     """
     ExchangeAdapter implementation for Kraken. Same shape as BinanceAdapter:
-    constructs and delegates to OrderManager/MarketData internally for
-    everything that isn't genuinely venue-specific.
+    constructs and delegates to OrderManager/MarketData internally (in the
+    shared CcxtSpotAdapter.__init__, which keeps the Step 8 venue-correct
+    dry-run fee/slippage wiring) for everything that isn't venue-specific.
     """
 
-    def __init__(self, exchange, dry_run: bool = False):
-        self.exchange = exchange
-        self.dry_run = dry_run
-        # claude code changed: Step 8 — fixes a real bug: OrderManager's
-        # dry-run fill simulation previously always used the module-level,
-        # Binance-modeled FEE_RATE/SLIPPAGE_RATE regardless of venue, so
-        # Kraken's dry-run fills were silently charged Binance's 0.1% fee,
-        # contradicting get_execution_costs() below (which already
-        # advertised Kraken's real 0.26% rate). Now threaded through
-        # explicitly so simulated fills actually reflect Kraken's own cost.
-        costs = get_venue_execution_costs(self.venue_id)
-        self.order_manager = OrderManager(
-            exchange, dry_run=dry_run,
-            fee_rate=costs["fee_rate"], slippage_rate=costs["slippage_rate"],
-        )
-        self.market_data = MarketData(exchange, dry_run=dry_run)
+    FALLBACK_QUOTES = FALLBACK_QUOTES   # claude code changed: 2026-10-22 — consumed by CcxtSpotAdapter.normalize_symbol()
 
     @property
     def venue_id(self) -> str:
         return "kraken"
 
-    # ── Market data ──────────────────────────────────────────────────
-
-    def get_ticker(self, symbol: str) -> dict:
-        ticker = self.exchange.fetch_ticker(symbol)
-        return {
-            "last": ticker.get("last"),
-            "bid": ticker.get("bid"),
-            "ask": ticker.get("ask"),
-            "timestamp": ticker.get("timestamp"),
-        }
-
-    def get_ohlcv(self, symbol: str, timeframe: str, limit: int) -> list:
-        return self.market_data.get_ohlcv(symbol, timeframe=timeframe, limit=limit)
-
-    def get_balance(self, currency: str) -> float:
-        return self.market_data.get_balance(currency)
-
-    # ── Orders ───────────────────────────────────────────────────────
-
-    def place_order(
-        self,
-        symbol: str,
-        side: str,
-        order_type: str,
-        quantity: float,
-        price: Optional[float] = None,
-    ) -> dict:
-        # claude code changed: same bridge BinanceAdapter uses — OrderManager
-        # is confirmed exchange-agnostic, reused unchanged here.
-        effective_price = price if order_type == "limit" else None
-        return self.order_manager.place_order(symbol, side, quantity, price=effective_price)
+    # claude code changed: 2026-10-22 — get_ticker/get_ohlcv/get_balance/place_order are inherited from CcxtSpotAdapter (moved verbatim)
 
     def place_stop_loss(self, symbol: str, side: str, quantity: float, stop_price: float) -> dict:
         """
@@ -176,110 +129,9 @@ class KrakenAdapter(ExchangeAdapter):
             "side": side.lower(),
         }
 
-    def cancel_order(self, order_id: str, symbol: str) -> dict:
-        return self.exchange.cancel_order(order_id, symbol)
-
-    def get_order(self, order_id: str, symbol: str) -> dict:
-        return self.exchange.fetch_order(order_id, symbol)
-
-    def get_open_orders(self, symbol: str) -> list:
-        return self.exchange.fetch_open_orders(symbol)
-
-    def get_order_book(self, symbol: str, limit: int = 20) -> dict:
-        # claude code changed: new — Step 9. THE method that actually
-        # matters for Kraken: ccxt's kraken.py fetch_order_book() returns
-        # a third per-level element (a timestamp) on every bid/ask level —
-        # verified empirically, not assumed — that Binance's does not.
-        # Trimming to level[0]/level[1] here means no caller of this
-        # contract method ever needs to know that.
-        raw = self.exchange.fetch_order_book(symbol, limit)
-        return {
-            "symbol": symbol,
-            "bids": [[level[0], level[1]] for level in raw["bids"]],
-            "asks": [[level[0], level[1]] for level in raw["asks"]],
-            "timestamp": raw.get("timestamp"),
-        }
-
-    # ── Normalization ────────────────────────────────────────────────
-
-    def normalize_symbol(self, canonical_symbol: str) -> Optional[str]:
-        # claude code changed: Step 5 — was a bare passthrough justified by
-        # only 3 spot-checked symbols. Now checks real exchange.markets data
-        # and applies a genuine, evidence-backed quote-currency fallback
-        # (see FALLBACK_QUOTES above) instead of assuming Kraken always
-        # mirrors Binance's /USDT convention.
-        if not self.exchange.markets:
-            # claude code changed: markets not loaded yet — can't validate.
-            # Mirrors validate_order()'s existing graceful-degradation
-            # pattern below; callers are already responsible for calling
-            # load_markets()/validate_connection() before trading calls,
-            # same as the live Binance path does today.
-            return canonical_symbol
-
-        if canonical_symbol in self.exchange.markets:
-            return canonical_symbol
-
-        base, _, _quote = canonical_symbol.partition("/")
-        for fallback_quote in FALLBACK_QUOTES:
-            candidate = f"{base}/{fallback_quote}"
-            if candidate in self.exchange.markets:
-                logger.warning(
-                    f"[KrakenAdapter] {canonical_symbol} not listed on Kraken; "
-                    f"falling back to {candidate}"
-                )
-                return candidate
-
-        logger.warning(
-            f"[KrakenAdapter] {canonical_symbol} has no equivalent listing on "
-            f"Kraken (checked /USDT and fallback quotes {FALLBACK_QUOTES})"
-        )
-        return None
-
-    def normalize_quantity(self, symbol: str, quantity: float) -> float:
-        return float(self.exchange.amount_to_precision(symbol, quantity))
-
-    def normalize_price(self, symbol: str, price: float) -> float:
-        return float(self.exchange.price_to_precision(symbol, price))
-
-    def validate_order(self, symbol: str, quantity: float, price: Optional[float] = None) -> tuple:
-        market = self.exchange.markets.get(symbol) if self.exchange.markets else None
-        if market is None:
-            return False, f"{symbol} is not a listed market on {self.venue_id}"
-
-        limits = market.get("limits", {})
-        min_amount = (limits.get("amount") or {}).get("min")
-        if min_amount is not None and quantity < min_amount:
-            return False, f"quantity {quantity} below {self.venue_id}'s minimum {min_amount} for {symbol}"
-
-        min_cost = (limits.get("cost") or {}).get("min")
-        if min_cost is not None and price is not None and (quantity * price) < min_cost:
-            return False, f"order notional below {self.venue_id}'s minimum {min_cost} for {symbol}"
-
-        return True, ""
-
-    # ── Costs ────────────────────────────────────────────────────────
-
-    def get_execution_costs(self, symbol: Optional[str] = None) -> dict:
-        # claude code changed: Step 8 — now reads from the real per-venue
-        # table (bot/config/execution_costs.py's VENUE_EXECUTION_COSTS)
-        # instead of the local KRAKEN_FEE_RATE constant (removed) +
-        # imported SLIPPAGE_RATE. Same returned numbers as before this step.
-        return get_venue_execution_costs(self.venue_id)
-
-    # ── Connection health ────────────────────────────────────────────
-
-    def validate_connection(self) -> tuple:
-        try:
-            self.exchange.load_markets()
-        except Exception as e:
-            return False, f"load_markets() failed: {type(e).__name__}: {e}"
-
-        try:
-            self.exchange.fetch_balance()
-        except Exception as e:
-            return False, f"fetch_balance() failed (check API credentials): {type(e).__name__}: {e}"
-
-        return True, "connected"
+    # claude code changed: 2026-10-22 — cancel/get order, order book (levels trimmed to [price, amount]), symbol/
+    # quantity/price normalisation, validate_order, get_execution_costs and validate_connection are inherited from
+    # CcxtSpotAdapter (moved verbatim; normalize_symbol now also refuses markets ccxt marks inactive — audit fix).
 
 
 # ============================================================

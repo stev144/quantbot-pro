@@ -72,7 +72,7 @@ class BacktesterVenueSelectionTest(SimpleTestCase):
         kraken_results = Backtester(df=df, venue_id="kraken").run()
 
         self.assertEqual(kraken_results["venue_id"], "kraken")
-        self.assertEqual(kraken_results["fee_rate"], 0.0026)
+        self.assertEqual(kraken_results["fee_rate"], 0.0080)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
         self.assertEqual(binance_results["fee_rate"], 0.001)
 
         # Same trade sequence (identical price data, identical strategy
@@ -85,11 +85,11 @@ class BacktesterVenueSelectionTest(SimpleTestCase):
         df = _load_btc_df()
         results = backtest(df, venue_id="kraken")
         self.assertEqual(results["venue_id"], "kraken")
-        self.assertEqual(results["fee_rate"], 0.0026)
+        self.assertEqual(results["fee_rate"], 0.0080)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
 
     def test_empty_results_also_carries_venue_fields(self):
         # Fewer than 100 candles -> _empty_results() path.
         tiny_df = _load_btc_df().tail(5)
         results = Backtester(df=tiny_df, venue_id="kraken").run()
         self.assertEqual(results["venue_id"], "kraken")
-        self.assertEqual(results["fee_rate"], 0.0026)
+        self.assertEqual(results["fee_rate"], 0.0080)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %

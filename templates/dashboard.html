@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
 {% load static %}
 {% load research_extras %}
 
@@ -87,7 +88,7 @@ state, not an error the page failed to handle.
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title">1 · Market State</span>
-            <span class="term-section-meta">{{ symbol }} · 1H</span>
+            <span class="term-section-meta coin-id">{% coin_logo symbol 18 %}{{ symbol }} · 1H</span>{# claude code changed: 2026-10-22 — coin logo #}
         </div>
         <div class="term-section-body">
             <div class="term-grid term-grid-6">
@@ -443,7 +444,7 @@ state, not an error the page failed to handle.
     <!-- ================= BACKTEST DETAIL ================= -->
     <div class="term-section">
         <div class="term-section-head">
-            <span class="term-section-title">Backtest Detail — {{ symbol }}</span>
+            <span class="term-section-title coin-id">{% coin_logo symbol 22 %}Backtest Detail — {{ symbol }}</span>{# claude code changed: 2026-10-22 — coin logo #}
             <span class="term-section-meta">grade {{ grade }} · score {{ total_score|floatformat:1 }}/100</span>
         </div>
         <div class="term-section-body">

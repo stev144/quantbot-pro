@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
+{% load static %}
+{% block title %}Funding Carry Monitor — Steph Quant Technologies{% endblock %}
+{% block content %}
+<!-- # claude code changed: 2026-10-22 — new: read-only Funding Carry Monitor (Futures Funding Intelligence Phase 1) -->
+{% include "partials/_topbar.html" with active="funding_carry" %}
+
+<div class="term-body">
+<div class="term-section">
+    <div class="term-section-head">
+        <span class="term-section-title">Funding Carry Monitor — long spot + short perpetual (hypothetical)</span>
+        <span class="term-section-meta">{% if report %}run {{ report.run_id|slice:":12" }} · {{ report.generated_at|slice:":16" }} UTC{% endif %}</span>
+    </div>
+    <div class="term-section-body">
+        <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin-bottom:12px">
+            <strong>Historical research estimate — not a live yield or trading recommendation.</strong>
+            Classification: DESCRIPTIVE (pseudo-holdout history, not claim-eligible). No order, exchange credential or live data is involved.
+        </div>
+        {% if not report %}
+        <div class="unavailable">No funding-carry run has been recorded yet. A research run is started explicitly with <code>{{ command }}</code>; this page never computes on its own.</div>
+        {% else %}
+        <div class="chart-caption" style="margin-bottom:12px">
+            Each row holds a hypothetical position of <b>${{ report.config.spot_notional_usd|floatformat:0 }}</b> of spot bought and the same number of coins shorted on the Binance USDⓈ-M perpetual,
+            from the first to the last recorded funding settlement that has a spot price. The short <b>receives</b> funding when the rate is positive (longs pay shorts) and <b>pays</b> it when negative.
+            Data stop before the sealed crypto holdout ({{ report.zones.holdout_start_F|slice:":10" }}); nothing after it is read.
+            Fees: spot {{ report.config.spot_fee_rate }} and perp {{ report.config.perp_fee_rate }} per side (base-tier taker assumptions) plus {{ report.config.slippage_rate }} slippage per side per leg.
+        </div>
+        {% if summary %}
+        <div class="term-grid term-grid-4" style="margin-bottom:12px">
+            <div class="metric-tile"><div class="metric-label">Assets analysed</div><div class="metric-value">{{ summary.n_ok }}</div><div class="metric-sub">{{ unavailable|length }} unavailable (listed below)</div></div>
+            <div class="metric-tile"><div class="metric-label">Median net, funding-only</div><div class="metric-value">{{ summary.median_net_pct|floatformat:1 }}%</div><div class="metric-sub">of spot notional over each asset's whole period — not per year</div></div>
+            <div class="metric-tile"><div class="metric-label">Assets with negative net</div><div class="metric-value {% if summary.n_negative_net %}neg{% endif %}">{{ summary.n_negative_net }}</div><div class="metric-sub">the short paid more funding than it received, after costs</div></div>
+            <div class="metric-tile"><div class="metric-label">2× short liquidated (no top-ups)</div><div class="metric-value warn">{% if summary.pct_breach_2x is not None %}{{ summary.pct_breach_2x|floatformat:0 }}%{% else %}—{% endif %}</div><div class="metric-sub">of assets: the spot 1-h high reached the theoretical liquidation price</div></div>
+        </div>
+        {% endif %}
+
+        <div class="term-table-wrap">
+            <table class="term-table">
+                <thead><tr>
+                    <th>Asset</th><th>Period (days)</th><th class="num">Settlements</th><th class="num">Gross funding</th>
+                    <th class="num">Costs</th><th class="num">Net (funding-only)</th><th class="num">Net (with basis)</th>
+                    <th>Worst month</th><th class="num">Neg. months</th><th class="num">Capital at 2×</th><th class="num">Net / capital</th><th>Data to</th><th>Details</th>
+                </tr></thead>
+                <tbody>
+                {% for a in assets %}{% if a.status == "OK" %}
+                <tr>
+                    <td class="label-cell"><span class="coin-id">{% coin_logo a.symbol 20 %}{{ a.symbol }}</span></td><!-- # claude code changed: 2026-10-22 — coin logo -->
+                    <td class="mono">{{ a.period.entry_settlement|slice:":10" }} → {{ a.period.exit_settlement|slice:":10" }} ({{ a.period.days|floatformat:0 }})</td>
+                    <td class="num">{{ a.n_settlements }}{% if a.months_incomplete %} <span class="badge warn" title="months without complete funding/price data are excluded, never zero-filled">{{ a.months_incomplete|length }} mo. excl.</span>{% endif %}</td>
+                    <td class="num {% if a.scope_A_funding_only.gross_funding_usd < 0 %}neg{% endif %}">${{ a.scope_A_funding_only.gross_funding_usd|floatformat:2 }}</td>
+                    <td class="num">−${{ a.scope_A_funding_only.costs_usd.total|floatformat:2 }}</td>
+                    <td class="num {% if a.scope_A_funding_only.net_usd < 0 %}neg{% else %}pos{% endif %}">${{ a.scope_A_funding_only.net_usd|floatformat:2 }} <span class="text-dim">({{ a.scope_A_funding_only.net_pct_of_spot_notional|floatformat:1 }}%)</span></td>
+                    <td class="num">{% if a.scope_B_full_position.status == "OK" %}${{ a.scope_B_full_position.net_usd|floatformat:2 }}<div class="text-dim" style="font-size:10px">from {{ a.scope_B_full_position.entry_settlement|slice:":10" }}</div>{% else %}<span class="badge dim" title="{{ a.scope_B_full_position.reason }}">n/a</span>{% endif %}</td>
+                    <td class="mono">{% if a.scope_A_funding_only.worst_month %}{{ a.scope_A_funding_only.worst_month.month }} <span class="{% if a.scope_A_funding_only.worst_month.funding_usd < 0 %}neg{% endif %}">${{ a.scope_A_funding_only.worst_month.funding_usd|floatformat:2 }}</span>{% else %}—{% endif %}</td>
+                    <td class="num">{{ a.scope_A_funding_only.negative_month_pct|floatformat:0 }}%</td>
+                    {% with r=a.capital_and_liquidation.rows.1 %}
+                    <td class="num">${{ r.total_capital_usd|floatformat:0 }}{% if r.breached_without_topups %} <span class="badge warn" title="spot 1-h high reached the theoretical 2× short liquidation price without margin top-ups">liq.</span>{% endif %}</td>
+                    <td class="num">{{ r.net_on_capital_pct|floatformat:1 }}%{% if r.annualised_pct is not None %}<div class="text-dim" style="font-size:10px">≈{{ r.annualised_pct|floatformat:1 }}%/yr extrapolated</div>{% endif %}</td>
+                    {% endwith %}
+                    <td class="mono text-dim">{{ a.data.funding_last_settlement|slice:":10" }}</td>
+                    <td>
+                        <details>
+                            <summary class="text-dim" style="cursor:pointer">open</summary>
+                            <div style="min-width:420px;padding:8px 0;font-size:12px">
+                                <div><b>Quantity</b> {{ a.quantity_base_units|floatformat:6 }} {{ a.symbol|slice:":-5" }} · spot entry ${{ a.spot_entry }} → exit ${{ a.spot_exit }} · perp price source: {{ a.perp_price_proxy.source }}{% if a.perp_price_proxy.mark_unit_mismatch %} (recorded mark is in another contract unit — not used){% endif %}</div>
+                                <div><b>Costs</b> open ${{ a.scope_A_funding_only.costs_usd.open|floatformat:2 }} · close ${{ a.scope_A_funding_only.costs_usd.close|floatformat:2 }} (fees + slippage, both legs). Basis P&amp;L is <b>excluded</b> from the funding-only net.</div>
+                                {% if a.scope_B_full_position.status == "OK" %}<div><b>With basis</b> ({{ a.scope_B_full_position.entry_settlement|slice:":10" }} → {{ a.scope_B_full_position.exit_settlement|slice:":10" }}, mark-price proxy): funding ${{ a.scope_B_full_position.funding_usd|floatformat:2 }} + basis ${{ a.scope_B_full_position.basis_pnl_usd|floatformat:2 }} − costs ${{ a.scope_B_full_position.costs_usd.total|floatformat:2 }} = ${{ a.scope_B_full_position.net_usd|floatformat:2 }}</div>{% else %}<div><b>With basis</b>: unavailable — {{ a.scope_B_full_position.reason }}</div>{% endif %}
+                                <div style="margin-top:6px"><b>Capital &amp; liquidation</b> (capital, not cost; theoretical isolated short, flat {{ report.config.maintenance_margin_rate }} maintenance, no top-ups):</div>
+                                <table class="term-table" style="margin:4px 0"><thead><tr><th>Short lev.</th><th class="num">Margin</th><th class="num">Capital</th><th class="num">Liq. distance</th><th>Breached</th><th class="num">Net / capital</th></tr></thead><tbody>
+                                {% for r in a.capital_and_liquidation.rows %}<tr><td>{{ r.short_leverage|floatformat:0 }}×</td><td class="num">${{ r.initial_margin_usd|floatformat:0 }}</td><td class="num">${{ r.total_capital_usd|floatformat:0 }}</td><td class="num">+{{ r.liquidation_distance_pct|floatformat:1 }}%</td><td>{% if r.breached_without_topups %}<span class="badge warn">yes</span>{% else %}no{% endif %}</td><td class="num">{{ r.net_on_capital_pct|floatformat:1 }}%</td></tr>{% endfor %}
+                                </tbody></table>
+                                <div>Largest rise after entry: +{{ a.capital_and_liquidation.max_rise_after_entry_pct|floatformat:1 }}% · worst rise inside one month: +{{ a.capital_and_liquidation.worst_monthly_rise_pct|floatformat:1 }}% → collateral needed with monthly top-ups ≈ {{ a.capital_and_liquidation.collateral_needed_monthly_topup_pct_of_notional|floatformat:0 }}% of notional.</div>
+                                <div style="margin-top:6px"><b>Cost sensitivity</b> (net, funding-only): {% for g in a.cost_sensitivity %}fees×{{ g.fee_multiplier }}/slip {{ g.slippage_rate }}: ${{ g.net_usd|floatformat:0 }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+                                <div style="margin-top:6px"><b>Months</b>: {% for m in a.months %}<span class="mono {% if not m.complete %}text-dim{% elif m.funding_usd < 0 %}neg{% endif %}" title="{{ m.reason }}">{{ m.month }} {% if m.complete %}${{ m.funding_usd|floatformat:0 }}{% else %}excl.{% endif %}</span>{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+                                <div class="text-dim" style="margin-top:6px">Sources: {{ a.data.spot_file }}, {{ a.data.funding_file }} · excluded rows: {{ a.data.excluded }}</div>
+                            </div>
+                        </details>
+                    </td>
+                </tr>
+                {% endif %}{% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if unavailable %}
+        <div class="chart-caption" style="margin-top:10px"><b>Unavailable:</b> {% for a in unavailable %}{{ a.symbol }} — {{ a.reason }}{% if not forloop.last %}; {% endif %}{% endfor %}</div>
+        {% endif %}
+
+        <div class="term-panel" style="margin-top:14px">
+            <div class="metric-label" style="margin-bottom:6px">How to read this — and its limits</div>
+            <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.6">
+                {% for l in report.limitations %}<li>{{ l }}</li>{% endfor %}
+                <li>"Net / capital" divides by the spot leg plus the short's initial margin. Margin is capital tied up, never a cost. Per-year figures appear only for ≥ 365 observed days and are extrapolations of the past, not a rate anyone will earn.</li>
+            </ul>
+            <div class="chart-caption" style="margin-top:8px">Provenance: run {{ report.run_id }} · code {{ report.code.commit|slice:":10" }}{% if report.code.dirty %} (uncommitted changes){% endif %} · module {{ report.code.module_sha256|slice:":12" }} · inputs {{ report.inputs_version|slice:":12" }} · zones {{ report.zones.zones_hash|slice:":12" }} · {{ report.monitor_version }} / {{ report.funding_model_version }}</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+</div>
+{% endblock %}

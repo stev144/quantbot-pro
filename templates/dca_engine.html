@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos / FX flags #}
 {% load static %}
 {% load feature_intel_extras %}  {# claude code changed: restored — get_item filter IS used on lines 138 and 215; earlier removal was incorrect #}
 {# claude code changed: new — QC-1 Forex DCA Engine dashboard page #}
@@ -120,7 +121,7 @@
     <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="badge">FX-QC-PROTOCOL-1</span>
         <span class="badge">LONG only</span>
-        <span class="badge">GBP/JPY</span>
+        {% fx_pair "GBP/JPY" 16 %}{# claude code changed: 2026-10-22 — FX flags + names (was a plain GBP/JPY badge) #}
         <span class="badge dim">$3,000 notional / entry · 1:30</span>{# claude code changed: 2026-10-21 — was "$6 / cycle" (the unscaled simulation size) #}
     </span>
 </div>
@@ -149,7 +150,7 @@
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
         <div>
             <div class="metric-label" style="margin-bottom:6px">
-                <span class="dca-dot" style="background:var(--accent)"></span>GBP/JPY LONG
+                <span class="dca-dot" style="background:var(--accent)"></span>{% fx_flags "GBP/JPY" 18 %} GBP/JPY LONG{# claude code changed: 2026-10-22 — FX flags #}
                 <span class="term-section-meta" style="margin-left:8px"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades · walk-forward out-of-sample</span>
             </div>
             <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>

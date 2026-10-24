@@ -155,7 +155,7 @@ class CostModelIntegrationTest(SimpleTestCase):
         # claude code changed: Step 4 requirement — "different asset
         # classes/configurations must produce different cost assumptions
         # when configured." Only two real venues exist today (both CRYPTO);
-        # kraken's real fee tier (0.26%) differs from binance's (0.1%).
+        # kraken's real fee tier (0.80% Tier 1 taker, verified 2026-10-22) differs from binance's (0.1%).
         binance_engine = EntryExitEngine(venue_id="binance", output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         kraken_engine = EntryExitEngine(venue_id="kraken", output_dir=self.tmp_dir, validated_win_rate=PLACEHOLDER_WIN_RATE_SIZING_IRRELEVANT)   # claude code changed: validated_win_rate now required
         self.assertNotEqual(binance_engine.fee_rate, kraken_engine.fee_rate)
@@ -181,7 +181,7 @@ class CostModelIntegrationTest(SimpleTestCase):
         _, summary, _ = engine.run(kalman_csv=str(csv_path))
         self.assertEqual(summary.iloc[0]["asset_class"], ASSET_CLASS_CRYPTO)
         self.assertEqual(summary.iloc[0]["venue_id"], "kraken")
-        self.assertEqual(summary.iloc[0]["fee_rate"], 0.0026)  # claude code changed: kraken's real published taker fee
+        self.assertEqual(summary.iloc[0]["fee_rate"], 0.0080)  # claude code changed: kraken's real published taker fee (2026-10-22: Tier 1 0.80 %, was stale 0.26 %)
 
 
 # claude code changed: Stage 2D Rev B step 8 — KalmanPositionSizerTest replaced:

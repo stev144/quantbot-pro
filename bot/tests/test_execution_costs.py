@@ -19,7 +19,7 @@ class GetVenueExecutionCostsTest(SimpleTestCase):
 
     def test_kraken_returns_its_own_fee_rate(self):
         costs = get_venue_execution_costs("kraken")
-        self.assertEqual(costs["fee_rate"], 0.0026)
+        self.assertEqual(costs["fee_rate"], 0.0080)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
         self.assertEqual(costs["slippage_rate"], SLIPPAGE_RATE)
 
     def test_unknown_venue_falls_back_to_default(self):

@@ -123,7 +123,7 @@ def execution_costs():
     p.eq("G2", "gross P&L LONG 100 → 110 × 2 = +20", 20.0, sim.calculate_pnl("LONG", 100.0, 110.0, 2.0))
     p.eq("G2", "gross P&L SHORT 100 → 110 × 2 = −20", -20.0, sim.calculate_pnl("SHORT", 100.0, 110.0, 2.0))
     kr, bn = ec.get_venue_execution_costs("kraken"), ec.get_venue_execution_costs("binance")
-    p.eq("G4", "Kraken fee = 0.26 % (lowest published tier)", 0.0026, kr["fee_rate"])
+    p.eq("G4", "Kraken fee = 0.80 % taker (Tier 1, official fee page 2026-10-22)", 0.0080, kr["fee_rate"])   # claude code changed: 2026-10-22 — was the stale 0.26 %
     p.eq("G4", "single-source FEE_RATE = the Binance row", ec.FEE_RATE, bn["fee_rate"])
     # Existing fallbacks, REPORTED (not changed — execution behaviour is out of scope for this upgrade):
     odd = sim.apply_slippage(100.0, "SIDEWAYS", True, r)

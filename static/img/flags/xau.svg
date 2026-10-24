@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!-- claude code changed: 2026-10-22 — gold (XAU) badge, drawn for this project -->
+  <defs><radialGradient id="xau-g" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#fff3b0"/><stop offset=".45" stop-color="#e6b422"/><stop offset="1" stop-color="#9c6b00"/></radialGradient></defs>
+  <rect width="512" height="512" fill="url(#xau-g)"/>
+  <text x="256" y="318" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="200" fill="#5a3d00">Au</text>
+</svg>

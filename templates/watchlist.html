@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
 {% load static %}
 {# claude code changed: new — Watchlist page #}
 
@@ -33,10 +34,11 @@
                 <div class="term-panel" style="padding:var(--sp-3) var(--sp-4);display:flex;flex-direction:column;gap:var(--sp-2)"
                      data-live-symbol="{{ q.symbol }}" data-live-class="{{ q.asset_class }}" data-decimals="{{ q.price_decimals }}" data-asof="{{ q.as_of }}">{# claude code changed: 2026-10-21 — live prices #}
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                        <div>
+                        <div class="coin-id">{% if q.asset_class == 'crypto' %}{% coin_logo q.symbol 28 %}{% endif %}<div>{# claude code changed: 2026-10-22 — coin logo #}
                             <a href="{% url 'market_workspace' q.asset_class q.symbol %}" style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:var(--text-primary)">{{ q.display_symbol }}</a>{# claude code changed: 2026-10-21 — opens the Market Intelligence workspace #}
                             {% if q.display_name %}<div style="font-size:11px;color:var(--text-dim);margin-top:2px">{{ q.display_name }}</div>{% endif %}
-                        </div>
+                            {% if q.asset_class == 'forex' %}<div style="margin-top:4px">{% fx_pair q.symbol 18 %}</div>{% endif %}{# claude code changed: 2026-10-22 — FX flags + names #}
+                        </div></div>
                         <button class="mkt-watchlist-btn active"
                                 data-symbol="{{ q.symbol }}"
                                 data-class="{{ q.asset_class }}"

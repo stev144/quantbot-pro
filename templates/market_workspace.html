@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
 {% load static %}
 {# claude code changed: 2026-10-21 — new: Market Intelligence workspace (bot/views/market_workspace.py, bot/market_intel/) #}
 {% block title %}{{ display }} — Market Intelligence · Steph Quant Technologies{% endblock %}
@@ -97,7 +98,9 @@
       <div>
         <div class="mi-asset">
           <a href="{% url 'markets' %}" class="mi-sub" aria-label="Back to Markets">← Markets</a>
+          {% if asset_class == 'crypto' %}{% coin_logo symbol 36 %}{% endif %}{# claude code changed: 2026-10-22 — coin logo #}
           <h1>{{ display }}</h1>
+          {% if asset_class == 'forex' %}{% fx_pair symbol 22 %}{% endif %}{# claude code changed: 2026-10-22 — FX flags + names #}
           <span class="mi-tag edu">{{ asset_class }}</span>
           <span class="mi-price" id="mi-price" aria-live="polite">—</span>
           <span class="mi-tag" id="mi-price-state">loading</span>

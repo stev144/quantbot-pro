@@ -3293,3 +3293,34 @@ the semi-real null reads only development rows (< FX_RESEARCH_DATA_CUTOFF). Evid
 Owner decision (same day): route B — PT-OG-DCA-1 is descriptive only (no p-values; ceiling D-7 OBSERVATION); T5 ($30)
 dropped, 5 arms (T1–T4, H6). Forward window: sealed from signing, single read at 12 months, not before 2027-01-17.
 Still open: broker commission (G4 PARTIAL), code approval, owner signature. Preregistration revision 2.
+
+## 2026-10-22 — Futures Funding Intelligence (funding-carry monitor) + Leverage Reality (Academy) — DESCRIPTIVE
+Owner brief "Staged Implementation: Futures Funding Intelligence and Leverage Reality". Research/education only: no
+order, no exchange credential, no DRY_RUN change, QC-1/QC-2 untouched, crypto holdout F = 2026-10-04 respected
+(every reader splits/asserts against ZONES; all recorded inputs end before F).
+- Phase 1 `bot/research/funding_carry_monitor.py` (reuses quant_core.funding sign/coverage, ZONES, execution_costs,
+  provenance): hypothetical long spot + short USDⓈ-M perp, $10k, entry→exit over recorded settlements. Run
+  8c27b4bbf559 (module 00b988961e57): 118/119 assets; median net funding-only +8.9 % of notional over ~5 years (not
+  per year); 33 assets negative; median 23 % negative months; with basis (mark proxy, from 2023-10-31) median +24.1 %
+  over its shorter window; 79 % of 2× shorts reach the theoretical liquidation price without margin top-ups. TRB:
+  −$22,353 (2023 squeeze). Margin reported as capital, never cost; incomplete months excluded, never zero-filled;
+  1000-unit perp marks (SHIB) refused by a unit guard. Persisted to research_data/funding_carry/ + sidecars.
+- Phase 2 `bot/research/leverage_reality.py` + /academy/leverage-reality/: deterministic linear-contract
+  calculator (flat maintenance, theoretical) and descriptive history (run 753c3d9b708a, module b6568865774c). Audit
+  finding: the advertised $1,000 / $100-200-300-400 ladder cannot fund its 4th step (available balance after fees
+  and unrealised loss) — the scratchpad simulation had assumed it could. Ladder wipeout share of resolved 30-day
+  cycles: 20×/1 % 3.2–6.0 % (one per 17–31), 50×/1 % 8.5–13.6 % (one per 7–12) between intrabar bounds; 30-day
+  isolated holds liquidated 3× 21 %, 10× 73 %, 20× 88 %, 50× 96 %. Time-block bootstrap intervals (descriptive).
+Evidence class: DESCRIPTIVE / EDUCATIONAL — pseudo-holdout history, not claim-eligible, not forecasts. Tests:
+bot.tests.test_funding_carry_monitor (21), bot.tests.test_leverage_reality (20). Review: FUTURES_FUNDING_LEVERAGE_REALITY_2026-10-22.md.
+
+## 2026-10-22 — Venue audit: Kraken fee corrected, Coinbase added (execution-cost configuration; no orders)
+- Kraken base taker fee 0.26 % → **0.80 %** (kraken.com/features/fee-schedule, Spot Crypto Tier 1 $0+: maker 0.40 %,
+  taker 0.80 %, read 2026-10-22). The old value was a stale schedule; it understated Kraken costs ≈3× in the Venue
+  Comparison, Kraken dry-run fills (bot_runner's optional Kraken session) and `venue_id="kraken"` backtests. Any
+  earlier Kraken cost figure is SUPERSEDED. Tests updated to the verified value, each line marked.
+- Venue Comparison: the market actually quoted is shown; a USD/USDC fallback (e.g. AAVE/USD vs AAVE/USDT) is flagged
+  "quote differs"; inactive (delisted) markets are reported as such; fee provenance shown per venue.
+- Coinbase Advanced Trade added as the third ExchangeAdapter (shared CcxtSpotAdapter with Kraken; BinanceAdapter
+  unchanged). Fee 0.60 % taker UNVERIFIED (official page HTTP 403). Live stop-loss refused. Not in bot_runner.
+Tests: test_coinbase_adapter (new), venue/Kraken/cost suites 99 + 154 OK; dry_run_test 56/0.

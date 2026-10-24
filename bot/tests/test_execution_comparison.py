@@ -49,7 +49,7 @@ class GetVenueQuoteRealDataTest(SimpleTestCase):
 
         self.assertTrue(quote.available)
         self.assertEqual(quote.venue_id, "kraken")
-        self.assertEqual(quote.fee_rate, 0.0026)
+        self.assertEqual(quote.fee_rate, 0.0080)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
 
     def test_kraken_matic_usdt_is_unavailable(self):
         # claude code changed: Step 5's confirmed real, fully-unlisted case

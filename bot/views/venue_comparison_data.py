@@ -17,12 +17,49 @@
 # real time (~30s) for the same reason.
 # ============================================================
 
+import time
+
 import ccxt
 
+from bot.config.execution_costs import VENUE_FEE_PROVENANCE   # claude code changed: 2026-10-22
 from bot.engines.binance_adapter import BinanceAdapter
+from bot.engines.coinbase_adapter import CoinbaseAdapter   # claude code changed: 2026-10-22 — third venue
 from bot.engines.execution_comparison import compare_venues
 from bot.engines.kraken_adapter import KrakenAdapter
 from bot.engines.venue_readiness import assess_venue_readiness
+
+# claude code changed: 2026-10-22 — reuse each PUBLIC (credential-less) ccxt exchange for up to an hour so its loaded
+# market list is not re-downloaded on every page view (Kraken's alone took several seconds). Order books, tickers and
+# readiness checks are still fetched live on every request.
+_EXCHANGE_TTL_S = 3600
+_exchanges: dict = {}
+
+
+def _exchange(name: str):
+    ex, born = _exchanges.get(name, (None, 0.0))
+    if ex is None or time.time() - born > _EXCHANGE_TTL_S:
+        ex = getattr(ccxt, name)()
+        _exchanges[name] = (ex, time.time())
+    return ex
+
+
+def _quote_ccy(symbol: str) -> str:
+    return symbol.partition("/")[2]
+
+
+def _plain(x, max_decimals: int = 8, min_decimals: int = 0):
+    """claude code changed: 2026-10-22 — display string without exponent notation ("6.93e-06" → "0.00000693"),
+    trailing zeros trimmed down to min_decimals; None stays None. Used for the animated card values."""
+    if x is None:
+        return None
+    s = f"{float(x):.{max_decimals}f}"
+    if "." in s:
+        head, tail = s.split(".")
+        tail = tail.rstrip("0")
+        if len(tail) < min_decimals:
+            tail = tail.ljust(min_decimals, "0")
+        s = head + ("." + tail if tail else "")
+    return s
 
 DEFAULT_SYMBOL = "XRP/USDT"
 DEFAULT_QUANTITY = 100.0
@@ -31,16 +68,17 @@ DEFAULT_QUANTITY = 100.0
 def get_venue_comparison_table(symbol: str = DEFAULT_SYMBOL, quantity: float = DEFAULT_QUANTITY) -> dict:
     """
     Real-time comparison of executing `quantity` units of `symbol` (buy
-    side) on Binance vs. Kraken right now — real order book, real fees,
+    side) on Binance vs. Kraken vs. Coinbase right now — real order book, real fees,
     real readiness. Returns {"available": False, "reason": ...} only if
     both venues fail to produce any comparable data at all (e.g. a bad
     symbol) — a single venue being unavailable is reported per-row, not
     as a page-level failure, since "Kraken doesn't list this symbol" is
     itself real, useful information (Step 5's finding), not an error.
     """
-    adapters = [
-        BinanceAdapter(ccxt.binance(), dry_run=True),
-        KrakenAdapter(ccxt.kraken(), dry_run=True),
+    adapters = [   # claude code changed: 2026-10-22 — Coinbase added; dry_run=True, public exchanges, no credentials
+        BinanceAdapter(_exchange("binance"), dry_run=True),
+        KrakenAdapter(_exchange("kraken"), dry_run=True),
+        CoinbaseAdapter(_exchange("coinbase"), dry_run=True),
     ]
 
     try:
@@ -62,8 +100,13 @@ def get_venue_comparison_table(symbol: str = DEFAULT_SYMBOL, quantity: float = D
 
     rows = []
     for q in quotes:
+        fee_info = VENUE_FEE_PROVENANCE.get(q.venue_id, {"verified": False, "basis": "no fee provenance recorded"})
         rows.append({
             "venue_id": q.venue_id,
+            "market": q.symbol,                                                     # claude code changed: 2026-10-22 — the market actually quoted
+            "quote_mismatch": _quote_ccy(q.symbol) != _quote_ccy(symbol),           # claude code changed: e.g. AAVE/USD vs AAVE/USDT
+            "fee_verified": bool(fee_info.get("verified")),                         # claude code changed: 2026-10-22
+            "fee_basis": fee_info.get("basis", ""),                                 # claude code changed: 2026-10-22
             "available": q.available,
             "unavailable_reason": q.unavailable_reason,
             "readiness": readiness_by_venue.get(q.venue_id, "UNKNOWN"),
@@ -76,7 +119,44 @@ def get_venue_comparison_table(symbol: str = DEFAULT_SYMBOL, quantity: float = D
             "estimated_total_cost_pct": round(q.estimated_total_cost_pct * 100, 4) if q.estimated_total_cost_pct is not None else None,
         })
 
-    cheapest = next((r["venue_id"] for r in rows if r["available"]), None)
+    # claude code changed: 2026-10-22 — rank by the ALL-IN amount actually paid, not by "fee % + slippage vs the
+    # venue's OWN mid". The old percentage ignored price-level differences BETWEEN venues (a venue whose whole book sits
+    # higher could rank cheapest). all-in = quantity × walked fill price × (1 + taker fee). Only rows quoted in the
+    # requested currency are ranked — a USD-quoted row cannot be compared without a USDT/USD rate, so it is shown but
+    # left unranked (never silently converted).
+    for r in rows:
+        if r["available"] and r["estimated_fill_price"] is not None and r["fee_rate_pct"] is not None:
+            unit = r["estimated_fill_price"] * (1 + r["fee_rate_pct"] / 100.0)
+            r["all_in_unit_price"] = unit
+            r["all_in_total"] = unit * quantity
+            r["ranked"] = not r["quote_mismatch"]
+        else:
+            r["all_in_unit_price"] = r["all_in_total"] = None
+            r["ranked"] = False
+    ranked = sorted((r for r in rows if r["ranked"]), key=lambda r: r["all_in_total"])
+    best = ranked[0]["all_in_total"] if ranked else None
+    for pos, r in enumerate(ranked, start=1):
+        r["rank"] = pos
+        r["extra_vs_cheapest"] = r["all_in_total"] - best
+        r["extra_vs_cheapest_pct"] = (r["all_in_total"] / best - 1) * 100 if best else None
+    for r in rows:
+        r.setdefault("rank", None)
+        r.setdefault("extra_vs_cheapest", None)
+        r.setdefault("extra_vs_cheapest_pct", None)
+        r["quote_currency"] = _quote_ccy(r["market"])
+    rows = ranked + [r for r in rows if r["available"] and not r["ranked"]] + [r for r in rows if not r["available"]]
+    best_price = min((r["estimated_fill_price"] for r in ranked), default=None)
+    for r in ranked:   # explain the result: price advantage vs fee
+        r["best_book_price"] = best_price is not None and r["estimated_fill_price"] == best_price
+    cheapest = ranked[0]["venue_id"] if ranked else None
+    for r in rows:   # claude code changed: 2026-10-22 — display strings for the animated cards
+        r["disp"] = {
+            "best_bid": _plain(r["best_bid"]), "best_ask": _plain(r["best_ask"]),
+            "fill": _plain(r["estimated_fill_price"]), "spread": _plain(r["spread_pct"], 4),
+            "fee": _plain(r["fee_rate_pct"], 3), "slippage": _plain(r["estimated_slippage_pct"], 4),
+            "all_in": _plain(r["all_in_total"], 4, 2), "extra": _plain(r["extra_vs_cheapest"], 4, 2),
+            "extra_pct": _plain(r["extra_vs_cheapest_pct"], 3),
+        }
 
     return {
         "available": True,
@@ -84,4 +164,6 @@ def get_venue_comparison_table(symbol: str = DEFAULT_SYMBOL, quantity: float = D
         "quantity": quantity,
         "rows": rows,
         "cheapest_venue": cheapest,
+        "any_quote_mismatch": any(r["quote_mismatch"] for r in rows if r["available"]),   # claude code changed: 2026-10-22
+        "requested_quote": _quote_ccy(symbol),   # claude code changed: 2026-10-22 — the currency the ranking is in
     }

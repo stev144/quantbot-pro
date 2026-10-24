@@ -144,7 +144,7 @@
 
         {# claude code changed: 2026-10-07 — no longer rendered pre-opened on its own pages (the menu stayed hanging after a selection until an outside click); the summary's active highlight still marks the section #}
         <details class="term-nav-group">
-            <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive,decision_journal" %}active{% endif %}">Research</summary>{# claude code changed: 2026-10-07 — decision_journal added #}
+            <summary class="term-nav-link {% if active in "research_lab,features,strategy_research,strategy_pipeline,pairs_performance,backtesting,robustness_analysis,rejected_research,research_archive,decision_journal,funding_carry" %}active{% endif %}">Research</summary>{# claude code changed: 2026-10-07 — decision_journal added; 2026-10-22 — funding_carry added #}
             <div class="term-nav-dropdown">
                 <a class="{% if active == 'research_lab' %}active{% endif %}" href="{% url 'research_lab' %}">Research Lab</a>
                 <a class="{% if active == 'features' %}active{% endif %}" href="{% url 'feature_leaderboard' %}">Feature Intelligence</a>
@@ -156,6 +156,7 @@
                 <a class="{% if active == 'rejected_research' %}active{% endif %}" href="{% url 'rejected_research' %}">Rejected Research</a>
                 <a class="{% if active == 'research_archive' %}active{% endif %}" href="{% url 'research_archive' %}">Research Archive</a>
                 <a class="{% if active == 'decision_journal' %}active{% endif %}" href="{% url 'decision_journal' %}">Decision Journal</a>{# claude code changed: 2026-10-07 — new (read-only journal pages) #}
+                <a class="{% if active == 'funding_carry' %}active{% endif %}" href="{% url 'funding_carry' %}">Funding Carry Monitor</a>{# claude code changed: 2026-10-22 — new (read-only, descriptive) #}
             </div>
         </details>
 

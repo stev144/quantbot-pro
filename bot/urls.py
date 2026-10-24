@@ -15,6 +15,7 @@ from bot.views.pairs_performance import pairs_performance   # claude code change
 from bot.views.backtesting_view import backtesting
 from bot.views.robustness_analysis import robustness_analysis
 from bot.views.research_archive import rejected_research, research_archive
+from bot.views.funding_carry import funding_carry   # claude code changed: 2026-10-22 — Funding Carry Monitor (read-only)
 from bot.views.decision_journal import decision_journal, decision_journal_run, decision_journal_decision, decision_journal_analytics, decision_journal_annotate   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
 from bot.views.portfolio_risk import portfolio_risk
 from bot.views.execution_monitor import execution_monitor
@@ -95,6 +96,7 @@ urlpatterns = [
     path('research/robustness/', robustness_analysis, name='robustness_analysis'),
     path('research/rejected/', rejected_research, name='rejected_research'),
     path('research/archive/', research_archive, name='research_archive'),
+    path('research/funding-carry/', funding_carry, name='funding_carry'),   # claude code changed: 2026-10-22 — Funding Carry Monitor (read-only, persisted report)
     path('research/journal/', decision_journal, name='decision_journal'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)
     path('research/journal/<str:run_id>/analytics/', decision_journal_analytics, name='decision_journal_analytics'),   # claude code changed: 2026-10-07 Phase 4 — analytics page
     path('research/journal/<str:run_id>/', decision_journal_run, name='decision_journal_run'),   # claude code changed: 2026-10-07 — Decision Journal UI (read-only)

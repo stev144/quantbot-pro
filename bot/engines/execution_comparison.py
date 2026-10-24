@@ -100,6 +100,11 @@ def get_venue_quote(adapter: ExchangeAdapter, symbol: str, side: str, quantity: 
             f"{symbol} is not tradeable on {adapter.venue_id} (no direct or fallback listing)",
         )
 
+    market = (adapter.exchange.markets or {}).get(normalized)   # claude code changed: 2026-10-22 — venue audit
+    if market is not None and market.get("active") is False:
+        return _unavailable(adapter.venue_id, normalized,
+                            f"{normalized} is listed but inactive on {adapter.venue_id} (delisted or halted)")
+
     try:
         order_book = adapter.get_order_book(normalized)
     except Exception as e:

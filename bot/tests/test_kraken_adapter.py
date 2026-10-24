@@ -134,7 +134,7 @@ class KrakenAdapterExecutionCostsTest(SimpleTestCase):
         # the old local KRAKEN_FEE_RATE constant (removed).
         adapter = KrakenAdapter(ccxt.kraken(), dry_run=True)
         costs = adapter.get_execution_costs()
-        self.assertEqual(costs["fee_rate"], 0.0026)
+        self.assertEqual(costs["fee_rate"], 0.0080)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
 
     def test_dry_run_fill_actually_uses_krakens_fee_rate_not_binances(self):
         # claude code changed: new — Step 8. THE regression test that would
@@ -142,7 +142,7 @@ class KrakenAdapterExecutionCostsTest(SimpleTestCase):
         # _simulate_fill() always used the module-level, Binance-modeled
         # FEE_RATE (0.001) regardless of which adapter constructed it, so
         # this dry-run fill was silently charged Binance's fee even though
-        # get_execution_costs() already advertised Kraken's 0.26% rate.
+        # get_execution_costs() already advertised Kraken's own rate (0.80 % taker since the 2026-10-22 audit).
         adapter = KrakenAdapter(ccxt.kraken(), dry_run=True)
         result = adapter.place_order("BTC/USDT", "buy", "market", 1.0)
 
@@ -150,7 +150,7 @@ class KrakenAdapterExecutionCostsTest(SimpleTestCase):
         # effective rate actually applied and confirm it's Kraken's, not
         # Binance's 0.001.
         effective_fee_rate = result["fee_usdt"] / (result["fill_price"] * 1.0)
-        self.assertAlmostEqual(effective_fee_rate, 0.0026, places=6)
+        self.assertAlmostEqual(effective_fee_rate, 0.0080, places=6)  # claude code changed: 2026-10-22 — Kraken Tier 1 taker 0.80 % (official fee page); was the stale 0.26 %
         self.assertNotAlmostEqual(effective_fee_rate, 0.001, places=4)
 
 

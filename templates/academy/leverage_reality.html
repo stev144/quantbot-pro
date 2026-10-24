@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Academy — Leverage Reality{% endblock %}
+{% block content %}
+<!-- # claude code changed: 2026-10-22 — new: Leverage Reality educational page (Phase 2) -->
+{% include "partials/_topbar.html" with active="academy" %}
+
+<div class="term-body">
+
+<div class="term-section">
+    <div class="term-section-head">
+        <span class="term-section-title">Leverage Reality — what leverage really changes</span>
+        <span class="term-section-meta">education · hypothetical positions only · not advice</span>
+    </div>
+    <div class="term-section-body">
+        <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin-bottom:12px">
+            <strong>Educational tool.</strong> Nothing here recommends leverage, sizes a position for you, or places an order.
+            Liquidation prices below come from a simplified theoretical model; real exchanges use tiered margins and mark prices, so real outcomes differ.
+        </div>
+        <div class="term-grid term-grid-4">
+            <div class="metric-tile"><div class="metric-label">Account equity</div><div class="metric-sub">Your money: wallet balance plus or minus the open positions' unrealised profit or loss.</div></div>
+            <div class="metric-tile"><div class="metric-label">Margin</div><div class="metric-sub">The part of your money locked as collateral for a position. Margin × leverage = the position's size.</div></div>
+            <div class="metric-tile"><div class="metric-label">Notional exposure</div><div class="metric-sub">The full value of the position. Profit and loss move with THIS, not with the margin.</div></div>
+            <div class="metric-tile"><div class="metric-label">Liquidation</div><div class="metric-sub">When equity behind a position falls to the maintenance requirement, the exchange closes it — usually at a worse price.</div></div>
+        </div>
+        <div class="chart-caption" style="margin-top:10px">Leverage does not make a trade more likely to be right. It makes the same price move matter more: at 20×, a 1 % move is 20 % of your margin, and a move of roughly 5 % against you can wipe it out. It changes exposure and the distance to liquidation — it does not create an edge.</div>
+    </div>
+</div>
+
+<div class="term-section">
+    <div class="term-section-head"><span class="term-section-title">Calculator — a hypothetical position or DCA ladder</span>
+        <span class="term-section-meta">linear USDT-margined perpetual · up to {{ max_steps }} steps · 1×–{{ max_leverage|floatformat:0 }}×</span></div>
+    <div class="term-section-body">
+        <form method="get" action="" class="lr-form" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;align-items:end">
+            <label class="text-dim mono">Account equity (USDT)<input class="term-input mono" type="number" step="any" min="0.01" name="equity" value="{{ form.equity }}" required></label>
+            <label class="text-dim mono">First entry price<input class="term-input mono" type="number" step="any" min="0" name="entry" value="{{ form.entry }}" required></label>
+            <label class="text-dim mono">Leverage (×)<input class="term-input mono" type="number" step="any" min="1" max="{{ max_leverage|floatformat:0 }}" name="leverage" value="{{ form.leverage }}" required></label>
+            <label class="text-dim mono">Margin per step (USDT, comma-separated)<input class="term-input mono" type="text" name="steps" value="{{ form.steps }}" required></label>
+            <label class="text-dim mono">Gap between steps (%)<input class="term-input mono" type="number" step="any" min="0" max="50" name="spacing" value="{{ form.spacing }}"></label>
+            <label class="text-dim mono">Direction<select class="term-input mono" name="direction">
+                <option value="LONG" {% if form.direction == "LONG" %}selected{% endif %}>Long</option>
+                <option value="SHORT" {% if form.direction == "SHORT" %}selected{% endif %}>Short</option></select></label>
+            <label class="text-dim mono">Margin mode<select class="term-input mono" name="mode">
+                <option value="CROSS" {% if form.mode == "CROSS" %}selected{% endif %}>Cross (whole account backs it)</option>
+                <option value="ISOLATED" {% if form.mode == "ISOLATED" %}selected{% endif %}>Isolated (only its margin)</option></select></label>
+            <label class="text-dim mono">Maintenance margin (%)<input class="term-input mono" type="number" step="any" min="0" max="50" name="maintenance" value="{{ form.maintenance }}"></label>
+            <label class="text-dim mono">Taker fee per side (%)<input class="term-input mono" type="number" step="any" min="0" max="1" name="fee" value="{{ form.fee }}"></label>
+            <button type="submit" class="term-btn">Calculate</button>
+        </form>
+        {% if error %}<div class="unavailable" role="alert" style="margin-top:10px">Cannot calculate: {{ error }}</div>{% endif %}
+
+        {% if scenario %}
+        {% if scenario.stopped %}<div class="chart-caption" role="status" style="margin-top:10px;border-left:3px solid var(--negative);padding-left:8px"><b>The ladder stops at step {{ scenario.stopped.step }}:</b> {{ scenario.stopped.reason }}</div>{% endif %}
+        <div class="term-table-wrap" style="margin-top:10px">
+            <table class="term-table">
+                <thead><tr><th>Step</th><th class="num">Price</th><th class="num">Margin added</th><th class="num">Exposure added</th><th class="num">Total exposure</th>
+                    <th class="num">Avg entry</th><th class="num">Margin used</th><th class="num">Fees paid</th><th class="num">Equity at this price</th>
+                    <th class="num">Liquidation price</th><th class="num">From first entry</th><th class="num">Exposure ÷ equity</th></tr></thead>
+                <tbody>
+                {% for s in scenario.steps %}
+                <tr>
+                    <td>{{ s.step }}</td><td class="num">{{ s.price|floatformat:4 }}</td><td class="num">${{ s.margin_added|floatformat:2 }}</td>
+                    <td class="num">${{ s.notional_added|floatformat:0 }}</td><td class="num">${{ s.cumulative_notional_at_entry|floatformat:0 }}</td>
+                    <td class="num">{{ s.weighted_avg_entry|floatformat:4 }}</td><td class="num">${{ s.cumulative_margin|floatformat:2 }}</td>
+                    <td class="num">${{ s.fees_paid|floatformat:2 }}</td><td class="num {% if s.equity_at_step_price < scenario.input.account_equity %}neg{% endif %}">${{ s.equity_at_step_price|floatformat:2 }}</td>
+                    <td class="num">{% if s.liquidation_price %}{{ s.liquidation_price|floatformat:4 }}{% else %}—{% endif %}</td>
+                    <td class="num {% if s.distance_from_first_entry_pct is not None %}neg{% endif %}">{% if s.distance_from_first_entry_pct is not None %}{{ s.distance_from_first_entry_pct|floatformat:2 }}%{% else %}none{% endif %}</td>
+                    <td class="num">{{ s.effective_leverage_on_equity|floatformat:1 }}×</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="metric-label" style="margin:12px 0 6px">If the price moves against the first entry (with the steps above filled)</div>
+        <div class="term-table-wrap"><table class="term-table">
+            <thead><tr><th>Move against you</th>{% for x in scenario.sensitivity %}<th class="num">{{ x.adverse_move_pct_from_first_entry }}%</th>{% endfor %}</tr></thead>
+            <tbody><tr><td>Equity (cross) / position margin (isolated)</td>{% for x in scenario.sensitivity %}<td class="num {% if x.liquidated %}neg{% endif %}">{% if x.liquidated %}LIQUIDATED{% else %}${{ x.equity_or_position_margin|floatformat:0 }}{% endif %}</td>{% endfor %}</tr></tbody>
+        </table></div>
+        <div class="chart-caption" style="margin-top:6px">Model: {{ scenario.model }}.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="term-section">
+    <div class="term-section-head"><span class="term-section-title">Why the liquidation price is not where you get out</span></div>
+    <div class="term-section-body"><div class="chart-caption">
+        The liquidation price is the level at which the exchange <em>starts</em> closing your position. In a fast market the order fills wherever buyers or sellers are, often well past that level, and a liquidation fee is charged. Exchanges watch a <b>mark price</b> (a smoothed fair price), not the last trade, and the maintenance rate rises in tiers as the position grows. Cross margin moves the liquidation point further away by putting your <b>whole account</b> behind the position — which means a liquidation then takes the whole account.
+    </div></div>
+</div>
+
+<div class="term-section">
+    <div class="term-section-head"><span class="term-section-title">Why a 95 % win rate can still lose everything</span></div>
+    <div class="term-section-body"><div class="chart-caption">
+        A DCA ladder that takes small profits wins most cycles: price usually comes back a little. The rare cycle where price keeps falling fills every step, piles up exposure, and ends in liquidation — and one liquidation can erase hundreds of small wins. Screenshots of winning days show the first part only. Judge a strategy by its worst case and how often it happens, never by its win rate.
+    </div></div>
+</div>
+
+<div class="term-section">
+    <div class="term-section-head"><span class="term-section-title">Funding — the cost of holding a perpetual</span></div>
+    <div class="term-section-body"><div class="chart-caption">
+        Every few hours, perpetual-futures longs and shorts pay each other a funding rate. When it is positive, longs pay shorts; when negative, shorts pay longs. It is charged on the full exposure, so leverage multiplies it, and it changes constantly — a positive rate today is not guaranteed tomorrow. See the historical record in the <a href="{% url 'funding_carry' %}">Funding Carry Monitor</a>.
+    </div></div>
+</div>
+
+<div class="term-section">
+    <div class="term-section-head"><span class="term-section-title">What happened historically — descriptive only</span>
+        <span class="term-section-meta">{% if historical %}run {{ historical.run_id|slice:":12" }} · data before {{ historical.data.before|slice:":10" }}{% endif %}</span></div>
+    <div class="term-section-body">
+        {% if not historical %}
+        <div class="unavailable">Historical summaries have not been generated. They are produced only by an explicit research run (<code>{{ command }}</code>); the calculator above works without them.</div>
+        {% else %}
+        <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin-bottom:10px"><strong>Past shares are not future probabilities.</strong> {% for w in historical.warnings %}{{ w }} {% endfor %}</div>
+        <div class="metric-label" style="margin-bottom:6px">Long held 30 days at fixed leverage (isolated, no stop), coins with recorded funding history, funding included</div>
+        <div class="term-table-wrap"><table class="term-table">
+            <thead><tr><th>Leverage</th><th class="num">Windows</th><th class="num">Liquidated within 30 days</th><th class="num">Interval (descriptive)</th><th class="num">Median result on margin</th><th class="num">Made money</th></tr></thead>
+            <tbody>{% for h in historical.hold %}<tr>
+                <td>{{ h.leverage }}×</td><td class="num">{{ h.windows }}</td>
+                <td class="num {% if h.liquidated_share > 0.2 %}neg{% endif %}">{% widthratio h.liquidated_share 1 100 %}%</td>
+                <td class="num text-dim">{% if h.liquidated_share_interval.ok %}{% widthratio h.liquidated_share_interval.lo 1 100 %}–{% widthratio h.liquidated_share_interval.hi 1 100 %}%{% else %}—{% endif %}</td>
+                <td class="num {% if h.median_return_on_margin_pct < 0 %}neg{% endif %}">{{ h.median_return_on_margin_pct|floatformat:1 }}%</td>
+                <td class="num">{% widthratio h.share_positive 1 100 %}%</td></tr>{% endfor %}</tbody>
+        </table></div>
+        <div class="metric-label" style="margin:14px 0 6px">The advertised ladder: $1,000 cross margin, $100 / $200 / $300 / $400 steps, take profit +1 % over the average entry (funding excluded)</div>
+        <div class="term-table-wrap"><table class="term-table">
+            <thead><tr><th>Leverage</th><th>Gap</th><th>Intrabar bound</th><th class="num">Cycles</th><th class="num">Unresolved at 30 d</th><th class="num">Wiped out (of resolved)</th><th class="num">Interval</th><th class="num">One wipeout per</th><th class="num">Avg win</th><th class="num">Avg result / cycle</th></tr></thead>
+            <tbody>{% for r in historical.ladder %}<tr>
+                <td>{{ r.leverage|floatformat:0 }}×</td><td>{{ r.spacing_pct|floatformat:0 }}%</td><td>{{ r.bound }}</td><td class="num">{{ r.cycles }}</td><td class="num">{{ r.unresolved_at_30d }}</td>
+                <td class="num neg">{% if r.wipeout_share_of_resolved is not None %}{{ r.wipeout_share_of_resolved|floatformat:4 }}{% else %}—{% endif %}</td>
+                <td class="num text-dim">{% if r.wipeout_share_interval.ok %}{{ r.wipeout_share_interval.lo|floatformat:4 }}–{{ r.wipeout_share_interval.hi|floatformat:4 }}{% else %}—{% endif %}</td>
+                <td class="num">{% if r.cycles_per_wipeout %}{{ r.cycles_per_wipeout|floatformat:0 }} cycles{% else %}—{% endif %}</td>
+                <td class="num">{% if r.avg_take_profit_usd is not None %}${{ r.avg_take_profit_usd|floatformat:2 }}{% else %}—{% endif %}</td>
+                <td class="num {% if r.mean_result_per_resolved_cycle_usd < 0 %}neg{% endif %}">{% if r.mean_result_per_resolved_cycle_usd is not None %}${{ r.mean_result_per_resolved_cycle_usd|floatformat:2 }}{% else %}—{% endif %}</td></tr>{% endfor %}</tbody>
+        </table></div>
+        <div class="chart-caption" style="margin-top:6px">"Conservative" assumes, inside each hour, the price first rose (no profit on the old average) and then fell; "optimistic" assumes it fell, filled steps, then rose to take profit on the new average. The truth lies between. A step is only filled if the account's available balance can pay its margin and fee (with $1,000 the $400 step usually cannot). Classification: {{ historical.classification }}.</div>
+        {% endif %}
+    </div>
+</div>
+
+</div>
+{% endblock %}
