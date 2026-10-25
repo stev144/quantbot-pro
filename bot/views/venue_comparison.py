@@ -8,6 +8,7 @@
 from django.shortcuts import render
 
 from bot.views import venue_comparison_data
+from bot.views.recorded_books import recorded_books_payload   # claude code changed: 2026-10-25 — recorded books panel
 
 
 def venue_comparison(request):
@@ -20,7 +21,12 @@ def venue_comparison(request):
     except (TypeError, ValueError):
         quantity = venue_comparison_data.DEFAULT_QUANTITY
 
+    try:   # claude code changed: 2026-10-25 — the recorder's latest books; a read problem must not break the page
+        recorded = recorded_books_payload()
+    except Exception as exc:
+        recorded = {"available": False, "reason": f"Recorded books could not be read: {exc}"}
     context = {
         "comparison": venue_comparison_data.get_venue_comparison_table(symbol=symbol, quantity=quantity),
+        "recorded_books": recorded,   # claude code changed: 2026-10-25
     }
     return render(request, "venue_comparison.html", context)

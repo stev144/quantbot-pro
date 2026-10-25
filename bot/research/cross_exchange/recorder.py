@@ -295,11 +295,8 @@ def summary_text(meta: dict) -> str:
 def read_session(out_dir: str, session_id: str, stale_heartbeat_s: float = 180) -> Tuple[dict, List[dict], List[dict]]:
     """Read a session back: (metadata, observations, events). RUNNING with an old heartbeat ⇒ reported INCOMPLETE."""
     root = Path(out_dir)
-    meta = json.loads((root / "metadata" / f"{session_id}.json").read_text(encoding="utf-8"))
-    if meta.get("status") == RUNNING and meta.get("heartbeat_utc"):
-        age = time.time() - datetime.fromisoformat(meta["heartbeat_utc"]).timestamp()
-        if age > stale_heartbeat_s:
-            meta = {**meta, "status": INCOMPLETE, "status_note": f"no heartbeat for {age:.0f}s — ended abnormally"}
+    meta = _effective_status(json.loads((root / "metadata" / f"{session_id}.json").read_text(encoding="utf-8")),
+                             stale_heartbeat_s)   # claude code changed: 2026-10-25 — shared with latest_books()
     obs = []
     for p in sorted((root / "raw" / session_id).glob("obs-*.jsonl")):
         with open(p, encoding="utf-8") as fh:
@@ -315,3 +312,57 @@ def read_session(out_dir: str, session_id: str, stale_heartbeat_s: float = 180) 
     if ev.exists():
         events = [json.loads(l) for l in ev.read_text(encoding="utf-8").splitlines() if l.strip()]
     return meta, obs, events
+
+
+# claude code changed: 2026-10-25 — read-only viewer support (Venue Comparison "Recorded order books" panel).
+def _effective_status(meta: dict, stale_heartbeat_s: float = 180) -> dict:
+    """RUNNING with a heartbeat older than stale_heartbeat_s ⇒ INCOMPLETE (the process died without closing)."""
+    if meta.get("status") == RUNNING and meta.get("heartbeat_utc"):
+        age = time.time() - datetime.fromisoformat(meta["heartbeat_utc"]).timestamp()
+        if age > stale_heartbeat_s:
+            meta = {**meta, "status": INCOMPLETE, "status_note": f"no heartbeat for {age:.0f}s — ended abnormally"}
+    return meta
+
+
+def latest_session_id(out_dir: str) -> Optional[str]:
+    """Newest session by id (ids start with a UTC timestamp, so they sort chronologically); None if none recorded."""
+    d = Path(out_dir) / "metadata"
+    ids = sorted(p.stem for p in d.glob("*.json")) if d.is_dir() else []
+    return ids[-1] if ids else None
+
+
+def latest_books(out_dir: str, session_id: Optional[str] = None, tail_bytes: int = 512 * 1024,
+                 max_files: int = 2, stale_heartbeat_s: float = 180) -> Tuple[Optional[dict], Dict[str, dict]]:
+    """The most recent sample row of every book in a session, read from the END of the newest observation file(s)
+    only — a multi-GB session costs one small read. Returns (metadata, {"venue:symbol": row}); (None, {}) when no
+    session exists. Rows are returned exactly as recorded (a STALE / DISCONNECTED book has no levels — no fill-in).
+    Torn or partial lines (the recorder may be mid-write) are skipped, never guessed."""
+    session_id = session_id or latest_session_id(out_dir)
+    if not session_id:
+        return None, {}
+    root = Path(out_dir)
+    meta_path = root / "metadata" / f"{session_id}.json"
+    if not meta_path.exists():
+        return None, {}
+    meta = _effective_status(json.loads(meta_path.read_text(encoding="utf-8")), stale_heartbeat_s)
+    wanted = set((meta.get("books") or {}).keys())
+    found: Dict[str, dict] = {}
+    for p in sorted((root / "raw" / session_id).glob("obs-*.jsonl"), reverse=True)[:max_files]:
+        with open(p, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            start = max(0, size - tail_bytes)
+            fh.seek(start)
+            lines = fh.read().split(b"\n")
+        if start > 0:
+            lines = lines[1:]                                          # first line is cut by the seek
+        for raw in reversed(lines):
+            try:
+                row = json.loads(raw)
+            except ValueError:
+                continue                                               # empty / torn line
+            key = f"{row.get('venue')}:{row.get('venue_symbol')}"
+            if key not in found:
+                found[key] = row
+        if wanted and wanted <= found.keys():
+            break
+    return meta, found

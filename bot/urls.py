@@ -23,6 +23,7 @@ from bot.views.pairs_pilot import pairs_pilot   # claude code changed: new — P
 from bot.views.dca_engine import dca_engine, dca_survival_ledger     # claude code changed: new — QC-1 Forex DCA Engine dashboard; 2026-10-21 survival ledger endpoint
 from bot.views.paper_trading import paper_trading  # claude code changed: new — Ranging Paper Trader
 from bot.views.venue_comparison import venue_comparison   # claude code changed: new — Venue Comparison page
+from bot.views.recorded_books import recorded_books_json   # claude code changed: 2026-10-25 — recorder's latest books (read-only)
 from bot.views.forex_scanner import forex_scanner         # claude code changed: new — Forex Market Scanner
 from bot.views.markets import markets, markets_live       # claude code changed: new — Markets discovery screen; 2026-10-21 live prices
 from bot.views import market_workspace as mw             # claude code changed: 2026-10-21 — Market Intelligence workspace
@@ -111,6 +112,7 @@ urlpatterns = [
     path('execution/dca-engine/ledger/', dca_survival_ledger, name='dca_survival_ledger'),   # claude code changed: 2026-10-21 — per-cycle ledger JSON for the survival replay
     path('execution/paper-trading/', paper_trading, name='paper_trading'),  # claude code changed: new — Ranging Paper Trader
     path('execution/venues/', venue_comparison, name='venue_comparison'),   # claude code changed: new — Venue Comparison page
+    path('execution/venues/books.json', recorded_books_json, name='recorded_books_json'),   # claude code changed: 2026-10-25 — recorded order books panel
 
     # ---- SYSTEM ----
     path('system/health/', system_health, name='system_health'),

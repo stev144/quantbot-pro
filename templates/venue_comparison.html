@@ -6,7 +6,7 @@
 <style>
 /* claude code changed: 2026-10-22 — exchange cards with blue text (owner request) */
 .vc-wrap { --vc-blue: #4aa3ff; --vc-blue-soft: rgba(74,163,255,0.12); --vc-blue-line: rgba(74,163,255,0.35); }
-.vc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:var(--sp-4); }
+.vc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr)); gap:var(--sp-4); }  /* claude code changed: 2026-10-25 — fits phone width */
 .vc-card { position:relative; background:var(--bg-1); border:1px solid var(--vc-blue-line); border-radius:12px;
            padding:var(--sp-4) var(--sp-5); display:flex; flex-direction:column; gap:12px; color:var(--vc-blue);
            box-shadow:0 0 0 1px transparent; transition:transform .15s, box-shadow .15s; }
@@ -38,7 +38,40 @@
 .vc-tag.warn { border-color:var(--warning); color:var(--warning); }
 .vc-note { font-size:12px; color:var(--vc-blue); opacity:.9; line-height:1.5; }
 .vc-why { margin-top:var(--sp-4); padding:12px 14px; border-left:3px solid var(--vc-blue); background:var(--vc-blue-soft); border-radius:6px; }
-@media (max-width:600px) { .vc-grid { grid-template-columns:1fr; } .vc-total-value { font-size:20px; } }
+@media (max-width:600px) { .vc-grid { grid-template-columns:1fr; } .vc-total-value { font-size:20px; } .vc-card, .rb-card { padding:12px; } .vc-stats { grid-template-columns:1fr; } }  /* claude code changed: 2026-10-25 */
+/* claude code changed: 2026-10-25 — "Recorded order books" panel (Phase A recorder's latest snapshot) */
+.rb-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:12px; font-size:12px; font-family:var(--font-mono); color:var(--vc-blue); }
+.rb-live { font-size:11px; font-weight:700; letter-spacing:.08em; padding:3px 10px; border-radius:999px; color:#04121f; background:var(--positive); }
+.rb-live.off { background:var(--negative); color:#fff; }
+.rb-live.paused { background:var(--warning); }
+.rb-tabs { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.rb-tab { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:999px; cursor:pointer; font-weight:700;
+          font-size:12px; letter-spacing:.05em; border:1px solid var(--vc-blue-line); background:transparent; color:var(--vc-blue); }
+.rb-tab.active { background:var(--vc-blue); color:#04121f; border-color:var(--vc-blue); }
+.rb-btn { padding:3px 10px; border-radius:999px; border:1px solid var(--vc-blue-line); background:transparent; color:var(--vc-blue); cursor:pointer; font-size:11px; }
+.rb-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr)); gap:var(--sp-4); }
+.rb-card { background:var(--bg-1); border:1px solid var(--vc-blue-line); border-radius:12px; padding:12px 14px; color:var(--vc-blue); min-width:0; }
+.rb-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.rb-name { display:flex; align-items:center; gap:8px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.rb-name img { width:22px; height:22px; border-radius:6px; }
+.rb-pill { font-size:10px; font-weight:700; letter-spacing:.06em; padding:2px 8px; border-radius:999px; color:#04121f; }
+.rb-pill.ok { background:var(--positive); } .rb-pill.quiet { background:var(--warning); } .rb-pill.bad { background:var(--negative); color:#fff; }
+.rb-sub { font-size:11px; font-family:var(--font-mono); opacity:.8; margin-bottom:6px; }
+.rb-table { font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; }
+.rb-row { display:grid; grid-template-columns:1.3fr 1fr 1fr; padding:1px 4px; }   /* claude code changed: grid rows — one depth bar per row */
+.rb-row > span { text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rb-row > span:first-child { text-align:left; }
+.rb-row.hd > span { font-weight:600; font-size:10px; letter-spacing:.05em; text-transform:uppercase; opacity:.7; }
+.rb-row.ask > span:first-child { color:var(--negative); } .rb-row.bid > span:first-child { color:var(--positive); }
+.rb-row.ask { background:linear-gradient(to left, rgba(255,90,90,.18) var(--w), transparent var(--w)); }
+.rb-row.bid { background:linear-gradient(to left, rgba(60,200,120,.18) var(--w), transparent var(--w)); }
+.rb-row.mid { display:block; text-align:center; font-size:11px; padding:4px; border-top:1px dashed var(--vc-blue-line); border-bottom:1px dashed var(--vc-blue-line); }
+.rb-empty { padding:24px 6px; text-align:center; font-size:12px; opacity:.85; }
+.rb-sub.slow { color:var(--warning); opacity:1; font-weight:600; }
+/* claude code changed: 2026-10-25 — phone: the Symbol/Qty form wraps instead of being cut off on the left */
+@media (max-width:600px) { .vc-form-row { justify-content:flex-start !important; padding-left:16px !important; padding-right:16px !important; }
+  .vc-form-row .term-symbol-form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; width:100%; }
+  .vc-form-row .term-input { flex:1 1 90px; min-width:0; } .rb-bar { font-size:11px; } }
 </style>
 {% endblock %}
 
@@ -53,7 +86,7 @@
 
 {% include "partials/_topbar.html" with active="venue_comparison" %}
 
-<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+<div class="vc-form-row" style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">{# claude code changed: 2026-10-25 — class for the phone layout #}
     <form class="term-symbol-form" method="get" action=".">
         <label class="text-dim mono" for="vc-symbol">Symbol:</label>
         <input id="vc-symbol" type="text" name="symbol" class="term-input mono" value="{{ comparison.symbol }}" placeholder="SYMBOL">
@@ -130,6 +163,41 @@
             {% endif %}
         </div>
     </div>
+
+    {# claude code changed: 2026-10-25 — Recorded order books: the research recorder's LATEST snapshot, read from its files #}
+    <div class="term-section" id="recorded-books">
+        <div class="term-section-head">
+            <span class="term-section-title">Recorded Order Books</span>
+            <span class="term-section-meta">research recorder · latest snapshot · refreshes every 2 s</span>
+        </div>
+        <div class="term-section-body">
+            {% if recorded_books.available %}
+            <div class="rb-bar">
+                <span id="rb-live" class="rb-live">…</span>
+                <span>session <b id="rb-session">{{ recorded_books.session_id }}</b></span>
+                <span>status <b id="rb-status">{{ recorded_books.status }}</b></span>
+                <span>samples <b id="rb-samples">{{ recorded_books.samples_written }}</b></span>
+                <span>top {{ recorded_books.depth }} levels per side</span>
+                <button type="button" id="rb-pause" class="rb-btn">Pause</button>
+            </div>
+            <div class="rb-tabs" role="tablist">
+                {% for inst in recorded_books.instruments %}
+                <button type="button" class="rb-tab" role="tab" data-inst="{{ inst.instrument }}">{% coin_logo inst.instrument 18 %}{{ inst.base }}</button>
+                {% endfor %}
+            </div>
+            <div id="rb-grid" class="rb-grid"></div>
+            <div class="vc-why vc-note">
+                What you see is the last row the recorder wrote for each exchange's own order book: prices in each exchange's quote currency, sizes in the coin.
+                Green = book in sync and updating, yellow = in sync but unchanged for over 5 s (quiet market), red = not usable (disconnected, re-syncing or stale): no price is shown rather than an old one.
+                Bar length = size at that price level. Feed delay = how long the exchange's update took to reach this PC (yellow above 2 s = slow network); a negative value would mean this PC's clock is behind the exchange's.
+                <br>Display only: no price gap between exchanges is calculated here. The recorded history lies inside the sealed crypto test window (ZONES.F) and is not analysed on this page.
+            </div>
+            {{ recorded_books|json_script:"rb-initial" }}
+            {% else %}
+            <div class="unavailable">{{ recorded_books.reason }}</div>
+            {% endif %}
+        </div>
+    </div>
 </div>
 
 {% include "partials/_footer.html" with label="Venue Comparison" note="real order-book/fee data, live exchange calls — expect a few seconds to load" %}
@@ -138,4 +206,78 @@
 
 {% block scripts %}
 <script src="{% static 'js/counters.js' %}"></script>{# claude code changed: 2026-10-22 — restored (dropped in the card redesign): count-up like every other page #}
+{% if recorded_books.available %}
+<script>
+/* claude code changed: 2026-10-25 — Recorded order books panel. Polls the read-only JSON every 2 s while the tab is visible. */
+(function () {
+    var URL_ = "{% url 'recorded_books_json' %}", LOGO = "{% static 'img/exchanges/' %}";
+    var data = JSON.parse(document.getElementById("rb-initial").textContent);
+    var tabs = document.querySelectorAll(".rb-tab"), grid = document.getElementById("rb-grid");
+    var paused = false, current = null;
+    try { current = localStorage.getItem("rbInstrument"); } catch (e) {}
+    if (!data.instruments.some(function (i) { return i.instrument === current; })) current = data.instruments.length ? data.instruments[0].instrument : null;
+
+    function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+    function fmtQty(q) { var x = parseFloat(q); return x >= 1000 ? x.toFixed(0) : x >= 1 ? x.toFixed(3) : String(parseFloat(x.toPrecision(3))); }   // no trailing zeros
+
+    function card(b) {
+        var c = el("div", "rb-card"), head = el("div", "rb-head"), name = el("div", "rb-name");
+        var img = el("img"); img.src = LOGO + b.venue + ".svg"; img.alt = ""; name.appendChild(img); name.appendChild(el("span", null, b.venue));
+        var quiet = b.flags.indexOf("QUIET_BOOK") >= 0, kind = !b.usable ? "bad" : quiet ? "quiet" : "ok";
+        head.appendChild(name);
+        head.appendChild(el("span", "rb-pill " + kind, !b.usable ? (b.flags.indexOf("STALE") >= 0 ? "STALE" : b.status) : quiet ? "QUIET" : "IN SYNC"));
+        c.appendChild(head);
+        var sub = el("div", "rb-sub", b.symbol + " · row " + (b.age_s == null ? "?" : b.age_s + " s") + " old" +
+            (b.feed_delay_ms != null ? " · feed delay " + Math.round(b.feed_delay_ms) + " ms" : ""));
+        sub.title = "Feed delay = local receipt time − exchange time. A negative value means this PC's clock is behind the exchange's clock.";
+        if (b.feed_delay_ms != null && b.feed_delay_ms > 2000) { sub.className += " slow"; sub.textContent += " · slow network"; }   // claude code changed: 2026-10-25
+        c.appendChild(sub);
+        if (!b.usable) { c.appendChild(el("div", "rb-empty", "No current price: recorded as " + b.status + (b.status_reason ? " (" + b.status_reason + ")" : "") + ".")); return c; }
+        var maxQ = 0; b.asks.concat(b.bids).forEach(function (l) { maxQ = Math.max(maxQ, parseFloat(l[1])); });
+        var t = el("div", "rb-table"), hr = el("div", "rb-row hd");
+        ["Price (" + b.quote + ")", "Size (" + b.base + ")", "Total"].forEach(function (h) { hr.appendChild(el("span", null, h)); });
+        t.appendChild(hr);
+        function rows(levels, side) {
+            var cum = 0, out = levels.map(function (l) { cum += parseFloat(l[1]); return [l[0], l[1], cum]; });
+            if (side === "ask") out.reverse();             // highest ask on top, best ask next to the spread
+            out.forEach(function (r) {
+                var tr = el("div", "rb-row " + side); tr.style.setProperty("--w", (maxQ ? parseFloat(r[1]) / maxQ * 100 : 0).toFixed(1) + "%");
+                tr.appendChild(el("span", null, r[0])); tr.appendChild(el("span", null, fmtQty(r[1]))); tr.appendChild(el("span", null, fmtQty(r[2])));
+                t.appendChild(tr);
+            });
+        }
+        rows(b.asks, "ask");
+        t.appendChild(el("div", "rb-row mid", "spread " + (b.spread_pct == null ? "?" : b.spread_pct.toFixed(4) + "%")));
+        rows(b.bids, "bid");
+        c.appendChild(t);
+        return c;
+    }
+
+    function render() {
+        var live = document.getElementById("rb-live");
+        live.className = "rb-live" + (paused ? " paused" : data.live ? "" : " off");
+        live.textContent = paused ? "PAUSED" : data.live ? "LIVE" : "NOT WRITING";
+        live.title = data.snapshot_age_s == null ? "" : "newest row " + data.snapshot_age_s + " s old";
+        document.getElementById("rb-status").textContent = data.status + (data.status_note ? " — " + data.status_note : "");
+        document.getElementById("rb-samples").textContent = (data.samples_written || 0).toLocaleString();
+        tabs.forEach(function (b) { b.classList.toggle("active", b.dataset.inst === current); });
+        var inst = data.instruments.filter(function (i) { return i.instrument === current; })[0];
+        grid.replaceChildren.apply(grid, inst ? inst.books.map(card) : [el("div", "rb-empty", "No rows for this coin yet.")]);
+    }
+
+    tabs.forEach(function (b) { b.addEventListener("click", function () {
+        current = b.dataset.inst; try { localStorage.setItem("rbInstrument", current); } catch (e) {} render(); }); });
+    document.getElementById("rb-pause").addEventListener("click", function () {
+        paused = !paused; this.textContent = paused ? "Resume" : "Pause"; render(); });
+
+    function poll() {
+        if (paused || document.hidden) return;
+        fetch(URL_, { cache: "no-store" }).then(function (r) { return r.json(); })
+            .then(function (d) { if (d.available) { data = d; render(); } }).catch(function () {});
+    }
+    render();
+    setInterval(poll, 2000);
+})();
+</script>
+{% endif %}
 {% endblock %}

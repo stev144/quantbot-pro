@@ -3336,3 +3336,16 @@ Gates (canonical §4): G1 PASS, G2 PASS, G3 NOT APPLICABLE, G4 PARTIAL (sub-seco
 G5 PASS for recording / BLOCKED for Phase B — every recorded row lies inside the sealed crypto holdout ZONES.F
 (D-8); analysing it needs an explicit owner decision. Phase B/C/execution NOT implemented. Report:
 CROSS_EXCHANGE_PHASE_A_RECORDER_2026-10-25.md. Evidence class: RAW MARKET DATA (no evidence status).
+
+## 2026-10-25 — Venue Comparison: "Recorded order books" panel (display of the Phase A recorder's latest snapshot)
+`bot/views/recorded_books.py` + `/execution/venues/books.json` + panel in `templates/venue_comparison.html`; reader
+`recorder.latest_books()` reads only the tail of the newest observation file(s) (≈ 60 ms on a 340k-row session).
+Read-only (no exchange connection, starts nothing); rows shown exactly as recorded — an unusable book shows no price;
+each venue's OWN bid/ask spread only. No cross-venue gap/edge figure is computed (Phase B stays sealed, ZONES.F).
+Tests: 5 new in test_cross_exchange_recorder (known-answer tail read, rotation, torn line, INCOMPLETE, read-only AST).
+Clock (same day): the Windows Time service was STOPPED (manual start), so the PC clock had drifted ≈ 0.89 s behind
+NTP (w32tm stripchart vs time.google.com). Owner-requested fix at 09:56–09:57 local (05:56–05:57 UTC): w32time set to
+Automatic, peers time.windows.com + time.google.com, hourly poll (SpecialPollInterval 3600); after it, offset ≈ +2 ms.
+Session 20261024T211220Z-eac5af therefore contains a ≈ +0.9 s step in its local wall-clock fields (sample_utc_ns /
+receipt_utc_ns) at ≈ 05:57 UTC; monotonic fields are unaffected. Any later analysis must treat pre-step local times
+as ≈ 0.9 s slow (feed_delay_ms was ≈ −700…−800 ms before, ≈ +75…+210 ms after).

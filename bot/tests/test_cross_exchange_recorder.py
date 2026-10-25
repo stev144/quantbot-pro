@@ -399,3 +399,107 @@ class SafetyTests(SimpleTestCase):
         hosts = set(re.findall(r"(?:wss|https)://([a-z0-9.\-]+)", " ".join(consts)))
         self.assertEqual(hosts, {"stream.binance.com", "api.binance.com", "ws.kraken.com", "api.kraken.com",
                                  "advanced-trade-ws.coinbase.com", "api.coinbase.com"})
+
+
+# claude code changed: 2026-10-25 — read-only viewer (Venue Comparison "Recorded order books" panel)
+class LatestBooksViewerTests(SimpleTestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.sid = "20261025T000000Z-abcdef"
+        (self.d / "metadata").mkdir()
+        self.raw = self.d / "raw" / self.sid
+        self.raw.mkdir(parents=True)
+        self.meta = {"session_id": self.sid, "status": rc.RUNNING, "heartbeat_utc": rc._iso(time.time_ns()),
+                     "samples_written": 5, "config": {"depth": 2, "sample_interval_s": 1.0},
+                     "books": {"binance:BTCUSDT": {}, "kraken:BTC/USDT": {}}}
+        self.write_meta()
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def write_meta(self):
+        (self.d / "metadata" / f"{self.sid}.json").write_text(json.dumps(self.meta), encoding="utf-8")
+
+    @staticmethod
+    def row(venue, sym, seq, bid="100.10", ask="100.20", usable=True, status="SYNCED", flags=()):
+        return {"venue": venue, "venue_symbol": sym, "instrument": "BTC-USDT", "base": "BTC", "quote": "USDT", "seq": seq,
+                "sample_utc_ns": time.time_ns(), "status": status, "usable": usable, "flags": list(flags),
+                "best_bid": bid if usable else None, "best_ask": ask if usable else None,
+                "bids": [[bid, "1.50000000"], ["100.00", "2"]] if usable else None,
+                "asks": [[ask, "0.25000000"], ["100.30", "3"]] if usable else None}
+
+    def write_obs(self, name, rows, torn_tail=False):
+        text = "".join(json.dumps(r) + "\n" for r in rows) + ('{"venue":"binance","venue_sym' if torn_tail else "")
+        (self.raw / name).write_text(text, encoding="utf-8")
+
+    def test_newest_row_per_book_across_rotated_files_and_torn_line_skipped(self):
+        self.write_obs("obs-0001.jsonl", [self.row("binance", "BTCUSDT", 1), self.row("kraken", "BTC/USDT", 1, bid="99")])
+        self.write_obs("obs-0002.jsonl", [self.row("binance", "BTCUSDT", 2), self.row("binance", "BTCUSDT", 3, bid="101")],
+                       torn_tail=True)
+        meta, found = rc.latest_books(str(self.d))
+        self.assertEqual(meta["status"], rc.RUNNING)
+        self.assertEqual(found["binance:BTCUSDT"]["seq"], 3)            # newest row in the newest file
+        self.assertEqual(found["binance:BTCUSDT"]["best_bid"], "101")
+        self.assertEqual(found["kraken:BTC/USDT"]["seq"], 1)            # only in the previous file
+        # a small tail window still finds the newest complete row (the cut first line is discarded)
+        _, small = rc.latest_books(str(self.d), tail_bytes=900)
+        self.assertEqual(small["binance:BTCUSDT"]["seq"], 3)
+
+    def test_old_heartbeat_is_incomplete_and_no_session_is_none(self):
+        self.meta["heartbeat_utc"] = rc._iso(time.time_ns() - 3600 * 10**9)
+        self.write_meta()
+        self.write_obs("obs-0001.jsonl", [self.row("binance", "BTCUSDT", 1)])
+        self.assertEqual(rc.latest_books(str(self.d))[0]["status"], rc.INCOMPLETE)
+        empty = Path(tempfile.mkdtemp())
+        try:
+            self.assertEqual(rc.latest_books(str(empty)), (None, {}))
+            from bot.views.recorded_books import recorded_books_payload
+            self.assertFalse(recorded_books_payload(empty)["available"])
+        finally:
+            shutil.rmtree(empty, ignore_errors=True)
+
+    def test_payload_shows_rows_as_recorded_and_no_cross_venue_figure(self):
+        from bot.views.recorded_books import recorded_books_payload
+        self.write_obs("obs-0001.jsonl", [self.row("kraken", "BTC/USDT", 1, usable=False, status="DISCONNECTED"),
+                                          self.row("binance", "BTCUSDT", 1)])
+        p = recorded_books_payload(self.d)
+        self.assertTrue(p["available"] and p["live"])
+        books = p["instruments"][0]["books"]
+        self.assertEqual([b["venue"] for b in books], ["binance", "kraken"])         # fixed venue order
+        bn, kr = books
+        self.assertEqual(bn["best_bid"], "100.1")                                    # exact text, zeros trimmed
+        self.assertEqual(bn["bids"][0], ["100.1", "1.5"])
+        self.assertAlmostEqual(bn["spread_pct"], (100.2 - 100.1) / 100.15 * 100)    # the venue's OWN spread
+        self.assertFalse(kr["usable"])
+        self.assertEqual((kr["bids"], kr["asks"], kr["best_bid"]), ([], [], None))   # no forward fill
+        flat = json.dumps(p).lower()
+        for word in ("gap", "arb", "opportun", "edge", "profit"):
+            self.assertNotIn(f'"{word}', flat)                                       # no cross-venue figure keys
+
+    def test_json_endpoint_and_page_panel(self):
+        from unittest import mock
+        from bot.views import recorded_books as rb
+        self.write_obs("obs-0001.jsonl", [self.row("binance", "BTCUSDT", 1), self.row("kraken", "BTC/USDT", 1)])
+        with mock.patch.object(rb, "recorder_dir", return_value=self.d):
+            r = self.client.get("/execution/venues/books.json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["session_id"], self.sid)
+        from bot.views import venue_comparison_data as vcd
+        with mock.patch.object(rb, "recorder_dir", return_value=self.d), \
+             mock.patch.object(vcd, "compare_venues", return_value=[]), \
+             mock.patch.object(vcd, "assess_venue_readiness", side_effect=Exception("offline")):
+            html = self.client.get("/execution/venues/").content.decode()
+        self.assertIn('id="recorded-books"', html)
+        self.assertIn('id="rb-initial"', html)
+        self.assertIn('data-inst="BTC-USDT"', html)
+
+    def test_viewer_is_read_only(self):
+        import ast
+        src = (PKG.parents[1] / "views" / "recorded_books.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        mods = ({a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+                | {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)})
+        for bad in ("aiohttp", "ccxt", "requests", "bot.research.cross_exchange.feeds", "bot.engines", "subprocess"):
+            self.assertFalse(any(m.startswith(bad) for m in mods), bad)
+        calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        self.assertFalse(calls & {"write_text", "write", "unlink", "mkdir", "run"})
