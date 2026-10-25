@@ -196,6 +196,10 @@ class StudyGuardTests(unittest.TestCase):   # claude code changed: 2026-10-25 â€
                 S.check_protocol(Path(d))
         self.assertEqual(S.check_protocol(Path(".")), S.PROTOCOL_SHA256)          # the registered file is intact
         self.assertTrue(S.IS_PAPER_ONLY)
+        with tempfile.TemporaryDirectory() as d:   # claude code changed: 2026-10-25 â€” a CRLF checkout is the same text
+            lf = (Path(".") / S.PROTOCOL_FILE).read_bytes().replace(b"\r\n", b"\n")
+            (Path(d) / S.PROTOCOL_FILE).write_bytes(lf.replace(b"\n", b"\r\n"))
+            self.assertEqual(S.check_protocol(Path(d)), S.PROTOCOL_SHA256)
 
     def test_sign_flip_holm_and_monthly_change_known_answers(self):
         from bot.research import lthp_study as S

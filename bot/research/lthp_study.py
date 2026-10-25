@@ -39,7 +39,9 @@ PRIMARY_COMPARISONS = ("A1_STOP5", "A3_HEDGE_HOLD_GROSS", "A4_HEDGE_REMOVE_GROSS
 
 
 def check_protocol(root: Path) -> str:
-    h = hashlib.sha256((root / PROTOCOL_FILE).read_bytes()).hexdigest()
+    # claude code changed: 2026-10-25 — hash with LF line endings: git (core.autocrlf=true) may check the file out with
+    # CRLF, which changes the bytes but not the registered text. The registered hash is of the LF form.
+    h = hashlib.sha256((root / PROTOCOL_FILE).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     if h != PROTOCOL_SHA256:
         raise RuntimeError(f"{PROTOCOL_FILE} changed after registration (sha256 {h[:12]}…) — this run is refused")
     return h
