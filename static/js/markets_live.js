@@ -18,6 +18,7 @@
     var POLL_MS = 30000;
     var STALE_AFTER_S = 2 * 3600;   // older than 2 h = STALE (hourly CSV refresh + slack)
     var status = {};
+    var fxSession = null;           // claude code changed: 2026-10-25 — /markets/live/ forex_session (owner FX calendar)
 
     function cards() { return document.querySelectorAll("[data-live-symbol]"); }
 
@@ -33,6 +34,27 @@
     function fmtPrice(p, dec) {
         if (p == null || !isFinite(p)) return "—";
         return String(Number(p.toFixed(dec)));
+    }
+
+    // claude code changed: 2026-10-25 — one badge rule for paint() and refreshAges(). A forex price that reaches the
+    // weekend/holiday close (within 2 h) is MARKET CLOSED, not STALE; data that stopped before the close stay STALE.
+    function badge(card, asof, source) {
+        var ageS = (Date.now() - Date.parse(asof)) / 1000;
+        var where = source === "BINANCE_LIVE" ? "Binance" : source === "MT5_LIVE" ? "MT5" : "saved data";
+        if (card.dataset.liveClass === "forex" && fxSession && !fxSession.is_open && fxSession.closed_since &&
+            Date.parse(asof) >= Date.parse(fxSession.closed_since) - 2 * 3600 * 1000) {
+            var r = new Date(fxSession.reopens);
+            var reopens = r.toUTCString().slice(0, 3) + " " + r.toISOString().slice(11, 16) + " UTC";
+            return { cls: "closed", text: "MARKET CLOSED", rest: " reopens " + reopens,
+                     title: "Forex market closed (weekend / holiday) — last price before the close, " + ago(asof) +
+                            " · closed since " + fxSession.closed_since + " · reopens " + fxSession.reopens };
+        }
+        if (card.dataset.liveClass === "forex" && !fxSession && (!source || source.indexOf("LIVE") < 0)) {
+            return { cls: "closed", text: "…", rest: " " + ago(asof) + " · " + where, title: "checking the forex session" };
+        }
+        var live = source && source.indexOf("LIVE") >= 0 && ageS < STALE_AFTER_S;
+        return { cls: live ? "live" : "stale", text: live ? "LIVE" : "STALE", rest: " " + ago(asof) + " · " + where,
+                 title: (live ? "Live display price" : "Last saved candle — not live") + " · as of " + asof };
     }
 
     function paint(card, price, chg, asof, source) {
@@ -54,15 +76,14 @@
                 chgEl.style.color = up ? "var(--positive)" : "var(--negative)";
             }
         }
-        var ageS = (Date.now() - Date.parse(asof)) / 1000;
-        var live = source && source.indexOf("LIVE") >= 0 && ageS < STALE_AFTER_S;
         card.dataset.liveAsof = asof;
         card.dataset.liveSource = source || "CSV";
         if (asofEl) {
-            var why = live ? "" : (status[card.dataset.liveClass] || "");
-            asofEl.innerHTML = '<span class="live-badge ' + (live ? "live" : "stale") + '">' + (live ? "LIVE" : "STALE") +
-                "</span> " + ago(asof) + " · " + (source === "BINANCE_LIVE" ? "Binance" : source === "MT5_LIVE" ? "MT5" : "saved data");
-            asofEl.title = (live ? "Live display price" : "Last saved candle — not live") + " · as of " + asof + (why ? " · " + why : "");
+            var b = badge(card, asof, source);
+            var why = b.cls === "live" ? "" : (status[card.dataset.liveClass] || "");
+            asofEl.innerHTML = '<span class="live-badge ' + b.cls + '">' + b.text + "</span>" + b.rest;
+            asofEl.style.whiteSpace = b.cls === "closed" ? "normal" : "";   // claude code changed: 2026-10-25 — reopen time may wrap, never cut
+            asofEl.title = b.title + (why ? " · " + why : "");
         }
     }
 
@@ -78,11 +99,9 @@
         cards().forEach(function (card) {
             var el = card.querySelector(".live-asof .live-badge");
             if (!el || !card.dataset.liveAsof) return;
-            var src = card.dataset.liveSource;
-            var ageS = (Date.now() - Date.parse(card.dataset.liveAsof)) / 1000;
-            var live = src.indexOf("LIVE") >= 0 && ageS < STALE_AFTER_S;
-            var rest = " " + ago(card.dataset.liveAsof) + " · " + (src === "BINANCE_LIVE" ? "Binance" : src === "MT5_LIVE" ? "MT5" : "saved data");
-            card.querySelector(".live-asof").innerHTML = '<span class="live-badge ' + (live ? "live" : "stale") + '">' + (live ? "LIVE" : "STALE") + "</span>" + rest;
+            var b = badge(card, card.dataset.liveAsof, card.dataset.liveSource);
+            card.querySelector(".live-asof").innerHTML = '<span class="live-badge ' + b.cls + '">' + b.text + "</span>" + b.rest;
+            card.querySelector(".live-asof").style.whiteSpace = b.cls === "closed" ? "normal" : "";
         });
     }
 
@@ -92,16 +111,24 @@
             .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
             .then(function (j) {
                 status = { crypto: (j.status || {}).crypto || "", forex: (j.status || {}).forex || "" };
+                fxSession = j.forex_session || null;   // claude code changed: 2026-10-25
                 cards().forEach(function (card) {
                     var q = (j[card.dataset.liveClass] || {})[card.dataset.liveSymbol];
                     if (q) paint(card, q.price, q.change_pct, q.as_of, q.source);
                     else {   // keep the saved price, but say why it is not live
                         var el = card.querySelector(".live-asof");
+                        if (el && card.dataset.liveAsof) {   // claude code changed: 2026-10-25 — re-badge only (price/change untouched)
+                            var b = badge(card, card.dataset.liveAsof, card.dataset.liveSource);
+                            el.innerHTML = '<span class="live-badge ' + b.cls + '">' + b.text + "</span>" + b.rest;
+                            el.style.whiteSpace = b.cls === "closed" ? "normal" : "";
+                        }
                         if (el) el.title = "Not live: " + (status[card.dataset.liveClass] || "symbol not in the live feed");
                     }
                 });
             })
-            .catch(function () { /* network hiccup: cards keep their last labelled state */ });
+            .catch(function () {   // network hiccup: cards keep their last labelled state
+                if (!fxSession) { fxSession = { is_open: true }; refreshAges(); }   // claude code changed: 2026-10-25 — session unknown → plain STALE, never a stuck "…"
+            });
     }
 
     function start() {

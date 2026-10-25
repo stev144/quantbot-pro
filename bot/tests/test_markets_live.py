@@ -51,6 +51,10 @@ class LiveQuotesTests(SimpleTestCase):
         self.assertEqual(btc["source"], "BINANCE_LIVE")
         age = (pd.Timestamp.now(tz="UTC") - pd.Timestamp(btc["as_of"])).total_seconds()
         self.assertLess(age, 3600)                                   # genuinely recent, not the sealed-boundary CSV close
+        from bot.quant_core.market_profile import forex_session_status   # claude code changed: 2026-10-25
+        self.assertEqual(j["forex_session"]["is_open"], forex_session_status()["is_open"])   # cards can show MARKET CLOSED
+        if not j["forex_session"]["is_open"]:
+            self.assertTrue(j["status"]["forex"].startswith("MARKET CLOSED"))
         after = (_snapshot(data_dir), _snapshot(data_dir / "forex"))
         self.assertEqual(before, after, "live display prices must never be written into data/ (holdout seal)")
         sealed = data_dir / "_sealed_holdout_F2026-10-04"

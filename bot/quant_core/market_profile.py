@@ -119,6 +119,14 @@ class SessionCalendar:
         full = pd.date_range(_utc(start), _utc(end), freq="h")
         return full[self.is_trading(full)]
 
+    def closure_at(self, t) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """claude code changed: 2026-10-25 — the scheduled closure [start, end) containing instant t, or None."""
+        t = _utc(t)
+        k = int(self._starts.searchsorted(t, side="right")) - 1
+        if k >= 0 and t < self._ends[k]:
+            return self._starts[k], self._ends[k]
+        return None
+
     def first_trading_at_or_after(self, t, horizon: pd.Timedelta = pd.Timedelta(days=31)) -> pd.Timestamp:
         g = self.trading_grid(_utc(t).ceil("h"), _utc(t).ceil("h") + horizon)
         if len(g) == 0:
@@ -338,6 +346,26 @@ FOREX_PROFILE = MarketProfile(asset_class="FOREX", calendar=fx_new_york_close_ca
                               protocol_hash="33606297d9b7412ef0e0333a0f1dd37455482686b7dea89dd23c4084831fa38b")  # claude code changed: 2026-10-17 FX-DCA-PROTOCOL-1-A5 — SHA-256 of FX_DCA_PROTOCOL_2026-10-17_v6.md; adds carry-direction gate (Part 3C §1, swap≥0) and ADX(14)≤25 entry gate (Part 3C §2); eligible directions locked: EUR/USD SHORT, USD/JPY LONG, USD/CHF LONG; v5 hash 2e022f35… preserved in v6 doc
 
 _PROFILES = {"CRYPTO": CRYPTO_PROFILE, "FOREX": FOREX_PROFILE}
+
+
+def forex_session_status(now=None) -> dict:
+    """claude code changed: 2026-10-25 — the ONE place pages ask "is the forex market open?" (Markets/Watchlist live
+    cards, Forex dashboard, Market Intelligence). Uses FOREX_PROFILE's owner calendar (OD-FX-1: Fri 17:00 → Sun 17:00
+    New York + measured holiday closures). A price that stops at the close is MARKET CLOSED, not STALE."""
+    now = _utc(now if now is not None else pd.Timestamp.now(tz="UTC"))
+    closure = FOREX_PROFILE.calendar.closure_at(now)
+    if closure is None:
+        return {"is_open": True, "state": "OPEN", "closed_since": None, "reopens": None}
+    a, b = closure
+    return {"is_open": False, "state": "MARKET_CLOSED", "closed_since": a.isoformat(), "reopens": b.isoformat()}
+
+
+def explained_by_closure(last_data, session: dict, slack_hours: float = 2.0) -> bool:
+    """claude code changed: 2026-10-25 — True when the market is closed AND the data reach the close (within slack):
+    the data are as fresh as the market allows. Data that stopped well before the close are still genuinely STALE."""
+    if session.get("is_open") or not session.get("closed_since") or last_data is None:
+        return False
+    return _utc(last_data) >= pd.Timestamp(session["closed_since"]) - pd.Timedelta(hours=slack_hours)
 
 
 def profile_for_asset_class(asset_class: str) -> MarketProfile:

@@ -280,6 +280,12 @@ def get_live_quotes(force_refresh: bool = False) -> dict:  # claude code changed
                                   else "UNAVAILABLE: MT5 returned no ticks")
     except Exception as exc:   # terminal closed / package missing: the page keeps the CSV price, labelled stale
         out["status"]["forex"] = f"UNAVAILABLE: {exc}"[:200]
+    # claude code changed: 2026-10-25 — forex session state (owner calendar), so a weekend price is shown as
+    # MARKET CLOSED rather than STALE; independent of whether MT5 is reachable.
+    from bot.quant_core.market_profile import forex_session_status
+    out["forex_session"] = forex_session_status(now)
+    if not out["forex_session"]["is_open"]:
+        out["status"]["forex"] = "MARKET CLOSED (weekend / holiday) · " + out["status"].get("forex", "")
 
     cache.set(_LIVE_CACHE_KEY, out, _LIVE_TTL)
     return out

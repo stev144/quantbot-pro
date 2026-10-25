@@ -59,7 +59,7 @@
             return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) { var e = new Error(j.error || j.message || ("HTTP " + r.status)); e.body = j; throw e; } return j; });
         });
     }
-    function stateTag(s) { var k = (s || "unavailable").toLowerCase(); return tag(k, s || "UNAVAILABLE", "LIVE = live source, last closed bar ≤ 1 bar old; DELAYED / STALE = saved or late data"); }
+    function stateTag(s) { var k = (s || "unavailable").toLowerCase(); return tag(k, s || "UNAVAILABLE", "LIVE = live source, last closed bar ≤ 1 bar old; DELAYED / STALE = saved or late data; MARKET CLOSED = forex weekend/holiday, data reach the close"); }   // claude code changed: 2026-10-25 — MARKET CLOSED explained
 
     // ── core: header, regime, chart, evidence, alerts, lessons ───────────────────────────────────────────────
     function loadCore() {

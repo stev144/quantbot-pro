@@ -52,7 +52,8 @@ figure.
             <span class="term-section-title">Data Provenance</span>
             <span class="term-section-meta">
                 {% if provenance.available %}
-                    {% if provenance.is_fresh %}<span class="badge pos">FRESH</span>{% else %}<span class="badge warn">STALE</span>{% endif %}
+                    {% if provenance.market and not provenance.market.is_open and provenance.closed_explains_age %}<span class="badge dim" title="Forex market closed (weekend / holiday) since {{ provenance.market.closed_since }}; the data reach the close">MARKET CLOSED · reopens {{ provenance.market.reopens|slice:"5:10" }} {{ provenance.market.reopens|slice:"11:16" }} UTC</span>
+                    {% elif provenance.is_fresh %}<span class="badge pos">FRESH</span>{% else %}<span class="badge warn">STALE</span>{% endif %}{# claude code changed: 2026-10-25 — MARKET CLOSED instead of STALE/FRESH when the weekend explains the age #}
                 {% else %}<span class="badge dim">NO DATA</span>{% endif %}
             </span>
         </div>

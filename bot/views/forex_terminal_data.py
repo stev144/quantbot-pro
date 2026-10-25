@@ -111,6 +111,8 @@ def get_forex_data_provenance(symbol, instrument, df):
         row_count=len(df),
     )
 
+    from bot.quant_core.market_profile import explained_by_closure, forex_session_status   # claude code changed: 2026-10-25
+    session = forex_session_status()
     return {
         "available": True,
         "provider": instrument.venue,
@@ -121,6 +123,9 @@ def get_forex_data_provenance(symbol, instrument, df):
         "age_days": round(age_days, 1),
         "is_fresh": is_fresh,
         "fingerprint": fingerprint,
+        # claude code changed: 2026-10-25 — weekend/holiday: show MARKET CLOSED (data reach the close), not STALE
+        "market": session,
+        "closed_explains_age": explained_by_closure(last_ts + pd.Timedelta(hours=1), session),
     }
 
 

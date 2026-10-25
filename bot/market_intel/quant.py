@@ -77,8 +77,11 @@ def _resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     return df.resample(rule, label="left", closed="left").agg(agg).dropna(subset=["close"])
 
 
-def freshness(last_bar_open: pd.Timestamp, timeframe: str, source: str, now: Optional[pd.Timestamp] = None) -> Dict:
-    """LIVE only for a live source whose last CLOSED bar is at most one bar old; never for saved data."""
+def freshness(last_bar_open: pd.Timestamp, timeframe: str, source: str, now: Optional[pd.Timestamp] = None,
+              asset_class: Optional[str] = None) -> Dict:
+    """LIVE only for a live source whose last CLOSED bar is at most one bar old; never for saved data.
+    claude code changed: 2026-10-25 — forex data that reach the weekend/holiday close are MARKET CLOSED, not
+    DELAYED/STALE (owner FX calendar via market_profile.forex_session_status); data that stopped earlier stay STALE."""
     now = now or pd.Timestamp.now(tz="UTC")
     bar = pd.Timedelta(hours=TIMEFRAMES[timeframe])
     age = now - (last_bar_open + bar)
@@ -88,7 +91,13 @@ def freshness(last_bar_open: pd.Timestamp, timeframe: str, source: str, now: Opt
         state = "DELAYED"
     else:
         state = "STALE"
-    return {"state": state, "age_hours": round(age.total_seconds() / 3600, 2), "last_closed_bar_open": last_bar_open.isoformat()}
+    out = {"state": state, "age_hours": round(age.total_seconds() / 3600, 2), "last_closed_bar_open": last_bar_open.isoformat()}
+    if asset_class == "forex" and state != "LIVE":
+        from bot.quant_core.market_profile import explained_by_closure, forex_session_status
+        session = forex_session_status(now)
+        if explained_by_closure(last_bar_open + bar, session):
+            out.update(state="MARKET CLOSED", reopens=session["reopens"], closed_since=session["closed_since"])
+    return out
 
 
 def load_bars(asset_class: str, symbol: str, timeframe: str, n_bars: int = ANALYSIS_BARS) -> Tuple[pd.DataFrame, Dict]:
@@ -128,7 +137,7 @@ def load_bars(asset_class: str, symbol: str, timeframe: str, n_bars: int = ANALY
     df = df.tail(n_bars)
     if df.empty:
         return df, {**meta, "freshness": {"state": "UNAVAILABLE"}}
-    meta["freshness"] = freshness(df.index[-1], timeframe, meta["source"], now)
+    meta["freshness"] = freshness(df.index[-1], timeframe, meta["source"], now, asset_class)   # claude code changed: 2026-10-25 — asset class for MARKET CLOSED
     meta["bars"] = int(len(df))
     meta["first_bar"] = df.index[0].isoformat()
     meta["volume_kind"] = ("exchange traded volume" if asset_class == "crypto" else "broker tick volume (not traded volume)") \

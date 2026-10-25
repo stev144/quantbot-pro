@@ -111,6 +111,25 @@ class EndpointTests(SimpleTestCase):
         self.assertEqual(q.freshness(pd.Timestamp("2026-10-01 10:00", tz="UTC"), "1h", "BINANCE_LIVE", now)["state"], "STALE")
         self.assertEqual(q.freshness(pd.Timestamp("2026-10-20 00:00", tz="UTC"), "1d", "MT5_CSV", now)["state"], "DELAYED")
 
+    def test_forex_weekend_is_market_closed_not_stale(self):   # claude code changed: 2026-10-25
+        from bot.quant_core.market_profile import explained_by_closure, forex_session_status
+        sun = pd.Timestamp("2026-10-25 08:00", tz="UTC")        # Sunday morning: closed Fri 21:00 → Sun 21:00 UTC (EDT)
+        s = forex_session_status(sun)
+        self.assertEqual((s["state"], s["closed_since"], s["reopens"]),
+                         ("MARKET_CLOSED", "2026-10-23T21:00:00+00:00", "2026-10-25T21:00:00+00:00"))
+        self.assertTrue(forex_session_status(pd.Timestamp("2026-10-23 20:59", tz="UTC"))["is_open"])
+        self.assertEqual(forex_session_status(pd.Timestamp("2026-11-06 22:00", tz="UTC"))["closed_since"],
+                         "2026-11-06T22:00:00+00:00")                # after US DST ends the close moves to 22:00 UTC
+        last_fri = pd.Timestamp("2026-10-23 20:00", tz="UTC")       # last hourly bar before the close
+        f = q.freshness(last_fri, "1h", "MT5_CSV", sun, "forex")
+        self.assertEqual((f["state"], f["reopens"]), ("MARKET CLOSED", "2026-10-25T21:00:00+00:00"))
+        self.assertEqual(q.freshness(last_fri, "1h", "MT5_CSV", sun)["state"], "STALE")             # crypto/default unchanged
+        thu = pd.Timestamp("2026-10-22 10:00", tz="UTC")           # data stopped BEFORE the close → genuinely stale
+        self.assertEqual(q.freshness(thu, "1h", "MT5_CSV", sun, "forex")["state"], "STALE")
+        self.assertFalse(explained_by_closure(thu, s))
+        wed = pd.Timestamp("2026-10-21 12:00", tz="UTC")           # market open: a 30-h-old bar is still STALE
+        self.assertEqual(q.freshness(pd.Timestamp("2026-10-20 05:00", tz="UTC"), "1h", "MT5_CSV", wed, "forex")["state"], "STALE")
+
     def test_risk_scenario_known_answer_crypto(self):
         r = q.risk_scenario("crypto", "BTC_USDT", side="LONG", entry=100.0, stop=98.0, target=104.0, balance=10_000, risk_pct=1)
         self.assertAlmostEqual(r["quantity"], 50.0, places=4)                       # 1 % of 10k / (100 − 98)
