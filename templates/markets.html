@@ -86,13 +86,84 @@
     line-height: 1.5;
 }
 .mkt-tab.active .mkt-tab-count { background: rgba(255,255,255,0.25); }
+
+/* claude code changed: 2026-10-25 — owner request, PHONE ONLY (≤860px): the layout of the owner's reference screenshot —
+   section headings with ›, a sideways-scrolling Watchlist row, a segmented Crypto | Forex switch, and compact cards
+   (symbol + logo, name, wide chart, price, change). The search lives in the app bar (partials/_topbar.html). */
+.mkt-rail-section, .mkt-phone-only { display: none; }
+@media (max-width: 860px) {
+    .mkt-page { gap: 0; padding-left: 0; padding-right: 0; }
+    .mkt-page .mkt-header { display: none; }
+    .mkt-phone-only { display: flex; }
+    .mkt-rail-section { display: block; }
+    .mkt-rail-section:not(:has(.mkt-card)) { display: none; }
+    .mkt-sec-head {
+        display: flex; align-items: center; gap: 6px;
+        padding: 20px 16px 10px;
+        font-size: 18px; font-weight: 700; letter-spacing: 0;
+        color: var(--text-primary) !important; text-decoration: none;   /* the theme's link colour must not tint the heading */
+    }
+    .mkt-sec-head span { color: var(--text-secondary); font-size: 22px; line-height: 1; margin-left: auto; }
+    .mkt-rail {
+        display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory;
+        padding: 0 16px 6px; scrollbar-width: none;
+    }
+    .mkt-rail::-webkit-scrollbar { display: none; }
+    .mkt-rail .mkt-card { flex: 0 0 44%; scroll-snap-align: start; }
+
+    /* segmented switch */
+    .mkt-tabs { gap: 6px; padding: 0 16px 14px; }
+    .mkt-tab[disabled] { display: none; }
+    .mkt-tab { flex: 1; border: 1px solid transparent; background: transparent; color: var(--text-secondary);
+               font-size: 14px; padding: 9px 14px; }
+    .mkt-tab.active { background: var(--bg-2); border-color: var(--border-strong); color: var(--text-primary); }
+    .mkt-tab.active .mkt-tab-count, .mkt-tab-count { background: rgba(255,255,255,0.1); }
+
+    /* compact cards, two per row */
+    .mkt-page .mkt-grid { grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px 16px; }
+    .mkt-page .mkt-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "sym logo" "name logo" "spark spark" "price price" "chg heart" "asof asof";
+        gap: 2px 6px; padding: 12px; border-radius: 14px; align-items: center;
+    }
+    .mkt-page .mkt-card-top, .mkt-page .coin-id, .mkt-page .mkt-card-identity, .mkt-page .mkt-card-top > div:last-child,
+    .mkt-page .mkt-card-identity > div:not([class]), .mkt-page .fx-pair, .mkt-page .mkt-card-bottom, .mkt-page .mkt-price-block { display: contents !important; }   /* !important: the badge/heart wrapper has an inline display:flex */
+    .mkt-page .mkt-symbol { grid-area: sym; font-family: var(--font-ui); font-size: 15px; font-weight: 700;
+                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mkt-page .coin-logo, .mkt-page .fx-flags { grid-area: logo; align-self: start; justify-self: end; }
+    .mkt-page .coin-logo { width: 26px; height: 26px; }
+    .mkt-page .mkt-name, .mkt-page .fx-names { grid-area: name; font-size: 12px; color: var(--text-dim); margin: 0;
+                                               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mkt-page .mkt-class-badge { display: none; }
+    .mkt-page .mkt-sparkline { grid-area: spark; margin: 10px 0 8px; opacity: 1; }
+    .mkt-page .mkt-sparkline svg { width: 100%; height: auto; }
+    .mkt-page .mkt-price { grid-area: price; font-size: 16px; }
+    .mkt-page .mkt-change { grid-area: chg; font-size: 12px; }
+    .mkt-page .mkt-watchlist-btn { grid-area: heart; justify-self: end; }
+    .mkt-page .live-asof { grid-area: asof; font-size: 10px; margin-top: 4px; max-width: 100%;
+                           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
 </style>
 {% endblock %}
 
 {% block content %}
 {% include "partials/_topbar.html" with active="markets" %}
 
-<div class="term-body" style="padding-top:0">
+<div class="term-body mkt-page" style="padding-top:0">{# claude code changed: 2026-10-25 — mkt-page: phone-only compact layout hook #}
+
+    {# claude code changed: 2026-10-25 — owner request (phone only): a "Watchlist ›" row of cards scrolling sideways, as in #}
+    {# the owner's reference screenshot. Hidden on laptops and when nothing is watchlisted (CSS :has). #}
+    {% if user.is_authenticated %}
+    <section class="mkt-rail-section" aria-label="Your watchlist">
+        <a class="mkt-sec-head" href="{% url 'watchlist' %}">Watchlist <span aria-hidden="true">›</span></a>
+        <div class="mkt-rail">
+            {% for q in crypto %}{% if q.available and q.in_watchlist %}{% include "partials/_mkt_card.html" with q=q %}{% endif %}{% endfor %}
+            {% for q in forex %}{% if q.available and q.in_watchlist %}{% include "partials/_mkt_card.html" with q=q %}{% endif %}{% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    <div class="mkt-sec-head mkt-phone-only">All markets</div>{# claude code changed: 2026-10-25 — phone section heading #}
 
     <!-- ── header row: title + search ── -->
     <div class="mkt-header">
@@ -178,6 +249,16 @@ document.querySelectorAll('.mkt-tab[data-tab]').forEach(function(btn) {
     });
 });
 
+// claude code changed: 2026-10-25 — on phones the search is the app bar's pill (partials/_topbar.html): here it filters
+// the cards live instead of reloading the page, and a ?q= arriving from another page is applied on load
+(function () {
+    var bar = document.getElementById('appbar-search');
+    var box = document.getElementById('mkt-search');
+    if (!bar) return;
+    bar.form.addEventListener('submit', function (e) { e.preventDefault(); });
+    bar.addEventListener('input', function () { if (box) box.value = this.value; filterCards(this.value); });
+    if (bar.value) document.addEventListener('DOMContentLoaded', function () { if (box) box.value = bar.value; filterCards(bar.value); });
+})();
 </script>
 {% include "partials/_mkt_card_scripts.html" %}
 {% endblock %}

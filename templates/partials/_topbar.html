@@ -80,7 +80,42 @@
         </a>
     </div>
 
-    <nav class="term-nav" aria-label="Primary">
+    {# claude code changed: 2026-10-25 — owner request (phone only, ≤860px): app-style bar — a search pill and a round #}
+    {# account button. The search goes to Markets (?q=), where it filters the cards live. Hidden on laptops. #}
+    <form class="term-appbar-search" action="{% url 'markets' %}" method="get" role="search">
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 3a5 5 0 103.16 8.87l3.98 3.99a1 1 0 001.42-1.42l-3.99-3.98A5 5 0 008 3zM5 8a3 3 0 116 0 3 3 0 01-6 0z" clip-rule="evenodd"/></svg>
+        <input type="search" name="q" id="appbar-search" placeholder="Search markets" aria-label="Search markets" autocomplete="off" value="{{ request.GET.q|default:'' }}">
+    </form>
+    {% if user.is_authenticated %}
+    <button type="button" class="term-appbar-avatar" data-mnav-toggle aria-label="Account and all menus" aria-controls="term-primary-nav">{{ user.username|first|upper }}</button>
+    {% else %}
+    <a href="{% url 'login' %}" class="term-appbar-avatar" aria-label="Sign in">
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
+    </a>
+    {% endif %}
+
+    <nav class="term-nav" id="term-primary-nav" aria-label="Primary">{# claude code changed: 2026-10-25 — id: on phones this same nav is the sheet opened by the bottom bar's four-squares button #}
+        <div class="term-nav-sheet-head">{# claude code changed: 2026-10-25 — shown only in the phone sheet #}
+            <span>All menus</span>
+            <button type="button" class="term-nav-sheet-close" data-mnav-close aria-label="Close menu">&times;</button>
+        </div>
+        {# claude code changed: 2026-10-25 — on phones the topbar's theme picker and account buttons are hidden, so the sheet carries them #}
+        <div class="term-nav-sheet-account">
+            {% if user.is_authenticated %}
+            <span class="term-nav-sheet-user">Signed in as <b>{{ user.username }}</b></span>
+            <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="term-btn mono">Logout</button></form>
+            {% else %}
+            <a href="{% url 'login' %}" class="term-btn mono">Sign In</a>
+            <a href="{% url 'signup' %}" class="term-btn mono">Sign Up</a>
+            {% endif %}
+            <select class="term-input mono" data-theme-select onchange="setTheme(this.value)" aria-label="Select theme">
+                <option value="dark">◐ Dark</option>
+                <option value="light">◐ Light</option>
+                <option value="navy">◐ Navy</option>
+                <option value="gold">◐ Gold</option>
+                <option value="midnight">◐ Midnight</option>
+            </select>
+        </div>
         <a class="term-nav-link {% if active == 'dashboard' %}active{% endif %}"
            {% if active == 'dashboard' %}aria-current="page"{% endif %}
            data-slow-nav="Loading market data and running the backtest — first load after a while can take up to two minutes. This page is not frozen."

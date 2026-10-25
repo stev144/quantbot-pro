@@ -99,9 +99,11 @@
         var VALID_THEMES = ["dark", "light", "navy", "gold", "midnight"];
 
         function syncThemeSelect() {
-            var select = document.getElementById("theme-select");
-            if (!select) return;
-            select.value = document.documentElement.getAttribute("data-theme") || "dark";
+            // claude code changed: 2026-10-25 — also the phone menu sheet's copy ([data-theme-select])
+            var theme = document.documentElement.getAttribute("data-theme") || "dark";
+            document.querySelectorAll("#theme-select, [data-theme-select]").forEach(function (select) {
+                select.value = theme;
+            });
         }
 
         (function () {
@@ -134,6 +136,7 @@
         // only ever CLOSES an open one from elsewhere on the page, never
         // interferes with opening).
         document.addEventListener("click", function (event) {
+            if (document.documentElement.classList.contains("mnav-open")) return;   // claude code changed: 2026-10-25 — the phone sheet keeps its groups open
             document.querySelectorAll(".term-nav-group[open]").forEach(function (details) {
                 if (!details.contains(event.target)) {
                     details.removeAttribute("open");
@@ -146,9 +149,29 @@
                 item.closest(".term-nav-group").removeAttribute("open");
             }
         });
+        // claude code changed: 2026-10-25 — phone menu sheet: the bottom bar's four-squares button opens/closes the
+        // topbar nav as a sheet (CSS in terminal.css, ≤860px only); the close button, a chosen link or Esc closes it.
+        function setMobileNav(open) {
+            document.documentElement.classList.toggle("mnav-open", open);
+            // a closed <details> hides its items whatever the CSS says, so the sheet opens every group (and closes them after)
+            document.querySelectorAll("#term-primary-nav .term-nav-group").forEach(function (details) {
+                if (open) details.setAttribute("open", ""); else details.removeAttribute("open");
+            });
+            document.querySelectorAll("[data-mnav-toggle]").forEach(function (b) {
+                b.setAttribute("aria-expanded", open ? "true" : "false");
+            });
+        }
+        document.addEventListener("click", function (event) {
+            if (event.target.closest("[data-mnav-toggle]")) {
+                setMobileNav(!document.documentElement.classList.contains("mnav-open"));
+            } else if (event.target.closest("[data-mnav-close]") || event.target.closest("#term-primary-nav a")) {
+                setMobileNav(false);
+            }
+        });
         // claude code changed: 2026-10-07 — Esc closes any open navbar group
         document.addEventListener("keydown", function (event) {
             if (event.key === "Escape") {
+                if (document.documentElement.classList.contains("mnav-open")) setMobileNav(false);   // claude code changed: 2026-10-25 — and the phone menu sheet
                 document.querySelectorAll(".term-nav-group[open]").forEach(function (details) {
                     details.removeAttribute("open");
                 });

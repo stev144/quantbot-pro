@@ -709,6 +709,186 @@
   }
 }
 
+/* claude code changed: 2026-10-25 — owner request, PHONE ONLY (≤860px): the topbar's menu pills are hidden; the bottom
+   bar keeps Home / Markets / Watchlist / Portfolio and gains a round four-squares button (bottom right) that opens the
+   same topbar nav as a sheet above the bar. Laptops are unchanged (the button and sheet header never show there). */
+.term-bnav-more,
+.term-nav-sheet-head,
+.term-nav-sheet-account,
+.term-appbar-search,
+.term-appbar-avatar { display: none; }
+
+/* claude code changed: 2026-10-25 — owner request, PHONE ONLY: an app-style bar like the owner's reference screenshot —
+   a warm tint fading into the page, the logo mark, a search pill and a round account button; the brand text, typed
+   strip, theme picker and sign-in buttons move out of the way (theme + account are in the menu sheet). The page body
+   starts as a sheet with rounded top corners. */
+@media (max-width: 860px) {
+  .term-topbar {
+    flex-wrap: nowrap;
+    gap: 10px;
+    padding: 10px 16px 14px;
+    border-bottom: none;
+    background: linear-gradient(180deg,
+                color-mix(in srgb, var(--heading-color, var(--accent)) 34%, var(--bg-0)) 0%,
+                color-mix(in srgb, var(--heading-color, var(--accent)) 12%, var(--bg-0)) 100%) !important;
+  }
+  .term-brand-text, .term-topbar-right, .term-typed-strip { display: none !important; }
+  .term-brand-mark { width: 30px; height: 30px; }
+  .term-back-arrow { width: 30px !important; min-width: 30px !important; margin-right: 0 !important; }
+  .term-appbar-search {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 14px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+    color: var(--text-secondary);
+  }
+  .term-appbar-search svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .term-appbar-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 14px;
+  }
+  .term-appbar-search input::placeholder { color: var(--text-secondary); }
+  .term-appbar-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: none;
+    background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .term-appbar-avatar svg { width: 20px; height: 20px; }
+  .term-body {
+    border-top: 1px solid var(--border);
+    border-radius: 22px 22px 0 0;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  }
+  .mnav-open .term-nav-sheet-account {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .term-nav-sheet-account form { margin: 0; }
+  .term-nav-sheet-account select { width: auto; margin-left: auto; }
+  .term-nav-sheet-user { font-size: 13px; color: var(--text-secondary); }
+}
+@media (max-width: 860px) {
+  .term-bnav-wide-only { display: none !important; }
+  .term-bnav-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    flex: 0 0 auto;
+    width: 46px;
+    height: 46px;
+    margin: 0 10px 0 4px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-2);
+    color: var(--text-primary);
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+  .term-bnav-more svg { width: 20px; height: 20px; }
+  .term-bnav-more[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg-1); }
+
+  .term-topbar .term-nav { display: none; }               /* the pills: hidden until the sheet is opened */
+  .mnav-open .term-topbar { z-index: 190; }               /* above page content, below the bottom bar (200) */
+  .mnav-open body { overflow: hidden; }
+  .mnav-open .term-topbar .term-nav {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    gap: 6px;
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding: 14px 16px 20px;
+    overflow-y: auto;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+  }
+  .mnav-open .term-nav-sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    padding-bottom: 6px;
+  }
+  .term-nav-sheet-close {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-2);
+    color: var(--text-primary);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  /* inside the sheet every link and group is a full-width row; groups are always expanded, their title is a heading */
+  .mnav-open .term-nav > .term-nav-link,
+  .mnav-open .term-nav-group > .term-nav-link {
+    display: block;
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 13px;
+    border-radius: 10px;
+    text-align: left;
+  }
+  .mnav-open .term-nav-group > summary.term-nav-link {
+    pointer-events: none;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    padding: 12px 4px 4px;
+  }
+  .mnav-open .term-nav-group > summary.term-nav-link.active { color: var(--accent); }
+  .mnav-open .term-nav-group .term-nav-dropdown {
+    display: flex;
+    position: static;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-2);
+  }
+  .mnav-open .term-nav-dropdown a { padding: 10px 14px; font-size: 13px; }
+}
+
 /* ============================================================
  * TYPED STRIP — the one real typed-text feature (static/js/typed.js).
  * claude code changed: went through several placements/restyles this
@@ -1206,9 +1386,9 @@
 :root[data-theme="navy"] .mkt-card,
 :root[data-theme="navy"] .vc-card,
 :root[data-theme="navy"] .rb-card {
-  background: rgba(2, 10, 28, 0.45);
+  background: rgba(2, 10, 28, 0.75);   /* claude code changed: 2026-10-25 — was 0.45 (logos competed with the text), then 0.88 (logos hidden behind cards) */
 }
-:root[data-theme="navy"] .mkt-card:hover { background: rgba(5, 19, 44, 0.65); }
+:root[data-theme="navy"] .mkt-card:hover { background: rgba(5, 19, 44, 0.92); }   /* claude code changed: 2026-10-25 — match the more opaque panels */
 
 /* ============================================================
  * MISC

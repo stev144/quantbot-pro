@@ -28,6 +28,7 @@
     var script = document.currentScript;   // claude code changed: 2026-10-25 — derive /static/ from this script's URL
     var canvas = document.getElementById("bubble-canvas");
     if (!canvas) return;
+    canvas.style.filter = "saturate(0.5) brightness(0.95)";   // claude code changed: 2026-10-25 — owner: dull but clearly visible — no blur (it made them unreadable), muted colours instead   // claude code changed: 2026-10-25 — owner request: soften the logos so they stay in the background (one GPU filter on the whole canvas)
     var ctx = canvas.getContext("2d");
     var bubbles = [];
     var animationId = null;
@@ -84,14 +85,14 @@
         // claude code changed: 2026-10-25 — each item is a crypto logo, a forex flag or a US index badge (GROUP_SHARE)
         var u = Math.random();
         var group = u < GROUP_SHARE.crypto ? "crypto" : u < GROUP_SHARE.crypto + GROUP_SHARE.forex ? "forex" : "index";
-        var r = group === "index" ? 19 + Math.random() * 7 : 10 + Math.random() * 11;   // bolder: 10–21 px (indices 19–26)
+        var r = group === "index" ? 17 + Math.random() * 6 : 9 + Math.random() * 9;   // claude code changed: 2026-10-25 — a little larger (9–18 px, indices 17–23) so blurred logos read
         return {
             x: Math.random() * canvas.width,
             y: spawnAtTop ? -2 * r - Math.random() * 120 : Math.random() * canvas.height,
             r: r,
-            speed: 0.3 + Math.random() * 0.7,
+            speed: 0.2 + Math.random() * 0.4,   // claude code changed: 2026-10-25 — slower fall, less distracting
             drift: (Math.random() - 0.5) * 0.4,
-            alpha: 0.4 + Math.random() * 0.35,             // bolder: 40–75 % opaque (was 18–45 %)
+            alpha: 0.5 + Math.random() * 0.2,              // claude code changed: 2026-10-25 — 50–70 % opaque, sharp; the muted colours (canvas filter) keep them dull
             logo: pick(logos[group]),
             angle: group === "index" ? 0 : Math.random() * Math.PI * 2,   // index text stays upright
             spin: group === "index" ? 0 : (Math.random() - 0.5) * 0.01,
@@ -100,7 +101,7 @@
 
     function initBubbles() {
         // claude code changed: 2026-10-25 — up to 60 items (logos are larger than the old dots)
-        var count = Math.min(60, Math.floor((canvas.width * canvas.height) / 22000));
+        var count = Math.min(60, Math.floor((canvas.width * canvas.height) / 22000));   // claude code changed: 2026-10-25 — back to the original quantity (up to 60), owner request
         bubbles = [];
         for (var i = 0; i < count; i++) bubbles.push(makeBubble(false));
     }
