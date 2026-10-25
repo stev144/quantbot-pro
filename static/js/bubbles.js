@@ -19,7 +19,13 @@
 // pass wasn't visible enough.
 // ============================================================
 
+// claude code changed: 2026-10-25 — owner request: instead of dots, Bitcoin logos and forex currency flags fall in
+// the background. Images are the project's bundled, licensed assets (static/img/coins/btc.svg — cryptocurrency-icons;
+// static/img/flags/*.svg — flag-icons, MIT), drawn as round badges like the forex cards' flags. Until an image has
+// loaded (or if one fails) that item is drawn as the old accent-coloured dot, so the background never goes blank.
+
 (function () {
+    var script = document.currentScript;   // claude code changed: 2026-10-25 — derive /static/ from this script's URL
     var canvas = document.getElementById("bubble-canvas");
     if (!canvas) return;
     var ctx = canvas.getContext("2d");
@@ -28,6 +34,30 @@
     var running = false;
     var bubbleRgb = "240, 185, 11"; // fallback (gold); overwritten from --accent in start()
     var BUBBLE_THEMES = ["midnight", "navy"];
+
+    // claude code changed: 2026-10-25 — the falling logos, in three groups (owner request: bolder; more forex and crypto;
+    // US stocks as whole-market INDEX portfolios, not single stocks). Crypto and forex use bundled licensed SVGs; the
+    // indices are drawn as text badges (no fund/brand logos are copied).
+    var STATIC = script && script.src ? script.src.replace(/js\/bubbles\.js(\?.*)?$/, "") : "/static/";
+    var CRYPTO = ["btc", "eth", "bnb", "sol", "xrp", "ada", "doge", "dot", "ltc", "link", "avax", "trx", "matic", "shib",
+                  "uni", "atom", "xlm", "bch", "near", "etc", "fil", "apt", "arb", "op"];
+    var FOREX = ["us", "eu", "gb", "jp", "ch", "au", "ca", "nz", "cn", "hk", "sg", "se", "no", "dk", "pl", "cz", "mx",
+                 "za", "th", "xau", "xag"];
+    var INDICES = [["S&P", "500"], ["NASDAQ", "100"], ["DOW", "30"], ["RUSSELL", "2000"], ["US TOTAL", "MARKET"]];
+    var GROUP_SHARE = { crypto: 0.4, forex: 0.4, index: 0.2 };   // share of the falling items per group
+    function loadImg(path) {
+        var img = new Image();
+        img.decoding = "async";
+        img.src = STATIC + path;
+        return img;
+    }
+    var logos = {
+        crypto: CRYPTO.map(function (c) { return { img: loadImg("img/coins/" + c + ".svg"), square: true }; }),
+        forex: FOREX.map(function (f) { return { img: loadImg("img/flags/" + f + ".svg"), square: false }; }),
+        index: INDICES.map(function (lines) { return { lines: lines }; }),
+    };
+    function ready(img) { return img && img.complete && img.naturalWidth > 0; }
+    function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
 
     function hexToRgbTriple(hex) {
         hex = (hex || "").trim().replace("#", "");
@@ -51,20 +81,80 @@
     }
 
     function makeBubble(spawnAtTop) {
+        // claude code changed: 2026-10-25 — each item is a crypto logo, a forex flag or a US index badge (GROUP_SHARE)
+        var u = Math.random();
+        var group = u < GROUP_SHARE.crypto ? "crypto" : u < GROUP_SHARE.crypto + GROUP_SHARE.forex ? "forex" : "index";
+        var r = group === "index" ? 19 + Math.random() * 7 : 10 + Math.random() * 11;   // bolder: 10–21 px (indices 19–26)
         return {
             x: Math.random() * canvas.width,
-            y: spawnAtTop ? -10 - Math.random() * 100 : Math.random() * canvas.height,
-            r: 1.5 + Math.random() * 4.5,
+            y: spawnAtTop ? -2 * r - Math.random() * 120 : Math.random() * canvas.height,
+            r: r,
             speed: 0.3 + Math.random() * 0.7,
             drift: (Math.random() - 0.5) * 0.4,
-            alpha: 0.12 + Math.random() * 0.28,
+            alpha: 0.4 + Math.random() * 0.35,             // bolder: 40–75 % opaque (was 18–45 %)
+            logo: pick(logos[group]),
+            angle: group === "index" ? 0 : Math.random() * Math.PI * 2,   // index text stays upright
+            spin: group === "index" ? 0 : (Math.random() - 0.5) * 0.01,
         };
     }
 
     function initBubbles() {
-        var count = Math.min(90, Math.floor((canvas.width * canvas.height) / 20000));
+        // claude code changed: 2026-10-25 — up to 60 items (logos are larger than the old dots)
+        var count = Math.min(60, Math.floor((canvas.width * canvas.height) / 22000));
         bubbles = [];
         for (var i = 0; i < count; i++) bubbles.push(makeBubble(false));
+    }
+
+    function drawLogo(b) {
+        // claude code changed: 2026-10-25 — round badge: the image clipped to a circle with a faint accent ring
+        var L = b.logo, img = L.img;
+        ctx.save();
+        ctx.globalAlpha = b.alpha;
+        ctx.translate(b.x, b.y);
+        ctx.rotate(b.angle);
+        if (L.lines) {   // US index badge: dark disc, accent ring, two lines of bold text
+            ctx.beginPath();
+            ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(4, 14, 36, 0.92)";
+            ctx.fill();
+            ctx.lineWidth = 1.8;
+            ctx.strokeStyle = "rgba(" + bubbleRgb + ", 0.95)";
+            ctx.stroke();
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            function fitText(text, y, maxSize, color) {   // largest bold size whose width fits inside the disc at height y
+                var room = 2 * Math.sqrt(Math.max(b.r * b.r - y * y, 1)) * 0.86;
+                var fs = maxSize;
+                ctx.font = "800 " + fs.toFixed(1) + "px system-ui, Segoe UI, sans-serif";
+                var w = ctx.measureText(text).width;
+                if (w > room) {
+                    fs = Math.max(5, fs * room / w);
+                    ctx.font = "800 " + fs.toFixed(1) + "px system-ui, Segoe UI, sans-serif";
+                }
+                ctx.fillStyle = color;
+                ctx.fillText(text, 0, y);
+            }
+            fitText(L.lines[0], -b.r * 0.24, b.r * 0.5, "#ffffff");
+            fitText(L.lines[1], b.r * 0.3, b.r * 0.55, "rgb(" + bubbleRgb + ")");
+        } else if (ready(img)) {
+            ctx.beginPath();
+            ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+            ctx.closePath();
+            ctx.save();
+            ctx.clip();
+            var w = L.square ? 2 * b.r : 2 * b.r * (img.naturalWidth / img.naturalHeight);   // flags 4:3 → cover the circle
+            ctx.drawImage(img, -w / 2, -b.r, w, 2 * b.r);
+            ctx.restore();
+            ctx.lineWidth = 1.8;                                       // bolder ring
+            ctx.strokeStyle = "rgba(" + bubbleRgb + ", 0.9)";
+            ctx.stroke();
+        } else {   // not loaded yet / failed: the original dot
+            ctx.beginPath();
+            ctx.arc(0, 0, Math.min(b.r, 6), 0, Math.PI * 2);
+            ctx.fillStyle = "rgb(" + bubbleRgb + ")";
+            ctx.fill();
+        }
+        ctx.restore();
     }
 
     function step() {
@@ -74,14 +164,12 @@
             var b = bubbles[i];
             b.y += b.speed;
             b.x += b.drift;
+            b.angle += b.spin;
             if (b.y - b.r > canvas.height) {
                 bubbles[i] = makeBubble(true);
                 continue;
             }
-            ctx.beginPath();
-            ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(" + bubbleRgb + ", " + b.alpha + ")";
-            ctx.fill();
+            drawLogo(b);   // claude code changed: 2026-10-25 — logos instead of plain dots
         }
         animationId = requestAnimationFrame(step);
     }

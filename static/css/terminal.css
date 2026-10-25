@@ -1194,6 +1194,22 @@
   display: none;
 }
 
+/* claude code changed: 2026-10-25 — owner request: in the NAVY theme the page's navy background (and its falling
+ * bubbles) shows through the panel surfaces too. Surfaces become translucent navy instead of solid --bg-1.
+ * Menus that float over other content (nav dropdowns, the phone bottom bar, the loading overlay) stay solid so their
+ * text never overlaps what is underneath. Other themes are unchanged. */
+:root[data-theme="navy"] .term-topbar,
+:root[data-theme="navy"] .term-typed-strip,
+:root[data-theme="navy"] .term-section,
+:root[data-theme="navy"] .term-panel,
+:root[data-theme="navy"] .metric-tile,
+:root[data-theme="navy"] .mkt-card,
+:root[data-theme="navy"] .vc-card,
+:root[data-theme="navy"] .rb-card {
+  background: rgba(2, 10, 28, 0.45);
+}
+:root[data-theme="navy"] .mkt-card:hover { background: rgba(5, 19, 44, 0.65); }
+
 /* ============================================================
  * MISC
  * ============================================================ */
