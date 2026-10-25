@@ -40,6 +40,16 @@ logger = logging.getLogger(__name__)
 
 # ── Real, confirmed constraints ──────────────────────────────────────────
 MAX_OPEN_INTEREST_HISTORY_DAYS = 30    # Binance's real cap on openInterestHist — see module docstring.
+# claude code changed: 2026-10-25 — a request starting EXACTLY 30 days back is rejected (-1130) whenever this PC's clock
+# is even slightly behind Binance's (seen at −0.6 s, Windows Time service stopped). Start at most 30 days minus this
+# margin back, so local clock drift up to 10 minutes can't push the start past Binance's limit.
+OPEN_INTEREST_CAP_MARGIN_S = 600
+
+
+def _open_interest_since_ms(days: float, now_s: float) -> int:
+    """Start of the open-interest window: `days` back, but never earlier than the cap minus the safety margin."""
+    earliest = now_s - MAX_OPEN_INTEREST_HISTORY_DAYS * 86400 + OPEN_INTEREST_CAP_MARGIN_S   # claude code changed: 2026-10-25
+    return int(max(now_s - days * 86400, earliest) * 1000)
 MAX_PAGINATION_PAGES = 200             # Same ceiling data_fetcher.py uses — safety, not a real API limit.
 FUNDING_HISTORY_PAGE_LIMIT = 1000      # Binance's per-call max for fundingRateHistory.
 OPEN_INTEREST_PAGE_LIMIT = 500         # Binance's per-call max for openInterestHist.
@@ -258,8 +268,9 @@ def fetch_open_interest_history(symbol: str, days: int = MAX_OPEN_INTEREST_HISTO
         return pd.DataFrame(columns=["timestamp", "open_interest_amount", "open_interest_value"])
 
     ex = _get_futures_exchange()
-    since_ms = int((time.time() - days * 86400) * 1000)
-    until_ms = int(time.time() * 1000)
+    now_s = time.time()
+    since_ms = _open_interest_since_ms(days, now_s)   # claude code changed: 2026-10-25 — clock-drift margin at the 30-day cap
+    until_ms = int(now_s * 1000)
 
     rows: List[dict] = []
     cursor = since_ms

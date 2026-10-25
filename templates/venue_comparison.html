@@ -203,7 +203,7 @@
                 What you see is the last row the recorder wrote for each exchange's own order book: prices in each exchange's quote currency, sizes in the coin.
                 Green = book in sync and updating, yellow = in sync but unchanged for over 5 s (quiet market), red = not usable (disconnected, re-syncing or stale): no price is shown rather than an old one.
                 Bar length = size at that price level. Feed delay = how long the exchange's update took to reach this PC (yellow above 2 s = slow network); a negative value would mean this PC's clock is behind the exchange's.
-                <br>Display only: no price gap between exchanges is calculated here. The descriptive Phase B study of the recorded history (gross and net-of-fee gaps, depth, episode lengths) is on <a href="{% url 'cross_exchange_gaps' %}">Research → Cross-Exchange Gaps</a>.{# claude code changed: 2026-10-25 — link to Phase B #}
+                <br>Display only: no price gap between exchanges is calculated here. The descriptive Phase B study of the recorded history (gross and net-of-fee gaps, depth, episode lengths) is shown below and on <a href="{% url 'cross_exchange_gaps' %}">Research → Cross-Exchange Gaps</a>.{# claude code changed: 2026-10-25 — link to Phase B #}
             </div>
             {{ recorded_books|json_script:"rb-initial" }}
             {% else %}
@@ -211,6 +211,9 @@
             {% endif %}
         </div>
     </div>
+
+    {# claude code changed: 2026-10-25 — owner request: the Phase B cross-exchange gap research, after the books (shared partial) #}
+    {% include "partials/_xarb_gaps.html" with report=xg.report instruments=xg.instruments sizes=xg.sizes span_h=xg.span_h fees=xg.fees excluded_pct=xg.excluded_pct n_net_positive_rows=xg.n_net_positive_rows n_rows=xg.n_rows command=xg.command phase_c=xg.phase_c title="Cross-Exchange Gaps — research (Phase B, descriptive)" %}
 </div>
 
 {% include "partials/_footer.html" with label="Venue Comparison" note="real order-book/fee data, live exchange calls — expect a few seconds to load" %}

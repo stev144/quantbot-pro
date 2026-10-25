@@ -35,11 +35,28 @@ def _row(pair: dict, sizes) -> dict:
                                 or any(b["net"] and b["net"]["pct_positive"] > 0 for b in by_size)}
 
 
-def cross_exchange_gaps(request):
+def phase_c_status() -> dict:
+    """claude code changed: 2026-10-25 — Phase C (XARB-C1) registration state, read-only; never evaluates."""
+    from bot.research.cross_exchange import phase_c as pc
+    d = pc.prereg_dir(str(_out_dir()))
+    reg_file, res_file = d / f"{pc.PREREG_ID}.json", d / f"{pc.PREREG_ID}_RESULT.json"
+    if res_file.exists():
+        import json
+        r = json.loads(res_file.read_text(encoding="utf-8"))
+        return {"state": "EVALUATED", "verdict": r.get("verdict"), "detail": r}
+    if reg_file.exists():
+        import json
+        raw = json.loads(reg_file.read_text(encoding="utf-8"))
+        return {"state": raw.get("status"), "registered_utc": raw.get("registered_utc"), "n_hours": raw.get("n_hours")}
+    return {"state": "NOT DRAFTED"}
+
+
+def gap_context() -> dict:
+    """claude code changed: 2026-10-25 — shared by this page and the Venue Comparison page (one source, no duplicate
+    tables): the newest saved report shaped for templates/partials/_xarb_gaps.html."""
     report = load_latest_report(str(_out_dir()))
     if report is None:
-        return render(request, "cross_exchange_gaps.html", {"active": "cross_exchange_gaps", "report": None,
-                                                            "command": COMMAND})
+        return {"report": None, "command": COMMAND, "phase_c": phase_c_status()}
     sizes = report["config"]["sizes_quote"]
     instruments = [{"instrument": i["instrument"], "rows": [_row(p, sizes) for p in i["pairs"]]}
                    for i in report["instruments"]]
@@ -55,9 +72,14 @@ def cross_exchange_gaps(request):
              "basis": report["config"]["fee_basis"].get(v, "").removeprefix("VERIFIED ").removeprefix("UNVERIFIED "),
              "verified": report["config"]["fee_basis"].get(v, "").startswith("VERIFIED")}
             for v, r in sorted(report["config"]["fees"].items())]
-    return render(request, "cross_exchange_gaps.html", {
-        "active": "cross_exchange_gaps", "report": report, "instruments": instruments, "sizes": sizes,
+    return {
+        "report": report, "instruments": instruments, "sizes": sizes,
         "span_h": span_h, "fees": fees, "excluded_pct": (100.0 * excluded / (usable + excluded)) if usable + excluded else None,
         "n_net_positive_rows": sum(r["any_net_positive"] for i in instruments for r in i["rows"]),
         "n_rows": sum(len(i["rows"]) for i in instruments), "command": COMMAND,
-    })
+        "phase_c": phase_c_status(),   # claude code changed: 2026-10-25
+    }
+
+
+def cross_exchange_gaps(request):
+    return render(request, "cross_exchange_gaps.html", {"active": "cross_exchange_gaps", "xg": gap_context()})

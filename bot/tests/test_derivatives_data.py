@@ -96,6 +96,19 @@ class FundingRateHistoryTest(SimpleTestCase):
         self.assertEqual(list(df.columns), ["timestamp", "funding_rate", "mark_price"])
 
 
+class OpenInterestWindowMarginTest(SimpleTestCase):   # claude code changed: 2026-10-25 — offline, known answers
+    def test_start_never_reaches_the_cap_and_shorter_windows_are_unchanged(self):
+        from bot.engines.derivatives_data import OPEN_INTEREST_CAP_MARGIN_S, _open_interest_since_ms
+        now = 1_792_900_000.0
+        cap_start = now - MAX_OPEN_INTEREST_HISTORY_DAYS * 86400
+        self.assertEqual(_open_interest_since_ms(30, now), int((cap_start + OPEN_INTEREST_CAP_MARGIN_S) * 1000))
+        self.assertEqual(_open_interest_since_ms(90, now), int((cap_start + OPEN_INTEREST_CAP_MARGIN_S) * 1000))
+        self.assertEqual(_open_interest_since_ms(5, now), int((now - 5 * 86400) * 1000))   # well inside: untouched
+        # a local clock 0.6 s behind Binance still lands well inside Binance's 30-day window
+        binance_now = now + 0.6
+        self.assertGreater(_open_interest_since_ms(30, now) / 1000, binance_now - MAX_OPEN_INTEREST_HISTORY_DAYS * 86400)
+
+
 class OpenInterestHistoryTest(SimpleTestCase):
 
     def test_returns_real_rows(self):

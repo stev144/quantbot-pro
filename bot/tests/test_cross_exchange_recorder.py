@@ -369,7 +369,8 @@ class SafetyTests(SimpleTestCase):
     def trees(self):
         import ast
         cmds = PKG.parents[1] / "management" / "commands"   # claude code changed: 2026-10-25 — Phase B command too
-        files = list(PKG.glob("*.py")) + [cmds / "research_record_cross_exchange_books.py", cmds / "research_cross_exchange_gap_study.py"]
+        files = list(PKG.glob("*.py")) + [cmds / "research_record_cross_exchange_books.py", cmds / "research_cross_exchange_gap_study.py",
+                                            cmds / "research_cross_exchange_phase_c.py"]   # claude code changed: 2026-10-25 — Phase C command too
         return {f.name: ast.parse(f.read_text(encoding="utf-8")) for f in files}
 
     def test_no_order_account_or_credential_path_exists(self):
@@ -634,6 +635,20 @@ class GapStudyPageTests(GapStudySessionTests):   # claude code changed: 2026-10-
         self.assertIn("Pre-funded inventory", html)        # limitations are shown, not hidden
         self.assertIn("Governance:", html)
 
+    def test_venue_comparison_shows_the_gap_research_after_the_books(self):   # claude code changed: 2026-10-25
+        from unittest import mock
+        from bot.views import cross_exchange_gaps as xg, recorded_books as rb, venue_comparison_data as vcd
+        gs.save_report(gs.run_study(str(self.d), cfg=self.cfg), str(self.d))
+        with mock.patch.object(xg, "_out_dir", return_value=self.d), \
+             mock.patch.object(rb, "recorder_dir", return_value=self.d), \
+             mock.patch.object(vcd, "compare_venues", return_value=[]), \
+             mock.patch.object(vcd, "assess_venue_readiness", side_effect=Exception("offline")):
+            html = self.client.get("/execution/venues/").content.decode()
+        self.assertIn("Cross-Exchange Gaps — research (Phase B, descriptive)", html)
+        self.assertLess(html.index('id="recorded-books"'), html.index("Cross-Exchange Gaps — research"))   # after the books
+        self.assertIn("0 / 2", html)
+        self.assertIn("not profit, not a trading signal", html)
+
     def test_view_is_read_only(self):
         import ast
         src = (PKG.parents[1] / "views" / "cross_exchange_gaps.py").read_text(encoding="utf-8")
@@ -643,3 +658,116 @@ class GapStudyPageTests(GapStudySessionTests):   # claude code changed: 2026-10-
         for bad in ("aiohttp", "ccxt", "requests", "bot.research.cross_exchange.feeds", "bot.engines", "subprocess"):
             self.assertFalse(any(m.startswith(bad) for m in mods), bad)
         self.assertNotIn("run_study", src)                 # the page never computes; it only loads a saved report
+
+
+# claude code changed: 2026-10-25 — PHASE C (preregistered XARB-C1): known answers, guards, one-shot evaluation, calibration
+from datetime import datetime as _dt, timezone as _tz
+import numpy as _np
+from dataclasses import replace as _replace
+from bot.research.cross_exchange import phase_c as pc
+
+_FEES0 = {"binance": 0.0, "kraken": 0.0, "coinbase": 0.0}
+
+
+class PhaseCDecisionTests(SimpleTestCase):
+    reg = pc.Registration(fees=_FEES0, fee_basis={v: "test" for v in _FEES0})
+
+    def test_known_answers(self):
+        n = self.reg.n_hours
+        self.assertEqual(pc.decide(_np.zeros(n), self.reg)["verdict"], "FAIL")
+        self.assertEqual(pc.decide(_np.full(n, 3 * self.reg.theta), self.reg)["verdict"], "PASS")
+        self.assertEqual(pc.decide(_np.full(n, self.reg.theta), self.reg)["verdict"], "FAIL")     # must EXCEED θ
+        ramp = _np.linspace(2 * self.reg.theta, 6 * self.reg.theta, n)                           # lag-1 ≈ 1
+        r = pc.decide(ramp, self.reg)
+        self.assertGreater(r["lag1_autocorrelation"], 0.9)
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")                                           # beyond calibration
+        self.assertEqual(r["batches"], 7)
+
+    def test_batch_means_t_known_answer(self):
+        y = _np.repeat([1.0, 2.0, 3.0], 2)                         # batches of 2 → means 1, 2, 3
+        r = pc.batch_means_test(y, 2, theta=0.0, alpha=0.05)
+        from scipy import stats
+        se = _np.std([1, 2, 3], ddof=1) / _np.sqrt(3)
+        self.assertAlmostEqual(r["lower_bound"], 2.0 - stats.t.ppf(0.95, 2) * se)
+        self.assertAlmostEqual(r["t_stat"], 2.0 / se)
+        with self.assertRaises(ValueError):
+            pc.batch_means_test(_np.ones(5), 2, 0.0, 0.05)        # fewer than 3 batches
+
+    def test_false_pass_rate_at_the_null_boundary_is_controlled(self):
+        self.assertLessEqual(pc.false_pass_rate(self.reg, n_sims=600, rho=0.5), 0.05)
+
+
+class PhaseCRegistrationTests(SimpleTestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        (self.d / "metadata").mkdir()
+        self.reg = pc.Registration(fees=_FEES0, fee_basis={v: "test" for v in _FEES0}, n_hours=3, batch_hours=1,
+                                   min_eligible_share=0.0005, recorder={"recorder_version": "SQT-XARB-REC-1",
+                                   "schema_version": "xarb-obs-v1", "sample_interval_s": 1.0, "depth": 10,
+                                   "venues": ["binance", "kraken"]})
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def session(self, sid, start_iso, hours, kraken_bids):
+        """One instant per (hour, kraken_bid); Binance ask fixed at 100. Instants are 1 s apart within an hour."""
+        meta = {"session_id": sid, "status": rc.COMPLETED, "start_utc": start_iso, "recorder_version": "SQT-XARB-REC-1",
+                "schema_version": "xarb-obs-v1", "config": {"sample_interval_s": 1.0, "depth": 10, "venues": ["binance", "kraken"]},
+                "books": {"binance:BTCUSDT": {"instrument": "BTC-USDT"}, "kraken:BTC/USDT": {"instrument": "BTC-USDT"}}}
+        (self.d / "metadata" / f"{sid}.json").write_text(json.dumps(meta), encoding="utf-8")
+        raw = self.d / "raw" / sid
+        raw.mkdir(parents=True)
+        lines, mono = [], 0
+        for h in hours:
+            for kb in kraken_bids:
+                mono += 1
+                utc = (h * 3600 + mono) * 10**9
+                c = {"sample_mono_ns": (h * 3600 + mono) * 10**9, "sample_utc_ns": utc, "instrument": "BTC-USDT",
+                     "feed_delay_ms": 50.0, "flags": [], "usable": True, "status": "SYNCED"}
+                lines.append({**c, "venue": "binance", "venue_symbol": "BTCUSDT", "best_bid": "99.9", "best_ask": "100",
+                              "bids": [["99.9", "100"]], "asks": [["100", "100"]]})
+                lines.append({**c, "venue": "kraken", "venue_symbol": "BTC/USDT", "best_bid": kb,
+                              "best_ask": str(D(kb) + D("0.1")), "bids": [[kb, "100"]], "asks": [[str(D(kb) + D("0.1")), "100"]]})
+        (raw / "obs-0001.jsonl").write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+
+    def test_hourly_outcome_counts_only_runs_of_l_min(self):
+        # bids: + + + − + −  → a run of 3 qualifies (≥ 2); the lone + does not → 3 qualifying of 6 eligible
+        self.session("20261026T000000Z-bbbbbb", "2026-10-26T00:00:00+00:00", [493000],
+                     ["100.2", "100.2", "100.2", "99.5", "100.2", "99.5"])
+        hours, sha = pc.hourly_outcomes(str(self.d), "20261026T000000Z-bbbbbb", self.reg)
+        self.assertEqual(len(hours), 1)
+        self.assertEqual((hours[0]["eligible"], hours[0]["qualifying"]), (6, 3))
+        self.assertAlmostEqual(hours[0]["y"], 0.5)
+        self.assertEqual(len(sha), 64)
+
+    def test_full_lifecycle_guards_and_single_evaluation(self):
+        pc.write_draft(str(self.d), self.reg)
+        with self.assertRaises(FileExistsError):
+            pc.write_draft(str(self.d), self.reg)                          # a draft is never replaced
+        with self.assertRaises(PermissionError):
+            pc.evaluate(str(self.d))                                        # unsigned → refused
+        pc.owner_sign(str(self.d), "owner (test)", now=_dt(2026, 10, 26, tzinfo=_tz.utc))
+        with self.assertRaises(ValueError):
+            pc.owner_sign(str(self.d), "again")                                   # only a draft can be signed
+        # pre-registration session (Phase B-style) is refused; post-registration session is used
+        self.session("20261025T000000Z-old000", "2026-10-25T00:00:00+00:00", [492990, 492991, 492992], ["100.2", "100.2"])
+        self.session("20261027T000000Z-new000", "2026-10-27T00:00:00+00:00", [493030], ["100.2", "100.2"])
+        r = pc.evaluate(str(self.d))
+        self.assertEqual(r["status"], "INSUFFICIENT_DATA")                  # 1 of 3 hours: nothing written
+        self.assertFalse((pc.prereg_dir(str(self.d)) / "XARB-C1_RESULT.json").exists())
+        self.assertEqual([s["reason"] for s in r["sessions_refused"]], ["started before registration"])
+        shutil.rmtree(self.d / "raw" / "20261027T000000Z-new000")
+        (self.d / "metadata" / "20261027T000000Z-new000.json").unlink()
+        self.session("20261027T000000Z-new000", "2026-10-27T00:00:00+00:00", [493030, 493031, 493032], ["100.2", "100.2"])
+        r = pc.evaluate(str(self.d))
+        self.assertEqual((r["status"], r["verdict"], r["n_hours"]), ("EVALUATED", "PASS", 3))
+        with self.assertRaises(FileExistsError):
+            pc.evaluate(str(self.d))                                        # one shot only
+
+    def test_edited_registration_is_refused(self):
+        path = pc.write_draft(str(self.d), self.reg)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw["theta"] = 0.0                                                  # someone loosens the threshold
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            pc.owner_sign(str(self.d), "owner")

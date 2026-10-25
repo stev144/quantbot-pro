@@ -3362,3 +3362,15 @@ First run, session 20261024T211220Z-eac5af (9.7 h, 34,607 instants, 1.2 % rows e
 Gates: G1 PASS, G2 PASS, G3 NOT APPLICABLE, G4 PARTIAL (no inventory/rebalancing/latency model; 10-level depth),
 G5 PASS (descriptive, conditions recorded). Report: CROSS_EXCHANGE_PHASE_B_GAP_STUDY_2026-10-25.md. Evidence class:
 DESCRIPTIVE — no evidence status.
+
+## 2026-10-25 — Cross-exchange research PHASE C: preregistered test XARB-C1 designed + calibrated (not signed)
+Owner: "proceed with the cross exchange prompt to phase C". Built `bot/research/cross_exchange/phase_c.py` +
+`manage.py research_cross_exchange_phase_c` (--draft / --sign / --status / --calibrate / --evaluate). H1: share of time a
+1,000-USDT trade is net-positive for ≥ 2 consecutive samples (any coin/direction) exceeds θ = 0.1 %, at registered fees.
+Design: first 336 eligible post-signing hours; 7 × 48-h batch means, one-sided t (6 df), α = 0.025; INCONCLUSIVE if
+hourly lag-1 > 0.9; one-shot, digest-checked, pre-registration sessions refused. Calibration replaced a percentile
+block bootstrap that passed 6.8–14 % at the null; final design false-pass 2.7/2.8/3.2/4.1 % (ρ 0/.5/.8/.9), power
+1.00 at 2θ. Phase B session used only as a known answer (9 eligible hours, all Y = 0) — not evidence.
+NOT drafted: at base-tier fees the answer is already FAIL; awaiting owner fee tiers + signature, then a NEW recorder
+session. Gates: G1 PASS, G2 PASS, G3 PASS (design), G4 PARTIAL, G5 BLOCKED (owner). Phase D not implemented.
+Report: CROSS_EXCHANGE_PHASE_C_PREREGISTRATION_2026-10-25.md.

@@ -1,0 +1,125 @@
+{% load coin_extras %}
+{# claude code changed: 2026-10-25 — shared Phase B gap-study block (Cross-Exchange Gaps page + Venue Comparison).
+   Context: report, instruments, sizes, span_h, fees, excluded_pct, n_net_positive_rows, n_rows, command, title. #}
+<style>
+/* claude code changed: 2026-10-25 — new page: cross-exchange research Phase B (descriptive gap study) */
+.xg-dir { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.xg-dir img { width:18px; height:18px; border-radius:5px; }
+.xg-arrow { opacity:.6; }
+.xg-sub { font-size:10px; opacity:.75; }
+.xg-size-head { text-align:center; border-left:1px solid var(--border); }
+.xg-sep { border-left:1px solid var(--border); }
+.xg-legend li { margin:2px 0; }
+</style>
+<div class="term-section">
+    <div class="term-section-head">
+        <span class="term-section-title">{{ title|default:"Cross-Exchange Gaps — Phase B (descriptive)" }}</span>
+        <span class="term-section-meta">{% if report %}run {{ report.run_id }} · {{ report.generated_at|slice:":16" }} UTC · {{ report.study_version }}{% endif %}</span>
+    </div>
+    <div class="term-section-body">
+        <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin-bottom:12px">
+            <strong>Measurement of recorded public order books — not profit, not a trading signal.</strong>
+            {% if report %}{{ report.classification }}.{% endif %} No order, credential or exchange connection is involved; this block only reads a saved report.
+        </div>
+        {% if not report %}
+        <div class="unavailable">No gap study has been run yet. Start one explicitly with <code>{{ command }}</code> (it reads the newest recording session); pages never compute it on their own.</div>
+        {% else %}
+        <div class="term-grid term-grid-4" style="margin-bottom:12px">
+            <div class="metric-tile"><div class="metric-label">Recording analysed</div><div class="metric-value">{% if span_h %}{{ span_h|floatformat:1 }} h{% else %}—{% endif %}</div><div class="metric-sub">{{ report.input.instants }} one-second instants · {{ report.input.first_sample_utc|slice:":16" }} → {{ report.input.last_sample_utc|slice:":16" }} UTC</div></div>
+            <div class="metric-tile"><div class="metric-label">Rows excluded</div><div class="metric-value">{{ excluded_pct|floatformat:1 }}%</div><div class="metric-sub">disconnected, re-syncing, stale or feed slower than {{ report.config.max_feed_delay_ms|floatformat:0 }} ms</div></div>
+            <div class="metric-tile"><div class="metric-label">Directions with any net-positive instant</div><div class="metric-value {% if n_net_positive_rows %}warn{% else %}neg{% endif %}">{{ n_net_positive_rows }} / {{ n_rows }}</div><div class="metric-sub">after base-tier taker fees on both legs, at any size</div></div>
+            <div class="metric-tile"><div class="metric-label">Recorder pauses</div><div class="metric-value">{{ report.input.pauses_over_max_gap }}</div><div class="metric-sub">gaps over {{ report.config.max_gap_s }} s (e.g. sleep) — each ends every episode</div></div>
+        </div>
+
+        <div class="chart-caption" style="margin-bottom:12px">
+            <b>How to read a row:</b> buy on the first exchange (pay its <b>ask</b>), sell on the second (receive its <b>bid</b>), at the same sampled instant.
+            <b>Gross</b> = sell price − buy price, in basis points (1 bp = 0.01 %) of the buy price. <b>Net</b> = after each exchange's taker fee on its own leg.
+            Size columns walk the recorded depth for the same coin quantity on both legs; "no depth" = the recorded top {{ report.session.depth }} levels could not fill that size (never extrapolated).
+            <b>Episode</b> = consecutive seconds with the gap above zero.
+        </div>
+
+        <div class="term-table-wrap" style="margin-bottom:12px">
+            <table class="term-table">
+                <thead><tr><th>Exchange</th><th class="num">Taker fee used</th><th>Source</th></tr></thead>
+                <tbody>{% for f in fees %}
+                <tr><td class="label-cell"><span class="coin-id">{% venue_logo f.venue 18 %}{{ f.venue|upper }}</span></td>
+                    <td class="num">{{ f.pct|floatformat:2 }} % ({{ f.bps|floatformat:0 }} bps)</td>
+                    <td>{% if f.verified %}<span class="badge pos">verified</span>{% else %}<span class="badge warn">unverified</span>{% endif %} <span class="text-dim">{{ f.basis }}</span></td></tr>
+                {% endfor %}</tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if report %}
+{% for inst in instruments %}
+<div class="term-section">
+    <div class="term-section-head">
+        <span class="term-section-title"><span class="coin-id">{% coin_logo inst.instrument 20 %}{{ inst.instrument }}</span></span>
+        <span class="term-section-meta">6 directions · top of book + {{ sizes|length }} trade sizes (USDT)</span>
+    </div>
+    <div class="term-section-body">
+        <div class="term-table-wrap">
+            <table class="term-table">
+                <thead>
+                <tr>
+                    <th rowspan="2">Buy → Sell</th><th rowspan="2" class="num">Fees (both legs)</th>
+                    <th colspan="4" class="xg-size-head">Top of book</th>
+                    <th colspan="3" class="xg-size-head">Gross &gt; 0 episodes</th>
+                    {% for s in sizes %}<th colspan="2" class="xg-size-head">{{ s }} USDT · net</th>{% endfor %}
+                </tr>
+                <tr>
+                    <th class="num xg-sep">Gross &gt; 0</th><th class="num">Median gross</th><th class="num">99th pct</th><th class="num">Best net</th>
+                    <th class="num xg-sep">Count</th><th class="num">Median</th><th class="num">Longest</th>
+                    {% for s in sizes %}<th class="num xg-sep">Net &gt; 0</th><th class="num">Median / no depth</th>{% endfor %}
+                </tr>
+                </thead>
+                <tbody>
+                {% for r in inst.rows %}
+                <tr>
+                    <td class="label-cell"><span class="xg-dir">{% venue_logo r.buy 18 %}{{ r.buy|upper }}<span class="xg-arrow">→</span>{% venue_logo r.sell 18 %}{{ r.sell|upper }}</span></td>
+                    <td class="num">{{ r.fee_bps|floatformat:0 }} bps</td>
+                    {% if r.gross %}
+                    <td class="num xg-sep">{{ r.gross.pct_positive|floatformat:1 }}%</td>
+                    <td class="num {% if r.gross.p50 > 0 %}pos{% else %}neg{% endif %}">{{ r.gross.p50|floatformat:2 }}</td>
+                    <td class="num">{{ r.gross.p99|floatformat:2 }}</td>
+                    <td class="num {% if r.net.max > 0 %}pos{% else %}neg{% endif %}">{{ r.net.max|floatformat:1 }}<div class="xg-sub">net &gt; 0: {{ r.net.pct_positive|floatformat:2 }}%</div></td>
+                    <td class="num xg-sep">{{ r.episodes.count }}</td>
+                    <td class="num">{% if r.episodes.median_s is not None %}{{ r.episodes.median_s|floatformat:0 }} s{% else %}—{% endif %}</td>
+                    <td class="num">{% if r.episodes.max_s is not None %}{{ r.episodes.max_s|floatformat:0 }} s{% else %}—{% endif %}</td>
+                    {% else %}
+                    <td colspan="7" class="xg-sep text-dim">no eligible instants</td>
+                    {% endif %}
+                    {% for b in r.by_size %}
+                    <td class="num xg-sep">{% if b.net %}{{ b.net.pct_positive|floatformat:2 }}%{% else %}—{% endif %}</td>
+                    <td class="num">{% if b.net %}<span class="{% if b.net.p50 > 0 %}pos{% else %}neg{% endif %}">{{ b.net.p50|floatformat:1 }}</span>{% else %}—{% endif %}<div class="xg-sub">{% if b.insufficient_pct is not None %}{{ b.insufficient_pct|floatformat:0 }}% no depth{% endif %}</div></td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="xg-sub" style="margin-top:6px">All gap figures in basis points. "Best net" is the single most favourable instant after fees; its share of time above zero is shown under it.</div>
+    </div>
+</div>
+{% endfor %}
+
+<div class="term-section">
+    <div class="term-section-head"><span class="term-section-title">What this does not show</span><span class="term-section-meta">limitations · governance · provenance</span></div>
+    <div class="term-section-body">
+        <ul class="chart-caption xg-legend">{% for l in report.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+        <div class="chart-caption" style="border-left:3px solid var(--accent);padding-left:8px;margin:10px 0"><b>Governance:</b> {{ report.governance }}</div>
+        {# claude code changed: 2026-10-25 — Phase C (preregistered test XARB-C1) state #}
+        <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin:10px 0">
+            <b>Phase C — preregistered test XARB-C1:</b>
+            {% if phase_c.state == "EVALUATED" %}evaluated once — verdict <b>{{ phase_c.verdict }}</b> (not permission to trade).
+            {% elif phase_c.state == "SIGNED" %}signed {{ phase_c.registered_utc|slice:":16" }} UTC — collecting fresh data; evaluates once after {{ phase_c.n_hours }} eligible hours recorded after signing.
+            {% elif phase_c.state == "DRAFT" %}draft written, awaiting the owner's signature.
+            {% else %}designed and calibrated, not yet drafted — it needs your real taker fees first (at base-tier fees Phase B already shows the answer would be FAIL). See CROSS_EXCHANGE_PHASE_C_PREREGISTRATION_2026-10-25.md.{% endif %}
+        </div>
+        <div class="xg-sub mono">session {{ report.session.session_id }} ({{ report.session.status }}) · recorder {{ report.session.recorder_version }} · input sha256 {{ report.input.sha256|slice:":16" }}… · code {{ report.code.commit|slice:":8" }}{% if report.code.dirty %} (uncommitted changes){% endif %} · runtime {{ report.runtime_s }} s
+            · rerun: <code>{{ command }}</code> (add <code>--fee binance=0.00075</code> etc. for your own fee tier)</div>
+    </div>
+</div>
+{% endif %}
