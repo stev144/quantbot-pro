@@ -68,6 +68,19 @@
 .rb-row.mid { display:block; text-align:center; font-size:11px; padding:4px; border-top:1px dashed var(--vc-blue-line); border-bottom:1px dashed var(--vc-blue-line); }
 .rb-empty { padding:24px 6px; text-align:center; font-size:12px; opacity:.85; }
 .rb-sub.slow { color:var(--warning); opacity:1; font-weight:600; }
+/* claude code changed: 2026-10-25 — owner request: sizes yellow, totals bright blue, brighter exchange names.
+   Dark / gold themes use the first set; the light theme gets darker shades of the same hues so they stay readable. */
+.vc-wrap { --rb-size:#f2c94c; --rb-total:#3db4ff; --vc-name-color:#eaf4ff; }
+/* claude code changed: 2026-10-25 — owner request: back to the site's normal theme background (the black / gold / navy
+   page-only trials were removed). The light theme gets darker shades of the same hues so they stay readable on white. */
+:root[data-theme="light"] .vc-wrap { --rb-size:#a87a00; --rb-total:#0a6fe0; --vc-name-color:#0b3d91; }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) .vc-wrap { --rb-size:#a87a00; --rb-total:#0a6fe0; --vc-name-color:#0b3d91; } }
+.vc-ribbon { white-space:nowrap; }                    /* "2ND CHEAPEST" / "3RD · MOST EXPENSIVE" stay on one line */
+.vc-head { flex-wrap:wrap; row-gap:6px; }             /* a narrow card moves the pill under the name instead */
+.rb-row.ask > span:nth-child(2), .rb-row.bid > span:nth-child(2) { color:var(--rb-size); }
+.rb-row.ask > span:nth-child(3), .rb-row.bid > span:nth-child(3) { color:var(--rb-total); font-weight:600; }
+.vc-name, .rb-name { color:var(--vc-name-color); }
+.rb-name { font-size:15px; }
 /* claude code changed: 2026-10-25 — phone: the Symbol/Qty form wraps instead of being cut off on the left */
 @media (max-width:600px) { .vc-form-row { justify-content:flex-start !important; padding-left:16px !important; padding-right:16px !important; }
   .vc-form-row .term-symbol-form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; width:100%; }
@@ -117,8 +130,8 @@
                             <div class="vc-market coin-id">{% coin_logo row.market 18 %}{{ row.market }}</div>{# claude code changed: 2026-10-22 — coin logo #}
                         </div>
                         {% if row.venue_id == comparison.cheapest_venue %}<span class="vc-ribbon vc-r1">CHEAPEST</span>{# claude code changed: 2026-10-22 — green #}
-                        {% elif row.rank == 2 %}<span class="vc-ribbon vc-r2">2ND</span>{# claude code changed: 2026-10-22 — yellow #}
-                        {% elif row.rank %}<span class="vc-ribbon vc-r3">{% if row.rank == 3 %}3RD{% else %}#{{ row.rank }}{% endif %}</span>{# claude code changed: 2026-10-22 — red #}
+                        {% elif row.rank == 2 %}<span class="vc-ribbon vc-r2">2ND CHEAPEST</span>{# claude code changed: 2026-10-25 — owner wording (yellow since 2026-10-22) #}
+                        {% elif row.rank %}<span class="vc-ribbon vc-r3">{% if row.rank == 3 %}3RD · MOST EXPENSIVE{% else %}#{{ row.rank }}{% endif %}</span>{# claude code changed: 2026-10-25 — owner wording (red since 2026-10-22) #}
                         {% elif row.available %}<span class="vc-rank" title="quoted in another currency — not ranked">not ranked</span>{% endif %}
                     </div>
 
@@ -190,7 +203,7 @@
                 What you see is the last row the recorder wrote for each exchange's own order book: prices in each exchange's quote currency, sizes in the coin.
                 Green = book in sync and updating, yellow = in sync but unchanged for over 5 s (quiet market), red = not usable (disconnected, re-syncing or stale): no price is shown rather than an old one.
                 Bar length = size at that price level. Feed delay = how long the exchange's update took to reach this PC (yellow above 2 s = slow network); a negative value would mean this PC's clock is behind the exchange's.
-                <br>Display only: no price gap between exchanges is calculated here. The recorded history lies inside the sealed crypto test window (ZONES.F) and is not analysed on this page.
+                <br>Display only: no price gap between exchanges is calculated here. The descriptive Phase B study of the recorded history (gross and net-of-fee gaps, depth, episode lengths) is on <a href="{% url 'cross_exchange_gaps' %}">Research → Cross-Exchange Gaps</a>.{# claude code changed: 2026-10-25 — link to Phase B #}
             </div>
             {{ recorded_books|json_script:"rb-initial" }}
             {% else %}

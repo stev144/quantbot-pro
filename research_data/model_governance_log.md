@@ -3349,3 +3349,16 @@ Automatic, peers time.windows.com + time.google.com, hourly poll (SpecialPollInt
 Session 20261024T211220Z-eac5af therefore contains a ≈ +0.9 s step in its local wall-clock fields (sample_utc_ns /
 receipt_utc_ns) at ≈ 05:57 UTC; monotonic fields are unaffected. Any later analysis must treat pre-step local times
 as ≈ 0.9 s slow (feed_delay_ms was ≈ −700…−800 ms before, ≈ +75…+210 ms after).
+
+## 2026-10-25 — Cross-exchange research PHASE B: descriptive gap study (owner-authorised inside ZONES.F)
+Owner: "continue with phase b". Recorded as DESCRIPTIVE analysis of recorder data inside the sealed crypto window
+ZONES.F (D-8) under the strictest reading: no p-values/significance/edge claims; nothing may select or tune any strategy
+evaluated on ZONES.F; any inferential Phase C must be preregistered and use only data recorded after registration.
+Built `bot/research/cross_exchange/gap_study.py` + `manage.py research_cross_exchange_gap_study` + read-only page
+/research/cross-exchange-gaps/. Exact-Decimal depth walk, per-leg base-tier taker fees (Binance 0.10 % unverified,
+Kraken 0.80 % verified, Coinbase 0.60 % unverified), quality filters, episodes; monotonic-clock pairing.
+First run, session 20261024T211220Z-eac5af (9.7 h, 34,607 instants, 1.2 % rows excluded), run 81de663cf531ad48:
+0/24 directions ever net-positive at any size; best net −63.6 bps; largest gross 8.8 bps; fees 70–140 bps.
+Gates: G1 PASS, G2 PASS, G3 NOT APPLICABLE, G4 PARTIAL (no inventory/rebalancing/latency model; 10-level depth),
+G5 PASS (descriptive, conditions recorded). Report: CROSS_EXCHANGE_PHASE_B_GAP_STUDY_2026-10-25.md. Evidence class:
+DESCRIPTIVE — no evidence status.

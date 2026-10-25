@@ -368,7 +368,8 @@ class SafetyTests(SimpleTestCase):
 
     def trees(self):
         import ast
-        files = list(PKG.glob("*.py")) + [PKG.parents[1] / "management" / "commands" / "research_record_cross_exchange_books.py"]
+        cmds = PKG.parents[1] / "management" / "commands"   # claude code changed: 2026-10-25 — Phase B command too
+        files = list(PKG.glob("*.py")) + [cmds / "research_record_cross_exchange_books.py", cmds / "research_cross_exchange_gap_study.py"]
         return {f.name: ast.parse(f.read_text(encoding="utf-8")) for f in files}
 
     def test_no_order_account_or_credential_path_exists(self):
@@ -503,3 +504,142 @@ class LatestBooksViewerTests(SimpleTestCase):
             self.assertFalse(any(m.startswith(bad) for m in mods), bad)
         calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
         self.assertFalse(calls & {"write_text", "write", "unlink", "mkdir", "run"})
+
+
+# claude code changed: 2026-10-25 — PHASE B descriptive gap study: known answers + a synthetic session with known episodes
+from bot.research.cross_exchange import gap_study as gs
+
+
+class GapStudyMathTests(SimpleTestCase):
+    def test_walk_known_answers_exact_decimal(self):
+        lv = [["100", "1"], ["101", "1"]]
+        self.assertEqual(gs.walk(lv, D("1")), D("100"))
+        self.assertEqual(gs.walk(lv, D("1.5")), (D("100") + D("50.5")) / D("1.5"))   # 100.333…
+        self.assertEqual(gs.walk(lv, D("2")), D("100.5"))
+        self.assertIsNone(gs.walk(lv, D("2.0001")))                                # never extrapolated
+
+    def test_pair_measure_known_answers(self):
+        buy = {"best_ask": "100", "asks": [["100", "1"], ["101", "1"]]}
+        sell = {"best_bid": "100.5", "bids": [["100.5", "1"], ["100", "1"]]}
+        m = gs.pair_measure(buy, sell, (150, 1000), 0.001, 0.002)
+        self.assertAlmostEqual(m["top_gross_bps"], 50.0)                              # (100.5-100)/100
+        self.assertAlmostEqual(m["top_net_bps"], (100.5 * 0.998 - 100.1) / 100.1 * 1e4)   # ≈ 19.88 bps
+        r = m["sizes"][150]                                                           # 1.5 coins on both legs
+        self.assertAlmostEqual(r["gross_bps"], 0.0, places=9)                        # 100.333… both sides
+        avg = 150.5 / 1.5
+        self.assertAlmostEqual(r["net_bps"], (avg * 0.998 - avg * 1.001) / (avg * 1.001) * 1e4)
+        self.assertIsNone(m["sizes"][1000])                                           # 10 coins: depth exhausted
+
+    def test_row_exclusion(self):
+        self.assertEqual(gs.row_exclusion(None, 1000), "missing_row")
+        self.assertEqual(gs.row_exclusion({"usable": False, "flags": ["STALE"], "status": "SYNCED"}, 1000), "stale")
+        self.assertEqual(gs.row_exclusion({"usable": False, "flags": [], "status": "DISCONNECTED"}, 1000),
+                         "unusable:DISCONNECTED")
+        self.assertEqual(gs.row_exclusion({"usable": True, "feed_delay_ms": 1500}, 1000), "slow_feed")
+        self.assertIsNone(gs.row_exclusion({"usable": True, "feed_delay_ms": -800}, 1000))   # clock offset, not slow
+        self.assertIsNone(gs.row_exclusion({"usable": True, "feed_delay_ms": None}, 1000))
+
+
+class GapStudySessionTests(SimpleTestCase):
+    """6 instants, binance vs kraken, BTC. Kraken's bid is above Binance's ask (buy Binance → sell Kraken gap > 0) at
+    instants 1, 2, 5, 15; below at 3; Kraken unusable at 4; a 10 s recorder pause sits between 5 and 15."""
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.sid = "20261025T010000Z-aaaaaa"
+        (self.d / "metadata").mkdir()
+        raw = self.d / "raw" / self.sid
+        raw.mkdir(parents=True)
+        meta = {"session_id": self.sid, "status": rc.COMPLETED,
+                "config": {"sample_interval_s": 1.0, "depth": 2, "venues": ["binance", "kraken"]},
+                "books": {"binance:BTCUSDT": {"instrument": "BTC-USDT"}, "kraken:BTC/USDT": {"instrument": "BTC-USDT"}}}
+        (self.d / "metadata" / f"{self.sid}.json").write_text(json.dumps(meta), encoding="utf-8")
+        mono = [1, 2, 3, 4, 5, 15]
+        kr_bid = ["100.2", "100.3", "99.8", None, "100.2", "100.4"]
+        lines = []
+        for t, kb in zip(mono, kr_bid):
+            common = {"sample_mono_ns": t * 10**9, "sample_utc_ns": (1792890000 + t) * 10**9, "instrument": "BTC-USDT",
+                      "feed_delay_ms": 80.0, "flags": []}
+            lines.append({**common, "venue": "binance", "venue_symbol": "BTCUSDT", "usable": True, "status": "SYNCED",
+                          "best_bid": "99.9", "best_ask": "100", "bids": [["99.9", "5"]], "asks": [["100", "5"]]})
+            if kb is None:
+                lines.append({**common, "venue": "kraken", "venue_symbol": "BTC/USDT", "usable": False,
+                              "status": "DISCONNECTED", "best_bid": None, "best_ask": None, "bids": None, "asks": None})
+            else:
+                ka = str(D(kb) + D("0.1"))
+                lines.append({**common, "venue": "kraken", "venue_symbol": "BTC/USDT", "usable": True, "status": "SYNCED",
+                              "best_bid": kb, "best_ask": ka, "bids": [[kb, "0.5"]], "asks": [[ka, "0.5"]]})
+        text = "".join(json.dumps(r) + "\n" for r in lines) + '{"torn'
+        (raw / "obs-0001.jsonl").write_text(text, encoding="utf-8")
+        self.cfg = gs.StudyConfig(sizes_quote=(10, 100), fees={"binance": 0.001, "kraken": 0.008},
+                                  fee_basis={"binance": "test", "kraken": "test"})
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_known_shares_episodes_depth_and_exclusions(self):
+        r = gs.run_study(str(self.d), cfg=self.cfg)
+        self.assertEqual(r["input"]["instants"], 6)
+        self.assertEqual(r["input"]["pauses_over_max_gap"], 1)
+        pairs = {(p["buy_venue"], p["sell_venue"]): p for p in r["instruments"][0]["pairs"]}
+        top = pairs[("binance", "kraken")]["by_size"]["top"]
+        self.assertEqual(top["eligible_instants"], 5)                                  # instant 4 excluded
+        self.assertAlmostEqual(top["gross_bps"]["pct_positive"], 80.0)                 # 4 of 5
+        self.assertAlmostEqual(top["gross_bps"]["max"], 40.0)                          # (100.4-100)/100
+        ep = top["episodes_gross_positive"]
+        self.assertEqual(ep["count"], 3)                                               # [1,2] · [5] · [15]
+        self.assertEqual(ep["max_s"], 2.0)
+        self.assertEqual(top["net_bps"]["pct_positive"], 0.0)                          # 90 bps of fees > 40 bps gap
+        self.assertEqual(top["episodes_net_positive"]["count"], 0)
+        # 100 USDT = 1 coin: Kraken's 0.5-coin bid cannot absorb it → insufficient depth, never extrapolated
+        self.assertEqual(pairs[("binance", "kraken")]["by_size"]["100"]["insufficient_depth"], 5)
+        self.assertIsNone(pairs[("binance", "kraken")]["by_size"]["100"]["gross_bps"])
+        self.assertEqual(r["data_quality"]["kraken:BTC/USDT"]["excluded"], {"unusable:DISCONNECTED": 1})
+        self.assertEqual(r["config"]["fees"], {"binance": 0.001, "kraken": 0.008})
+        self.assertIn("DESCRIPTIVE", r["classification"])
+        r2 = gs.run_study(str(self.d), cfg=self.cfg)                                 # reproducible
+        self.assertEqual((r["run_id"], r["input"]["sha256"]), (r2["run_id"], r2["input"]["sha256"]))
+
+    def test_saved_reports_are_never_overwritten_and_missing_fee_fails_closed(self):
+        r = gs.run_study(str(self.d), cfg=self.cfg)
+        path = gs.save_report(r, str(self.d))
+        with self.assertRaises(FileExistsError):
+            gs.save_report(r, str(self.d))
+        self.assertEqual(gs.load_latest_report(str(self.d))["run_id"], r["run_id"])
+        with self.assertRaises(ValueError):
+            gs.run_study(str(self.d), cfg=gs.StudyConfig(fees={"binance": 0.001}, fee_basis={}))
+        self.assertTrue(path.name.startswith(f"gap_study_{self.sid}_"))
+
+
+class GapStudyPageTests(GapStudySessionTests):   # claude code changed: 2026-10-25 — Phase B page (reuses the synthetic session)
+    def test_page_without_report_explains_how_to_run(self):
+        from unittest import mock
+        from bot.views import cross_exchange_gaps as xg
+        with mock.patch.object(xg, "_out_dir", return_value=self.d):
+            html = self.client.get("/research/cross-exchange-gaps/").content.decode()
+        self.assertIn("No gap study has been run yet", html)
+        self.assertIn("research_cross_exchange_gap_study", html)
+
+    def test_page_renders_saved_report_with_classification_and_limits(self):
+        from unittest import mock
+        from bot.views import cross_exchange_gaps as xg
+        gs.save_report(gs.run_study(str(self.d), cfg=self.cfg), str(self.d))
+        with mock.patch.object(xg, "_out_dir", return_value=self.d):
+            r = self.client.get("/research/cross-exchange-gaps/")
+        html = r.content.decode()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("not profit, not a trading signal", html)
+        self.assertIn("BTC-USDT", html)
+        self.assertIn('src="/static/img/exchanges/kraken.svg"', html)
+        self.assertIn("0 / 2", html)                       # no direction ever net-positive in the synthetic session
+        self.assertIn("Pre-funded inventory", html)        # limitations are shown, not hidden
+        self.assertIn("Governance:", html)
+
+    def test_view_is_read_only(self):
+        import ast
+        src = (PKG.parents[1] / "views" / "cross_exchange_gaps.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        mods = ({a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+                | {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)})
+        for bad in ("aiohttp", "ccxt", "requests", "bot.research.cross_exchange.feeds", "bot.engines", "subprocess"):
+            self.assertFalse(any(m.startswith(bad) for m in mods), bad)
+        self.assertNotIn("run_study", src)                 # the page never computes; it only loads a saved report
