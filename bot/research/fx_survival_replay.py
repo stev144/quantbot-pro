@@ -138,6 +138,32 @@ class StrategyConfig:
     execution_delay_bars: int = 0             # stress: decisions execute this many bars late
 
 
+# claude code changed: 2026-10-25 — LTHP-1 (EXPLORATORY, LTHP_1_PREREGISTRATION_2026-10-25.md). Optional overlay; when
+# run_replay(hedge_policy=None) every new branch is skipped and the baseline is bit-identical (tested).
+LTHP_ARMS = ("STOP5", "HEDGE_HOLD", "HEDGE_REMOVE")
+HEDGE_OPENED, HEDGE_REJECTED, HEDGE_REMOVED, TRIGGER_SKIPPED_EXIT = "HEDGE_OPENED", "HEDGE_REJECTED", "HEDGE_REMOVED", "TRIGGER_SKIPPED_EXIT_PENDING"
+
+
+@dataclass(frozen=True)
+class HedgePolicy:
+    """STOP5: exit the basket at the next open after the bar in which fill `trigger_fills` executed.
+    HEDGE_HOLD: instead open a SHORT of exactly the basket's lots at that open; while hedged the trailing rule is off and
+    the existing time exit closes both legs. HEDGE_REMOVE: as HEDGE_HOLD, plus one removal at the next open after the
+    first close >= hedge entry bid + remove_atr_mult x ATR. margin_model: GROSS (each leg) | ONE_LEG (larger leg)."""
+    arm: str
+    margin_model: str = "GROSS"
+    trigger_fills: int = 5
+    remove_atr_mult: float = 1.0
+
+    def __post_init__(self):
+        if self.arm not in LTHP_ARMS:
+            raise ValueError(f"arm must be one of {LTHP_ARMS}")
+        if self.margin_model not in ("GROSS", "ONE_LEG"):
+            raise ValueError("margin_model must be GROSS or ONE_LEG")
+        if self.trigger_fills < 1 or self.remove_atr_mult <= 0:
+            raise ValueError("trigger_fills >= 1 and remove_atr_mult > 0 required")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 # Data
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -330,6 +356,20 @@ class _LiveCycle:
     total_units: float = 0.0
     total_lots: float = 0.0
     weighted_avg_price: float = 0.0
+    # claude code changed: 2026-10-25 — LTHP-1 hedge leg (unused unless run_replay(hedge_policy=...))
+    trigger_done: bool = False
+    hedge_state: Optional[str] = None      # None | ACTIVE | REMOVED | REJECTED
+    hedge_units: float = 0.0
+    hedge_lots: float = 0.0
+    hedge_ts: Optional[pd.Timestamp] = None
+    hedge_ref_bid: float = 0.0
+    hedge_exec_px: float = 0.0             # short sells at bid - slippage
+    hedge_removed_ts: Optional[pd.Timestamp] = None
+    hedge_realised_usd: float = 0.0
+    hedge_spread_usd: float = 0.0
+    hedge_slip_usd: float = 0.0
+    hedge_comm_usd: float = 0.0
+    hedge_swap_usd: float = 0.0
 
     def add_fill(self, f: "_Fill") -> None:
         cost = self.weighted_avg_price * self.total_units + f.exec_price * f.units
@@ -370,6 +410,15 @@ class _Account:
 # Replay
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
+def _hedge_columns(cyc: "_LiveCycle") -> Dict:
+    """claude code changed: 2026-10-25 — LTHP-1 per-cycle hedge record (all zeros/None when no hedge was opened)."""
+    return {"trigger_reached": cyc.trigger_done, "hedge_state": cyc.hedge_state, "hedge_open_ts": cyc.hedge_ts,
+            "hedge_removed_ts": cyc.hedge_removed_ts, "hedge_lots": cyc.hedge_lots, "hedge_entry_bid": cyc.hedge_ref_bid or None,
+            "hedge_realised_usd": cyc.hedge_realised_usd, "hedge_spread_usd": cyc.hedge_spread_usd,
+            "hedge_slippage_usd": cyc.hedge_slip_usd, "hedge_commission_usd": cyc.hedge_comm_usd,
+            "hedge_swap_usd": cyc.hedge_swap_usd}
+
+
 def rollover_schedule(start: pd.Timestamp, end: pd.Timestamp) -> Tuple[np.ndarray, np.ndarray]:
     """17:00 America/New_York rollover instants Mon-Fri between start and end: (UTC int64 ns, NY weekday)."""
     days = pd.date_range(start.tz_convert("America/New_York").normalize().tz_localize(None) - pd.Timedelta(days=1),
@@ -380,10 +429,14 @@ def rollover_schedule(start: pd.Timestamp, end: pd.Timestamp) -> Tuple[np.ndarra
 
 
 def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCostModel = FxCostModel(),
-               strategy: StrategyConfig = StrategyConfig(), label: str = "") -> Dict:
+               strategy: StrategyConfig = StrategyConfig(), label: str = "",
+               hedge_policy: Optional[HedgePolicy] = None) -> Dict:   # claude code changed: 2026-10-25 — LTHP-1 overlay (None = baseline)
     """Chronological replay of all `pairs` sharing ONE account. Returns rows/ledger/cycles/events/fills + config."""
     if strategy.direction not in ("LONG", "SHORT"):
         raise ValueError("direction must be LONG or SHORT")
+    hp = hedge_policy   # claude code changed: 2026-10-25
+    if hp is not None and strategy.direction != "LONG":
+        raise ValueError("LTHP-1 is registered for the LONG strategy only (the hedge leg is a SHORT)")   # claude code changed: 2026-10-25
     sign = 1.0 if strategy.direction == "LONG" else -1.0
     acct = _Account(account_cfg.starting_capital_usd)
     states = {p.pair: _PairState() for p in pairs}
@@ -425,6 +478,26 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
     def current_index(p: PairData) -> int:
         return states[p.pair].last_close_idx
 
+    # claude code changed: 2026-10-25 — LTHP-1 helpers (only reached when a hedge leg is ACTIVE)
+    def hedged(cyc: Optional[_LiveCycle]) -> bool:
+        return cyc is not None and cyc.hedge_state == "ACTIVE"
+
+    def hedge_unreal_usd(p: PairData, cyc: _LiveCycle, bid: float, i: int, rate: float) -> float:
+        """Liquidation value of the SHORT hedge at `bid`: it buys back at the ask (bid + spread) + slippage."""
+        return (cyc.hedge_exec_px - (bid + spread_at(p, i) + slip_px[p.pair])) * cyc.hedge_units * rate
+
+    def basket_unreal(p: PairData, cyc: _LiveCycle, i: int, which: str, rate: float) -> Tuple[float, str]:
+        """Unrealised of the whole basket at mark `which`. For a hedged basket at a bar extreme, the worse of the bar's
+        low and high (one price moves both legs, so the combined value is linear in price: its minimum is at an end)."""
+        if hedged(cyc) and which in ("low", "high"):
+            vals = [(unreal_usd(p, cyc, mark_price(p, i, w), i, rate) + hedge_unreal_usd(p, cyc, mark_price(p, i, w), i, rate), w)
+                    for w in ("low", "high")]
+            return min(vals)
+        u = unreal_usd(p, cyc, mark_price(p, i, which), i, rate)
+        if hedged(cyc):
+            u += hedge_unreal_usd(p, cyc, mark_price(p, i, which), i, rate)
+        return u, which
+
     def margin_used(prices: Optional[Dict[str, Tuple[int, str]]] = None) -> float:
         """Margin of all open positions; base->USD rate taken at the same (index, open|close) mark as equity_with()."""
         m = 0.0
@@ -434,7 +507,10 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                 continue
             i, which = (prices or {}).get(p.pair, (current_index(p), "close"))
             rate = (p.b2usd_open if which == "open" else p.b2usd_close)[max(i, 0)]
-            m += cyc.total_units * rate / lev[p.pair]
+            units = cyc.total_units
+            if hedged(cyc):   # claude code changed: 2026-10-25 — LTHP-1 margin model for the hedged pair
+                units = units + cyc.hedge_units if hp.margin_model == "GROSS" else max(units, cyc.hedge_units)
+            m += units * rate / lev[p.pair]
         return m
 
     def equity_with(prices: Dict[str, Tuple[int, str]]) -> float:
@@ -446,8 +522,29 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                 continue
             i, which = prices.get(p.pair, (current_index(p), "close"))
             rate = (p.q2usd_open if which == "open" else p.q2usd_close)[i]
+            if hedged(cyc):   # claude code changed: 2026-10-25 — LTHP-1: include the hedge leg
+                e += basket_unreal(p, cyc, i, which, rate)[0]
+                continue
             e += unreal_usd(p, cyc, mark_price(p, i, which), i, rate)
         return e
+
+    def close_hedge(p: PairData, i: int, ts, ref_bid: float, rate: float, note: str) -> float:
+        """claude code changed: 2026-10-25 — LTHP-1: buy back the SHORT hedge at ask = ref_bid + spread + slippage."""
+        cyc = states[p.pair].cycle
+        exec_px = ref_bid + spread_at(p, i) + slip_px[p.pair]
+        realised = (cyc.hedge_exec_px - exec_px) * cyc.hedge_units * rate
+        acct.post(ts, "REALISED_TRADING_PNL", realised, p.pair, cyc.cycle_id, note)
+        comm = comm_rate * cyc.hedge_lots
+        if comm:
+            acct.post(ts, "COMMISSION", -comm, p.pair, cyc.cycle_id, note + " commission")
+        sp_usd = spread_at(p, i) * cyc.hedge_units * rate
+        sl_usd = slip_px[p.pair] * cyc.hedge_units * rate
+        cyc.hedge_realised_usd += realised
+        cyc.hedge_spread_usd += sp_usd
+        cyc.hedge_slip_usd += sl_usd
+        cyc.hedge_comm_usd += comm
+        cum["spread"] += sp_usd; cum["slippage"] += sl_usd; cum["commission"] += comm
+        return realised
 
     def close_cycle(p: PairData, i: int, ts, ref_bid: float, reason: str, outcome_override: Optional[str] = None,
                     rate: Optional[float] = None, extra: Optional[Dict] = None) -> Dict:
@@ -468,11 +565,14 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
         exit_comm = comm_rate * lots
         if exit_comm:
             acct.post(ts, "COMMISSION", -exit_comm, p.pair, cyc.cycle_id, "exit")
-        spread_usd = sum(f.spread_usd for f in cyc.fills) + exit_spread_usd
-        slip_usd = sum(f.slippage_usd for f in cyc.fills) + exit_slip_usd
-        comm_usd = sum(f.commission_usd for f in cyc.fills) + exit_comm
+        if hedged(cyc):   # claude code changed: 2026-10-25 — LTHP-1: the hedge leg closes with the basket, same price
+            close_hedge(p, i, ts, ref_bid, rate, f"hedge close ({reason})")
+        spread_usd = sum(f.spread_usd for f in cyc.fills) + exit_spread_usd + cyc.hedge_spread_usd   # hedge_* are 0.0 without a hedge
+        slip_usd = sum(f.slippage_usd for f in cyc.fills) + exit_slip_usd + cyc.hedge_slip_usd
+        comm_usd = sum(f.commission_usd for f in cyc.fills) + exit_comm + cyc.hedge_comm_usd
+        realised = realised + cyc.hedge_realised_usd
         gross = realised + spread_usd + slip_usd
-        net = realised - comm_usd + cyc.swap_usd
+        net = realised - comm_usd + cyc.swap_usd + cyc.hedge_swap_usd
         cum["gross"] += gross; cum["spread"] += exit_spread_usd; cum["slippage"] += exit_slip_usd; cum["commission"] += exit_comm
         outcome = outcome_override or (PROFITABLE_EXIT if net > 0 else LOSING_EXIT)
         rec = {
@@ -481,7 +581,8 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
             "exit_exec_price": exec_px, "exit_reason": reason, "outcome": outcome, "fills": len(cyc.fills),
             "lots": lots, "units": units, "wap": cyc.weighted_avg_price, "duration_h": (ts - cyc.entry_ts).total_seconds() / 3600,
             "gross_pnl_usd": gross, "spread_usd": spread_usd, "slippage_usd": slip_usd, "commission_usd": comm_usd,
-            "swap_usd": cyc.swap_usd, "net_pnl_usd": net, "realised_trading_usd": realised,
+            "swap_usd": cyc.swap_usd + cyc.hedge_swap_usd,   # claude code changed: 2026-10-25 — + hedge swap (0.0 without one); keeps net == gross - costs + swap
+            "net_pnl_usd": net, "realised_trading_usd": realised,
             "mae_usd": min(cyc.min_unreal_usd, realised), "peak_margin_usd": cyc.max_margin_usd,
             "peak_notional_usd": cyc.max_notional_usd, "rejected_order_attempts": cyc.rejected_attempts,
             "ladder_exhausted": cyc.exhausted_ts is not None,
@@ -489,6 +590,8 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
         }
         if extra:
             rec.update(extra)
+        if hp is not None:   # claude code changed: 2026-10-25 — LTHP-1 hedge columns (absent in the baseline table)
+            rec.update(_hedge_columns(cyc))
         cycles_out.append(rec)
         st.cycle = None
         return rec
@@ -569,6 +672,42 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
             event(ts, DCA_LADDER_EXHAUSTED, p.pair, cyc.cycle_id, level=len(cyc.fills),
                   notional_usd=cyc.total_units * b2u, margin_usd=cyc.total_units * b2u / lev[p.pair])
 
+    def try_hedge(p: PairData, i: int, ts, bar: Dict[str, int]) -> None:
+        """claude code changed: 2026-10-25 — LTHP-1: SHORT exactly the basket's lots at this open (sells at bid - slip).
+        One attempt per cycle; if free margin cannot fund the hedge under the margin model, HEDGE_REJECTED (recorded)."""
+        cyc = states[p.pair].cycle
+        b2u = p.b2usd_open[i]
+        marks = {q: (j, "open") for q, j in bar.items()}
+        free = equity_with(marks) - margin_used(marks)
+        extra_units = cyc.total_units if hp.margin_model == "GROSS" else 0.0   # ONE_LEG: equal legs add no margin
+        need = extra_units * b2u / lev[p.pair]
+        if need > free + 1e-9:
+            cyc.hedge_state = "REJECTED"
+            event(ts, HEDGE_REJECTED, p.pair, cyc.cycle_id, required_margin_usd=need, free_margin_usd=free,
+                  margin_model=hp.margin_model)
+            return
+        rate = p.q2usd_open[i]
+        cyc.hedge_state, cyc.hedge_ts = "ACTIVE", ts
+        cyc.hedge_units, cyc.hedge_lots = cyc.total_units, cyc.total_lots
+        cyc.hedge_ref_bid = p.o[i]
+        cyc.hedge_exec_px = p.o[i] - slip_px[p.pair]
+        sl_usd = slip_px[p.pair] * cyc.hedge_units * rate
+        comm = comm_rate * cyc.hedge_lots
+        if comm:
+            acct.post(ts, "COMMISSION", -comm, p.pair, cyc.cycle_id, "hedge open commission")
+        cyc.hedge_slip_usd += sl_usd
+        cyc.hedge_comm_usd += comm
+        cum["slippage"] += sl_usd; cum["commission"] += comm
+        event(ts, HEDGE_OPENED, p.pair, cyc.cycle_id, lots=cyc.hedge_lots, bid=p.o[i], margin_model=hp.margin_model,
+              margin_added_usd=need, free_margin_before_usd=free)
+
+    def remove_hedge(p: PairData, i: int, ts) -> None:
+        """claude code changed: 2026-10-25 — LTHP-1 (A4): buy back the hedge at this open; the LONG basket stays open."""
+        cyc = states[p.pair].cycle
+        realised = close_hedge(p, i, ts, p.o[i], p.q2usd_open[i], "hedge removal")
+        cyc.hedge_state, cyc.hedge_removed_ts = "REMOVED", ts
+        event(ts, HEDGE_REMOVED, p.pair, cyc.cycle_id, bid=p.o[i], hedge_realised_usd=realised)
+
     def entry_margin_needed(p: PairData, i: int) -> float:
         b2u = p.b2usd_close[i]
         if account_cfg.fractional_lots:
@@ -610,6 +749,16 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                             acct.post(ts, "SWAP", amt, name, cyc.cycle_id, f"rollover {pd.Timestamp(roll_ns[k], tz='UTC').isoformat()} x{mult}")
                             cyc.swap_usd += amt
                             cum["swap"] += amt
+                    if hedged(cyc):   # claude code changed: 2026-10-25 — LTHP-1: the SHORT hedge pays/receives the short swap
+                        h_ns = max(st.last_ts, cyc.hedge_ts).value
+                        lo, hi = np.searchsorted(roll_ns, h_ns, "right"), np.searchsorted(roll_ns, ts.value, "right")
+                        for k in range(lo, hi):
+                            mult = 3 if roll_wd[k] == p.triple_weekday else 1
+                            amt = p.swap_short_points * p.point * p.contract_size * cyc.hedge_lots * mult * p.q2usd_close[max(i - 1, 0)] * cost.swap_multiplier
+                            if amt:
+                                acct.post(ts, "SWAP", amt, name, cyc.cycle_id, f"hedge rollover {pd.Timestamp(roll_ns[k], tz='UTC').isoformat()} x{mult}")
+                                cyc.hedge_swap_usd += amt
+                                cum["swap"] += amt
 
         # 1. scheduled executions at this bar's open — exits first (they free margin), then entries/add-ons
         for phase in ("EXIT", "FILL"):
@@ -628,6 +777,14 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                     if kind == "OPEN" and acct.insolvent:
                         continue
                     try_fill(p, i, ts, kind, bar)
+                elif phase == "FILL" and kind in ("HEDGE", "UNHEDGE"):   # claude code changed: 2026-10-25 — LTHP-1
+                    st.pending = None
+                    if st.cycle is None:
+                        continue                       # the basket was already closed (e.g. close-out): nothing to hedge
+                    if kind == "HEDGE":
+                        try_hedge(p, i, ts, bar)
+                    elif hedged(st.cycle):
+                        remove_hedge(p, i, ts)
         for name, i in bar.items():
             states[name].last_close_idx = i   # from here on this bar is the pair's "current" bar
 
@@ -641,7 +798,10 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
             for q in open_pairs:   # track each cycle's MAE at its own adverse extreme
                 i_q, which = worst[q.pair]
                 cyc_q = states[q.pair].cycle
-                u = unreal_usd(q, cyc_q, mark_price(q, i_q, which), i_q, q.q2usd_close[i_q])
+                if hedged(cyc_q):   # claude code changed: 2026-10-25 — LTHP-1: basket (both legs) at its worse extreme
+                    u = basket_unreal(q, cyc_q, i_q, which, q.q2usd_close[i_q])[0]
+                else:
+                    u = unreal_usd(q, cyc_q, mark_price(q, i_q, which), i_q, q.q2usd_close[i_q])
                 cyc_q.min_unreal_usd = min(cyc_q.min_unreal_usd, u)
             if used > 0 and eq_worst / used <= account_cfg.close_out_level:
                 eq_before = equity_with({q.pair: (bar[q.pair], "open") for q in open_pairs if q.pair in bar})
@@ -652,12 +812,28 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                     used = margin_used({q: (j, "close") for q, j in bar.items()})
                     if used <= 0 or equity_with(worst) / used > account_cfg.close_out_level:
                         break
-                    q = min(remaining, key=lambda x: unreal_usd(x, states[x.pair].cycle, mark_price(x, *worst[x.pair]),
-                                                                worst[x.pair][0], x.q2usd_close[worst[x.pair][0]]))
+                    q = min(remaining, key=lambda x: basket_unreal(x, states[x.pair].cycle, worst[x.pair][0], worst[x.pair][1],
+                                                                   x.q2usd_close[worst[x.pair][0]])[0])   # claude code changed: 2026-10-25 — = unreal_usd when unhedged
                     remaining.remove(q)
                     cyc_q = states[q.pair].cycle
                     i_q = bar.get(q.pair, current_index(q))
                     rate = q.q2usd_close[i_q]
+                    if hedged(cyc_q):   # claude code changed: 2026-10-25 — LTHP-1: whole basket at its worse bar extreme
+                        floating_before, w_side = basket_unreal(q, cyc_q, i_q, worst[q.pair][1], rate)
+                        exec_bid = mark_price(q, i_q, w_side)
+                        trigger = exec_bid
+                        rule = "margin level <= {:.0%} (ESMA close-out), hedged basket".format(account_cfg.close_out_level)
+                        confidence = "hedged basket closed at its worse bar extreme (1h bar; path unknown)"
+                        rec = close_cycle(q, i_q, ts, exec_bid, "MARGIN_CLOSE_OUT", outcome_override=LIQUIDATED, rate=rate, extra={
+                            "trigger_price": trigger, "equity_before_usd": eq_before, "margin_used_usd": used,
+                            "maintenance_requirement_usd": account_cfg.close_out_level * used,
+                            "floating_loss_before_usd": floating_before, "rule": rule, "confidence": confidence,
+                        })
+                        event(ts, LIQUIDATED, q.pair, rec["cycle_id"], equity_before_usd=eq_before, margin_used_usd=used,
+                              net_pnl_usd=rec["net_pnl_usd"], rule=rule)
+                        event(ts, DATA_OR_EXECUTION_UNCERTAINTY, q.pair, rec["cycle_id"], note=confidence)
+                        states[q.pair].pending = None
+                        continue
                     if not remaining and q.pair in bar and sign > 0:
                         units = cyc_q.total_units
                         trigger = cyc_q.weighted_avg_price + slip_px[q.pair] + \
@@ -701,8 +877,24 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                 continue
             if cyc is not None:
                 atr = p.atr[i] if not math.isnan(p.atr[i]) else cyc.spec.atr_ref
+                if hp is not None and hedged(cyc):   # claude code changed: 2026-10-25 — LTHP-1 hedged basket
+                    # trailing rule off (it would only realise the frozen value); the existing time exit closes both legs
+                    if strategy.max_cycle_candles is not None and (i - cyc.entry_candle) >= strategy.max_cycle_candles:
+                        st.pending = ("EXIT", "TIME_EXIT", i + 1 + strategy.execution_delay_bars)
+                    elif hp.arm == "HEDGE_REMOVE" and p.c[i] >= cyc.hedge_ref_bid + hp.remove_atr_mult * atr:
+                        st.pending = ("UNHEDGE", None, i + 1 + strategy.execution_delay_bars)
+                    continue
                 pending, reason = decide_in_cycle(cyc, p.c[i], i, cyc.spec, atr,
                                                   strategy.profit_activation_pct, strategy.trailing_pct, strategy.max_cycle_candles)
+                if (hp is not None and not cyc.trigger_done and len(cyc.fills) >= hp.trigger_fills
+                        and cyc.fills[-1].ts == ts):   # claude code changed: 2026-10-25 — LTHP-1 trigger: close of the fill-5 bar
+                    cyc.trigger_done = True
+                    if pending == "EXIT":
+                        event(ts, TRIGGER_SKIPPED_EXIT, p.pair, cyc.cycle_id, exit_reason=reason, arm=hp.arm)
+                    elif hp.arm == "STOP5":
+                        pending, reason = "EXIT", "FIFTH_FILL_STOP"
+                    else:
+                        pending, reason = "HEDGE", None
                 if pending:
                     st.pending = (pending, reason, i + 1 + strategy.execution_delay_bars)
             elif not acct.insolvent:
@@ -727,6 +919,11 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
                      "open_cycles": sum(1 for q in pairs if states[q.pair].cycle is not None),
                      "cum_spread": cum["spread"], "cum_slippage": cum["slippage"], "cum_commission": cum["commission"],
                      "cum_swap": cum["swap"], "cum_net_pnl": eq_close - acct.starting})
+        if hp is not None:   # claude code changed: 2026-10-25 — LTHP-1 exposure columns (gross = |long| + |short|, net = long - short)
+            hedge_notional = sum(states[q.pair].cycle.hedge_units * q.b2usd_close[current_index(q)]
+                                 for q in pairs if hedged(states[q.pair].cycle))
+            rows[-1].update({"gross_notional_usd": open_notional + hedge_notional, "net_notional_usd": open_notional - hedge_notional,
+                             "hedges_open": sum(1 for q in pairs if hedged(states[q.pair].cycle))})
 
     # 5. unresolved cycles at the data end — reported, never dropped; counterfactual close kept separate
     for p in pairs:
@@ -740,6 +937,16 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
         spread_usd = sum(f.spread_usd for f in cyc.fills)
         slip_usd = sum(f.slippage_usd for f in cyc.fills) + slip_px[p.pair] * cyc.total_units * rate
         comm_usd = sum(f.commission_usd for f in cyc.fills)
+        hedge_end = {}
+        if hp is not None:   # claude code changed: 2026-10-25 — LTHP-1: an open hedge stays an open risk, marked to market
+            h_mtm = hedge_unreal_usd(p, cyc, p.c[i], i, rate) if hedged(cyc) else 0.0
+            h_sp = spread_at(p, i) * cyc.hedge_units * rate if hedged(cyc) else 0.0
+            h_sl = slip_px[p.pair] * cyc.hedge_units * rate if hedged(cyc) else 0.0
+            mtm += h_mtm + cyc.hedge_realised_usd
+            spread_usd += cyc.hedge_spread_usd + h_sp
+            slip_usd += cyc.hedge_slip_usd + h_sl
+            comm_usd += cyc.hedge_comm_usd
+            hedge_end = {**_hedge_columns(cyc), "hedge_mtm_unrealised_usd": h_mtm}
         cycles_out.append({
             "cycle_id": cyc.cycle_id, "pair": p.pair, "direction": strategy.direction, "fold_spec": cyc.fold_label,
             "entry_ts": cyc.entry_ts, "entry_price": cyc.fills[0].exec_price, "exit_ts": None, "exit_ref_price": None,
@@ -747,12 +954,15 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
             "lots": cyc.total_lots, "units": cyc.total_units, "wap": cyc.weighted_avg_price,
             "duration_h": (p.ts[i] - cyc.entry_ts).total_seconds() / 3600,
             "gross_pnl_usd": mtm + spread_usd + slip_usd, "spread_usd": spread_usd, "slippage_usd": slip_usd,
-            "commission_usd": comm_usd, "swap_usd": cyc.swap_usd, "net_pnl_usd": mtm - comm_usd + cyc.swap_usd,
+            "commission_usd": comm_usd, "swap_usd": cyc.swap_usd + cyc.hedge_swap_usd,   # claude code changed: 2026-10-25 — + hedge swap (0.0 without one)
+            "net_pnl_usd": mtm - comm_usd + cyc.swap_usd + cyc.hedge_swap_usd,
             "realised_trading_usd": None, "mtm_unrealised_usd": mtm, "mae_usd": min(cyc.min_unreal_usd, mtm),
             "peak_margin_usd": cyc.max_margin_usd, "peak_notional_usd": cyc.max_notional_usd,
             "rejected_order_attempts": cyc.rejected_attempts, "ladder_exhausted": cyc.exhausted_ts is not None,
             "notional_traded_usd": sum(f.notional_usd for f in cyc.fills),
-            "counterfactual_close_net_usd": mtm - comm_usd - comm_rate * cyc.total_lots + cyc.swap_usd,
+            "counterfactual_close_net_usd": mtm - comm_usd - comm_rate * (cyc.total_lots + (cyc.hedge_lots if hedged(cyc) else 0.0))
+                                            + cyc.swap_usd + cyc.hedge_swap_usd,
+            **hedge_end,
         })
         event(p.ts[i], OPEN_UNRESOLVED_AT_DATA_END, p.pair, cyc.cycle_id, mtm_usd=mtm, fills=len(cyc.fills))
 
@@ -766,6 +976,7 @@ def run_replay(pairs: Sequence[PairData], account_cfg: AccountConfig, cost: FxCo
         "starting_capital": acct.starting,
         "insolvent": acct.insolvent,
         "config": {"account": dataclasses.asdict(account_cfg), "cost": dataclasses.asdict(cost), "cost_labels": cost.labels,
+                   **({"hedge_policy": dataclasses.asdict(hp)} if hp is not None else {}),   # claude code changed: 2026-10-25 — LTHP-1
                    "strategy": dataclasses.asdict(strategy), "leverage": lev, "pairs": [p.pair for p in pairs]},
         "provenance": {p.pair: p.provenance for p in pairs},
     }

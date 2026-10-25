@@ -3374,3 +3374,39 @@ block bootstrap that passed 6.8–14 % at the null; final design false-pass 2.7/
 NOT drafted: at base-tier fees the answer is already FAIL; awaiting owner fee tiers + signature, then a NEW recorder
 session. Gates: G1 PASS, G2 PASS, G3 PASS (design), G4 PARTIAL, G5 BLOCKED (owner). Phase D not implemented.
 Report: CROSS_EXCHANGE_PHASE_C_PREREGISTRATION_2026-10-25.md.
+
+## 2026-10-25 — Forex "STALE" at weekends → "MARKET CLOSED" (display only)
+Owner request. One source: `market_profile.forex_session_status()` on FOREX_PROFILE's owner calendar (OD-FX-1, Fri 17:00
+→ Sun 17:00 New York, DST-aware, measured holiday closures) + `explained_by_closure()` (data reach the close within 2 h).
+Used by /markets/live/ (`forex_session`) → Markets/Watchlist cards (`markets_live.js` badge MARKET CLOSED · reopens …),
+Market Intelligence freshness (`quant.freshness(…, asset_class)`), and the Forex dashboard provenance badge. Data that
+stopped BEFORE the close stay STALE; crypto unchanged. No research data, calendar, seal or holdout changed.
+Also found: WhiteNoise in the dev server serves a static file edited after start with its old size (requests hang
+until the server restarts) — restart runserver after editing static files.
+
+## 2026-10-25 — LTHP-DCA (ladder-triggered hedge) audit: implementation BLOCKED pending owner decision
+Owner brief "Ladder-Triggered Hedging with Dynamic Hedge Removal". Audit only (no code, no runs): the $3,100 failure and
+$5,000 survival are the same engine/config/period (fx_survival_replay, run 2026-10-16_0800, GBP/JPY LONG 2022-08-10 →
+2026-10-16, fixed 0.02-lot 1:2:4:8:16 ladder, 72-candle time exit); the difference is margin headroom only (19 add-ons
+refused + 1 ESMA close-out at $3,100). "≈ 69 %" = $5,000 intrabar equity DD −69.9 % (2022-09-26). The ladder ends at
+fill 5, so "ladder continues vs suspended" arms collapse. Hand-verified: a 100 % same-symbol hedge freezes P&L ⇒ ≈ a
+stop-loss at fill 5 + spread + carry (−12.78 pts/lot/day) + FX translation; removal ≈ re-entry. Broker is MT5
+RETAIL_HEDGING but margin_hedged unknown. BLOCKER B1: FULL_LADDER_STOP_RULE_PRE_REGISTRATION_2026-10-18 §5/§7 forbid
+implementing or historically validating a full-ladder stop for GBP/JPY before 2027-01-17 — the hedge arms are that stop.
+Report: LTHP_DCA_AUDIT_AND_PROTOCOL_PROPOSAL_2026-10-25.md. Gates: G1 BLOCKED, G2 PARTIAL/BLOCKED, G3 PASS (hand),
+G4 designed not run, G5 not started.
+
+## 2026-10-25 — LTHP-1 exploratory protocol REGISTERED (owner: option b) — before any run
+File LTHP_1_PREREGISTRATION_2026-10-25.md, sha256 42e517b1ac3663f5dd09ddaf33005d3876e514e543f2f326dd73f754ae74416a. Arms A0/A1 STOP5/A3 HEDGE_HOLD/A4 HEDGE_REMOVE (ATR×1.0, once);
+margin models M-GROSS (primary) / M-ONE-LEG; capital $10k primary, $5k/$3.1k survival; monthly paired sign-flip, Holm.
+EXPLORATORY: may not select/inform K or alter FULL_LADDER_STOP_RULE_PRE_REGISTRATION_2026-10-18; no production use.
+
+## 2026-10-25 — LTHP-1 RESULTS (exploratory): hedge rejected — dominated by a plain stop
+Run research_data/lthp_study/lthp1_report_20261025T095539Z.json (protocol sha256 42e517b1… verified by the runner).
+$10k: A0 +$6,856 DD −$4,920 worst −$3,072 · A1 STOP5 +$6,954 DD −$2,760 worst −$1,048 · A3 HEDGE_HOLD +$3,979 DD −$3,682
+worst −$1,440 (carry −$709, spread $295, 512 vs 550 cycles: the hedge blocks re-entry) · A4 HEDGE_REMOVE +$5,122 DD −$6,463
+worst −$3,556 (worse than baseline). $3.1k: baseline liquidated; A1 no close-out; A3 GROSS 34/37 hedges margin-rejected.
+Registered calibration of the monthly sign-flip FAILED (0.0895 at ρ 0.3 > 0.07) → p-values unreliable, as pre-registered.
+Readings: A1 consistent with lower tail risk, no P&L difference; A3 adds nothing over a stop; A4 worse. EXPLORATORY —
+may not select/inform K of the full-ladder stop rule. Engine: optional hedge_policy in fx_survival_replay (baseline
+bit-identical); bot/research/lthp_study.py; manage.py run_lthp_study; 17 tests. Report: LTHP_1_RESULTS_2026-10-25.md.
