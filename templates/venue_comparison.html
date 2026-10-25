@@ -14,6 +14,7 @@
 .vc-card.vc-best { border-color:var(--vc-blue); box-shadow:0 0 0 2px var(--vc-blue-soft), 0 6px 24px rgba(74,163,255,0.22); }
 .vc-card.vc-off { opacity:.75; border-style:dashed; }
 .vc-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.venue-logo { display:inline-block; flex-shrink:0; border-radius:8px; vertical-align:middle; }  /* claude code changed: 2026-10-24 */
 .vc-name { font-size:18px; font-weight:800; letter-spacing:.06em; color:var(--vc-blue); text-transform:uppercase; }
 .vc-market { font-family:var(--font-mono); font-size:12px; color:var(--vc-blue); opacity:.85; }
 .vc-ribbon { font-size:11px; font-weight:700; letter-spacing:.08em; padding:3px 10px; border-radius:999px;
@@ -79,7 +80,7 @@
                 <div class="vc-card {% if row.venue_id == comparison.cheapest_venue %}vc-best{% endif %} {% if not row.available %}vc-off{% endif %}">
                     <div class="vc-head">
                         <div>
-                            <div class="vc-name">{{ row.venue_id|upper }}</div>
+                            <div class="vc-name coin-id">{% venue_logo row.venue_id 30 %}{{ row.venue_id|upper }}</div>{# claude code changed: 2026-10-24 — exchange logo #}
                             <div class="vc-market coin-id">{% coin_logo row.market 18 %}{{ row.market }}</div>{# claude code changed: 2026-10-22 — coin logo #}
                         </div>
                         {% if row.venue_id == comparison.cheapest_venue %}<span class="vc-ribbon vc-r1">CHEAPEST</span>{# claude code changed: 2026-10-22 — green #}

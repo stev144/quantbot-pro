@@ -32,6 +32,7 @@ python manage.py refresh_forex_data --attach   # incremental MT5 refresh for the
 python bot/run_research_all.py              # runs feature calc + validation across all symbols in data/
 python manage.py run_funding_carry_monitor  # descriptive funding-carry report (long spot + short perp) → /research/funding-carry/
 python manage.py run_leverage_reality       # descriptive leverage/ladder history → /academy/leverage-reality/ (calculator works without it)
+python manage.py research_record_cross_exchange_books   # RESEARCH-ONLY public order-book recorder (Binance/Kraken/Coinbase), Ctrl+C to stop; see CROSS_EXCHANGE_PHASE_A_RECORDER_2026-10-25.md
 ```
 
 `bot/tests/` (a package — not `bot/tests.py`, which was the old empty-stub module referenced by some historical comments) now holds 190+ real tests covering the multi-venue execution layer (see below), run via `python manage.py test bot.tests`. Convention throughout: **no mocking** — tests hit real public ccxt endpoints (`load_markets()`, `fetch_ticker()`, dry-run fills) rather than mocked exchange objects, since a mocked exchange can't catch a real cross-venue API discrepancy the way a real call can (this convention directly caught several real bugs during development — see Multi-venue execution below). `dry_run_test.py` and the two management health-check commands remain the closest thing to a live/manual smoke-test suite.

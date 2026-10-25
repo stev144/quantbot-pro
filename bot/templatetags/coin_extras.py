@@ -50,6 +50,28 @@ def coin_logo(symbol, size=24):
                        'title="{} (no logo available)" aria-hidden="true">{}</span>', px, px, max(8, px * 0.4), base, letters)
 
 
+# ── exchanges (claude code changed: 2026-10-24) ───────────────────────────────────────────────────────────────────────
+# {% venue_logo "kraken" 28 %} → the exchange's logo from static/img/exchanges/ (web3icons, MIT, bundled locally), or a
+# lettered badge for a venue without one.
+VENUE_DIR = Path(settings.BASE_DIR) / "static" / "img" / "exchanges"
+
+
+@register.simple_tag
+def venue_logo(venue_id, size=28):
+    v = str(venue_id or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9]{2,20}", v):
+        return ""
+    try:
+        px = max(12, min(int(size), 96))
+    except (TypeError, ValueError):
+        px = 28
+    if (VENUE_DIR / f"{v}.svg").exists():
+        return format_html('<img class="venue-logo" src="{}" alt="{} logo" width="{}" height="{}" loading="lazy" decoding="async">',
+                           static(f"img/exchanges/{v}.svg"), v.capitalize(), px, px)
+    return format_html('<span class="venue-logo coin-logo-fallback" style="width:{}px;height:{}px;font-size:{}px">{}</span>',
+                       px, px, max(8, px * 0.4), v[:2].upper())
+
+
 # ── forex pairs (claude code changed: 2026-10-22) ─────────────────────────────────────────────────────────────────
 # {% fx_pair "EUR_USD" %} → a small container: two overlapping flags + "Euro / US Dollar". Flags are bundled locally
 # in static/img/flags/ (flag-icons, MIT); gold/silver use project-drawn badges. A currency without a flag falls back

@@ -3324,3 +3324,15 @@ bot.tests.test_funding_carry_monitor (21), bot.tests.test_leverage_reality (20).
 - Coinbase Advanced Trade added as the third ExchangeAdapter (shared CcxtSpotAdapter with Kraken; BinanceAdapter
   unchanged). Fee 0.60 % taker UNVERIFIED (official page HTTP 403). Live stop-loss refused. Not in bot_runner.
 Tests: test_coinbase_adapter (new), venue/Kraken/cost suites 99 + 154 OK; dry_run_test 56/0.
+
+## 2026-10-25 — Cross-exchange stat-arb research, PHASE A: market-data recorder (measurement only)
+`bot/research/cross_exchange/` + `manage.py research_record_cross_exchange_books` (manual start, Ctrl+C stop).
+Public WebSocket order books from Binance (official local-book procedure), Kraken (v2 book, CRC32 checksum every
+message) and Coinbase (level2 + heartbeats, per-connection sequence check); JSON-Lines raw rows + events + atomic
+metadata with full provenance. No keys, no order/account paths, not imported by the live bot. Tests: 28 offline
+(incl. Kraken's published checksum 3310070434); 3 live 2-minute smoke runs (after an aiodns DNS fix): 0 checksum
+failures, 0 sequence gaps. Measured: local clock ≈ 131 ms ahead of Binance/Coinbase; ≈ 55 MB/hour at 12 books/1 s.
+Gates (canonical §4): G1 PASS, G2 PASS, G3 NOT APPLICABLE, G4 PARTIAL (sub-second alignment not establishable),
+G5 PASS for recording / BLOCKED for Phase B — every recorded row lies inside the sealed crypto holdout ZONES.F
+(D-8); analysing it needs an explicit owner decision. Phase B/C/execution NOT implemented. Report:
+CROSS_EXCHANGE_PHASE_A_RECORDER_2026-10-25.md. Evidence class: RAW MARKET DATA (no evidence status).

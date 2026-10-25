@@ -117,3 +117,24 @@ class FxPairPagesTests(TestCase):
         self.assertIn('class="fx-pair"', html)
         self.assertIn("British Pound", html)
         self.assertIn("Japanese Yen", html)
+
+
+class VenueLogoTests(SimpleTestCase):   # claude code changed: 2026-10-24 — exchange logos on Venue Comparison
+    def test_three_venues_have_local_logos_and_unknown_gets_a_badge(self):
+        for v in ("binance", "kraken", "coinbase"):
+            self.assertIn(f'src="/static/img/exchanges/{v}.svg"', render("{% venue_logo v %}", v=v))
+        self.assertIn("coin-logo-fallback", render("{% venue_logo 'okx' %}"))
+        self.assertEqual(render("{% venue_logo '<x>' %}"), "")
+        d = Path(settings.BASE_DIR) / "static" / "img" / "exchanges"
+        bad = re.compile(r"<script|\son\w+\s*=|javascript:|href\s*=\s*[\"']https?:", re.I)
+        self.assertEqual([f.name for f in d.glob("*.svg") if bad.search(f.read_text(encoding="utf-8"))], [])
+        self.assertTrue((d / "LICENSE-web3icons.txt").exists())
+
+    def test_venue_cards_render_the_logo(self):
+        from bot.engines.execution_comparison import VenueQuote
+        from bot.views import venue_comparison_data as vcd
+        q = VenueQuote("kraken", "BTC/USDT", True, "", 1.0, 1.1, 0.0001, 0.008, 1.1, 0.0, 0.008)
+        with mock.patch.object(vcd, "compare_venues", return_value=[q]), \
+             mock.patch.object(vcd, "assess_venue_readiness", side_effect=Exception("offline")):
+            html = self.client.get("/execution/venues/?symbol=BTC/USDT&quantity=1").content.decode()
+        self.assertIn('src="/static/img/exchanges/kraken.svg"', html)
