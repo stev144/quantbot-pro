@@ -28,7 +28,7 @@
                             <td><span class="badge">{{ e.status }}</span></td>
                             <td>{% include "partials/_evidence_badge.html" with ev=e.evidence %}</td>
                             <td class="{% if not e.evidence.is_current_evidence %}text-dim{% endif %}">{{ e.verdict|default:"—" }}</td>
-                            <td class="text-dim">{{ e.created_at|date:"Y-m-d H:i" }}</td>
+                            <td class="text-dim"><time class="local-time" datetime="{{ e.created_at|date:'c' }}">{{ e.created_at|date:"Y-m-d H:i" }} UTC</time></td>{# claude code changed: 2026-10-26 — UTC labelled #}
                             <td><a href="{% url 'research_lab_results' experiment_id=e.id %}">View</a></td>
                         </tr>
                         {% endfor %}
@@ -45,3 +45,5 @@
 {% include "partials/_footer.html" with label="Research Lab" note="rerunning creates a new experiment — records here are never overwritten" %}
 
 {% endblock %}
+
+{% block scripts %}{% include "partials/_local_time.html" %}{% endblock %}{# claude code changed: 2026-10-26 #}

@@ -85,3 +85,19 @@ admin.site.register(Enrollment)
 admin.site.register(LessonProgress)
 admin.site.register(QuizAttempt)
 admin.site.register(QuestionResponse)
+
+
+# claude code changed: 2026-10-26 — Research Explainer usage log (read-only in admin: tokens, estimated cost, status)
+from bot.academy.models import ExplainerRequest  # noqa: E402
+
+
+@admin.register(ExplainerRequest)
+class ExplainerRequestAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "user", "concept_id", "mode", "model", "status", "called_api",
+                    "input_tokens", "output_tokens", "estimated_cost_usd", "latency_ms")
+    list_filter = ("status", "model", "mode", "called_api")
+    readonly_fields = [f.name for f in ExplainerRequest._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+

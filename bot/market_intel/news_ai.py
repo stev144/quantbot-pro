@@ -123,8 +123,7 @@ class _NewsOut(BaseModel):
     insufficient_evidence: bool
 
 
-class _Declined(Exception):
-    """Claude returned stop_reason=refusal (after any server-side fallback)."""
+from bot.ai.client import Declined as _Declined   # claude code changed: 2026-10-26 — shared helper (bot/ai/client.py)
 
 
 # ── configuration ───────────────────────────────────────────────────────────────────────────────────────────
@@ -173,29 +172,13 @@ def _host_allowed(url: str, domains: List[str]) -> Optional[str]:
     return None
 
 
+# claude code changed: 2026-10-26 — budget counter, refusal check and usage reader moved to bot/ai/client.py (shared
+# with the Research Explainer); same behaviour, same cache keys
+from bot.ai.client import check_stop as _check_stop, usage_of as _usage, take_hourly_budget
+
+
 def _take_budget(max_per_hour: int) -> bool:
-    key = f"{CACHE_PREFIX}:calls:{int(time.time() // 3600)}"
-    cache.add(key, 0, timeout=3700)
-    try:
-        n = cache.incr(key)
-    except ValueError:
-        cache.set(key, 1, timeout=3700)
-        n = 1
-    return n <= max_per_hour
-
-
-def _check_stop(resp) -> None:
-    if getattr(resp, "stop_reason", None) == "refusal":
-        raise _Declined(getattr(getattr(resp, "stop_details", None), "category", None) or "declined")
-
-
-def _usage(resp) -> Dict:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return {}
-    stu = getattr(u, "server_tool_use", None)
-    return {"input_tokens": getattr(u, "input_tokens", None), "output_tokens": getattr(u, "output_tokens", None),
-            "web_search_requests": getattr(stu, "web_search_requests", None) if stu else None}
+    return take_hourly_budget(CACHE_PREFIX, max_per_hour)
 
 
 # ── step 1: retrieve ────────────────────────────────────────────────────────────────────────────────────────

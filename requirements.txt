@@ -42,3 +42,6 @@ urllib3==2.6.3
 webencodings==0.6.1
 whitenoise==6.12.0
 yarl==1.23.0
+anthropic==1.17.0  # claude code changed: 2026-10-26 — was installed in venv but missing here (Market Intelligence news, Research Explainer)
+httpx2==2.16.0  # claude code changed: 2026-10-26 — anthropic 1.x HTTP client
+pydantic==2.14.1  # claude code changed: 2026-10-26 — AI response validation

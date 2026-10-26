@@ -39,3 +39,13 @@ VERDICT_CLASS_MAP = {
 @register.filter
 def verdict_class(verdict):
     return VERDICT_CLASS_MAP.get(str(verdict).upper(), "dim")
+
+
+@register.filter
+def as_pct(value):   # claude code changed: 2026-10-26 — fractions (0.02645) shown as percent (2.645); None/'' stay ''
+    """Multiply a stored fraction by 100 for display as a percentage. Non-numbers return ''."""
+    try:
+        return float(value) * 100
+    except (TypeError, ValueError):
+        return ""
+

@@ -12,6 +12,7 @@ from bot.academy.views.courses import course_detail, enroll
 from bot.academy.views.lessons import lesson_detail, complete_lesson
 from bot.academy.views.quiz import quiz_detail
 from bot.academy.views.leverage_reality import leverage_reality   # claude code changed: 2026-10-22 — Leverage Reality
+from bot.academy.views.explainer import research_explainer   # claude code changed: 2026-10-26 — Research Explainer
 
 urlpatterns = [
     path("", academy_dashboard, name="academy_dashboard"),
@@ -26,4 +27,5 @@ urlpatterns = [
     path("courses/<slug:course_slug>/lessons/<slug:lesson_slug>/complete/", complete_lesson, name="academy_complete_lesson"),
     path("quiz/<int:quiz_id>/", quiz_detail, name="academy_quiz_detail"),
     path("leverage-reality/", leverage_reality, name="academy_leverage_reality"),   # claude code changed: 2026-10-22 — educational calculator
+    path("explainer/", research_explainer, name="academy_explainer"),   # claude code changed: 2026-10-26 — Research Explainer
 ]

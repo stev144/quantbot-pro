@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% load static %}
+{% load research_extras %}{# claude code changed: 2026-10-26 — as_pct #}
 {% block title %}Research Report — {{ experiment.id }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
 {% block content %}
@@ -63,13 +64,13 @@
             {# claude code changed: Statistical Integrity Hardening — expanded per gap #4/#8/#10/#12; FDR is now computed (m=1 identity), not skipped. #}
             <ul>
                 <li>Total observations: <span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.sample_size|default:"not evaluated" }}</span></li>
-                <li>Qualifying observations (condition true): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_true|default:"not evaluated" }}</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|default_if_none:'' }}" data-decimals="2" data-suffix="%">{{ experiment.statistical_results.pct_condition_true|floatformat:2 }}%</span> of dataset)</li>
+                <li>Qualifying observations (condition true): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_true|default:"not evaluated" }}</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|as_pct }}" data-decimals="2" data-suffix="%">{{ experiment.statistical_results.pct_condition_true|as_pct|floatformat:2 }}%</span> of dataset){# claude code changed: 2026-10-26 — was the raw fraction with a % sign (2.65% showed as 0.03%) #}</li>
                 <li>Non-qualifying observations (condition false / baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_false|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</span></li>
                 <li>Qualifying episodes (contiguous runs, not raw candles): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_episodes|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_episodes|default:"not evaluated" }}</span> — average <span class="stat-number" data-target="{{ experiment.statistical_results.episode_ratio|default_if_none:'' }}" data-decimals="1">{{ experiment.statistical_results.episode_ratio|floatformat:1 }}</span> candles/episode</li>
-                <li>Mean return when condition true: <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mean_return_when_true|default:"not evaluated" }}</span></li>
-                <li>Mean return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mean_return_when_false|default:"not evaluated" }}</span></li>
-                <li>Median return when condition true: <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.median_return_when_true|default:"not evaluated" }}</span></li>
-                <li>Median return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.median_return_when_false|default:"not evaluated" }}</span></li>
+                <li>Mean forward return when condition true (per observation): <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.mean_return_when_true is not None %}{{ experiment.statistical_results.mean_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
+                <li>Mean return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.mean_return_when_false is not None %}{{ experiment.statistical_results.mean_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
+                <li>Median return when condition true: <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.median_return_when_true is not None %}{{ experiment.statistical_results.median_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
+                <li>Median return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.median_return_when_false is not None %}{{ experiment.statistical_results.median_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
                 <li>Expected direction: {{ experiment.statistical_results.expected_direction|default:"unspecified" }}</li>
                 <li>Observed direction: {{ experiment.statistical_results.observed_direction|default:"not evaluated" }}</li>
                 <li>Mann-Whitney U p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</span></li>
@@ -98,7 +99,7 @@
 
             <p><strong>Code version:</strong> {{ experiment.code_version }}</p>
             <p><strong>Random seed:</strong> <span class="stat-number" data-target="{{ experiment.random_seed|default_if_none:'' }}" data-decimals="0">{{ experiment.random_seed }}</span></p>
-            <p><strong>Experiment timestamps:</strong> created {{ experiment.created_at }}, started {{ experiment.started_at }}, completed {{ experiment.completed_at }}</p>
+            <p><strong>Experiment timestamps:</strong> created {% if experiment.created_at %}<time class="local-time" datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}, started {% if experiment.started_at %}<time class="local-time" datetime="{{ experiment.started_at|date:'c' }}">{{ experiment.started_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}, completed {% if experiment.completed_at %}<time class="local-time" datetime="{{ experiment.completed_at|date:'c' }}">{{ experiment.completed_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}{# claude code changed: 2026-10-26 — times were UTC without saying so #}</p>
             <p><strong>Research ID:</strong> {{ experiment.id }}</p>
 
             {% if experiment.rerun_of %}<p><strong>Rerun of:</strong> <a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></p>{% endif %}
@@ -118,4 +119,5 @@
 
 {% block scripts %}
 <script src="{% static 'js/counters.js' %}"></script>
+{% include "partials/_local_time.html" %}
 {% endblock %}

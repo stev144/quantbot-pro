@@ -1,0 +1,11 @@
+{# claude code changed: 2026-10-26 — new. Times are stored and shown in UTC (labelled); this adds the viewer's own local time #}
+{# next to every <time class="local-time" datetime="ISO-8601"> element, e.g. "14:54 UTC (18:54 your time)". #}
+<script>
+document.querySelectorAll('time.local-time[datetime]').forEach(function (el) {
+    var d = new Date(el.getAttribute('datetime'));
+    if (isNaN(d.getTime()) || d.getTimezoneOffset() === 0) return;   // already UTC for this viewer: nothing to add
+    var hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
+    var sameDay = d.toISOString().slice(0, 10) === [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+    el.insertAdjacentText('afterend', ' (' + (sameDay ? '' : d.toLocaleDateString(undefined, {day: 'numeric', month: 'short'}) + ' ') + hh + ':' + mm + ' your time)');
+});
+</script>

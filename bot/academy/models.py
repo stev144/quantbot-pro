@@ -342,3 +342,32 @@ class QuestionResponse(models.Model):
 
     class Meta:
         unique_together = [("attempt", "question")]
+
+
+# claude code changed: 2026-10-26 — Research Explainer usage log. One row per AI request (cache hits included, flagged),
+# used for per-user / global rate limits (database-backed: the LocMem cache is per process) and for usage and
+# estimated-cost reporting. Stores a hash and the length of the question, never its text.
+class ExplainerRequest(models.Model):
+    STATUS_CHOICES = [(s, s) for s in ("OK", "CACHED", "DECLINED", "INVALID_AI_RESPONSE", "NOT_CONFIGURED",
+                                        "CREDITS_EXHAUSTED", "RATE_LIMITED", "TIMEOUT", "UNAVAILABLE", "ERROR")]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="explainer_requests")
+    concept_id = models.CharField(max_length=64, blank=True)
+    mode = models.CharField(max_length=16)
+    question_sha256 = models.CharField(max_length=64)
+    question_chars = models.PositiveIntegerField()
+    model = models.CharField(max_length=64)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES)
+    called_api = models.BooleanField(default=False)   # False for cache hits and failures before the call
+    input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    cache_read_input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    estimated_cost_usd = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "created_at"])]
+
+    def __str__(self):
+        return f"{self.user_id} {self.concept_id or '-'} {self.status} {self.created_at:%Y-%m-%d %H:%M}"

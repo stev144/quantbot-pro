@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% load static %}
+{% load research_extras %}{# claude code changed: 2026-10-26 — as_pct #}
 {% block title %}Results — Research Lab{% endblock %}
 {% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
 {% block content %}
@@ -20,7 +21,7 @@
 
             {% if experiment.status == "PLANNED" or experiment.status == "RUNNING" %}
             {# claude code changed: 2026-10-26 — runs execute in the background; this page reloads itself until the run is terminal #}
-            <div class="term-message mono">Running{% if experiment.started_at %} since {{ experiment.started_at|time:"H:i" }}{% endif %}. A strategy backtest can take several minutes — this page refreshes itself every 10 seconds, and you can leave and come back from History.</div>
+            <div class="term-message mono">Running{% if experiment.started_at %} since <time class="local-time" datetime="{{ experiment.started_at|date:'c' }}">{{ experiment.started_at|time:"H:i" }} UTC</time>{% endif %}. A strategy backtest can take several minutes — this page refreshes itself every 10 seconds, and you can leave and come back from History.</div>
             <script>setTimeout(function () { location.reload(); }, 10000);</script>
             {% elif experiment.status != "COMPLETED" %}
             <div class="term-message mono">This experiment is {{ experiment.status }}. {{ experiment.error_message }}</div>
@@ -54,14 +55,14 @@
             {# claude code changed: Statistical Integrity Hardening — expanded from 5 to include the fields gap #4/#8/#10 require: qualifying %, median return, FDR (now computed, not skipped), episode count, expected vs observed direction. #}
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Total observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:0 }}" data-decimals="0">0</span></span></div>
-                <div class="term-stat"><span class="term-stat-label">Qualifying observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:0 }}" data-decimals="0">0</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</span>)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:0 }}" data-decimals="0">0</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|as_pct|default:0 }}" data-decimals="2" data-suffix="%">0%</span>)</span></div>
                 <div class="term-stat"><span class="term-stat-label">Qualifying episodes (contiguous runs)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_episodes|default_if_none:0 }}" data-decimals="0">0</span></span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
-                <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|default_if_none:0 }}" data-decimals="4">0</span></span></div>
-                <div class="term-stat"><span class="term-stat-label">Mean Return (baseline / condition false)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|default_if_none:0 }}" data-decimals="4">0</span></span></div>
-                <div class="term-stat"><span class="term-stat-label">Median Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|default_if_none:0 }}" data-decimals="4">0</span></span></div>
-                <div class="term-stat"><span class="term-stat-label">Median Return (baseline)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (baseline / condition false)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (baseline)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
             </div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Expected direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.expected_direction|default:"unspecified" }}</span></div>
@@ -160,4 +161,5 @@
 
 {% block scripts %}
 <script src="{% static 'js/counters.js' %}"></script>
+{% include "partials/_local_time.html" %}{# claude code changed: 2026-10-26 #}
 {% endblock %}

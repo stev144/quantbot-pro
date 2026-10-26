@@ -137,3 +137,35 @@ class CardAnimationTest(SimpleTestCase):   # claude code changed: 2026-10-22 —
         self.assertTrue(all("e-" not in text for _, text in cells))  # no exponent notation to scramble
         self.assertIn("counters.js", html)
         self.assertNotIn('class="vc-ribbon vc-r2 count-text"', html)   # rank pills ("2ND") never animate
+
+
+# claude code changed: 2026-10-26 — display fixes: one price precision per comparison, and no multi-line {# #} comments
+class PriceDisplayPrecisionTest(SimpleTestCase):
+    def test_shared_precision_keeps_trailing_zeros(self):
+        from bot.views.venue_comparison_data import _fixed, _price_decimals
+        rows = [{"best_bid": 1.2909, "best_ask": 1.291}, {"best_bid": 1.29073, "best_ask": 1.29113},
+                {"best_bid": None, "best_ask": None}]
+        d = _price_decimals(rows)
+        self.assertEqual(d, 5)                                   # Kraken's 5-decimal tick sets the precision
+        self.assertEqual(_fixed(1.291, d), "1.29100")            # was "1.291" next to "1.2909"
+        self.assertEqual(_fixed(1.29161442, d), "1.29161")       # was 8 decimals
+        self.assertIsNone(_fixed(None, d))
+
+    def test_precision_bounds(self):
+        from bot.views.venue_comparison_data import _price_decimals
+        self.assertEqual(_price_decimals([{"best_bid": 64000.0, "best_ask": 64000.5}]), 2)   # never fewer than 2
+        self.assertEqual(_price_decimals([{"best_bid": 0.0000069312345, "best_ask": 0.000007}]), 8)   # capped at 8
+        self.assertEqual(_price_decimals([]), 2)
+
+
+class NoMultilineTemplateCommentTest(SimpleTestCase):
+    def test_every_hash_comment_closes_on_its_own_line(self):
+        """Django's {# #} is single-line only; an unclosed one is printed on the page (it leaked on Venue Comparison)."""
+        from pathlib import Path
+        from django.conf import settings
+        bad = []
+        for path in Path(settings.BASE_DIR, "templates").rglob("*.html"):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if line.count("{#") > line.count("#}"):
+                    bad.append(f"{path.relative_to(settings.BASE_DIR)}:{n}")
+        self.assertEqual(bad, [], "use {% comment %}…{% endcomment %} for multi-line comments")

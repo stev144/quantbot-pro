@@ -131,6 +131,22 @@ RESEARCH_LAB_BACKGROUND_RUNS = config('RESEARCH_LAB_BACKGROUND_RUNS', default=Tr
 # background thread every 15 min (bot/views/home_intelligence.py); False = never start one (tests).
 HOME_UNIVERSE_SNAPSHOT_BACKGROUND = config("HOME_UNIVERSE_SNAPSHOT_BACKGROUND", default=True, cast=bool)
 
+# claude code changed: 2026-10-26 — Research Explainer (Academy). Off by default; the API key itself is NOT a setting
+# (bot/ai/client.py reads ANTHROPIC_API_KEY directly, so it can never appear in settings dumps). Model is configurable;
+# the Haiku default is provisional until the Stage F comparison with Sonnet.
+EXPLAINER_AI_ENABLED = config("EXPLAINER_AI_ENABLED", default=False, cast=bool)
+EXPLAINER_AI_MODEL = config("EXPLAINER_AI_MODEL", default="claude-haiku-5-5")   # Beginner mode
+# claude code changed: 2026-10-26 — owner decision after the Stage F evaluation: Research mode uses Sonnet (no slips on
+# the subtle-statistics questions; ~22x Haiku's cost per answer)
+EXPLAINER_AI_MODEL_RESEARCH = config("EXPLAINER_AI_MODEL_RESEARCH", default="claude-sonnet-5-5")
+EXPLAINER_MAX_QUESTION_CHARS = config("EXPLAINER_MAX_QUESTION_CHARS", default=500, cast=int)
+EXPLAINER_MAX_OUTPUT_TOKENS = config("EXPLAINER_MAX_OUTPUT_TOKENS", default=2000, cast=int)   # includes thinking tokens
+EXPLAINER_TIMEOUT_SECONDS = config("EXPLAINER_TIMEOUT_SECONDS", default=30.0, cast=float)
+EXPLAINER_USER_PER_MINUTE = config("EXPLAINER_USER_PER_MINUTE", default=3, cast=int)
+EXPLAINER_USER_PER_DAY = config("EXPLAINER_USER_PER_DAY", default=15, cast=int)
+EXPLAINER_GLOBAL_PER_DAY = config("EXPLAINER_GLOBAL_PER_DAY", default=100, cast=int)
+EXPLAINER_CACHE_DAYS = config("EXPLAINER_CACHE_DAYS", default=7, cast=int)
+
 
 # Application definition
 

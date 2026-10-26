@@ -61,6 +61,23 @@ def _plain(x, max_decimals: int = 8, min_decimals: int = 0):
         s = head + ("." + tail if tail else "")
     return s
 
+def _price_decimals(rows) -> int:   # claude code changed: 2026-10-26 — one precision for every price on the page
+    """Decimals needed by the most precise venue's best bid/ask (2–8). Each venue quotes on its own tick (Binance
+    1.2910, Kraken 1.29113), and _plain() also dropped trailing zeros, so the cards showed 1.2909 next to 1.291 and an
+    8-decimal average fill; one shared precision keeps the prices comparable digit for digit."""
+    need = 2
+    for r in rows:
+        for x in (r.get("best_bid"), r.get("best_ask")):
+            s = _plain(x)
+            if s and "." in s:
+                need = max(need, len(s.split(".")[1]))
+    return min(need, 8)
+
+
+def _fixed(x, decimals: int):   # claude code changed: 2026-10-26 — fixed decimals, trailing zeros kept; None stays None
+    return None if x is None else f"{float(x):.{decimals}f}"
+
+
 DEFAULT_SYMBOL = "XRP/USDT"
 DEFAULT_QUANTITY = 100.0
 
@@ -149,10 +166,11 @@ def get_venue_comparison_table(symbol: str = DEFAULT_SYMBOL, quantity: float = D
     for r in ranked:   # explain the result: price advantage vs fee
         r["best_book_price"] = best_price is not None and r["estimated_fill_price"] == best_price
     cheapest = ranked[0]["venue_id"] if ranked else None
+    px = _price_decimals([r for r in rows if r["available"]])   # claude code changed: 2026-10-26
     for r in rows:   # claude code changed: 2026-10-22 — display strings for the animated cards
         r["disp"] = {
-            "best_bid": _plain(r["best_bid"]), "best_ask": _plain(r["best_ask"]),
-            "fill": _plain(r["estimated_fill_price"]), "spread": _plain(r["spread_pct"], 4),
+            "best_bid": _fixed(r["best_bid"], px), "best_ask": _fixed(r["best_ask"], px),   # claude code changed: 2026-10-26 — shared precision (was _plain)
+            "fill": _fixed(r["estimated_fill_price"], px), "spread": _plain(r["spread_pct"], 4),
             "fee": _plain(r["fee_rate_pct"], 3), "slippage": _plain(r["estimated_slippage_pct"], 4),
             "all_in": _plain(r["all_in_total"], 4, 2), "extra": _plain(r["extra_vs_cheapest"], 4, 2),
             "extra_pct": _plain(r["extra_vs_cheapest_pct"], 3),
