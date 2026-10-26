@@ -389,6 +389,10 @@ def describe_executed_spec(spec: ResearchSpec) -> str:
         condition_desc = f"{c.get('feature')} {c.get('operator')} {c.get('threshold')}"
         return f"Condition: {condition_desc}. Target: forward return over {horizon_desc} on {spec.asset}."
 
+    if spec.hypothesis_type == "strategy_backtest":   # claude code changed: 2026-10-26 — Backtest Validation
+        return (f"Strategy backtest: the platform's regime-routed strategy on {spec.asset} ({spec.timeframe}), "
+                f"full history, net of fees and slippage. Claim: positive net expectancy per trade.")
+
     feature_desc = spec.features[0] if spec.features else "no feature specified"
     return f"Feature: {feature_desc} (continuous). Target: forward return over {horizon_desc} on {spec.asset}."
 
@@ -454,6 +458,21 @@ def explain_evidence(experiment) -> str:
             lines.append(f"Mann-Whitney U p-value: {p:.4f}.")
         if block_p is not None:
             lines.append(f"Block-permutation p-value: {block_p:.4f}.")
+    elif stat.get("metric") == "strategy_backtest":   # claude code changed: 2026-10-26 — Backtest Validation; reads stored evidence only
+        n = stat.get("n_trades_with_net_r")
+        mean_r = stat.get("mean_net_r")
+        p = stat.get("p_value_one_sided")
+        ci = stat.get("bootstrap_ci95_mean_net_r")
+        dd = stat.get("max_drawdown")
+        if n is not None:
+            lines.append(f"The backtest closed {n} trades between {stat.get('data_start')} and {stat.get('data_end')}.")
+        if mean_r is not None:
+            lines.append(f"Mean net R per trade after costs: {mean_r:+.3f}" + (f" (bootstrap 95% CI {ci[0]:+.3f} to {ci[1]:+.3f})" if ci else "") + ".")
+        if p is not None:
+            lines.append(f"One-sided t-test p-value: {p:.4f}.")
+        if stat.get("final_balance") is not None:
+            lines.append(f"Starting from ${stat.get('initial_balance'):,.2f}, the simulated balance ended at ${stat.get('final_balance'):,.2f}"
+                         + (f"; worst drawdown −{dd:.2f}%." if dd is not None else "."))
     else:
         ic = stat.get("ic")
         p = stat.get("block_permutation_p_value")

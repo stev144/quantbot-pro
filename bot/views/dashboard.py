@@ -128,6 +128,16 @@ def _fetch_klines_or_stale_fallback(symbol):
 
 
 def dashboard(request):
+    """Home page: Quantitative Market Intelligence."""   # claude code changed: 2026-10-26 — home page redesign (owner brief)
+    return _dashboard_page(request, "dashboard.html")
+
+
+def backtest_detail(request):   # claude code changed: 2026-10-26 — the in-sample backtest detail moved off the home page, unchanged
+    """The selected symbol's in-sample backtest (score, curves, breakdowns, rejections, trade log)."""
+    return _dashboard_page(request, "backtest_detail.html")
+
+
+def _dashboard_page(request, template):   # claude code changed: 2026-10-26 — was the body of dashboard(); shared by both pages
     # ==============================
     # SYMBOL
     # ==============================
@@ -147,7 +157,7 @@ def dashboard(request):
         df, stale_notice = _fetch_klines_or_stale_fallback(symbol)
 
         if df is None or df.empty:
-            return render(request, "dashboard.html", {
+            return render(request, template, {   # claude code changed: 2026-10-26 — was "dashboard.html"
                 "error": "Failed to fetch market data"
             })
 
@@ -281,13 +291,13 @@ def dashboard(request):
     # ==============================
     # TERMINAL SECTIONS
     # ==============================
-    cross_section_dispersion = terminal_data.get_cross_sectional_dispersion()
-    market_state = terminal_data.get_market_state(current_regime_result, cross_section_dispersion)
-    research_state = terminal_data.get_research_state()
-    alpha_intelligence = terminal_data.get_alpha_intelligence(cross_section_dispersion, results)
-    portfolio_risk = terminal_data.get_portfolio_risk(results)
-    execution_state = terminal_data.get_execution_state()
-    system_health = terminal_data.get_system_health()
+    # claude code changed: 2026-10-26 — home page redesign: the month-old research cross-section, the legacy feature-IC
+    # table and the 12-CSV historical correlation are no longer on the home page (the research pages keep them; the
+    # functions are unchanged); the platform journal (positions, P&L) is computed for staff only.
+    research_state = terminal_data.get_research_state() if template == "dashboard.html" else None
+    execution_state = (terminal_data.get_execution_state()
+                       if template == "dashboard.html" and request.user.is_staff else None)
+    system_health = terminal_data.get_system_health() if template == "dashboard.html" else None
 
     # ==============================
     # FINAL CONTEXT
@@ -295,11 +305,8 @@ def dashboard(request):
     context = {
         "symbol": symbol,
 
-        # Terminal sections
-        "market_state": market_state,
+        # Terminal sections   # claude code changed: 2026-10-26 — market_state / alpha_intelligence / portfolio_risk removed (home page redesign)
         "research_state": research_state,
-        "alpha_intelligence": alpha_intelligence,
-        "portfolio_risk": portfolio_risk,
         "execution_state": execution_state,
         "system_health": system_health,
 
@@ -346,17 +353,14 @@ def dashboard(request):
         "stale_notice": stale_notice,
     }
 
-    # claude code changed: 2026-10-22 — Markets cards for the cross-sectional list (same quotes and partial as /forex/);
-    # the z-scores themselves are unchanged
-    from bot.views import markets_data as md
-    csd = (market_state or {}).get("cross_section_dispersion") or {}
-    if csd.get("available"):
-        crypto_quotes = md.card_quotes("crypto", request.user)
-        csd["cards"] = [{"q": crypto_quotes[e["symbol"]], "z": e["cs_zscore"]}
-                        for e in csd.get("top_extremes", []) if e["symbol"] in crypto_quotes]
-        csd["n_without_quote"] = len(csd.get("top_extremes", [])) - len(csd["cards"])
+    # claude code changed: 2026-10-26 — home page redesign: market pulse, relative value, regime intelligence, risk,
+    # research evidence and watchlist (bot/views/home_intelligence.py; replaces market_pulse.py and the cross-section cards)
+    if template == "dashboard.html":
+        from bot.views import home_intelligence as hi
+        context["intel"] = hi.get_home_intelligence(df, current_regime_result, results, symbol, request.user)
+        context["show_private"] = request.user.is_staff
 
-    return render(request, "dashboard.html", context)
+    return render(request, template, context)
 
 def live_data(request):
     import logging

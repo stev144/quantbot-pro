@@ -452,8 +452,12 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             description="Run a full regime-aware backtest for a hypothesis and report trade-level performance (win rate, expectancy, Sharpe, drawdown) alongside the statistical evidence.",
             category=VALIDATION, required_tier=PRO, risk_tier="MEDIUM", compute_tier="MEDIUM",
             backing_engine="bot.backtesting.backtester.Backtester",
-            engine_status=PARTIALLY_IMPLEMENTED, has_tests=True,
-            status_note="The Research Lab tool wrapper (run_backtest) exists and is tool-tested, and the backtester itself is the most heavily used engine in the whole platform — but there is no orchestrator dispatch branch wiring it into an experiment yet.",
+            # claude code changed: 2026-10-26 — wired end to end: hypothesis_type "strategy_backtest", research-mode
+            # run_backtest (per-trade NET R, one-sided t-test + bootstrap CI), compute_verdict_backtest(), orchestrator
+            # branch, Formalize option, background execution. Tests: bot/tests/test_research_lab_backtest_validation.py.
+            engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="strategy_backtest",
+            supported_asset_classes=["CRYPTO", "FOREX"],
+            status_note="Tests positive net expectancy (after fees and slippage) of the platform's regime-routed strategy on one asset over its full history. In-sample only, so a positive result is capped at OBSERVATION.",
         ),
     ]
 }

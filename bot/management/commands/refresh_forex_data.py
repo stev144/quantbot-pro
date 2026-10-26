@@ -72,6 +72,7 @@ class Command(BaseCommand):
                 _to_mt5_symbol,
                 connect,
                 mt5_server_time_to_utc,
+                MT5_CLOCK_LABEL,   # claude code changed: 2026-10-26 — the configured clock, not a hard-coded NY+7 label
                 HISTORY_DAYS,
                 symbol_to_filename,
             )
@@ -99,6 +100,8 @@ class Command(BaseCommand):
             return
 
         now         = datetime.now(tz=timezone.utc)
+        _account    = mt5.account_info()   # claude code changed: 2026-10-26 — record which broker server the appended rows came from
+        broker      = _account.server if _account is not None else "unknown MT5 server"
         ok_count    = 0
         skip_count  = 0
         err_count   = 0
@@ -148,6 +151,9 @@ class Command(BaseCommand):
                     for col in ["open", "high", "low", "close", "volume"]:
                         new_df[col] = pd.to_numeric(new_df[col], errors="coerce")
                     new_df.dropna(subset=["open", "high", "low", "close"], inplace=True)
+                    # claude code changed: 2026-10-26 — drop the bar that is still forming (opened less than an hour
+                    # ago): saved now it would hold only part of the hour (a run at hh:00:01 saw one second of it).
+                    new_df = new_df[pd.to_datetime(new_df["timestamp"], utc=True) + timedelta(hours=1) <= now]
 
                     # ── merge with existing — always, even on --full  # claude code changed: bug fix: --full controls fetch window, not whether to merge; replacing instead of merging lost pre-broker-history-limit rows
                     existing_full = None
@@ -157,12 +163,16 @@ class Command(BaseCommand):
                     else:
                         combined = new_df
 
-                    combined.drop_duplicates(subset=["timestamp"], inplace=True)
+                    combined.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)   # claude code changed: 2026-10-26 — was keep="first": a re-fetched overlap bar now replaces the older (possibly partial) copy
                     combined.sort_values("timestamp", inplace=True)
                     combined.reset_index(drop=True, inplace=True)
 
                     added = len(combined) - (len(existing_full) if existing_full is not None else 0)
-                    if added <= 0 and not full:
+                    # claude code changed: 2026-10-26 — a replaced overlap bar adds no row but still has to be written
+                    _cols = ["open", "high", "low", "close"]
+                    revised = (existing_full is not None and added <= 0 and not combined[_cols].reset_index(drop=True).equals(
+                        existing_full.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")[_cols].reset_index(drop=True)))
+                    if added <= 0 and not full and not revised:
                         skip_count += 1
                         self.stdout.write(f"  {symbol:12s}  no new candles")
                         continue
@@ -177,7 +187,7 @@ class Command(BaseCommand):
                         start_date=str(combined["timestamp"].iloc[0])[:10],
                         end_date=str(combined["timestamp"].iloc[-1])[:10],
                         row_count=len(combined),
-                        clock="UTC (converted from MT5 server time = America/New_York + 7h)",
+                        clock=f"{MT5_CLOCK_LABEL}; rows appended on {now:%Y-%m-%d %H:%M} UTC came from MT5 server {broker}",   # claude code changed: 2026-10-26 — was a hard-coded NY+7 label
                     )
 
                     new_rows += max(added, 0)

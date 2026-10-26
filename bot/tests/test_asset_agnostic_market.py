@@ -320,6 +320,27 @@ class NoCrossAssetLeakTests(SimpleTestCase):
 
 # claude code changed: 2026-10-06 — data clock fix (owner option A) and the owner's FX calendar (OD-FX-1).
 class Mt5ServerClockTests(SimpleTestCase):
+    # claude code changed: 2026-10-26 — MT5_SERVER_CLOCK now comes from .env (owner's broker is on UTC); these tests
+    # exercise the NY+7 conversion maths, so they pin that clock for their own duration.
+    def setUp(self):
+        import bot.mt5_data_fetcher as f
+        self._f, self._saved_clock = f, f.MT5_SERVER_CLOCK
+        f.MT5_SERVER_CLOCK = "NY+7"
+
+    def tearDown(self):
+        self._f.MT5_SERVER_CLOCK = self._saved_clock
+
+    def test_utc_server_clock_is_identity(self):   # claude code changed: 2026-10-26 — GlobalDynamicMarkets-Demo
+        from bot.mt5_data_fetcher import mt5_server_time_to_utc
+        self._f.MT5_SERVER_CLOCK = "UTC"
+        epoch = int(pd.Timestamp("2026-10-26 03:00").timestamp())
+        self.assertEqual(mt5_server_time_to_utc(pd.Series([epoch])).iloc[0], pd.Timestamp("2026-10-26 03:00", tz="UTC"))
+        self.assertEqual(mt5_server_time_to_utc(pd.Series([pd.Timestamp("2026-03-08 09:30")])).iloc[0],   # no NY DST gap on a UTC clock
+                         pd.Timestamp("2026-03-08 09:30", tz="UTC"))
+        self._f.MT5_SERVER_CLOCK = "GMT+2"
+        with self.assertRaises(ValueError):   # anything not implemented and verified is refused
+            mt5_server_time_to_utc(pd.Series([epoch]))
+
     def test_server_time_converts_to_the_real_market_open_and_close(self):
         from bot.mt5_data_fetcher import mt5_server_time_to_utc
         cases = {"2026-01-05 00:00": "2026-01-04 22:00",   # winter: Monday-open bar = Sunday 22:00 UTC

@@ -150,7 +150,10 @@ RISK_TIERS = ["LOW", "MEDIUM", "HIGH"]
 # run_statistical_test/run_conditional_test. Gated PRO by
 # capability_registry.py's cointegration_pairs_research capability — see
 # entitlements.py. Advanced Quant Research Capability Architecture.
-HYPOTHESIS_TYPES = ["feature", "conditional", "pairs"]
+# claude code changed: 2026-10-26 — "strategy_backtest": "the platform's regime-routed strategy has positive net
+# expectancy on this asset" — tested by run_backtest (research mode, per-trade net R, one-sided t-test + bootstrap CI),
+# verdict by compute_verdict_backtest(). Like "pairs", it has no forward-return target.
+HYPOTHESIS_TYPES = ["feature", "conditional", "pairs", "strategy_backtest"]
 
 # claude code changed: new — Multi-Asset Foundation Refactor STEP 10. A
 # controlled, closed representation of how many instruments a piece of
@@ -381,7 +384,7 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
     # reads and could never satisfy meaningfully, so this whole block is
     # scoped away from hypothesis_type=="pairs" rather than forcing a
     # placeholder horizon value through it.
-    if spec.hypothesis_type != "pairs" and "target" not in unresolved:
+    if spec.hypothesis_type not in ("pairs", "strategy_backtest") and "target" not in unresolved:   # claude code changed: 2026-10-26 — +strategy_backtest (no forward-return target)
         target_type = spec.target.get("type")
         if not target_type:
             errors.append("target.type is required")
@@ -447,6 +450,9 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
                 errors.append(f"condition operator '{operator}' must be one of {CONDITION_OPERATORS}")
             if not isinstance(threshold, (int, float)):
                 errors.append(f"condition threshold must be numeric, got {threshold!r}")
+
+    if spec.hypothesis_type == "strategy_backtest" and spec.direction not in (None, "positive"):   # claude code changed: 2026-10-26
+        errors.append("a strategy backtest tests one claim only — positive net expectancy — so direction must be empty or 'positive'")   # claude code changed: 2026-10-26
 
     if spec.risk_tier not in RISK_TIERS:
         errors.append(f"risk_tier '{spec.risk_tier}' must be one of {RISK_TIERS}")

@@ -114,6 +114,24 @@ CACHES = {
 }
 
 
+# claude code changed: 2026-10-26 — 30-day free trial + Stripe subscriptions (bot/billing/). All read from .env.
+# STRIPE_SECRET_KEY may be (and should be) a restricted key (rk_...). BILLING_ENFORCED stays false until the owner
+# switches it on; until then premium pages stay open to everyone, exactly as before.
+STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
+STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
+STRIPE_PRICE_ID = config('STRIPE_PRICE_ID', default='')
+BILLING_ENFORCED = config('BILLING_ENFORCED', default=False, cast=bool)
+BILLING_TRIAL_DAYS = config('BILLING_TRIAL_DAYS', default=30, cast=int)
+BILLING_PRICE_LABEL = config('BILLING_PRICE_LABEL', default='')   # display only, e.g. "$29 / month" — Stripe's Price is what is charged
+
+# claude code changed: 2026-10-26 — Research Lab runs execute in a background thread (a strategy backtest takes minutes,
+# past gunicorn's 120 s timeout). Tests that drive the whole flow through HTTP switch it off to run synchronously.
+RESEARCH_LAB_BACKGROUND_RUNS = config('RESEARCH_LAB_BACKGROUND_RUNS', default=True, cast=bool)
+# claude code changed: 2026-10-26 — home page universe snapshot (regimes / volatility / correlation) refreshes in a
+# background thread every 15 min (bot/views/home_intelligence.py); False = never start one (tests).
+HOME_UNIVERSE_SNAPSHOT_BACKGROUND = config("HOME_UNIVERSE_SNAPSHOT_BACKGROUND", default=True, cast=bool)
+
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -149,6 +167,7 @@ MIDDLEWARE = [
     # itself stays — still needed to populate request.user (used to decide
     # Sign In vs Logout in the navbar, and by the login/signup views).
     'django.contrib.messages.middleware.MessageMiddleware',
+    'bot.billing.middleware.PremiumAccessMiddleware',   # claude code changed: 2026-10-26 — premium pages need a trial or subscription (off unless BILLING_ENFORCED)
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -172,6 +191,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'bot.billing.context_processors.billing_nav',   # claude code changed: 2026-10-26 — navbar plan label
             ],
         },
     },

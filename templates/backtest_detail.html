@@ -1,0 +1,283 @@
+{% extends 'base.html' %}
+{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
+{% load static %}
+{% load research_extras %}
+
+{% comment %}claude code changed: 2026-10-26 — new page (/backtest/). The in-sample backtest detail that used to sit at
+the bottom of the home page, moved here unchanged (same view code, same markup, same charts) when the home page became
+the Quantitative Market Intelligence dashboard.{% endcomment %}
+
+{% block content %}
+{% if error %}
+{% include "partials/_topbar.html" with active="dashboard" %}
+<div class="term-body">
+    <div class="term-panel">
+        <span class="badge neg">ERROR</span>
+        <span style="margin-left:8px">{{ error }}</span>
+    </div>
+</div>
+{% else %}
+
+{% include "partials/_topbar.html" with active="dashboard" %}
+
+{% if stale_notice %}
+{% comment %}
+claude code changed: new — dashboard hardening. Only rendered when
+bot/views/dashboard.py's _fetch_klines_or_stale_fallback() had to fall
+back to a previously-cached snapshot because the live exchange fetch
+failed. "warn" (not "neg") — this is a real, honestly-labeled degraded
+state, not an error the page failed to handle.
+{% endcomment %}
+<div style="padding: var(--sp-3) var(--sp-5) 0">
+    <div class="term-panel">
+        <span class="badge warn">STALE DATA</span>
+        <span style="margin-left:8px">{{ stale_notice }}</span>
+    </div>
+</div>
+{% endif %}
+
+<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
+    <form class="term-symbol-form" method="get" action="{% url 'backtest_detail' %}">
+        <label class="text-dim mono" for="db-symbol">Symbol:</label>
+        <input id="db-symbol" type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
+        <button type="submit" class="term-btn">Load</button>
+    </form>
+</div>
+
+<div class="term-body">
+    <div class="term-panel" style="margin-bottom:16px">
+        <span class="badge warn">IN-SAMPLE · DESCRIPTIVE</span>
+        <span style="margin-left:8px">A backtest of {{ symbol }} on the candles fetched for this page. It is not evidence of an edge: no strategy has
+        claim-eligible evidence (research reset CRRP-2026-10-02), and the production gate blocks strategies that are not validated, so
+        this run can show zero trades. <a href="{% url 'dashboard' %}?symbol={{ symbol }}">← Back to the home page</a></span>
+    </div>
+    <!-- ================= BACKTEST DETAIL ================= -->
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title coin-id">{% coin_logo symbol 22 %}Backtest Detail — {{ symbol }}</span>{# claude code changed: 2026-10-22 — coin logo #}
+            <span class="term-section-meta">grade {{ grade }} · score {{ total_score|floatformat:1 }}/100</span>
+        </div>
+        <div class="term-section-body">
+
+            <div class="term-grid term-grid-6" style="margin-bottom:16px">
+                <div class="metric-tile"><div class="metric-label">Total Trades</div><div class="metric-value stat-number" data-target="{{ total_trades }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Win Rate</div><div class="metric-value stat-number" data-target="{{ win_rate }}" data-decimals="2" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Profit Factor</div><div class="metric-value stat-number {% if profit_factor >= 1 %}pos{% else %}neg{% endif %}" data-target="{{ profit_factor }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Expectancy (R)</div><div class="metric-value stat-number {% if expectancy_r > 0 %}pos{% elif expectancy_r < 0 %}neg{% endif %}" data-target="{{ expectancy_r }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Sharpe</div><div class="metric-value stat-number {% if sharpe > 0 %}pos{% elif sharpe < 0 %}neg{% endif %}" data-target="{{ sharpe }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Sortino</div><div class="metric-value stat-number {% if sortino > 0 %}pos{% elif sortino < 0 %}neg{% endif %}" data-target="{{ sortino }}" data-decimals="2">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Max Drawdown</div><div class="metric-value stat-number neg" data-target="{{ max_drawdown }}" data-decimals="2" data-suffix="%">0%</div></div>
+                <div class="metric-tile"><div class="metric-label">Loss Streak</div><div class="metric-value stat-number" data-target="{{ loss_streak }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Wins</div><div class="metric-value stat-number pos" data-target="{{ wins }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Losses</div><div class="metric-value stat-number neg" data-target="{{ losses }}" data-decimals="0">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Avg R</div><div class="metric-value stat-number {% if avg_r > 0 %}pos{% elif avg_r < 0 %}neg{% endif %}" data-target="{{ avg_r }}" data-decimals="4">0</div></div>
+                <div class="metric-tile"><div class="metric-label">Validation Penalty</div><div class="metric-value stat-number {% if validation_penalty > 5 %}neg{% elif validation_penalty > 0 %}warn{% else %}pos{% endif %}" data-target="{{ validation_penalty }}" data-decimals="0">0</div></div>
+            </div>
+            <div class="metric-tile" style="margin-bottom:16px"><div class="metric-label">Verdict</div><div class="metric-value small">{{ verdict }}</div></div>
+
+            <div class="two-col" style="margin-bottom:16px">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Equity Curve</div>
+                    <div class="chart-box"><canvas id="equityChart"></canvas></div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Drawdown</div>
+                    <div class="chart-box"><canvas id="drawdownChart"></canvas></div>
+                </div>
+            </div>
+
+            <div class="two-col" style="margin-bottom:16px">
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Regime Breakdown</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Regime</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
+                            <tbody>
+                                {% for regime, d in regime_breakdown.items %}
+                                <tr>
+                                    <td class="label-cell">{{ regime }}</td>
+                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <div class="metric-label" style="margin-bottom:6px">Structure Breakdown</div>
+                    <div class="term-table-wrap">
+                        <table class="term-table">
+                            <thead><tr><th>Structure</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
+                            <tbody>
+                                {% for structure, d in structure_breakdown.items %}
+                                <tr>
+                                    <td class="label-cell">{{ structure }}</td>
+                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
+                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
+                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            {% if suggestions %}
+            <div class="metric-label" style="margin-bottom:6px">Scorer Notes</div>
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <tbody>
+                        {% for s in suggestions %}
+                        <tr><td class="label-cell">{{ s }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if rejection_table %}
+            <div class="metric-label" style="margin-bottom:6px">Rejection Analysis</div>
+            <div class="term-table-wrap" style="margin-bottom:16px">
+                <table class="term-table">
+                    <thead><tr><th>Reason</th><th class="num">Count</th><th class="num">%</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for reason, d in rejection_table.items %}
+                        {% if d.count > 0 %}
+                        <tr>
+                            <td class="label-cell">{{ reason }}</td>
+                            <td class="num stat-number" data-target="{{ d.count }}" data-decimals="0">0</td>
+                            <td class="num stat-number" data-target="{{ d.percentage }}" data-decimals="2" data-suffix="%">0%</td>
+                            <td>{% if d.research_verdict %}<span class="badge {{ d.research_verdict|verdict_class }}">{{ d.research_verdict }}</span>{% endif %}</td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <div class="metric-label" style="margin-bottom:6px">Trade Log ({{ trades|length }})</div>
+            <div class="term-table-wrap">
+                <table class="term-table">
+                    <thead><tr><th>#</th><th>Dir</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th class="num">R</th><th class="num">Held</th><th>Exit Reason</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        {% for t in trades|slice:":100" %}
+                        <tr class="{% if t.profit > 0 %}row-win{% elif t.profit < 0 %}row-loss{% endif %}" title="{{ t.entry_narrative }}">
+                            <td class="num text-dim">{{ forloop.counter }}</td>
+                            <td class="{% if t.direction == 'LONG' %}dir-long{% else %}dir-short{% endif %}">{{ t.direction }}</td>
+                            <td class="num stat-number" data-target="{{ t.entry_price|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td class="num stat-number" data-target="{{ t.exit_price|default_if_none:0 }}" data-decimals="4">0</td>
+                            <td class="num stat-number {% if t.profit > 0 %}pos{% elif t.profit < 0 %}neg{% endif %}" data-target="{{ t.profit|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number {% if t.r_multiple > 0 %}pos{% elif t.r_multiple < 0 %}neg{% endif %}" data-target="{{ t.r_multiple|default_if_none:0 }}" data-decimals="2">0</td>
+                            <td class="num stat-number" data-target="{{ t.holding_candles|default_if_none:0 }}" data-decimals="0">0</td>
+                            <td class="label-cell text-dim">{{ t.exit_reason }}</td>
+                            <td>{% if t.research_verdict %}<span class="badge {{ t.research_verdict|verdict_class }}">{{ t.research_verdict }}</span>{% else %}<span class="badge dim">&mdash;</span>{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if trades|length > 100 %}
+            <div class="chart-caption">Showing first 100 of {{ trades|length }} trades.</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+{% include "partials/_footer.html" with label="Backtest Detail" note=symbol|add:" · backtest cache: 1h" %}
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% include "partials/_mkt_card_scripts.html" %}{# claude code changed: 2026-10-22 — same card behaviour as Markets #}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/chart-theme.js' %}"></script>
+<script src="{% static 'js/counters.js' %}"></script>
+{% if not error %}
+<script>
+    window.equityData = {{ equity_curve|safe }};
+    window.drawdownData = {{ drawdown_curve|safe }};
+
+    var equityChartInstance = null;
+    var drawdownChartInstance = null;
+
+    function renderCharts() {
+        var lineColor = themeColor('--neutral');
+        var ddColor = themeColor('--negative');
+        var blueHex = themeColor('--neutral');
+        var scales = chartCommonScales({ xTitle: 'Trade #' });
+
+        equityChartInstance = destroyChart(equityChartInstance);
+        drawdownChartInstance = destroyChart(drawdownChartInstance);
+
+        var equityCtx = document.getElementById('equityChart');
+        if (equityCtx && window.equityData.length > 0) {
+            equityChartInstance = new Chart(equityCtx, {
+                type: 'line',
+                data: {
+                    labels: window.equityData.map(function (_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Cumulative P&L ($)',
+                        data: window.equityData,
+                        borderColor: lineColor,
+                        backgroundColor: chartAreaFill(blueHex),
+                        fill: true,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
+                    },
+                    scales: scales
+                }
+            });
+        }
+
+        var drawdownCtx = document.getElementById('drawdownChart');
+        if (drawdownCtx && window.drawdownData.length > 0) {
+            drawdownChartInstance = new Chart(drawdownCtx, {
+                type: 'line',
+                data: {
+                    labels: window.drawdownData.map(function (_, i) { return i + 1; }),
+                    datasets: [{
+                        label: 'Drawdown (%)',
+                        data: window.drawdownData,
+                        borderColor: ddColor,
+                        backgroundColor: chartAreaFill(blueHex),
+                        fill: true,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
+                    },
+                    scales: scales
+                }
+            });
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        renderCharts();
+        onThemeChange(renderCharts);
+    });
+</script>
+{% endif %}
+{% endblock %}

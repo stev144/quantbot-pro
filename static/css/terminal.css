@@ -1537,3 +1537,73 @@
            border-radius:999px; border:1px solid var(--border-strong); background:var(--bg-2); }
 .fx-names { font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .fx-sep { color:var(--text-dim); }
+
+/* ============================================================
+ * CARD EDGE SHINE — claude code changed: 2026-10-26, owner request: "make all the cards in the whole project shine
+ * at the edges like the binance card ... don't change the colors of the cards, only shining at the edges".
+ * The look is the Venue Comparison "cheapest" (Binance) card's edge: a bright #4aa3ff line on the border and a soft
+ * blue halo outside it. Drawn on a ::after overlay so no card's own background, text, border rule or box-shadow
+ * (e.g. .vc-card.vc-best, hover lifts) is overwritten; pointer-events:none keeps every card clickable.
+ * ============================================================ */
+/* claude code changed: 2026-10-26 — + .hq-card (home page cards), owner: home page edges as bright as other pages */
+:root { --card-shine-line: rgba(74, 163, 255, 0.55); --card-shine-ring: rgba(74, 163, 255, 0.14); --card-shine-glow: rgba(74, 163, 255, 0.20); }
+:is(.term-panel, .metric-tile, .mkt-card, .mkt-paper-card, .mi-card, .academy-step-card, .academy-answer-card,
+    .term-login-panel, .pos-stat-tile, .pos-open-card, .pt-stats-card, .cap-card, .bill-card, .vc-card, .rb-card,
+    .sv-card, .dca-card, .hq-card) {
+  position: relative;
+}
+:is(.term-panel, .metric-tile, .mkt-card, .mkt-paper-card, .mi-card, .academy-step-card, .academy-answer-card,
+    .term-login-panel, .pos-stat-tile, .pos-open-card, .pt-stats-card, .cap-card, .bill-card, .vc-card, .rb-card,
+    .sv-card, .dca-card, .hq-card)::after {
+  content: "";
+  position: absolute;
+  inset: -1px;                       /* over the card's own 1px border, so the edge itself lights up */
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--card-shine-line), 0 0 0 2px var(--card-shine-ring), 0 4px 20px var(--card-shine-glow);
+  transition: box-shadow 0.2s;
+}
+:is(.term-panel, .metric-tile, .mkt-card, .mkt-paper-card, .mi-card, .academy-step-card, .academy-answer-card,
+    .pos-stat-tile, .pos-open-card, .pt-stats-card, .cap-card, .bill-card, .vc-card, .rb-card, .sv-card,
+    .dca-card, .hq-card):hover::after {
+  box-shadow: inset 0 0 0 1px rgba(74, 163, 255, 0.85), 0 0 0 2px rgba(74, 163, 255, 0.22), 0 6px 26px rgba(74, 163, 255, 0.30);
+}
+/* claude code changed: 2026-10-26 — owner request: the cheapest venue (Venue Comparison's .vc-best) shines brighter
+   than every other card. Two classes outrank the shared :is(...) rule above. */
+.vc-card.vc-best::after {
+  box-shadow: inset 0 0 0 2px rgba(74, 163, 255, 0.95), 0 0 0 3px rgba(74, 163, 255, 0.30), 0 0 34px rgba(74, 163, 255, 0.55);
+}
+.vc-card.vc-best:hover::after {
+  box-shadow: inset 0 0 0 2px rgba(74, 163, 255, 1), 0 0 0 4px rgba(74, 163, 255, 0.38), 0 0 44px rgba(74, 163, 255, 0.65);
+}
+
+/* claude code changed: 2026-10-26 — owner request: "Steph Quant Technologies" must be visible at all times, on every
+   page, on the phone too (the 2026-10-25 app bar hid .term-brand-text). Phone app bar is now two rows: brand (logo +
+   name + subtitle) with the account button on the right, then the full-width search pill. */
+@media (max-width: 860px) {
+  .term-topbar { flex-wrap: wrap; row-gap: 10px; }
+  .term-topbar > .term-brand { order: 0; flex: 1 1 auto; min-width: 0; }
+  .term-topbar > .term-appbar-avatar { order: 1; margin-left: auto; }
+  .term-topbar > .term-appbar-search { order: 2; flex: 1 0 100%; }
+  .term-brand-text { display: flex !important; min-width: 0; }
+  .term-brand-name { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .term-brand-sub { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ============================================================
+ * CARDS FIT THE PHONE SCREEN — claude code changed: 2026-10-26, owner request: "make all the cards fit to the
+ * screen" (the whole project, as on the home page). On phones every card grid is one card per row at the full
+ * width, and section/panel insides are thinner so the cards are not inset twice. "html body" + !important: page
+ * <style> blocks load after this file and some grids are inline styles. Deliberately left as they are: the Markets
+ * coin list (its compact two-up layout is the phone app design), key/value rows and forms inside a card.
+ * ============================================================ */
+@media (max-width: 640px) {
+  html body :is(.term-grid, .term-grid-2, .term-grid-3, .term-grid-4, .term-grid-6, .two-col, .sv-cards, .dca-stat-row,
+                .dca-fold-grid, .cap-grid, .vc-grid, .rb-grid, .pt-pair-grid, .mi-grid) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .term-section-body { padding: 10px; }
+  .term-section-head { padding-left: 10px; padding-right: 10px; }
+  .term-panel { padding-left: 12px; padding-right: 12px; }
+}
+

@@ -66,20 +66,34 @@ from bot.quant_core.research_zones import seal_before_write   # claude code chan
 # (UTC+2 in winter, UTC+3 in summer — the standard "New York close" broker). Inferred from the data and CONFIRMED
 # LIVE 2026-10-06 (ICFundedEvaluations-MT5-Demo, account 90018157: last EURUSD tick 21:42:15 server vs 18:42:17 UTC
 # = +3.00 h during US DST, exactly as NY+7 predicts). Another broker clock is set via MT5_SERVER_CLOCK.   # claude code changed: 2026-10-06
-MT5_SERVER_CLOCK = os.getenv("MT5_SERVER_CLOCK", "NY+7")
-MT5_CLOCK_LABEL = "UTC (converted from MT5 server time = America/New_York + 7 h)"
+# claude code changed: 2026-10-26 — read through python-decouple (environment variable first, then the project .env),
+# like config/settings.py. os.getenv alone never saw .env, so a clock set there was silently ignored. Only this one
+# setting moved: MT5_ENABLED/LOGIN/PASSWORD/SERVER still use os.getenv (moving MT5_ENABLED would switch the research
+# data provider, a separate decision).
+from decouple import config as _config
+MT5_SERVER_CLOCK = _config("MT5_SERVER_CLOCK", default="NY+7")
+# claude code changed: 2026-10-26 — "UTC" added. Owner switched to GlobalDynamicMarkets-Demo (account 941029), whose
+# server clock is plain UTC: CONFIRMED LIVE 2026-10-26 03:31 UTC — every tick within 2 s of real UTC and the current
+# H1 bar stamped 03:00; its Friday 23 Oct EURUSD 19:00/20:00 closes (1.11945/1.12007) match the stored, converted
+# IC Funded rows (1.11947/1.12005) within 0.2 pip, so both feeds line up once in UTC. check_server_clock() below now
+# refuses to read data whenever the configured clock disagrees with the live ticks.
+MT5_SERVER_CLOCKS = ("NY+7", "UTC")
+MT5_CLOCK_LABEL = ("UTC (MT5 server time is UTC — no conversion)" if MT5_SERVER_CLOCK == "UTC"   # claude code changed: 2026-10-26
+                   else "UTC (converted from MT5 server time = America/New_York + 7 h)")
 
 
 def mt5_server_time_to_utc(server_wall_clock) -> pd.Series:   # claude code changed: 2026-10-06 — new
     """MT5 server wall-clock times (epoch seconds, or naive/UTC-labelled datetimes that are really server time)
     -> true tz-aware UTC. Fails closed on times that do not exist / are ambiguous in New York (DST switches fall on
     Sunday early morning, when the market is closed, so a bar there means the clock assumption is wrong)."""
-    if MT5_SERVER_CLOCK != "NY+7":
-        raise ValueError(f"unsupported MT5_SERVER_CLOCK={MT5_SERVER_CLOCK!r} (only 'NY+7' is implemented and verified)")
+    if MT5_SERVER_CLOCK not in MT5_SERVER_CLOCKS:   # claude code changed: 2026-10-26 — +UTC
+        raise ValueError(f"unsupported MT5_SERVER_CLOCK={MT5_SERVER_CLOCK!r} (implemented and verified: {MT5_SERVER_CLOCKS})")
     s = pd.Series(server_wall_clock)
     naive = pd.to_datetime(s, unit="s") if pd.api.types.is_numeric_dtype(s) else pd.to_datetime(s)
     if getattr(naive.dt, "tz", None) is not None:
         naive = naive.dt.tz_localize(None)              # the label was wrong: keep the wall-clock digits
+    if MT5_SERVER_CLOCK == "UTC":   # claude code changed: 2026-10-26 — the server's wall clock already is UTC
+        return naive.dt.tz_localize("UTC")
     ny = (naive - pd.Timedelta(hours=7)).dt.tz_localize("America/New_York", ambiguous="raise", nonexistent="raise")
     return ny.dt.tz_convert("UTC")
 
@@ -129,7 +143,8 @@ def confirm_mt5_server_clock() -> dict:   # claude code changed: 2026-10-06 — 
         tick = mt5.symbol_info_tick("EURUSD" + os.getenv("MT5_SYMBOL_SUFFIX", ""))
         now_utc = pd.Timestamp.now(tz="UTC")
         server = pd.Timestamp(tick.time, unit="s")
-        expected = now_utc.tz_convert("America/New_York").tz_localize(None) + pd.Timedelta(hours=7)
+        expected = (now_utc.tz_localize(None) if MT5_SERVER_CLOCK == "UTC"   # claude code changed: 2026-10-26 — +UTC
+                    else now_utc.tz_convert("America/New_York").tz_localize(None) + pd.Timedelta(hours=7))
         return {"server_minus_utc_hours": round((server - now_utc.tz_localize(None)).total_seconds() / 3600, 2),
                 "expected_hours": round((expected - now_utc.tz_localize(None)).total_seconds() / 3600, 2),
                 "note": "tick time is the LAST tick; outside market hours it can be stale"}
@@ -189,6 +204,26 @@ class MT5NotInstalledError(RuntimeError):
     connected right now"."""
 
 
+def check_server_clock(mt5, now=None) -> None:   # claude code changed: 2026-10-26 — new; fail-closed clock guard
+    """Refuse to use the terminal when MT5_SERVER_CLOCK disagrees with the broker's live EURUSD tick: after conversion
+    the tick must not lie in the future, and while the forex session is open it must be under 45 minutes old (a
+    wrong clock shows up as a whole-hour shift). Without a tick nothing can be checked, so nothing is refused."""
+    symbol = "EURUSD" + os.getenv("MT5_SYMBOL_SUFFIX", "")
+    mt5.symbol_select(symbol, True)
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None or not tick.time:
+        return
+    now = now or pd.Timestamp.now(tz="UTC")
+    tick_utc = mt5_server_time_to_utc(pd.Series([int(tick.time)])).iloc[0]
+    age_h = (now - tick_utc).total_seconds() / 3600
+    from bot.quant_core.market_profile import forex_session_status
+    if age_h < -0.25 or (forex_session_status(now)["is_open"] and age_h > 0.75):
+        raise MT5ClockMismatchError(
+            f"MT5_SERVER_CLOCK={MT5_SERVER_CLOCK!r} puts the latest {symbol} tick at {tick_utc} UTC, {age_h:+.2f} h from "
+            f"now — the broker's server clock is something else (or its feed is stalled). Nothing was read. Measure it "
+            f"with confirm_mt5_server_clock() and set MT5_SERVER_CLOCK in .env.")
+
+
 class MT5ConnectionError(RuntimeError):
     """claude code changed: new — raised for a real MT5 terminal
     connection/login failure (terminal not running, bad credentials,
@@ -196,6 +231,10 @@ class MT5ConnectionError(RuntimeError):
     per-symbol data error, matching forex_data_fetcher.py's own
     ForexProviderError/requests.RequestException split so a caller can
     tell these apart."""
+
+
+class MT5ClockMismatchError(RuntimeError):   # claude code changed: 2026-10-26 — raised by check_server_clock()
+    """MT5_SERVER_CLOCK does not match the broker's live server clock."""
 
 
 def _import_mt5():
@@ -323,6 +362,11 @@ def connect() -> "object":
             raise MT5ConnectionError(f"mt5.login() failed for server={creds['server']!r}: {mt5.last_error()}")
 
     logger.info(f"[mt5_data_fetcher] Connected — server={creds['server']}, login={creds['login']}")
+    try:
+        check_server_clock(mt5)   # claude code changed: 2026-10-26 — never read bars on a wrong clock
+    except MT5ClockMismatchError:
+        mt5.shutdown()
+        raise
     return mt5
 
 
@@ -388,6 +432,11 @@ def _attach_running_terminal():   # claude code changed: 2026-10-06 — new
     mt5 = _import_mt5()
     if not mt5.initialize():
         raise MT5ConnectionError(f"mt5.initialize() failed — is the MT5 terminal running and logged in? {mt5.last_error()}")
+    try:
+        check_server_clock(mt5)   # claude code changed: 2026-10-26 — never read bars or ticks on a wrong clock
+    except MT5ClockMismatchError:
+        mt5.shutdown()
+        raise
     return mt5
 
 

@@ -16,6 +16,8 @@ import logging
 import math
 import subprocess
 
+from datetime import timedelta   # claude code changed: 2026-10-26 — RUN_INTERRUPTED_AFTER
+
 from django.utils import timezone
 
 from bot.research_lab.capability_registry import capability_for_hypothesis_type  # claude code changed: new — Advanced Quant Research Capability Architecture
@@ -27,6 +29,7 @@ from bot.research_lab.models import ResearchExperiment
 from bot.research_lab.policy_gate import evaluate_policy
 from bot.research_lab.spec import ResearchSpec, validate_spec
 from bot.research_lab.tools import run_tool
+from bot.research_lab.verdict import compute_verdict_backtest   # claude code changed: 2026-10-26 — Backtest Validation
 from bot.research_lab.verdict import compute_verdict, compute_verdict_conditional, compute_verdict_pairs, compute_verdict_regime_conditional  # claude code changed: +compute_verdict_conditional (Conditional Hypothesis Integrity fix), +compute_verdict_pairs (Advanced Quant Research Capability Architecture), +compute_verdict_regime_conditional (Regime-Conditional Research wiring)
 
 DEFAULT_RANDOM_SEED = 42
@@ -198,8 +201,13 @@ def run_experiment(experiment: ResearchExperiment) -> None:
     PLANNED — never re-derives the plan itself, so what actually runs is
     exactly what the student saw and approved.
     """
-    if experiment.status != "PLANNED":
+    # claude code changed: 2026-10-26 — atomic claim (PLANNED -> RUNNING in one UPDATE) instead of a read-then-write
+    # check: runs now execute in a background thread (start_experiment_in_background), and a double-clicked "Run"
+    # must never execute the same experiment twice.
+    claimed = ResearchExperiment.objects.filter(pk=experiment.pk, status="PLANNED").update(status="RUNNING", started_at=timezone.now())
+    if not claimed:
         return
+    experiment.refresh_from_db()
 
     spec = ResearchSpec.from_dict(experiment.research_plan.get("spec", {}))
     allowed_tools = set(experiment.research_plan.get("policy_decision", {}).get("allowed_tools", []))
@@ -236,6 +244,43 @@ def run_experiment(experiment: ResearchExperiment) -> None:
         experiment.save()
 
 
+# claude code changed: 2026-10-26 — background execution. A strategy backtest over ~5 years of hourly candles takes
+# minutes, far past gunicorn's 120 s request timeout, so the Plan page's "Run" starts the experiment in a daemon thread
+# and the Results page refreshes until it is terminal. A run cut off by a server restart is marked FAILED by
+# fail_if_interrupted() — never left RUNNING forever, never silently retried.
+RUN_INTERRUPTED_AFTER = timedelta(hours=2)
+
+
+def _run_in_background(experiment_id) -> None:
+    from django.db import connection
+    try:
+        run_experiment(ResearchExperiment.objects.get(pk=experiment_id))
+    except Exception:
+        logger.exception("background research run %s crashed", experiment_id)
+    finally:
+        connection.close()   # this thread's own DB connection
+
+
+def start_experiment_in_background(experiment: ResearchExperiment) -> None:
+    import threading
+    threading.Thread(target=_run_in_background, args=(experiment.pk,), daemon=True,
+                     name=f"research-run-{experiment.pk}").start()
+
+
+def fail_if_interrupted(experiment: ResearchExperiment, now=None) -> bool:
+    """Marks a RUNNING experiment FAILED when it has run longer than any real run takes (its thread died with a
+    restarted server). Returns True when it did."""
+    now = now or timezone.now()
+    if experiment.status != "RUNNING" or not experiment.started_at or now - experiment.started_at < RUN_INTERRUPTED_AFTER:
+        return False
+    experiment.status = "FAILED"
+    experiment.error_message = (f"Interrupted: still RUNNING {RUN_INTERRUPTED_AFTER} after it started — the server most "
+                                f"likely restarted mid-run. Re-run it as a new experiment.")
+    experiment.completed_at = now
+    experiment.save()
+    return True
+
+
 def _execute_planned_tools(experiment: ResearchExperiment, spec: ResearchSpec, allowed_tools: set) -> None:
     """
     claude code changed: Conditional Hypothesis Integrity fix (Bug 1/7).
@@ -255,6 +300,8 @@ def _execute_planned_tools(experiment: ResearchExperiment, spec: ResearchSpec, a
         # spec.py's validate_spec() — so it would crash or silently test
         # the wrong thing) nor the conditional path.
         _execute_pairs_hypothesis(experiment, spec, allowed_tools)
+    elif spec.hypothesis_type == "strategy_backtest":   # claude code changed: 2026-10-26 — Backtest Validation
+        _execute_backtest_hypothesis(experiment, spec, allowed_tools)
     else:
         _execute_feature_hypothesis(experiment, spec, allowed_tools)
 
@@ -484,3 +531,31 @@ def _execute_pairs_hypothesis(experiment: ResearchExperiment, spec: ResearchSpec
 
     verdict_result = compute_verdict_pairs(cointegration_result)
     _finalize_experiment(experiment, tool_log, warnings, cointegration_result, {}, verdict_result)
+
+
+def _execute_backtest_hypothesis(experiment: ResearchExperiment, spec: ResearchSpec, allowed_tools: set) -> None:
+    """claude code changed: 2026-10-26 — new. STRATEGY_BACKTEST path: one run_backtest call (research mode, net-of-cost
+    per-trade R), verdict from compute_verdict_backtest() only — never the IC / conditional / pairs verdicts."""
+    tool_log = []
+    warnings = []
+    backtest_result = None
+
+    if "inspect_dataset" in allowed_tools:
+        result = run_tool("inspect_dataset", spec.risk_tier, asset=spec.asset)
+        tool_log.append(result.to_dict())
+
+    if "run_backtest" not in allowed_tools:
+        warnings.append("run_backtest is not an approved tool for this experiment's risk tier")
+    else:
+        result = run_tool("run_backtest", spec.risk_tier, asset=spec.asset, random_seed=experiment.random_seed)
+        tool_log.append(result.to_dict())
+        if result.status == "success":
+            backtest_result = result.output
+        else:
+            warnings.append(f"run_backtest failed: {result.error}")
+
+    if not backtest_result:
+        warnings.append("no backtest evidence was produced for this experiment")
+
+    verdict_result = compute_verdict_backtest(backtest_result)
+    _finalize_experiment(experiment, tool_log, warnings, backtest_result, {}, verdict_result)

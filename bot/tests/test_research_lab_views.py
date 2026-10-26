@@ -3,7 +3,7 @@
 # no mocking) — same convention as bot/tests/test_academy_models_and_views.py.
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings   # claude code changed: 2026-10-26 — +override_settings
 from django.urls import reverse
 
 from bot.research_lab.models import ResearchExperiment
@@ -140,6 +140,7 @@ class AssetSelectorGroupedByAssetClassTest(TestCase):
         self.assertEqual(self.experiment.structured_spec.get("asset_b"), "GBP/USD")
 
 
+@override_settings(RESEARCH_LAB_BACKGROUND_RUNS=False)   # claude code changed: 2026-10-26 — drive the run synchronously; the background thread could not see this test's transaction
 class FullWorkflowTest(TestCase):
     """One student, one hypothesis, all the way from intake to a
     completed, evidence-backed verdict — through real HTTP requests."""

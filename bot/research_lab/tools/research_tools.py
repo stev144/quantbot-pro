@@ -265,23 +265,68 @@ def run_kalman_pairs_test(
 
 
 @register_tool("run_backtest")
-def run_backtest(asset: str, initial_balance: float = 5000.0) -> dict:
+def run_backtest(asset: str, initial_balance: float = 5000.0, random_seed: int = 42) -> dict:
     """
     Wraps the real, regime-gated single-symbol Backtester — never
     portfolio_backtester.py, which bypasses the hardened data layer.
+
+    claude code changed: 2026-10-26 — Backtest Validation capability wiring. Two real fixes plus the evidence a verdict
+    needs: (1) allow_unvalidated_strategies=True — this tool exists to TEST the platform's strategies, and without it
+    the backtester's own validation gate refuses every untested/rejected strategy signal, so the run produced zero
+    trades and said nothing (research only: this flag never reaches live execution); (2) asset_class is passed from
+    the instrument registry, so a forex asset is annualised as forex; (3) the per-trade NET R-multiples (after fees
+    and slippage) and a one-sided test of mean net R > 0, with a seeded bootstrap CI and the lag-1 autocorrelation
+    of trade results (the t-test assumes independent trades — reported so a reader can see how far that holds).
     """
+    from scipy import stats   # local: only this tool needs it
+    from bot.instruments import get_instrument
+
     df = load_ohlcv(asset)
-    result = backtest(df, initial_balance=initial_balance)
-    return {
+    instrument = get_instrument(asset)
+    asset_class = instrument.asset_class if instrument is not None else None
+    result = backtest(df, initial_balance=initial_balance, allow_unvalidated_strategies=True, asset_class=asset_class)
+    trades = result.get("trades", [])
+    net_r = np.array([t["net_r_multiple"] for t in trades if t.get("net_r_multiple") is not None], dtype=float)
+
+    n = int(net_r.size)
+    equity = np.array(result.get("equity_curve") or [initial_balance], dtype=float)
+    peaks = np.maximum.accumulate(equity)
+    worst = int(np.argmax(peaks - equity))
+    evidence = {
+        "metric": "strategy_backtest",
         "asset": asset,
-        "n_trades": len(result.get("trades", [])),
+        "asset_class": asset_class,
+        "research_mode": True,
+        "data_start": str(df.index[0]) if len(df) else None,
+        "data_end": str(df.index[-1]) if len(df) else None,
+        "n_candles": int(len(df)),
+        "n_trades": len(trades),
+        "n_trades_with_net_r": n,
         "win_rate": result.get("win_rate"),
-        "expectancy_r": result.get("expectancy_r"),
+        "expectancy_r": result.get("expectancy_r"),   # the backtester's own (gross) figure, kept for comparison
         "profit_factor": result.get("profit_factor"),
         "sharpe_ratio": result.get("sharpe_ratio"),
         "max_drawdown": result.get("max_drawdown"),
+        "max_drawdown_usd": float(peaks[worst] - equity[worst]),   # same worst point as max_drawdown (% of the running peak)
+        "initial_balance": initial_balance,
         "final_balance": result.get("final_balance"),
+        "mean_net_r": None, "std_net_r": None, "t_stat": None, "p_value_one_sided": None,
+        "bootstrap_ci95_mean_net_r": None, "lag1_autocorrelation": None, "random_seed": random_seed,
     }
+    if n >= 2:
+        test = stats.ttest_1samp(net_r, 0.0, alternative="greater")
+        rng = np.random.default_rng(random_seed)
+        boot = net_r[rng.integers(0, n, size=(5000, n))].mean(axis=1)
+        evidence.update({
+            "mean_net_r": float(net_r.mean()),
+            "std_net_r": float(net_r.std(ddof=1)),
+            "t_stat": float(test.statistic),
+            "p_value_one_sided": float(test.pvalue),
+            "bootstrap_ci95_mean_net_r": [float(np.percentile(boot, 2.5)), float(np.percentile(boot, 97.5))],
+        })
+        if n >= 3 and net_r[:-1].std() > 0 and net_r[1:].std() > 0:
+            evidence["lag1_autocorrelation"] = float(np.corrcoef(net_r[:-1], net_r[1:])[0, 1])
+    return evidence
 
 
 @register_tool("run_parameter_sensitivity")

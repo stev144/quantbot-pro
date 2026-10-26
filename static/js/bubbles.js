@@ -40,12 +40,12 @@
     // US stocks as whole-market INDEX portfolios, not single stocks). Crypto and forex use bundled licensed SVGs; the
     // indices are drawn as text badges (no fund/brand logos are copied).
     var STATIC = script && script.src ? script.src.replace(/js\/bubbles\.js(\?.*)?$/, "") : "/static/";
-    var CRYPTO = ["btc", "eth", "bnb", "sol", "xrp", "ada", "doge", "dot", "ltc", "link", "avax", "trx", "matic", "shib",
-                  "uni", "atom", "xlm", "bch", "near", "etc", "fil", "apt", "arb", "op"];
-    var FOREX = ["us", "eu", "gb", "jp", "ch", "au", "ca", "nz", "cn", "hk", "sg", "se", "no", "dk", "pl", "cz", "mx",
-                 "za", "th", "xau", "xag"];
-    var INDICES = [["S&P", "500"], ["NASDAQ", "100"], ["DOW", "30"], ["RUSSELL", "2000"], ["US TOTAL", "MARKET"]];
-    var GROUP_SHARE = { crypto: 0.4, forex: 0.4, index: 0.2 };   // share of the falling items per group
+    // claude code changed: 2026-10-26 — owner request: only Bitcoin (the owner's gold-coin image, img/coins/btc_gold.png),
+    // the Nasdaq 100 and S&P 500 badges, and two flags (US, UK). Was 24 coins, 21 flags/metals and 5 indices.
+    var CRYPTO = ["img/coins/btc_gold.png"];
+    var FOREX = ["us", "gb"];
+    var INDICES = [["S&P", "500"], ["NASDAQ", "100"]];
+    var GROUP_SHARE = { crypto: 0.4, forex: 0.3, index: 0.3 };   // share of the falling items per group   // claude code changed: 2026-10-26 — was 0.4 / 0.4 / 0.2
     function loadImg(path) {
         var img = new Image();
         img.decoding = "async";
@@ -53,7 +53,7 @@
         return img;
     }
     var logos = {
-        crypto: CRYPTO.map(function (c) { return { img: loadImg("img/coins/" + c + ".svg"), square: true }; }),
+        crypto: CRYPTO.map(function (c) { return { img: loadImg(c), square: true }; }),   // claude code changed: 2026-10-26 — full path (PNG)
         forex: FOREX.map(function (f) { return { img: loadImg("img/flags/" + f + ".svg"), square: false }; }),
         index: INDICES.map(function (lines) { return { lines: lines }; }),
     };

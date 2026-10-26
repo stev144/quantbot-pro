@@ -6,19 +6,48 @@ var WL_ADD_URL    = '{% url "watchlist_add" %}';
 var WL_REMOVE_URL = '{% url "watchlist_remove" %}';
 
 // ── Search filter ──────────────────────────────────────────────────────────
+// claude code changed: 2026-10-26 — owner report: "BTCUSDT" matched nothing (cards say BTC_USDT / BTC/USDT), so every
+// card vanished and only the Paper Trader card was left to tap. Now: separators and case are ignored on both sides
+// (BTCUSDT = btc usdt = BTC-USDT = btc/usdt), forex full names count ("euro", "yen"), a match on the other tab
+// switches to it, and an empty result says so. Returns the matching cards (watchlist row excluded).
+function _mktNorm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
 function filterCards(q) {
-    q = (q || '').toLowerCase().trim();
+    var n = _mktNorm(q);
+    var hits = [], perPanel = {};
     document.querySelectorAll('.mkt-card').forEach(function(card) {
-        var sym  = (card.dataset.symbol  || '').toLowerCase();
-        var name = (card.dataset.name    || '').toLowerCase();
-        var disp = (card.dataset.display || '').toLowerCase();
-        var match = !q || sym.includes(q) || name.includes(q) || disp.includes(q);
+        var fx = card.querySelector('.fx-names');
+        var hay = [card.dataset.symbol, card.dataset.display, card.dataset.name, fx ? fx.textContent : ''].map(_mktNorm).join('|');
+        var match = !n || hay.indexOf(n) !== -1;
         card.style.display = match ? '' : 'none';
+        if (match && !card.closest('.mkt-rail-section')) {
+            hits.push(card);
+            var panel = card.closest('[role="tabpanel"]');
+            if (panel) perPanel[panel.id] = (perPanel[panel.id] || 0) + 1;
+        }
     });
+    document.documentElement.classList.toggle('mkt-searching', !!n);
+    var msg = document.getElementById('mkt-no-match');
+    if (msg) {
+        msg.hidden = !(n && hits.length === 0);
+        msg.textContent = 'No markets match "' + (q || '').trim() + '". Search by symbol (BTCUSDT, EUR/USD) or name (Bitcoin, Euro).';
+    }
+    var active = Array.prototype.find.call(document.querySelectorAll('[role="tabpanel"]'), function(p) { return p.style.display !== 'none'; });
+    if (n && active && !perPanel[active.id]) {
+        var other = Object.keys(perPanel)[0];
+        var tab = other && document.querySelector('.mkt-tab[data-tab="' + other.replace('tab-', '') + '"]');
+        if (tab) tab.click();   // markets.html's tab handler re-runs this filter on the new panel
+    }
+    return hits;
+}
+// Enter with exactly one match opens that market (claude code changed: 2026-10-26)
+function mktOpenSingleMatch(q) {
+    var hits = filterCards(q);
+    if (hits.length === 1) mktOpenDetail(hits[0].dataset.symbol, hits[0].dataset['class']);
 }
 (function() {
     var box = document.getElementById('mkt-search');
     if (box) box.addEventListener('input', function() { filterCards(this.value); });
+    if (box) box.addEventListener('keydown', function(e) { if (e.key === 'Enter') mktOpenSingleMatch(this.value); });   // claude code changed: 2026-10-26
 })();
 
 // ── Watchlist toggle ───────────────────────────────────────────────────────

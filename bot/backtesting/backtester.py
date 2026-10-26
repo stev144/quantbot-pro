@@ -585,6 +585,8 @@ class Backtester:
         # Replace the profit field with net profit — this is what the dashboard shows
         trade_dict["profit"] = round(net, 4)
         trade_dict["net_pnl"] = round(net, 4)   # Alias — some dashboard fields use this key
+        trade_dict["net_r_multiple"] = (round(net / self.open_trade.risk_amount, 4)   # claude code changed: 2026-10-26 — R after fees + slippage
+                                        if self.open_trade.risk_amount else None)      # (r_multiple above is GROSS: Trade.close() runs before costs)
 
         # ── ATTACH NARRATIVE CONTEXT ───────────────────────────
 
@@ -769,6 +771,8 @@ class Backtester:
         # Replace profit with net P&L — this is what the dashboard shows
         trade_dict["profit"] = round(net, 4)
         trade_dict["net_pnl"] = round(net, 4)
+        trade_dict["net_r_multiple"] = (round(net / self.open_trade.risk_amount, 4)   # claude code changed: 2026-10-26 — R after fees + slippage
+                                        if self.open_trade.risk_amount else None)      # (r_multiple above is GROSS: Trade.close() runs before costs)
 
         # Generate force close narrative if entry narrative exists
         if self.open_trade_narrative:

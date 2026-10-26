@@ -1,53 +1,122 @@
 {% extends 'base.html' %}
-{% load coin_extras %}{# claude code changed: 2026-10-22 — coin logos #}
+{% load coin_extras %}
 {% load static %}
-{% load research_extras %}
 
-{% block head %}{% include "partials/_mkt_card_styles.html" %}{% endblock %}{# claude code changed: 2026-10-22 — Markets cards for the cross-sectional list, as on /forex/ #}
+{% comment %}
+claude code changed: 2026-10-26 — full rewrite (owner brief "Home page transformation — Quantitative Market Intelligence
+Dashboard"). The page now reads: header + data status → market pulse → cross-sectional relative value | regime
+intelligence → risk conditions | research & evidence → research watchlist. Data: bot/views/home_intelligence.py (context
+"intel"), terminal_data.get_research_state / get_system_health / get_execution_state (staff only). Removed from the home
+page: the indicator tiles (their values now appear only as the regime detector's inputs, with its thresholds), the month-old
+research cross-section cards, the legacy feature-IC table, the historical 12-CSV correlation and the in-sample backtest
+detail (moved unchanged to /backtest/, templates/backtest_detail.html). Nothing here computes a strategy or research result.
+{% endcomment %}
+
+{% block head %}
+<style>
+/* claude code changed: 2026-10-26 — home page (Quantitative Market Intelligence) styles; theme tokens only */
+.hq-page { padding: var(--sp-4) var(--sp-5) 110px; max-width: 1480px; margin: 0 auto; }   /* bottom: clear of the floating nav */
+body:has(.hq-page) #bubble-canvas { display: none; }   /* no falling logos behind data */
+.hq-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin-bottom: 14px; }
+.hq-title { margin: 0; font-size: 22px; font-weight: 650; color: var(--text-primary); letter-spacing: .01em; }
+.hq-sub { margin: 4px 0 0; color: var(--text-secondary); font-size: 13.5px; }
+.hq-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
+.hq-tab { background: none; border: 0; color: var(--text-secondary); font: inherit; font-size: 13px; padding: 6px 16px; border-radius: 999px; cursor: pointer; }
+.hq-tab[aria-selected="true"] { background: var(--positive-dim); color: var(--positive); font-weight: 600; }
+.hq-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hq-tabs-note { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; text-align: right; }
+.hq-status { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; }
+.hq-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 4px; padding: 4px 9px; font-size: 12px; color: var(--text-secondary); background: var(--bg-1); }
+.hq-chip b { color: var(--text-primary); font-weight: 600; }
+.hq-tag { font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border-radius: 3px; border: 1px solid currentColor; }
+.hq-tag.live { color: var(--positive); } .hq-tag.cached { color: var(--neutral); } .hq-tag.historical { color: var(--warning); }
+.hq-tag.closed { color: var(--text-dim); } .hq-tag.unavailable { color: var(--negative); } .hq-tag.computing { color: var(--neutral); }
+.hq-warnings { margin: 0 0 18px; padding: 8px 12px; border-left: 3px solid var(--warning); background: var(--warning-dim); font-size: 12.5px; color: var(--text-secondary); }
+.hq-warnings ul { margin: 4px 0 0; padding-left: 18px; }
+.hq-sec { margin-bottom: 22px; }
+.hq-sec-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 10px; }
+.hq-sec-title { margin: 0; font-size: 15px; font-weight: 650; color: var(--text-primary); }
+.hq-sec-sub { margin: 2px 0 0; font-size: 12.5px; color: var(--text-dim); }
+.hq-grid { display: grid; gap: 12px; }
+.hq-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.hq-two { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.hq-two-even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.hq-card { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); padding: 14px 16px; min-width: 0; }
+.hq-card h3 { margin: 0 0 2px; font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.hq-big { font-family: var(--font-mono); font-size: 22px; color: var(--text-primary); margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.hq-big.small { font-size: 17px; }
+.hq-note { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+.hq-note b { color: var(--text-secondary); font-weight: 600; }
+.pos-t { color: var(--positive); } .neg-t { color: var(--negative); } .warn-t { color: var(--warning); } .dim-t { color: var(--text-dim); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.hq-bar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; background: var(--bg-2); margin: 8px 0 6px; }
+.hq-bar > span { display: block; height: 100%; min-width: 2px; }
+.seg-up, .seg-trending-up { background: var(--positive); } .seg-down, .seg-trending-down { background: var(--negative); }
+.seg-flat, .seg-ranging { background: var(--neutral); } .seg-high-volatility { background: var(--warning); }
+.seg-unknown { background: var(--border-strong); }
+.hq-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--text-secondary); }
+.hq-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.hq-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.hq-table th { text-align: left; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.hq-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: middle; }
+.hq-table td.r, .hq-table th.r { text-align: right; }
+.hq-table tr.hq-sep td { color: var(--text-dim); font-size: 11.5px; padding-top: 10px; border-bottom: 0; }
+.hq-asset { display: inline-flex; align-items: center; gap: 7px; color: var(--text-primary); font-weight: 600; text-decoration: none; }
+.hq-asset:hover { text-decoration: underline; }
+.hq-filters { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 8px; font-size: 12.5px; color: var(--text-secondary); }
+.hq-filters select, .hq-filters button { font: inherit; font-size: 12.5px; color: var(--text-primary); background: var(--bg-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; }
+.hq-filters button[aria-pressed="true"] { border-color: var(--positive); color: var(--positive); }
+.hq-regime-badge { display: inline-block; font-family: var(--font-mono); font-weight: 700; letter-spacing: .05em; font-size: 15px; padding: 5px 12px; border-radius: 4px; border: 1px solid currentColor; }
+.rg-trending-up { color: var(--positive); } .rg-trending-down { color: var(--negative); } .rg-ranging { color: var(--neutral); } .rg-high-volatility { color: var(--warning); }
+.hq-inputs { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 10px; }
+.hq-inputs td { padding: 6px 4px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
+.hq-inputs td:first-child { color: var(--text-primary); }
+details.hq-how { margin-top: 10px; font-size: 12.5px; color: var(--text-secondary); }
+details.hq-how summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
+details.hq-how p, details.hq-how li { line-height: 1.5; }
+.hq-symbol { display: flex; gap: 6px; align-items: center; margin: 0 0 10px; }
+.hq-symbol input { width: 130px; }
+.hq-list { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12.5px; }
+.hq-list li { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.hq-list li span:last-child { text-align: right; }
+.hq-disclaimer { font-size: 12px; color: var(--text-dim); border: 1px dashed var(--border-strong); border-radius: 4px; padding: 8px 10px; margin-top: 10px; }
+.hq-link { color: var(--accent); text-decoration: none; font-size: 12.5px; }
+.hq-link:hover { text-decoration: underline; }
+[data-universe-panel][hidden] { display: none !important; }
+@media (max-width: 1100px) {
+  .hq-two, .hq-two-even { grid-template-columns: minmax(0, 1fr); }
+  .hq-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .hq-page { padding: var(--sp-3) 8px 110px; }   /* claude code changed: 2026-10-26 — owner: cards fill the phone width (was 12px) */
+  /* claude code changed: 2026-10-26 — the section wrappers go flat on phones, so their cards are not inset twice */
+  section.hq-card { border: 0; background: transparent; padding: 4px 0; border-radius: 0; }
+  section.hq-card::after { display: none; }   /* the flat wrapper has no edge; its cards below do */
+  .hq-table.stack tr:not(.hq-sep) { box-shadow: inset 0 0 0 1px var(--card-shine-line), 0 0 0 2px var(--card-shine-ring), 0 4px 20px var(--card-shine-glow); }
+  .hq-grid > .hq-card, .hq-table.stack tr { border-radius: 10px; }
+  .hq-sec-head, .hq-filters, section.hq-card > .hq-note, section.hq-card > details, section.hq-card > form,
+  section.hq-card > h3, section.hq-card > .hq-legend { padding-left: 4px; padding-right: 4px; }
+  .hq-grid-4 { grid-template-columns: minmax(0, 1fr); }
+  .hq-title { font-size: 19px; }
+  .hq-tabs-note { text-align: left; }
+  /* tables become cards */
+  .hq-table.stack thead { display: none; }
+  .hq-table.stack, .hq-table.stack tbody, .hq-table.stack tr, .hq-table.stack td { display: block; width: 100%; }
+  .hq-table.stack tr { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
+  .hq-table.stack tr.hq-sep { border: 0; padding: 4px 0 0; }
+  .hq-table.stack tr.hq-sep td { justify-content: flex-start; text-align: left; }
+  .hq-table.stack td { border: 0; padding: 3px 0; display: flex; justify-content: space-between; gap: 12px; text-align: right; }
+  .hq-table.stack td::before { content: attr(data-label); color: var(--text-dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; text-align: left; }
+  .hq-table.stack td.hq-first { font-size: 14px; }
+  .hq-table.stack td.hq-first::before { content: none; }
+}
+</style>
+{% endblock %}
 
 {% block content %}
-
-<!--
- claude code changed: full rewrite — institutional quant-terminal
-   redesign. Replaces the retail-styled single scroll (particle
-   background, emoji headers, pulsing gradient cards, animated gauges,
-   rotating hero text) with a dense, table-first layout organized into
-   six sections: Market State, Research State, Alpha Intelligence,
-   Portfolio Risk, Execution, System Health, followed by the existing
-   backtest-detail data (score, edge/risk metrics, equity curve,
-   regime/structure breakdown, rejections, trade log) restyled to match.
-
-   Every number below either comes straight from context (real,
-   computed by bot/views/dashboard.py + bot/views/terminal_data.py) or
-   is rendered as an explicit "unavailable" state — see
-   bot/views/terminal_data.py's module docstring. Nothing here is a
-   placeholder or invented figure.
-
-   claude code changed: every numeric value (metric tiles AND table
-   cells) carries data-target/data-decimals and the stat-number class,
-   animated by the count-up system at the bottom of this file — same
-   mechanism and same "repeat every 5s" behavior static/js/charts.js
-   used to apply to summary cards + table cells, generalized here to
-   cover every number on the page per explicit request, not just the
-   original summary cards.
-
-   Deliberately NOT carried over from the old template: the Live Regime
-   Monitor and Walk-Forward Validation AJAX widgets (both real,
-   functioning features) — out of scope for this pass, which targeted
-   the six requested sections specifically; they can be re-skinned into
-   this layout in a follow-up rather than rushed here.
-
-   claude code changed: was a hash-style multi-line comment tag, which
-   only matches on a single line and was leaking through as literal
-   page text instead of being stripped. This block-style comment tag is
-   the correct one for multi-line use.
-
--->
-  
-
+{% include "partials/_topbar.html" with active="dashboard" %}
 
 {% if error %}
-{% include "partials/_topbar.html" with active="dashboard" %}
 <div class="term-body">
     <div class="term-panel">
         <span class="badge neg">ERROR</span>
@@ -55,619 +124,424 @@
     </div>
 </div>
 {% else %}
+{% with c=intel.crypto f=intel.forex snap=intel.snapshot rg=intel.regime ev=intel.evidence ig=intel.integrity %}
+<main class="hq-page">
 
-{% include "partials/_topbar.html" with active="dashboard" %}
-
-{% if stale_notice %}
-{% comment %}
-claude code changed: new — dashboard hardening. Only rendered when
-bot/views/dashboard.py's _fetch_klines_or_stale_fallback() had to fall
-back to a previously-cached snapshot because the live exchange fetch
-failed. "warn" (not "neg") — this is a real, honestly-labeled degraded
-state, not an error the page failed to handle.
-{% endcomment %}
-<div style="padding: var(--sp-3) var(--sp-5) 0">
-    <div class="term-panel">
-        <span class="badge warn">STALE DATA</span>
-        <span style="margin-left:8px">{{ stale_notice }}</span>
-    </div>
-</div>
-{% endif %}
-
-<div style="padding: var(--sp-3) var(--sp-5) 0; display:flex; justify-content:flex-end">
-    <form class="term-symbol-form" method="get" action=".">
-        <label class="text-dim mono" for="db-symbol">Symbol:</label>
-        <input id="db-symbol" type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="SYMBOL">
-        <button type="submit" class="term-btn">Load</button>
-    </form>
-</div>
-
-<div class="term-body">
-
-    <!-- ================= 1. MARKET STATE ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">1 · Market State</span>
-            <span class="term-section-meta coin-id">{% coin_logo symbol 18 %}{{ symbol }} · 1H</span>{# claude code changed: 2026-10-22 — coin logo #}
+    <!-- ═══ 1 · Header and data status ═══ -->
+    <header class="hq-head">
+        <div>
+            <h1 class="hq-title">Quantitative Market Intelligence</h1>
+            <p class="hq-sub">Measure market structure, relative strength, regimes, and research evidence.</p>
         </div>
-        <div class="term-section-body">
-            <div class="term-grid term-grid-6">
-                <div class="metric-tile">
-                    <div class="metric-label">Regime</div>
-                    <div class="metric-value small">{{ market_state.regime }}</div>
-                    <div class="metric-sub">{{ market_state.confidence }} confidence</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">ADX</div>
-                    <div class="metric-value stat-number" data-target="{{ market_state.adx|default_if_none:0 }}" data-decimals="1">0</div>
-                    <div class="metric-sub">trend strength</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">ATR Ratio</div>
-                    <div class="metric-value stat-number {% if market_state.volatility_extreme %}warn{% endif %}" data-target="{{ market_state.atr_ratio|default_if_none:0 }}" data-decimals="2">0</div>
-                    <div class="metric-sub">{% if market_state.volatility_extreme %}extreme volatility{% else %}normal range{% endif %}</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">EMA Spread</div>
-                    <div class="metric-value stat-number" data-target="{{ market_state.ema_spread_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
-                    <div class="metric-sub">20/50 divergence</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">BB Width</div>
-                    <div class="metric-value stat-number" data-target="{{ market_state.bb_width_pct|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
-                    <div class="metric-sub">compression</div>
-                </div>
-                {% if market_state.cross_section_dispersion.available %}
-                <div class="metric-tile">
-                    <div class="metric-label">Cross-Sect. Dispersion</div>
-                    <div class="metric-value stat-number" data-target="{{ market_state.cross_section_dispersion.dispersion_std }}" data-decimals="3">0</div>
-                    <div class="metric-sub">{{ market_state.cross_section_dispersion.n_symbols }} symbols, σ of z-score, as of {{ market_state.cross_section_dispersion.as_of }}</div>{# claude code changed: 2026-10-05 — timestamp of the reading #}
-                </div>
-                {% else %}
-                <div class="metric-tile">
-                    <div class="metric-label">Cross-Sect. Dispersion</div>
-                    <div class="unavailable-inline mono">N/A</div>
-                    <div class="metric-sub">{{ market_state.cross_section_dispersion.reason }}</div>
-                </div>
-                {% endif %}
+        <div>
+            <div class="hq-tabs" role="tablist" aria-label="Universe">
+                <button class="hq-tab" role="tab" type="button" aria-selected="true" data-universe="crypto">Crypto · {{ c.n_universe|default:0 }}</button>
+                <button class="hq-tab" role="tab" type="button" aria-selected="false" data-universe="forex">Forex · {{ f.n_pairs_listed|default:0 }} pairs</button>
             </div>
-
-            <div class="hairline"></div>
-
-            <div class="two-col">
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Liquidity Conditions</div>
-                    <div class="unavailable">{{ market_state.liquidity.reason }}</div>
-                </div>
-                {% if market_state.cross_section_dispersion.available %}
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Extremes (by |z-score|, as of {{ market_state.cross_section_dispersion.as_of }})</div>
-                    <div class="chart-caption">{# claude code changed: 2026-10-22 — table replaced; the same coins are shown once, as Markets cards, in 3 · Alpha Intelligence #}Shown as cards under <a href="#cs-relative-value">3 · Alpha Intelligence → Cross-Sectional Relative Value</a>.</div>
-                </div>
-                {% endif %}
-            </div>
+            <div class="hq-tabs-note">U.S. equities and ETFs: no data source configured. Horizons are fixed (stated on each metric); there is no timeframe selector.</div>
         </div>
+    </header>
+
+    <div class="hq-status" aria-label="Data status">
+        <span class="hq-chip" title="Binance all-symbol 24 h ticker, cached 30 s in memory; never written to data/">
+            Crypto prices
+            {% if c.available %}<span class="hq-tag live">LIVE</span> <b>{{ c.n }}/{{ c.n_universe }}</b> coins · {{ c.fetched_at|date:"H:i" }} UTC
+            {% else %}<span class="hq-tag unavailable">UNAVAILABLE</span> {{ c.reason }}{% endif %}
+        </span>
+        <span class="hq-chip" title="MT5 terminal ticks; 24 h change against the stored close about 24 h earlier">
+            Forex prices
+            {% if not f.open %}<span class="hq-tag closed">MARKET CLOSED</span> last session
+            {% elif f.n_pairs_live %}<span class="hq-tag live">LIVE</span> <b>{{ f.n_pairs_live }}/{{ f.n_pairs_listed }}</b> pairs{% if f.as_of %} · {{ f.as_of|date:"H:i" }} UTC{% endif %}
+            {% else %}<span class="hq-tag unavailable">UNAVAILABLE</span> {{ f.status|truncatechars:60 }}{% endif %}
+        </span>
+        <span class="hq-chip" title="RegimeDetector on 300 one-hour candles per coin, recomputed in the background every 15 minutes">
+            Universe regimes
+            {% if snap.available %}<span class="hq-tag cached">CACHED</span> computed {{ snap.computed_at|date:"H:i" }} UTC ({{ snap.age_minutes }} min ago){% if snap.refreshing %} · refreshing{% endif %}
+            {% elif snap.refreshing %}<span class="hq-tag computing">COMPUTING</span> reload in a minute or two
+            {% else %}<span class="hq-tag unavailable">UNAVAILABLE</span> {{ snap.reason|truncatechars:60 }}{% endif %}
+        </span>
+        <span class="hq-chip" title="Candles used for the selected asset's regime">
+            {{ symbol }} candles
+            {% if stale_notice %}<span class="hq-tag historical">STALE DATA</span>{% else %}<span class="hq-tag live">LIVE</span>{% endif %}
+            {% if rg.available %}last {{ rg.last_candle|date:"H:i" }} UTC{% if rg.candle_forming %} (still forming){% endif %}{% endif %}
+        </span>
+        <span class="hq-chip" title="research_data/ and data/ crypto files end before the sealed forward holdout (2026-10-04)">
+            Research datasets <span class="hq-tag historical">HISTORICAL</span> before 2026-10-04
+        </span>
+        <a class="hq-chip" href="{% url 'system_health' %}" style="text-decoration:none">
+            System
+            {% if system_health.overall == "ok" %}<span class="hq-tag live">ALL OK</span>{% elif system_health.overall == "warn" %}<span class="hq-tag historical">WARNINGS</span>{% else %}<span class="hq-tag unavailable">ERRORS</span>{% endif %}
+        </a>
     </div>
 
-    <!-- ================= 2. RESEARCH STATE ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">2 · Research State</span>
-            <span class="term-section-meta">
-                {% if research_state.pipeline_health == "fresh" %}<span class="badge pos">FRESH</span>
-                {% elif research_state.pipeline_health == "stale" %}<span class="badge warn">STALE</span>
-                {% else %}<span class="badge dim">UNKNOWN</span>{% endif %}
-            </span>
-        </div>
-        <div class="term-section-body">
-            <div class="term-grid term-grid-6">
-                <div class="metric-tile">
-                    <div class="metric-label">Assets Under Analysis</div>
-                    <div class="metric-value stat-number" data-target="{{ research_state.asset_count }}" data-decimals="0">0</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Features Evaluated</div>
-                    <div class="metric-value stat-number" data-target="{{ research_state.features_evaluated }}" data-decimals="0">0</div>
-                    <div class="metric-sub">across {{ research_state.feature_files }} symbols</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Features Valid</div>
-                    <div class="metric-value stat-number {% if research_state.features_valid == 0 %}neg{% else %}pos{% endif %}" data-target="{{ research_state.features_valid }}" data-decimals="0">0</div>
-                    <div class="metric-sub">passed statistical validation</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Strategies Active</div>
-                    <div class="metric-value stat-number" data-target="{{ research_state.strategies_active }}" data-decimals="0">0</div>
-                    <div class="metric-sub">{{ research_state.strategies_unwired }} unwired (experimental)</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Latest Research Output</div>{# claude code changed: 2026-10-05 — was "Latest Research Run": a file date is not proof of a research run #}
-                    <div class="metric-value small">{% if research_state.latest_run %}{{ research_state.latest_run|date:"Y-m-d" }}{% else %}—{% endif %}</div>
-                    <div class="metric-sub">{% if research_state.age_days is not None %}{{ research_state.age_days }}d ago{% if research_state.latest_output_file %} · {{ research_state.latest_output_file }}{% endif %}{% endif %}</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Governance Log Entries</div>
-                    <div class="metric-value stat-number" data-target="{{ research_state.governance_entries|default_if_none:0 }}" data-decimals="0">0</div>
-                    <div class="metric-sub">pair go/no-go decisions</div>
-                </div>
-            </div>
-            {% if research_state.features_valid == 0 %}
-            <div class="hairline"></div>
-            <div class="unavailable">Zero features currently pass validation across all {{ research_state.feature_files }} symbols evaluated — this is the actual, current state of the feature research pipeline, not a display error.</div>
-            {% endif %}
-        </div>
+    {% if stale_notice or c.n_stale or f.n_pairs_not_live or not snap.available or rg.history.available and not rg.history.matches_current or rg.available and not rg.consistent %}
+    <div class="hq-warnings" role="status">
+        <b>Data-quality notes</b>
+        <ul>
+            {% if stale_notice %}<li><b>STALE DATA</b> — {{ stale_notice }}</li>{% endif %}
+            {% if c.n_stale %}<li>{{ c.n_stale }} coin{{ c.n_stale|pluralize }} had no trade in the last 2 hours and {{ c.n_stale|pluralize:"is,are" }} excluded from every crypto cross-section: {{ c.stale_symbols|join:", " }}.</li>{% endif %}
+            {% if f.n_pairs_not_live %}<li>{{ f.n_pairs_not_live }} forex pair{{ f.n_pairs_not_live|pluralize }} {{ f.n_pairs_not_live|pluralize:"has,have" }} no live MT5 price (the current broker does not list {{ f.n_pairs_not_live|pluralize:"it,them" }}) and {{ f.n_pairs_not_live|pluralize:"is,are" }} left out.</li>{% endif %}
+            {% if not snap.available %}<li>Regime distribution, volatility and correlation: {{ snap.reason }}.</li>{% endif %}
+            {% if rg.available and not rg.consistent %}<li>The regime explanation below does not reproduce the detector's label; the detector's label is shown.</li>{% endif %}
+            {% if rg.history.available and not rg.history.matches_current %}<li>The regime history's last candle differs from the current classification.</li>{% endif %}
+        </ul>
     </div>
+    {% endif %}
 
-    <!-- ================= 3. ALPHA INTELLIGENCE ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">3 · Alpha Intelligence</span>
-        </div>
-        <div class="term-section-body">
-            <div class="term-grid term-grid-2" style="margin-bottom:16px">
-                <div class="metric-tile">
-                    <div class="metric-label">Strategy Expectancy (R)</div>
-                    <div class="metric-value stat-number" data-target="{{ alpha_intelligence.strategy_expectancy_r|default_if_none:0 }}" data-decimals="4">0</div>
-                    <div class="metric-sub">avg R per trade — in-sample backtest of {{ symbol }}; descriptive, not evidence</div>{# claude code changed: 2026-10-05 — neutral colour + evidence status (CRRP: no strategy has claim-eligible evidence) #}
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Strategy Expectancy ($)</div>
-                    <div class="metric-value stat-number" data-target="{{ alpha_intelligence.strategy_expectancy_dollar|default_if_none:0 }}" data-decimals="2">0</div>
-                    <div class="metric-sub">avg $ per trade — in-sample backtest of {{ symbol }}; descriptive, not evidence</div>{# claude code changed: 2026-10-05 #}
-                </div>
-            </div>
-
-            <div>{# claude code changed: 2026-10-22 — single column now that Relative Value is a full-width card grid #}
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Legacy Feature IC — descriptive, not evidence</div>{# claude code changed: 2026-10-05 — was "Feature Predictive Power & Stability — Top |IC|" #}
-                    {% if alpha_intelligence.feature_power_available %}
-                    <div class="term-table-wrap">
-                        <table class="term-table">
-                            <thead><tr><th>Symbol</th><th>Feature</th><th class="num">IC</th><th class="num">Stability σ</th><th>Status</th></tr></thead>
-                            <tbody>
-                                {% for f in alpha_intelligence.top_features %}
-                                <tr>
-                                    <td class="label-cell">{{ f.symbol }}</td>
-                                    <td class="label-cell">{{ f.feature }}</td>
-                                    <td class="num stat-number" data-target="{{ f.ic_overall }}" data-decimals="4">0</td>{# claude code changed: 2026-10-05 — neutral colour #}
-                                    <td class="num {% if f.stability_std is not None %}stat-number{% endif %}" data-target="{{ f.stability_std|default_if_none:0 }}" data-decimals="4">{% if f.stability_std is None %}—{% else %}0{% endif %}</td>
-                                    <td>{% if f.valid %}<span class="badge pos">VALID</span>{% else %}<span class="badge dim">{{ f.recommendation }}</span>{% endif %}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="chart-caption">{# claude code changed: 2026-10-05 #}Validator run {{ alpha_intelligence.feature_files_date|default:"unknown date" }}, labels from before the D-1 timing fix. Top 8 of {{ alpha_intelligence.n_feature_estimates }} estimates by |IC| — the largest of many noisy estimates always overstate strength.</div>
-                    {% else %}
-                    <div class="unavailable">No validated_features.csv files found in research_data/</div>
-                    {% endif %}
-                </div>
-            </div>
-            {# claude code changed: 2026-10-22 — Markets cards instead of a symbol list (same partial as /forex/, /market/ and /markets/) #}
-            <div id="cs-relative-value" style="margin-top:16px">
-                <div class="metric-label" style="margin-bottom:6px">Cross-Sectional Relative Value — descriptive</div>
-                {% if market_state.cross_section_dispersion.available %}
-                <div class="chart-caption" style="margin-bottom:8px">
-                    All {{ market_state.cross_section_dispersion.n_symbols }} coins, ranked by |z|: each coin's 1-hour return at <b>{{ market_state.cross_section_dispersion.as_of }}</b> compared with all {{ market_state.cross_section_dispersion.n_symbols }} coins in that same hour
-                    (z = (return − average) ÷ spread across coins; {{ market_state.cross_section_dispersion.n_excluded_other_timestamp }} with data from another time excluded).
-                    One hour of research data, before the sealed 2026-10-04 holdout — not live, not a trade signal; cross-sectional strategy research found no surviving edge.
-                    Card prices and changes are today's Markets quotes.
-                    {% if market_state.cross_section_dispersion.n_without_quote %}{{ market_state.cross_section_dispersion.n_without_quote }} coin(s) have no local price file and are not shown.{% endif %}
-                </div>
-                <div class="mkt-grid" style="padding:0">
-                    {% for c in market_state.cross_section_dispersion.cards %}
-                    {% include "partials/_mkt_card.html" with q=c.q regime=None zscore=c.z zscore_asof=market_state.cross_section_dispersion.as_of %}
-                    {% endfor %}
-                </div>
-                {% else %}
-                <div class="unavailable">Cross-sectional data unavailable</div>
-                {% endif %}
+    <!-- ═══ 2 · Market pulse ═══ -->
+    <section class="hq-sec" aria-labelledby="hq-pulse">
+        <div class="hq-sec-head">
+            <div><h2 class="hq-sec-title" id="hq-pulse">Market Pulse</h2>
+                <p class="hq-sec-sub" data-universe-panel="crypto">The platform's crypto universe ({{ c.n_universe }} coins on the Markets page, quoted in USDT) · rolling 24 h on Binance. Not market-wide.</p>
+                <p class="hq-sec-sub" data-universe-panel="forex" hidden>Each currency measured once, against the US dollar · 24 h · MT5 prices.</p>
             </div>
         </div>
-    </div>
 
-    <!-- ================= 4. PORTFOLIO RISK ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">4 · Portfolio Risk</span>
+        <div class="hq-grid hq-grid-4" data-universe-panel="crypto">
+            <div class="hq-card">
+                <h3>Breadth</h3>
+                {% if c.available %}
+                <div class="hq-big">{{ c.breadth_pct|floatformat:1 }}%</div>
+                <div class="hq-bar" role="img" aria-label="{{ c.n_up }} advancing, {{ c.n_flat }} unchanged, {{ c.n_down }} declining">
+                    <span class="seg-up" style="width:{% widthratio c.n_up c.n 100 %}%"></span><span class="seg-flat" style="width:{% widthratio c.n_flat c.n 100 %}%"></span><span class="seg-down" style="width:{% widthratio c.n_down c.n 100 %}%"></span>
+                </div>
+                <div class="hq-note"><span class="pos-t">▲ {{ c.n_up }} advancing</span> · {{ c.n_flat }} unchanged · <span class="neg-t">▼ {{ c.n_down }} declining</span></div>
+                <div class="hq-note">= advancing ÷ {{ c.n }} eligible ({{ c.n_universe }} in universe, {{ c.n_stale|add:c.n_missing }} excluded). {{ c.mood }}.</div>
+                {% else %}<div class="hq-big small dim-t">Unavailable</div><div class="hq-note">{{ c.reason }}</div>{% endif %}
+            </div>
+            <div class="hq-card">
+                <h3>Dispersion</h3>
+                {% if c.available %}
+                <div class="hq-big">{{ c.std_pct|floatformat:2 }} <span class="hq-note">pp</span></div>
+                <div class="hq-note">Cross-sectional standard deviation of the {{ c.n }} coins' 24 h returns (sample σ). Middle half spans {{ c.iqr_pct|floatformat:2 }} pp; median return <span class="{% if c.median_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{{ c.median_pct|floatformat:2 }}%</span>.</div>
+                <div class="hq-note" style="margin-top:4px">High dispersion means coins are behaving differently — not that profitable opportunities exist.</div>
+                {% else %}<div class="hq-big small dim-t">Unavailable</div>{% endif %}
+            </div>
+            <div class="hq-card">
+                <h3>Volatility conditions</h3>
+                {% if snap.available and snap.volatility.available %}
+                <div class="hq-big">{{ snap.volatility.median|floatformat:2 }}<span class="hq-note">× median ATR ratio</span></div>
+                <div class="hq-note">Each coin's 14-hour ATR ÷ its own 50-hour average ATR (1.00 = its usual range). Middle half {{ snap.volatility.q25|floatformat:2 }}–{{ snap.volatility.q75|floatformat:2 }}.</div>
+                <div class="hq-note" style="margin-top:4px"><b>{{ snap.volatility.n_above_own_average }}</b> of {{ snap.volatility.n }} above their own average · <b class="{% if snap.volatility.n_extreme %}warn-t{% endif %}">{{ snap.volatility.n_extreme }}</b> at or above {{ snap.volatility.extreme_threshold }}× (the detector's high-volatility rule).</div>
+                {% else %}<div class="hq-big small dim-t">{% if snap.refreshing %}Computing…{% else %}Unavailable{% endif %}</div><div class="hq-note">{{ snap.reason|default:"" }}</div>{% endif %}
+            </div>
+            <div class="hq-card">
+                <h3>Regime distribution</h3>
+                {% if snap.available %}
+                <div class="hq-bar" role="img" aria-label="{% for d in snap.distribution %}{{ d.label }} {{ d.n }}{% if not forloop.last %}, {% endif %}{% endfor %}">
+                    {% for d in snap.distribution %}{% if d.n %}<span class="seg-{{ d.key }}" style="width:{{ d.pct|floatformat:2 }}%" title="{{ d.label }}: {{ d.n }}"></span>{% endif %}{% endfor %}
+                </div>
+                <div class="hq-legend">
+                    {% for d in snap.distribution %}<span><i class="seg-{{ d.key }}"></i>{{ d.label }} <b class="num">{{ d.n }}</b></span>{% endfor %}
+                </div>
+                <div class="hq-note" style="margin-top:6px">RegimeDetector on {{ snap.candles_per_symbol }} one-hour candles per coin, last candle {{ snap.latest_candle|date:"Y-m-d H:i" }} UTC. Same detector as the bot and backtester.</div>
+                {% else %}<div class="hq-big small dim-t">{% if snap.refreshing %}Computing…{% else %}Unavailable{% endif %}</div><div class="hq-note">{{ snap.reason|default:"" }}</div>{% endif %}
+            </div>
         </div>
-        <div class="term-section-body">
-            <div class="term-grid term-grid-4" style="margin-bottom:16px">
-                <div class="metric-tile">
-                    <div class="metric-label">Max Drawdown</div>
-                    <div class="metric-value stat-number neg" data-target="{{ portfolio_risk.max_drawdown|default_if_none:0 }}" data-decimals="2" data-suffix="%">0%</div>
-                    <div class="metric-sub">current backtest, {{ symbol }}</div>
+
+        <div class="hq-grid hq-grid-4" data-universe-panel="forex" hidden>
+            <div class="hq-card">
+                <h3>Session</h3>
+                <div class="hq-big small {% if f.open %}pos-t{% else %}dim-t{% endif %}">{% if f.open %}Market open{% else %}Market closed{% endif %}</div>
+                <div class="hq-note">{{ f.n_pairs_live }} of {{ f.n_pairs_listed }} pairs with a live MT5 price{% if f.as_of %}, last tick {{ f.as_of|date:"H:i" }} UTC{% endif %}.</div>
+            </div>
+            <div class="hq-card">
+                <h3>Breadth vs US dollar</h3>
+                {% if f.available %}
+                <div class="hq-big">{{ f.n_up }} <span class="hq-note">of {{ f.n }} currencies rose vs USD</span></div>
+                <div class="hq-bar" role="img" aria-label="{{ f.n_up }} up, {{ f.n_down }} down against the US dollar">
+                    <span class="seg-up" style="width:{% widthratio f.n_up f.n 100 %}%"></span><span class="seg-flat" style="width:{% widthratio f.n_flat f.n 100 %}%"></span><span class="seg-down" style="width:{% widthratio f.n_down f.n 100 %}%"></span>
                 </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Current Exposure</div>
-                    <div class="metric-value stat-number" data-target="{{ execution_state.open_count|default_if_none:0 }}" data-decimals="0">0</div>
-                    <div class="metric-sub">open position(s), live DB</div>
-                </div>
-                {% if portfolio_risk.correlation.available %}
-                <div class="metric-tile">
-                    <div class="metric-label">Avg |Correlation|</div>
-                    <div class="metric-value stat-number {% if portfolio_risk.correlation.avg_abs_correlation > 0.6 %}warn{% endif %}" data-target="{{ portfolio_risk.correlation.avg_abs_correlation }}" data-decimals="3">0</div>
-                    <div class="metric-sub">{{ portfolio_risk.correlation.n_symbols }} symbols, {{ portfolio_risk.correlation.window_candles }}h window</div>
-                </div>
-                {% else %}
-                <div class="metric-tile">
-                    <div class="metric-label">Avg |Correlation|</div>
-                    <div class="unavailable-inline mono">N/A</div>
-                </div>
-                {% endif %}
-                <div class="metric-tile">
-                    <div class="metric-label">Crash-Risk State</div>
-                    <div class="unavailable-inline mono">N/A</div>
-                </div>
+                <div class="hq-note">Only each currency's USD pair is used (USD/XXX inverted exactly), so no currency is counted twice; crosses and metals are left out.</div>
+                {% else %}<div class="hq-big small dim-t">Unavailable</div><div class="hq-note">{{ f.reason }}</div>{% endif %}
+            </div>
+            <div class="hq-card">
+                <h3>Dispersion</h3>
+                {% if f.available %}
+                <div class="hq-big">{{ f.std_pct|floatformat:3 }} <span class="hq-note">pp</span></div>
+                <div class="hq-note">Sample σ of the {{ f.n }} currencies' 24 h change vs USD; median {{ f.median_pct|floatformat:3 }}%.</div>
+                {% else %}<div class="hq-big small dim-t">Unavailable</div>{% endif %}
+            </div>
+            <div class="hq-card">
+                <h3>Largest pair moves</h3>
+                {% if f.top_pair %}
+                <ul class="hq-list">
+                    <li><span>{% fx_flags f.top_pair.symbol 16 %} {{ f.top_pair.display }}</span><span class="num {% if f.top_pair.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{% if f.top_pair.return_pct >= 0 %}+{% endif %}{{ f.top_pair.return_pct|floatformat:2 }}%</span></li>
+                    <li><span>{% fx_flags f.bottom_pair.symbol 16 %} {{ f.bottom_pair.display }}</span><span class="num {% if f.bottom_pair.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{% if f.bottom_pair.return_pct >= 0 %}+{% endif %}{{ f.bottom_pair.return_pct|floatformat:2 }}%</span></li>
+                </ul>
+                <div class="hq-note" style="margin-top:6px">Regimes are not shown for forex: the detector's EMA-gap threshold is not calibrated for FX (a pending research-policy decision).</div>
+                {% else %}<div class="hq-big small dim-t">Unavailable</div>{% endif %}
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══ 3 · Relative value  |  4 · Regime intelligence ═══ -->
+    <div class="hq-two">
+        <section class="hq-sec hq-card" aria-labelledby="hq-rv" id="relative-value">
+            <div class="hq-sec-head">
+                <div><h2 class="hq-sec-title" id="hq-rv">Cross-Sectional Relative Value</h2>
+                    <p class="hq-sec-sub">Identify assets behaving unusually relative to a defined comparison universe.</p></div>
             </div>
 
-            {% if portfolio_risk.correlation.available %}
-            <div class="metric-label" style="margin-bottom:6px">Highest-Correlated Pairs (historical, {{ portfolio_risk.correlation.window_candles }}h)</div>
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Pair A</th><th>Pair B</th><th class="num">Correlation</th></tr></thead>
+            <div data-universe-panel="crypto">
+                {% if c.available %}
+                <div class="hq-filters" role="group" aria-label="Filter rows (does not recalculate)">
+                    <button type="button" aria-pressed="true" data-rv-side="all">Both ends</button>
+                    <button type="button" aria-pressed="false" data-rv-side="pos">Strongest</button>
+                    <button type="button" aria-pressed="false" data-rv-side="neg">Weakest</button>
+                    <label>Regime <select id="rv-regime"><option value="">Any</option>{% for d in snap.distribution %}<option value="{{ d.label }}">{{ d.label }}</option>{% endfor %}</select></label>
+                    <label><input type="checkbox" id="rv-extreme"> only |z| ≥ {{ intel.extreme_z|floatformat:0 }}</label>
+                </div>
+                <table class="hq-table stack" id="rv-table">
+                    <thead><tr><th>Asset</th><th class="r">24 h return</th><th class="r" title="Relative extremity describes how unusual an observation is within its reference universe. It does not guarantee reversal or profitability.">Z-score ⓘ</th><th class="r">Rank</th><th>Regime</th><th>Data</th></tr></thead>
                     <tbody>
-                        {% for p in portfolio_risk.correlation.top_pairs %}
+                        <tr class="hq-sep"><td colspan="6">Strongest relative performers</td></tr>
+                        {% for r in c.rows|slice:":8" %}{# claude code changed: 2026-10-26 — with fewer than 16 coins the two ends overlap #}{% include "partials/_hq_rv_row.html" with side="pos" n=c.n %}{% endfor %}
+                        <tr class="hq-sep"><td colspan="6">Weakest relative performers</td></tr>
+                        {% for r in c.rows|slice:"-8:" reversed %}{% include "partials/_hq_rv_row.html" with side="neg" n=c.n %}{% endfor %}
+                    </tbody>
+                </table>
+                <div class="hq-note" id="rv-empty" hidden>No rows match these filters.</div>
+                <div class="hq-note" style="margin-top:8px">Rank 1 = highest 24 h return, of {{ c.n }} eligible coins; ties ordered by symbol. Filters only hide rows — the z-scores always use all {{ c.n }} coins.</div>
+                {% else %}
+                <div class="hq-big small dim-t">Unavailable</div><div class="hq-note">{{ c.reason }}</div>
+                {% endif %}
+            </div>
+
+            <div data-universe-panel="forex" hidden>
+                {% if f.available %}
+                <table class="hq-table stack">
+                    <thead><tr><th>Currency</th><th class="r">24 h vs USD</th><th class="r" title="Relative extremity describes how unusual an observation is within its reference universe. It does not guarantee reversal or profitability.">Z-score ⓘ</th><th class="r">Rank</th></tr></thead>
+                    <tbody>
+                        {% for r in f.rows %}
                         <tr>
-                            <td class="label-cell">{{ p.a }}</td>
-                            <td class="label-cell">{{ p.b }}</td>
-                            <td class="num stat-number" data-target="{{ p.corr }}" data-decimals="3">0</td>
+                            <td class="hq-first" data-label="Currency"><span class="hq-asset">{{ r.symbol }}</span> <span class="dim-t">{{ r.name }}</span></td>
+                            <td class="r num {% if r.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="24 h vs USD">{% if r.return_pct >= 0 %}+{% endif %}{{ r.return_pct|floatformat:3 }}%</td>
+                            <td class="r num" data-label="Z-score">{% if r.z >= 0 %}+{% endif %}{{ r.z|floatformat:2 }}</td>
+                            <td class="r num" data-label="Rank">{{ r.rank }} / {{ f.n }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
+                <div class="hq-note" style="margin-top:8px">The US dollar is the reference, so it has no row. Rank 1 = strongest against USD.</div>
+                {% else %}
+                <div class="hq-big small dim-t">Unavailable</div><div class="hq-note">{{ f.reason }}</div>
+                {% endif %}
+            </div>
+
+            <details class="hq-how">
+                <summary>How these z-scores are calculated</summary>
+                <ul>
+                    <li><b>Return:</b> crypto — Binance's rolling 24 h change, each coin's window ending at its last trade (coins with no trade in 2 h are excluded and counted above); forex — each currency's 24 h change against USD from its USD pair.</li>
+                    <li><b>z = (r − mean) ÷ standard deviation</b>, across the eligible universe at this moment; sample standard deviation (n − 1). Same definition as the research cross-section engine; at least {{ intel.min_assets }} assets are required and zero variance shows "unavailable".</li>
+                    <li><b>No outlier trimming:</b> raw returns (the research engine's winsorisation needs each coin's history). One extreme coin widens σ and shrinks everyone else's |z|.</li>
+                    <li><b>Not a signal.</b> A large |z| means unusual relative to the others today. It is not a predicted reversal, a mispricing or evidence of alpha; cross-sectional strategy research on this universe found no surviving edge after costs.</li>
+                    <li>The research pipeline's own 1-hour cross-section (historical, before the sealed holdout) is on <a class="hq-link" href="{% url 'market_intelligence' %}">Market Intelligence</a>.</li>
+                </ul>
+            </details>
+        </section>
+
+        <section class="hq-sec hq-card" aria-labelledby="hq-regime" id="regime">
+            <div class="hq-sec-head">
+                <div><h2 class="hq-sec-title" id="hq-regime">Regime Intelligence</h2>
+                    <p class="hq-sec-sub">Classify market conditions before evaluating strategy suitability.</p></div>
+            </div>
+            <form class="hq-symbol term-symbol-form" method="get" action="{% url 'dashboard' %}#regime">
+                <label class="hq-note" for="db-symbol">Asset</label>
+                <input id="db-symbol" type="text" name="symbol" class="term-input mono" value="{{ symbol }}" placeholder="e.g. BTCUSDT" autocomplete="off">
+                <button type="submit" class="term-btn">Classify</button>
+            </form>
+            {% if rg.available %}
+            <div style="display:flex; flex-wrap:wrap; align-items:center; gap:10px">
+                <span class="coin-id">{% coin_logo symbol 22 %}<b style="color:var(--text-primary)">{{ symbol }}</b></span>
+                <span class="hq-regime-badge rg-{{ rg.regime_key }}" data-regime="{{ rg.regime }}">{{ rg.regime_words|upper }}</span>
+            </div>
+            <div class="hq-note" style="margin-top:6px">Classification based on the platform's current regime methodology · last candle {{ rg.last_candle|date:"Y-m-d H:i" }} UTC{% if rg.candle_forming %} (still forming){% endif %} · {{ rg.n_candles }} one-hour candles.</div>
+            <div class="hq-note" style="margin-top:4px"><b>Agreement: {{ rg.agreement|title }}</b> — {{ rg.agreement_meaning }}. This is a vote count between the inputs, not a probability.</div>
+
+            <table class="hq-inputs">
+                {% for i in rg.inputs %}
+                <tr><td>{{ i.name }}<div class="dim-t">{{ i.measure }}</div></td><td class="num">{{ i.value }}</td><td>{{ i.rule }}</td><td class="{% if i.votes == 'trend' %}pos-t{% else %}dim-t{% endif %}">→ {{ i.votes }}</td></tr>
+                {% endfor %}
+                <tr><td>Direction<div class="dim-t">EMA 20 vs EMA 50</div></td><td class="num">{{ rg.direction }}</td><td colspan="2">used only when a trend is confirmed</td></tr>
+                <tr><td>Volatility override<div class="dim-t">ATR ratio (14 / 50)</div></td><td class="num {% if rg.volatility_extreme %}warn-t{% endif %}">{{ rg.atr_ratio|floatformat:2 }}</td><td colspan="2">≥ {{ rg.atr_threshold }} → high volatility, before any vote · {{ rg.volatility_words|lower }}</td></tr>
+            </table>
+            <div class="hq-note" style="margin-top:6px"><b>Rule applied:</b> {{ rg.rule_applied }}.</div>
+
+            {% if rg.history.available %}
+            <div style="margin-top:12px">
+                <h3 style="margin:0; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Last {{ rg.history.bars }} hours</h3>
+                <div class="hq-bar" style="height:16px" role="img" aria-label="Regime history: {% for s in rg.history.segments %}{{ s.words }} {{ s.bars }} h{% if not forloop.last %}, {% endif %}{% endfor %}">
+                    {% for s in rg.history.segments %}<span class="seg-{{ s.key }}" style="width:{{ s.pct|floatformat:2 }}%" title="{{ s.words }}: {{ s.bars }} h from {{ s.start|date:'m-d H:i' }}"></span>{% endfor %}
+                </div>
+                <div class="hq-note">In the current regime for {% if rg.history.current_run_capped %}at least {% endif %}{{ rg.history.current_run_bars }} h · {{ rg.history.n_transitions }} change{{ rg.history.n_transitions|pluralize }} in {{ rg.history.bars }} h.</div>
+                {% if rg.history.transitions %}
+                <ul class="hq-list">
+                    {% for t in rg.history.transitions|slice:":4" %}<li><span>{{ t.from }} → <b>{{ t.to }}</b></span><span class="num">{{ t.at|date:"m-d H:i" }}</span></li>{% endfor %}
+                </ul>
+                {% endif %}
             </div>
             {% endif %}
-
-            <div class="hairline"></div>
-            <div class="unavailable">Concentration and crash-risk state require backend work not yet implemented: concentration needs live per-symbol exposure sizing (PositionTracker's in-memory state isn't reachable from a web request); crash-risk needs bot/research/contagion_engine.py wired to persist output, which it currently doesn't.</div>
-        </div>
-    </div>
-
-    <!-- ================= 5. EXECUTION ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">5 · Execution</span>
-            <span class="term-section-meta">source: TradeRecord (live DB)</span>
-        </div>
-        <div class="term-section-body">
-            <div class="term-grid term-grid-6" style="margin-bottom:16px">
-                <div class="metric-tile">
-                    <div class="metric-label">Open Positions</div>
-                    <div class="metric-value stat-number" data-target="{{ execution_state.open_count|default_if_none:0 }}" data-decimals="0">0</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Pending Orders</div>
-                    <div class="unavailable-inline mono">N/A</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Realized P&amp;L (LIVE){# claude code changed: Post-audit Phase 1 journal-mode separation — headline is LIVE rows only #}</div>
-                    <div class="metric-value stat-number {% if execution_state.realized_pnl > 0 %}pos{% elif execution_state.realized_pnl < 0 %}neg{% endif %}" data-target="{{ execution_state.realized_pnl|default_if_none:0 }}" data-decimals="2">0</div>
-                    {% if execution_state.realized_pnl_by_mode %}<div class="chart-caption mono">{% for mode, v in execution_state.realized_pnl_by_mode.items %}{% if mode != "LIVE" %}{{ mode }} {{ v|floatformat:2 }} ({% if mode == "DRY_RUN" %}simulated{% else %}unattributed{% endif %}) {% endif %}{% endfor %}{% if execution_state.unvalued_pnl_count %}· {{ execution_state.unvalued_pnl_count }} unvalued{% endif %}</div>{% endif %}
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Unrealized P&amp;L</div>
-                    <div class="unavailable-inline mono">N/A</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Avg Slippage</div>
-                    <div class="metric-value stat-number small" data-target="{{ execution_state.avg_slippage_pct|default_if_none:0 }}" data-decimals="4" data-suffix="%">{% if execution_state.avg_slippage_pct is None %}—{% else %}0%{% endif %}</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-label">Total Fees Paid</div>
-                    <div class="metric-value stat-number small" data-target="{{ execution_state.total_fees|default_if_none:0 }}" data-decimals="2">0</div>
-                </div>
-            </div>
-
-            {% if execution_state.open_count > 0 %}
-            <div class="metric-label" style="margin-bottom:6px">Open Positions</div>
-            <div class="term-table-wrap" style="margin-bottom:16px">
-                <table class="term-table">
-                    <thead><tr><th>Symbol</th><th>Side</th><th class="num">Entry</th><th class="num">SL</th><th class="num">TP</th><th class="num">Qty</th><th>Opened</th></tr></thead>
-                    <tbody>
-                        {% for p in execution_state.open_positions %}
-                        <tr>
-                            <td class="label-cell">{{ p.symbol }}</td>
-                            <td class="{% if p.side == 'BUY' %}dir-long{% else %}dir-short{% endif %}">{{ p.side }}</td>
-                            <td class="num stat-number" data-target="{{ p.entry_price }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ p.sl }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ p.tp }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ p.quantity }}" data-decimals="4">0</td>
-                            <td>{{ p.created_at|date:"Y-m-d H:i" }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
             {% else %}
-            <div class="unavailable" style="margin-bottom:16px">No open positions — bot is not currently live-trading in this environment (DRY_RUN default, no BINANCE_API_KEY configured).</div>
+            <div class="hq-big small dim-t">Insufficient data</div>
+            <div class="hq-note">{{ symbol }}: {{ rg.reason }}. The detector returns a safe "ranging" default in this case, which is not shown as a classification.</div>
             {% endif %}
 
-            <div class="metric-label" style="margin-bottom:6px">Recent Closed Trades ({{ execution_state.total_closed|default:"0" }} total in DB)</div>
-            {% if execution_state.recent_closed %}
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th class="num">Net P&amp;L</th><th class="num">R</th><th>Closed</th></tr></thead>
-                    <tbody>
-                        {% for t in execution_state.recent_closed %}
-                        <tr class="{% if t.status == 'WIN' %}row-win{% elif t.status == 'LOSS' %}row-loss{% endif %}">
-                            <td class="label-cell">{{ t.symbol }}</td>
-                            <td class="{% if t.side == 'BUY' %}dir-long{% else %}dir-short{% endif %}">{{ t.side }}</td>
-                            <td><span class="badge {% if t.status == 'WIN' %}pos{% else %}neg{% endif %}">{{ t.status }}</span></td>
-                            <td class="num stat-number {% if t.net_pnl > 0 %}pos{% elif t.net_pnl < 0 %}neg{% endif %}" data-target="{{ t.net_pnl|default_if_none:0 }}" data-decimals="2">0</td>
-                            <td class="num {% if t.r_multiple is not None %}stat-number{% endif %}" data-target="{{ t.r_multiple|default_if_none:0 }}" data-decimals="2">{% if t.r_multiple is None %}—{% else %}0{% endif %}</td>
-                            <td>{{ t.updated_at|date:"Y-m-d H:i" }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="unavailable">No closed trades recorded in this environment's database yet.</div>
-            {% endif %}
-        </div>
+            <details class="hq-how">
+                <summary>How was this regime classified?</summary>
+                <p>The detector looks at the latest one-hour candles and asks three questions. <b>Is there a strong trend?</b> (ADX of 25 or more.) <b>Are the 20- and 50-hour averages far apart?</b> (Gap of 0.5% of price or more.) <b>Is the price range wide rather than squeezed?</b> (Bollinger width above 2% of price.)</p>
+                <p>If two or three say "trend", the market is <b>trending</b>; whether up or down comes from the 20-hour average being above or below the 50-hour one. If two or three say "range", it is <b>ranging</b>. One check comes first: if the recent price range (ATR) is 1.7 times or more its own 50-hour average, the market is <b>high volatility</b> and no strategy is routed.</p>
+                <p>"High / medium / low" only says how many of the three agreed. It is not the chance the label is right. These are descriptions of the recent past, not forecasts.</p>
+            </details>
+        </section>
     </div>
 
-    <!-- ================= 6. SYSTEM HEALTH ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">6 · System Health</span>
-            <span class="term-section-meta">
-                {% if system_health.overall == "ok" %}<span class="badge pos">ALL OK</span>
-                {% elif system_health.overall == "warn" %}<span class="badge warn">WARNINGS</span>
-                {% else %}<span class="badge neg">ERRORS</span>{% endif %}
-            </span>
-        </div>
-        <div class="term-section-body">
-            <div class="two-col">
-                <div>
-                    {% for c in system_health.checks|slice:":4" %}
-                    <div class="status-row">
-                        <span class="status-name"><span class="status-dot {{ c.status }}"></span>{{ c.name }}</span>
-                        <span class="status-detail">{{ c.detail }}</span>
-                    </div>
-                    {% endfor %}
-                </div>
-                <div>
-                    {% for c in system_health.checks|slice:"4:" %}
-                    <div class="status-row">
-                        <span class="status-name"><span class="status-dot {{ c.status }}"></span>{{ c.name }}</span>
-                        <span class="status-detail">{{ c.detail }}</span>
-                    </div>
-                    {% endfor %}
-                </div>
+    <!-- ═══ 5 · Risk conditions  |  6 · Research & evidence ═══ -->
+    <div class="hq-two hq-two-even">
+        <section class="hq-sec hq-card" aria-labelledby="hq-risk">
+            <div class="hq-sec-head"><div><h2 class="hq-sec-title" id="hq-risk">Risk Conditions</h2>
+                <p class="hq-sec-sub">Market-wide (crypto universe). Not your portfolio, and not a risk score.</p></div></div>
+            <ul class="hq-list">
+                <li><span>High-volatility coins<div class="dim-t">ATR ratio ≥ {{ intel.atr_extreme }}</div></span>
+                    <span class="num">{% if snap.available %}<b class="{% if snap.volatility.n_extreme %}warn-t{% endif %}">{{ snap.volatility.n_extreme }}</b> / {{ snap.volatility.n }}{% else %}<span class="dim-t">{% if snap.refreshing %}computing{% else %}n/a{% endif %}</span>{% endif %}</span></li>
+                <li><span>Co-movement<div class="dim-t">{% if snap.correlation.available %}mean pairwise correlation of hourly log returns · {{ snap.correlation.n_coins }} coins · {{ snap.correlation.n_obs }} synchronised hours ({{ snap.correlation.window_start|date:"m-d H:i" }} → {{ snap.correlation.window_end|date:"m-d H:i" }} UTC){% else %}{{ snap.correlation.reason|default:snap.reason|default:"not computed yet" }}{% endif %}</div></span>
+                    <span class="num">{% if snap.correlation.available %}<b>{{ snap.correlation.mean|floatformat:2 }}</b><div class="dim-t">{% widthratio snap.correlation.share_high 1 100 %}% of {{ snap.correlation.n_pairs }} pairs &gt; {{ snap.correlation.high_threshold }}</div>{% else %}<span class="dim-t">n/a</span>{% endif %}</span></li>
+                <li><span>Large 24 h falls<div class="dim-t">down {{ intel.adverse_move_pct|floatformat:0 }}% or more · and relative extremes (z ≤ −{{ intel.extreme_z|floatformat:0 }})</div></span>
+                    <span class="num">{% if c.available %}<b class="{% if c.n_adverse %}neg-t{% endif %}">{{ c.n_adverse }}</b> · {{ c.n_extreme_neg }}{% else %}<span class="dim-t">n/a</span>{% endif %}</span></li>
+                <li><span>Liquidity<div class="dim-t">spread, depth and impact need live order books — not fetched during a page load</div></span>
+                    <span><a class="hq-link" href="{% url 'venue_comparison' %}">Venue comparison →</a></span></li>
+                <li><span>Data-quality notes</span><span class="num">{{ c.n_stale|add:f.n_pairs_not_live }}{% if stale_notice %} + stale candles{% endif %}</span></li>
+            </ul>
+            <div class="hq-note" style="margin-top:8px">Correlation describes co-movement, not causation; a high average means diversification across these coins is limited. Volatility alone does not measure liquidation risk.</div>
+            <div style="margin-top:12px">
+                <h3 style="margin:0 0 4px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Portfolio risk</h3>
+                {% if show_private and execution_state %}
+                <div class="hq-note">Platform journal (staff only): <b>{{ execution_state.open_count }}</b> open position{{ execution_state.open_count|pluralize }} · realised P&amp;L (live) <b class="num">{{ execution_state.realized_pnl|default_if_none:0|floatformat:2 }}</b> · {{ execution_state.total_closed|default:0 }} closed trades. <a class="hq-link" href="{% url 'execution_monitor' %}">Execution monitor →</a></div>
+                {% else %}
+                <div class="hq-note">Portfolio risk unavailable — no authorized portfolio data.</div>
+                {% endif %}
             </div>
-            <div class="chart-caption" style="margin-top:10px">"Execution Engine (code)" reflects whether the module imports cleanly, not whether a live bot process is currently running — this web process has no visibility into a separately-running bot_runner.py.</div>
-        </div>
+        </section>
+
+        <section class="hq-sec hq-card" aria-labelledby="hq-evidence">
+            <div class="hq-sec-head"><div><h2 class="hq-sec-title" id="hq-evidence">Research &amp; Evidence</h2>
+                <p class="hq-sec-sub">What the research supports today — and what it does not.</p></div></div>
+
+            <h3 style="margin:0 0 4px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Routed strategies</h3>
+            <ul class="hq-list">
+                {% for s in ev.strategies %}
+                <li><span>{{ s.name }}</span><span><span class="badge {% if s.verdict == 'SUPPORTED' %}pos{% elif s.verdict == 'REJECTED' %}neg{% else %}dim{% endif %}">{{ s.verdict }}</span> {% if s.eligible %}<span class="badge pos">ELIGIBLE</span>{% else %}<span class="badge dim">BLOCKED BY GATE</span>{% endif %}</span></li>
+                {% endfor %}
+            </ul>
+            <div class="hq-note" style="margin-top:6px">
+                <b>In-sample backtest of {{ symbol }}:</b>
+                {% if ev.state == "NO_TRADES_GATED" %}no trades — the production gate blocks every strategy that is not validated, so there is no expectancy to report (a 0 here would not be a measured result).
+                {% elif ev.state == "NO_TRADES" %}no completed trades.
+                {% elif ev.state == "INSUFFICIENT" %}insufficient completed trades ({{ ev.n_trades }} of the {{ ev.min_trades }} required).
+                {% else %}{{ ev.n_trades }} trades · expectancy {{ ev.expectancy_r|floatformat:3 }} R · profit factor {{ ev.profit_factor|floatformat:2 }} · win rate {{ ev.win_rate|floatformat:1 }}% · max drawdown {{ ev.max_drawdown_pct|floatformat:1 }}%. {{ ev.classification }}.{% endif %}
+                <a class="hq-link" href="{% url 'backtest_detail' %}?symbol={{ symbol }}">Backtest detail →</a>
+            </div>
+
+            {% if ig.registry.available %}
+            <h3 style="margin:14px 0 4px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Evidence registry · reset point {{ ig.registry.reset_point }}</h3>
+            <div class="hq-legend">
+                {% for k in ig.registry.classes %}<span><b class="num {% if k.key == 'CANONICAL' %}pos-t{% elif k.key == 'INVALIDATED' %}neg-t{% endif %}">{{ k.n }}</b> {{ k.name|lower }}</span>{% endfor %}
+            </div>
+            <div class="hq-note" style="margin-top:4px">of {{ ig.registry.n }} registered research artifacts. Only canonical results may be cited as evidence.</div>
+            {% endif %}
+
+            <h3 style="margin:14px 0 4px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Feature research</h3>
+            <div class="hq-note"><b class="num">{{ research_state.features_valid }}</b> of {{ research_state.features_evaluated }} feature estimates ({{ research_state.feature_files }} symbols) passed the feature validator's filter. A filter pass is not evidence of a trading edge. Latest research output {% if research_state.latest_run %}{{ research_state.latest_run|date:"Y-m-d" }} ({{ research_state.age_days }} d ago, {% if research_state.pipeline_health == "fresh" %}<span class="pos-t">fresh</span>{% else %}<span class="warn-t">{{ research_state.pipeline_health }}</span>{% endif %}){% else %}unknown{% endif %}. <a class="hq-link" href="{% url 'feature_leaderboard' %}">Feature research →</a></div>
+
+            {% if ig.sealed %}
+            <h3 style="margin:14px 0 4px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Sealed holdouts (untouched by research)</h3>
+            <ul class="hq-list">
+                {% for w in ig.sealed %}<li><span>{{ w.name }}<div class="dim-t">{{ w.note }}</div></span><span class="num">since {{ w.since|date:"Y-m-d" }}{% if w.evaluation %}<div class="dim-t">first evaluation {{ w.evaluation|date:"Y-m-d" }}</div>{% endif %}</span></li>{% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if ig.experiments %}
+            <h3 style="margin:14px 0 4px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-dim)">Your Research Lab experiments</h3>
+            <div class="hq-note"><b class="num">{{ ig.experiments.n }}</b> experiment{{ ig.experiments.n|pluralize }}{% for st, n in ig.experiments.by_status %} · {{ n }} {{ st|lower }}{% endfor %}.
+                {% if ig.experiments.latest %}Latest: “{{ ig.experiments.latest.hypothesis_text|truncatechars:70 }}” — {{ ig.experiments.latest.verdict|default:ig.experiments.latest.status }}.{% endif %}
+                <a class="hq-link" href="{% url 'research_lab_history' %}">History →</a></div>
+            {% endif %}
+
+            <div class="hq-note" style="margin-top:12px"><a class="hq-link" href="{% url 'research_archive' %}">Governance log →</a> ({{ research_state.governance_entries|default:0 }} sections; the count is not a measure of quality) · <a class="hq-link" href="{% url 'research_lab_dashboard' %}">Research Lab →</a></div>
+        </section>
     </div>
 
-    <!-- ================= BACKTEST DETAIL ================= -->
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title coin-id">{% coin_logo symbol 22 %}Backtest Detail — {{ symbol }}</span>{# claude code changed: 2026-10-22 — coin logo #}
-            <span class="term-section-meta">grade {{ grade }} · score {{ total_score|floatformat:1 }}/100</span>
-        </div>
-        <div class="term-section-body">
+    <!-- ═══ 7 · Research watchlist ═══ -->
+    <section class="hq-sec hq-card" aria-labelledby="hq-watch" data-universe-panel="crypto">
+        <div class="hq-sec-head"><div><h2 class="hq-sec-title" id="hq-watch">Research Watchlist</h2>
+            <p class="hq-sec-sub">Coins at |z| ≥ {{ intel.extreme_z|floatformat:0 }} in today's cross-section, largest first. Each dimension is shown separately; there is no combined score.</p></div></div>
+        {% if intel.watchlist %}
+        <table class="hq-table stack">
+            <thead><tr><th>Asset</th><th class="r">24 h return</th><th class="r">Z-score</th><th class="r">Rank</th><th>Regime</th><th class="r">24 h volume</th><th></th></tr></thead>
+            <tbody>
+                {% for w in intel.watchlist %}
+                <tr>
+                    <td class="hq-first" data-label="Asset"><a class="hq-asset" href="{% url 'market_workspace' 'crypto' w.symbol %}">{% coin_logo w.symbol 18 %}{{ w.display }}</a></td>
+                    <td class="r num {% if w.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="24 h return">{% if w.return_pct >= 0 %}+{% endif %}{{ w.return_pct|floatformat:2 }}%</td>
+                    <td class="r num" data-label="Z-score">{% if w.z >= 0 %}+{% endif %}{{ w.z|floatformat:2 }}</td>
+                    <td class="r num" data-label="Rank">{{ w.rank }} / {{ c.n }}</td>
+                    <td data-label="Regime">{{ w.regime_words }}</td>
+                    <td class="r num" data-label="24 h volume">{% if w.quote_volume %}{% if w.quote_volume >= 1000000 %}${% widthratio w.quote_volume 1000000 1 %}M{% else %}${% widthratio w.quote_volume 1000 1 %}k{% endif %}{% else %}—{% endif %}</td>
+                    <td data-label="Open"><a class="hq-link" href="{% url 'market_workspace' 'crypto' w.symbol %}">Inspect</a> · <a class="hq-link" href="{% url 'dashboard' %}?symbol={{ w.compact }}#regime">Regime</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="hq-note">{% if c.available %}No coin is at |z| ≥ {{ intel.extreme_z|floatformat:0 }} right now.{% else %}Unavailable: {{ c.reason }}{% endif %}</div>
+        {% endif %}
+        <div class="hq-disclaimer">Research candidates are not trade recommendations or executable signals. A coin appears here because its last 24 hours were unusual next to the other coins — nothing more.</div>
+    </section>
 
-            <div class="term-grid term-grid-6" style="margin-bottom:16px">
-                <div class="metric-tile"><div class="metric-label">Total Trades</div><div class="metric-value stat-number" data-target="{{ total_trades }}" data-decimals="0">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Win Rate</div><div class="metric-value stat-number" data-target="{{ win_rate }}" data-decimals="2" data-suffix="%">0%</div></div>
-                <div class="metric-tile"><div class="metric-label">Profit Factor</div><div class="metric-value stat-number {% if profit_factor >= 1 %}pos{% else %}neg{% endif %}" data-target="{{ profit_factor }}" data-decimals="2">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Expectancy (R)</div><div class="metric-value stat-number {% if expectancy_r > 0 %}pos{% elif expectancy_r < 0 %}neg{% endif %}" data-target="{{ expectancy_r }}" data-decimals="4">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Sharpe</div><div class="metric-value stat-number {% if sharpe > 0 %}pos{% elif sharpe < 0 %}neg{% endif %}" data-target="{{ sharpe }}" data-decimals="2">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Sortino</div><div class="metric-value stat-number {% if sortino > 0 %}pos{% elif sortino < 0 %}neg{% endif %}" data-target="{{ sortino }}" data-decimals="2">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Max Drawdown</div><div class="metric-value stat-number neg" data-target="{{ max_drawdown }}" data-decimals="2" data-suffix="%">0%</div></div>
-                <div class="metric-tile"><div class="metric-label">Loss Streak</div><div class="metric-value stat-number" data-target="{{ loss_streak }}" data-decimals="0">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Wins</div><div class="metric-value stat-number pos" data-target="{{ wins }}" data-decimals="0">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Losses</div><div class="metric-value stat-number neg" data-target="{{ losses }}" data-decimals="0">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Avg R</div><div class="metric-value stat-number {% if avg_r > 0 %}pos{% elif avg_r < 0 %}neg{% endif %}" data-target="{{ avg_r }}" data-decimals="4">0</div></div>
-                <div class="metric-tile"><div class="metric-label">Validation Penalty</div><div class="metric-value stat-number {% if validation_penalty > 5 %}neg{% elif validation_penalty > 0 %}warn{% else %}pos{% endif %}" data-target="{{ validation_penalty }}" data-decimals="0">0</div></div>
-            </div>
-            <div class="metric-tile" style="margin-bottom:16px"><div class="metric-label">Verdict</div><div class="metric-value small">{{ verdict }}</div></div>
+</main>
+{% endwith %}
 
-            <div class="two-col" style="margin-bottom:16px">
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Equity Curve</div>
-                    <div class="chart-box"><canvas id="equityChart"></canvas></div>
-                </div>
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Drawdown</div>
-                    <div class="chart-box"><canvas id="drawdownChart"></canvas></div>
-                </div>
-            </div>
-
-            <div class="two-col" style="margin-bottom:16px">
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Regime Breakdown</div>
-                    <div class="term-table-wrap">
-                        <table class="term-table">
-                            <thead><tr><th>Regime</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
-                            <tbody>
-                                {% for regime, d in regime_breakdown.items %}
-                                <tr>
-                                    <td class="label-cell">{{ regime }}</td>
-                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
-                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
-                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-                <div>
-                    <div class="metric-label" style="margin-bottom:6px">Structure Breakdown</div>
-                    <div class="term-table-wrap">
-                        <table class="term-table">
-                            <thead><tr><th>Structure</th><th class="num">Trades</th><th class="num">Win %</th><th class="num">P&amp;L</th></tr></thead>
-                            <tbody>
-                                {% for structure, d in structure_breakdown.items %}
-                                <tr>
-                                    <td class="label-cell">{{ structure }}</td>
-                                    <td class="num stat-number" data-target="{{ d.trades }}" data-decimals="0">0</td>
-                                    <td class="num stat-number" data-target="{{ d.win_rate }}" data-decimals="1" data-suffix="%">0%</td>
-                                    <td class="num stat-number {% if d.total_profit > 0 %}pos{% elif d.total_profit < 0 %}neg{% endif %}" data-target="{{ d.total_profit }}" data-decimals="2">0</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            {% if suggestions %}
-            <div class="metric-label" style="margin-bottom:6px">Scorer Notes</div>
-            <div class="term-table-wrap" style="margin-bottom:16px">
-                <table class="term-table">
-                    <tbody>
-                        {% for s in suggestions %}
-                        <tr><td class="label-cell">{{ s }}</td></tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
-
-            {% if rejection_table %}
-            <div class="metric-label" style="margin-bottom:6px">Rejection Analysis</div>
-            <div class="term-table-wrap" style="margin-bottom:16px">
-                <table class="term-table">
-                    <thead><tr><th>Reason</th><th class="num">Count</th><th class="num">%</th><th>Verdict</th></tr></thead>
-                    <tbody>
-                        {% for reason, d in rejection_table.items %}
-                        {% if d.count > 0 %}
-                        <tr>
-                            <td class="label-cell">{{ reason }}</td>
-                            <td class="num stat-number" data-target="{{ d.count }}" data-decimals="0">0</td>
-                            <td class="num stat-number" data-target="{{ d.percentage }}" data-decimals="2" data-suffix="%">0%</td>
-                            <td>{% if d.research_verdict %}<span class="badge {{ d.research_verdict|verdict_class }}">{{ d.research_verdict }}</span>{% endif %}</td>
-                        </tr>
-                        {% endif %}
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
-
-            <div class="metric-label" style="margin-bottom:6px">Trade Log ({{ trades|length }})</div>
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>#</th><th>Dir</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th class="num">R</th><th class="num">Held</th><th>Exit Reason</th><th>Verdict</th></tr></thead>
-                    <tbody>
-                        {% for t in trades|slice:":100" %}
-                        <tr class="{% if t.profit > 0 %}row-win{% elif t.profit < 0 %}row-loss{% endif %}" title="{{ t.entry_narrative }}">
-                            <td class="num text-dim">{{ forloop.counter }}</td>
-                            <td class="{% if t.direction == 'LONG' %}dir-long{% else %}dir-short{% endif %}">{{ t.direction }}</td>
-                            <td class="num stat-number" data-target="{{ t.entry_price|default_if_none:0 }}" data-decimals="4">0</td>
-                            <td class="num stat-number" data-target="{{ t.exit_price|default_if_none:0 }}" data-decimals="4">0</td>
-                            <td class="num stat-number {% if t.profit > 0 %}pos{% elif t.profit < 0 %}neg{% endif %}" data-target="{{ t.profit|default_if_none:0 }}" data-decimals="2">0</td>
-                            <td class="num stat-number {% if t.r_multiple > 0 %}pos{% elif t.r_multiple < 0 %}neg{% endif %}" data-target="{{ t.r_multiple|default_if_none:0 }}" data-decimals="2">0</td>
-                            <td class="num stat-number" data-target="{{ t.holding_candles|default_if_none:0 }}" data-decimals="0">0</td>
-                            <td class="label-cell text-dim">{{ t.exit_reason }}</td>
-                            <td>{% if t.research_verdict %}<span class="badge {{ t.research_verdict|verdict_class }}">{{ t.research_verdict }}</span>{% else %}<span class="badge dim">&mdash;</span>{% endif %}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% if trades|length > 100 %}
-            <div class="chart-caption">Showing first 100 of {{ trades|length }} trades.</div>
-            {% endif %}
-        </div>
-    </div>
-
-</div>
-
-{% include "partials/_footer.html" with label="Executive Dashboard" note=symbol|add:" · backtest cache: 1h" %}
-
+{% include "partials/_footer.html" with label="Quantitative Market Intelligence" note=symbol|add:" · prices live 30 s · universe regimes cached 15 min" %}
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
-{% include "partials/_mkt_card_scripts.html" %}{# claude code changed: 2026-10-22 — same card behaviour as Markets #}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="{% static 'js/chart-theme.js' %}"></script>
-<script src="{% static 'js/counters.js' %}"></script>
-{% if not error %}
 <script>
-    window.equityData = {{ equity_curve|safe }};
-    window.drawdownData = {{ drawdown_curve|safe }};
-
-    var equityChartInstance = null;
-    var drawdownChartInstance = null;
-
-    function renderCharts() {
-        var lineColor = themeColor('--neutral');
-        var ddColor = themeColor('--negative');
-        var blueHex = themeColor('--neutral');
-        var scales = chartCommonScales({ xTitle: 'Trade #' });
-
-        equityChartInstance = destroyChart(equityChartInstance);
-        drawdownChartInstance = destroyChart(drawdownChartInstance);
-
-        var equityCtx = document.getElementById('equityChart');
-        if (equityCtx && window.equityData.length > 0) {
-            equityChartInstance = new Chart(equityCtx, {
-                type: 'line',
-                data: {
-                    labels: window.equityData.map(function (_, i) { return i + 1; }),
-                    datasets: [{
-                        label: 'Cumulative P&L ($)',
-                        data: window.equityData,
-                        borderColor: lineColor,
-                        backgroundColor: chartAreaFill(blueHex),
-                        fill: true,
-                        borderWidth: 1.5,
-                        pointRadius: 0,
-                        tension: 0,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
-                    },
-                    scales: scales
-                }
-            });
-        }
-
-        var drawdownCtx = document.getElementById('drawdownChart');
-        if (drawdownCtx && window.drawdownData.length > 0) {
-            drawdownChartInstance = new Chart(drawdownCtx, {
-                type: 'line',
-                data: {
-                    labels: window.drawdownData.map(function (_, i) { return i + 1; }),
-                    datasets: [{
-                        label: 'Drawdown (%)',
-                        data: window.drawdownData,
-                        borderColor: ddColor,
-                        backgroundColor: chartAreaFill(blueHex),
-                        fill: true,
-                        borderWidth: 1.5,
-                        pointRadius: 0,
-                        tension: 0,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: { titleFont: { size: 10 }, bodyFont: { size: 10 } }
-                    },
-                    scales: scales
-                }
-            });
-        }
+// claude code changed: 2026-10-26 — universe tabs (Crypto / Forex) and relative-value row filters (hide/show only)
+(function () {
+    var tabs = document.querySelectorAll('.hq-tab');
+    function show(u) {
+        tabs.forEach(function (t) { t.setAttribute('aria-selected', t.dataset.universe === u ? 'true' : 'false'); });
+        document.querySelectorAll('[data-universe-panel]').forEach(function (p) { p.hidden = p.dataset.universePanel !== u; });
+        try { localStorage.setItem('hq-universe', u); } catch (e) {}
     }
+    tabs.forEach(function (t) { t.addEventListener('click', function () { show(t.dataset.universe); }); });
+    var saved = null;
+    try { saved = localStorage.getItem('hq-universe'); } catch (e) {}
+    if (saved === 'forex') show('forex');
 
-    document.addEventListener('DOMContentLoaded', function () {
-        renderCharts();
-        onThemeChange(renderCharts);
+    var table = document.getElementById('rv-table');
+    if (!table) return;
+    var side = 'all';
+    var sel = document.getElementById('rv-regime'), ext = document.getElementById('rv-extreme');
+    function apply() {
+        var shown = 0, reg = sel.value, onlyExt = ext.checked;
+        table.querySelectorAll('tr[data-side]').forEach(function (r) {
+            var ok = (side === 'all' || r.dataset.side === side) && (!reg || r.dataset.regime === reg) && (!onlyExt || r.dataset.extreme === '1');
+            r.hidden = !ok; if (ok) shown++;
+        });
+        table.querySelectorAll('tr.hq-sep').forEach(function (r, i) { r.hidden = side !== 'all' && ((i === 0) !== (side === 'pos')); });
+        document.getElementById('rv-empty').hidden = shown > 0;
+    }
+    document.querySelectorAll('[data-rv-side]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            side = b.dataset.rvSide;
+            document.querySelectorAll('[data-rv-side]').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+            apply();
+        });
     });
+    sel.addEventListener('change', apply);
+    ext.addEventListener('change', apply);
+})();
 </script>
-{% endif %}
 {% endblock %}

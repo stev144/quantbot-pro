@@ -75,6 +75,7 @@ def _context(experiment, spec, errors=None):
         "hypothesis_types": HYPOTHESIS_TYPES, "condition_operators": CONDITION_OPERATORS,  # claude code changed: new
         "interpreter_name": INTERPRETER_NAME,
         "horizon_unsupported_notice": horizon_unsupported_notice,  # claude code changed: new — gap #1
+        "backtest_ui_state": ResearchEntitlementService.capability_ui_state(experiment.student, "backtest_validation", asset_class=spec.resolved_asset_class),   # claude code changed: 2026-10-26
         "pairs_capability": pairs_capability, "pairs_ui_state": pairs_ui_state,  # claude code changed: new — Advanced Quant Research Capability Architecture
     }
 
@@ -105,7 +106,7 @@ def _spec_from_post(post_data, hypothesis_text):
     else:
         features = [f for f in [post_data.get("feature_name")] if f]
 
-    risk_tier = "MEDIUM" if hypothesis_type == "pairs" else post_data.get("risk_tier", "LOW")
+    risk_tier = "MEDIUM" if hypothesis_type in ("pairs", "strategy_backtest") else post_data.get("risk_tier", "LOW")   # claude code changed: 2026-10-26 — +strategy_backtest (run_backtest is MEDIUM-only)
 
     return ResearchSpec(
         hypothesis_text=hypothesis_text,

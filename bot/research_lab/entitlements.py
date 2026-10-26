@@ -65,6 +65,16 @@ class ResearchEntitlementService:
         """
         if not getattr(user, "is_authenticated", False):
             return "CORE"  # claude code changed: a real tier value even for an anonymous caller — can_access() below still denies via AUTHENTICATION_REQUIRED before this would ever matter
+        # claude code changed: 2026-10-26 — staff (the owner) always research at PRO; once billing is enforced, a
+        # user in the 30-day free trial or with a paid subscription (bot/billing/) researches at PRO too. With billing
+        # off, nothing changes for anyone else.
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):   # claude code changed: getattr — deep_health_check passes a duck-typed user
+            return "PRO"
+        from django.conf import settings
+        if settings.BILLING_ENFORCED:
+            from bot.billing.access import has_premium_access
+            if has_premium_access(user):
+                return "PRO"
         subscription = getattr(user, "research_subscription", None)
         if subscription is None:
             return "CORE"

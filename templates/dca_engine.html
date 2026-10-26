@@ -220,7 +220,7 @@
 
 
 {# ── per-fold breakdown tables ─────────────────────────────────────────────── #}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+<div class="dca-fold-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">{# claude code changed: 2026-10-26 — class so the phone rule makes it one column #}
     {% for pair_key, pair_label, dot_style in pair_table_items %}
     {% with p=results.pairs|get_item:pair_key %}
     <div class="term-section">

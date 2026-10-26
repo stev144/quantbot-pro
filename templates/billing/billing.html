@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+{# claude code changed: 2026-10-26 — new page: the user's plan (free trial / subscribed / expired) and Stripe buttons #}
+
+{% block title %}Billing — Steph Quant Technologies{% endblock %}
+
+{% block head %}
+<style>
+.bill-wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-4); }
+.bill-card { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+.bill-state { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.bill-plan { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+.bill-badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; font-family: var(--font-mono); }
+.bill-badge.trial { color: var(--accent); border: 1px solid var(--accent); }
+.bill-badge.subscribed { color: var(--positive); border: 1px solid var(--positive); }
+.bill-badge.expired { color: var(--negative); border: 1px solid var(--negative); }
+.bill-rows { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 13px; }
+.bill-rows dt { color: var(--text-dim); }
+.bill-rows dd { margin: 0; color: var(--text-primary); font-family: var(--font-mono); }
+.bill-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.bill-note { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.bill-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; color: var(--text-secondary); }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="billing" %}
+
+<div class="term-body">
+    <div class="term-section">
+        <div class="term-section-head">
+            <span class="term-section-title">Billing</span>
+            <span class="term-section-meta">{{ user.username }}</span>
+        </div>
+        <div class="term-section-body bill-wrap">
+
+            <div class="term-panel bill-card">
+                <div class="bill-state">
+                    {% if user.is_staff or user.is_superuser %}
+                    <span class="bill-plan">Owner account</span>
+                    <span class="bill-badge subscribed">FULL ACCESS</span>
+                    {% elif state == "subscribed" %}
+                    <span class="bill-plan">Pro</span>
+                    <span class="bill-badge subscribed">{{ sub.stripe_status|upper }}</span>
+                    {% elif state == "trial" %}
+                    <span class="bill-plan">Free trial · {{ days_left }} day{{ days_left|pluralize }} left</span>
+                    <span class="bill-badge trial">TRIAL</span>
+                    {% else %}
+                    <span class="bill-plan">Free trial ended</span>
+                    <span class="bill-badge expired">EXPIRED</span>
+                    {% endif %}
+                </div>
+
+                <dl class="bill-rows">
+                    <dt>Trial</dt><dd>{{ sub.trial_started_at|date:"j M Y" }} → {{ sub.trial_ends_at|date:"j M Y, H:i" }}</dd>
+                    {% if sub.stripe_status %}
+                    <dt>Subscription</dt><dd>{{ sub.stripe_status }}{% if sub.cancel_at_period_end %} · cancels at period end{% endif %}</dd>
+                    {% if sub.current_period_end %}
+                    <dt>{% if sub.cancel_at_period_end %}Access until{% else %}Renews{% endif %}</dt><dd>{{ sub.current_period_end|date:"j M Y" }}</dd>
+                    {% endif %}
+                    {% endif %}
+                    {% if price_label %}<dt>Price</dt><dd>{{ price_label }}</dd>{% endif %}
+                </dl>
+
+                {% if not user.is_staff and not user.is_superuser %}
+                <div class="bill-actions">
+                    {% if state == "subscribed" %}
+                    <form method="post" action="{% url 'billing_portal' %}">{% csrf_token %}
+                        <button type="submit" class="term-btn mono">Manage subscription</button>
+                    </form>
+                    {% elif payments_configured %}
+                    <form method="post" action="{% url 'billing_checkout' %}">{% csrf_token %}
+                        <button type="submit" class="term-btn mono">Subscribe{% if price_label %} · {{ price_label }}{% endif %}</button>
+                    </form>
+                    {% if sub.stripe_customer_id %}
+                    <form method="post" action="{% url 'billing_portal' %}">{% csrf_token %}
+                        <button type="submit" class="term-btn mono">Invoices &amp; card</button>
+                    </form>
+                    {% endif %}
+                    {% else %}
+                    <span class="bill-note">Subscriptions open soon. Your free trial keeps full access until then.</span>
+                    {% endif %}
+                </div>
+                {% if state == "trial" and payments_configured %}
+                <div class="bill-note">Subscribing now does not cut your trial short: the first charge happens when the free trial ends ({{ sub.trial_ends_at|date:"j M Y" }}). Payments are handled by Stripe; card details never reach this site. Cancel any time.</div>
+                {% endif %}
+                {% endif %}
+            </div>
+
+            <div class="term-panel bill-card">
+                <span class="term-section-title">What's included</span>
+                <ul class="bill-list">
+                    <li><b>Always free:</b> Markets, Forex dashboard, Academy, the backtest dashboard and the Paper Trader.</li>
+                    <li><b>Trial and Pro:</b> research pages, Forex scanner, Market Intelligence, portfolio risk and execution pages.</li>
+                </ul>
+                <div class="bill-note">Everything here is research and simulated (paper) trading. No strategy on this platform has proven edge, and nothing here is financial advice.</div>
+                {% if not enforced %}<div class="bill-note">Premium pages are currently open to everyone while billing is being set up.</div>{% endif %}
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

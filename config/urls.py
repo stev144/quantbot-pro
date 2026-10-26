@@ -15,6 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django import forms
+from django.conf import settings   # claude code changed: 2026-10-26 — trial length for the welcome message
 from django.contrib import admin, messages
 from django.contrib.auth import views as auth_views, login as auth_login
 from django.contrib.auth.forms import UserCreationForm
@@ -22,6 +23,8 @@ from django.contrib.auth.models import User
 from django.shortcuts import redirect
 from django.urls import path, include, reverse_lazy
 from django.views.generic import CreateView
+
+from bot.billing.access import start_trial   # claude code changed: 2026-10-26
 
 # claude code changed: was decorated with @login_not_required to exempt it
 # from LoginRequiredMiddleware — that middleware has been removed (nothing
@@ -71,10 +74,12 @@ class SignupView(CreateView):
 
     def form_valid(self, form):
         self.object = form.save()
+        start_trial(self.object)   # claude code changed: 2026-10-26 — the 30-day free trial starts at sign-up
         auth_login(self.request, self.object)
         messages.success(
             self.request,
-            f"Welcome, {self.object.username}! Your account has been created.",
+            f"Welcome, {self.object.username}! Your account has been created and your "   # claude code changed: 2026-10-26
+            f"{settings.BILLING_TRIAL_DAYS}-day free trial has started.",   # claude code changed: 2026-10-26
         )
         return redirect(self.get_success_url())
 

@@ -257,7 +257,8 @@ def get_live_quotes(force_refresh: bool = False) -> dict:  # claude code changed
                 continue
             out["crypto"][sym] = {"price": price, "change_pct": float(t["priceChangePercent"]),
                                   "as_of": pd.Timestamp(int(t["closeTime"]), unit="ms", tz="UTC").isoformat(),
-                                  "source": "BINANCE_LIVE"}
+                                  "source": "BINANCE_LIVE",
+                                  "quote_volume": float(t.get("quoteVolume") or 0)}   # claude code changed: 2026-10-26 — 24 h USDT volume, home page research watchlist
         except (KeyError, TypeError, ValueError):
             continue
     halted = sorted(s for s, v in out["crypto"].items()

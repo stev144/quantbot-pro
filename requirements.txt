@@ -35,6 +35,7 @@ setuptools==82.0.1
 six==1.17.0
 sqlparse==0.5.5
 statsmodels==0.14.6
+stripe==16.0.0  # claude code changed: 2026-10-26 — Stripe subscriptions (bot/billing/)
 typing_extensions==4.15.0
 tzdata==2026.1
 urllib3==2.6.3

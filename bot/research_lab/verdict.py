@@ -346,3 +346,51 @@ def compute_verdict_regime_conditional(regime_conditional_status: Optional[Dict]
     # REGIME_DEPENDENT, and (see docstring above) anything stronger that
     # might reach this function before the OOS/permutation stages exist.
     return VerdictResult("REGIME_DEPENDENT", inner_explanation)
+
+
+# claude code changed: 2026-10-26 — Backtest Validation capability. Below 30 closed trades a mean-R test says nothing.
+MIN_BACKTEST_TRADES = 30
+
+
+def compute_verdict_backtest(backtest: Optional[Dict]) -> VerdictResult:
+    """
+    claude code changed: 2026-10-26 — new. Deterministic verdict for a STRATEGY_BACKTEST hypothesis ("the platform's
+    strategy has positive net expectancy on this asset"), from run_backtest()'s evidence shape only.
+
+    A positive result needs ALL of: mean net R > 0, one-sided t-test p < ALPHA, and the bootstrap 95% CI of mean net R
+    entirely above 0. Even then it is capped at the D-7 ladder's OBSERVATION level and says why: it is one in-sample
+    run over the whole history (no holdout), the t-test treats trades as independent (dependence_aware_test=False),
+    and nothing corrects for having tried other assets or strategies first.
+    """
+    if backtest is None:
+        return VerdictResult("REQUIRES_REVIEW", ["hypothesis_type is 'strategy_backtest' but no backtest was executed — the requested question was not actually tested"])
+    if backtest.get("metric") != "strategy_backtest":
+        return VerdictResult("REQUIRES_REVIEW", ["evidence shape does not match a strategy backtest — the hypothesis was not actually tested"])
+
+    n = backtest.get("n_trades_with_net_r") or 0
+    if n < MIN_BACKTEST_TRADES:
+        return VerdictResult("INSUFFICIENT_DATA", [f"{n} closed trades — below the {MIN_BACKTEST_TRADES}-trade floor for testing mean net R"])
+
+    mean_r = backtest.get("mean_net_r")
+    p = backtest.get("p_value_one_sided")
+    ci = backtest.get("bootstrap_ci95_mean_net_r") or [None, None]
+    if mean_r is None or p is None or ci[0] is None:
+        return VerdictResult("INVALID_RESEARCH", ["the backtest produced no usable net-R statistics"])
+
+    explanation = [f"{n} trades, mean net R={mean_r:+.3f} (after fees and slippage), one-sided t-test p={p:.4f} "
+                   f"(alpha={ALPHA}), bootstrap 95% CI [{ci[0]:+.3f}, {ci[1]:+.3f}]"]
+    if mean_r <= 0:
+        explanation.append("the strategy loses money per trade after costs on this asset")
+        return VerdictResult("REJECTED", explanation)
+    if p >= ALPHA:
+        explanation.append("positive on average, but not distinguishable from zero")
+        return VerdictResult("INCONCLUSIVE", explanation)
+    if ci[0] <= 0:
+        explanation.append("the t-test clears alpha but the bootstrap CI still includes zero — the two tests disagree")
+        return VerdictResult("INCONCLUSIVE", explanation)
+
+    lag1 = backtest.get("lag1_autocorrelation")
+    explanation.append("in-sample only: one run over the whole history, with no holdout and no walk-forward")
+    explanation.append("the t-test treats trades as independent" + (f" (lag-1 autocorrelation of trade results {lag1:+.3f})" if lag1 is not None else ""))
+    explanation.append("no correction for other assets or strategies tried before this one")
+    return _ladder(explanation, effect_observed=True, dependence_aware_test=False, net_positive_after_costs=True)

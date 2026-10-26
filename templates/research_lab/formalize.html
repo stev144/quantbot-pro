@@ -33,7 +33,7 @@
                 <label class="mono" style="display:block; margin-bottom:6px">Hypothesis type</label>
                 <div style="margin-bottom:16px">
                     <label class="mono" style="margin-right:16px">
-                        <input type="radio" name="hypothesis_type" value="feature" id="type-feature" {% if spec.hypothesis_type == "pairs" or spec.hypothesis_type == "conditional" %}{% else %}checked{% endif %}> Feature-based (continuous relationship)
+                        <input type="radio" name="hypothesis_type" value="feature" id="type-feature" {% if spec.hypothesis_type == "pairs" or spec.hypothesis_type == "conditional" or spec.hypothesis_type == "strategy_backtest" %}{% else %}checked{% endif %}> Feature-based (continuous relationship)
                     </label>
                     <label class="mono" style="margin-right:16px">
                         <input type="radio" name="hypothesis_type" value="conditional" id="type-conditional" {% if spec.hypothesis_type == "conditional" %}checked{% endif %}> Conditional (event — "WHEN X, THEN Y")
@@ -46,6 +46,15 @@
                         {% if pairs_ui_state.badge == "LOCKED" %}<span style="color:var(--verdict-warning)">Pro Research — {{ pairs_ui_state.message }}</span>
                         {% elif pairs_ui_state.badge == "COMING_SOON" %}<span style="color:var(--verdict-warning)">Coming soon</span>
                         {% elif pairs_ui_state.badge == "UNAVAILABLE" %}<span style="color:var(--verdict-warning)">{{ pairs_ui_state.message }}</span>
+                        {% endif %}
+                    </label>
+                    {# claude code changed: 2026-10-26 — Backtest Validation; same "visible but locked" pattern as pairs above #}
+                    <label class="mono" style="display:block; margin-top:8px">
+                        <input type="radio" name="hypothesis_type" value="strategy_backtest" id="type-backtest" {% if spec.hypothesis_type == "strategy_backtest" %}checked{% endif %} {% if backtest_ui_state.badge != "AVAILABLE" %}disabled{% endif %}>
+                        Strategy backtest (does the platform's strategy make money on this asset after costs?)
+                        {% if backtest_ui_state.badge == "LOCKED" %}<span style="color:var(--verdict-warning)">Pro Research — {{ backtest_ui_state.message }}</span>
+                        {% elif backtest_ui_state.badge == "COMING_SOON" %}<span style="color:var(--verdict-warning)">Coming soon</span>
+                        {% elif backtest_ui_state.badge == "UNAVAILABLE" %}<span style="color:var(--verdict-warning)">{{ backtest_ui_state.message }}</span>
                         {% endif %}
                     </label>
                 </div>
@@ -70,7 +79,7 @@
                     {% endfor %}
                 </select>
 
-                <div id="feature-block" style="{% if spec.hypothesis_type == 'conditional' or spec.hypothesis_type == 'pairs' %}display:none{% endif %}">
+                <div id="feature-block" style="{% if spec.hypothesis_type == 'conditional' or spec.hypothesis_type == 'pairs' or spec.hypothesis_type == 'strategy_backtest' %}display:none{% endif %}">
                     <label class="mono" style="display:block; margin-bottom:6px">Feature to test {% if not spec.features %}<span style="color:var(--verdict-warning)">— not detected, please choose</span>{% endif %}</label>
                     <select name="feature_name" class="term-input mono" style="margin-bottom:16px">
                         <option value="">—</option>
@@ -119,7 +128,7 @@
                 </div>
 
                 {# claude code changed: new — Advanced Quant Research Capability Architecture. Direction and forward horizon are meaningless for a pairs hypothesis (cointegration tests spread stationarity, not a directional forward-return IC) — see spec.py's validate_spec(), which does not require target.horizon when hypothesis_type=="pairs". #}
-                <div id="direction-horizon-block" style="{% if spec.hypothesis_type == 'pairs' %}display:none{% endif %}">
+                <div id="direction-horizon-block" style="{% if spec.hypothesis_type == 'pairs' or spec.hypothesis_type == 'strategy_backtest' %}display:none{% endif %}">
                 <label class="mono" style="display:block; margin-bottom:6px">Expected direction {% if not spec.direction %}<span style="color:var(--verdict-warning)">— not detected</span>{% endif %}</label>
                 <select name="direction" class="term-input mono" style="margin-bottom:16px">
                     <option value="">—</option>
@@ -173,17 +182,20 @@
     var pairsBlock = document.getElementById('pairs-block');
     var directionHorizonBlock = document.getElementById('direction-horizon-block');
     var typePairs = document.getElementById('type-pairs');
+    var typeBacktest = document.getElementById('type-backtest');   // claude code changed: 2026-10-26
     function sync() {
         var conditional = document.getElementById('type-conditional').checked;
         var pairs = typePairs.checked;
-        featureBlock.style.display = (conditional || pairs) ? 'none' : '';
+        var backtest = typeBacktest.checked;   // claude code changed: 2026-10-26 — no feature, condition, direction or horizon
+        featureBlock.style.display = (conditional || pairs || backtest) ? 'none' : '';
         conditionBlock.style.display = conditional ? '' : 'none';
         pairsBlock.style.display = pairs ? '' : 'none';
-        directionHorizonBlock.style.display = pairs ? 'none' : '';
+        directionHorizonBlock.style.display = (pairs || backtest) ? 'none' : '';
     }
     document.getElementById('type-feature').addEventListener('change', sync);
     document.getElementById('type-conditional').addEventListener('change', sync);
     typePairs.addEventListener('change', sync);
+    typeBacktest.addEventListener('change', sync);   // claude code changed: 2026-10-26
 })();
 </script>
 {% endblock %}

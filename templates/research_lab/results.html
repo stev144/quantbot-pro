@@ -18,14 +18,21 @@
         <div class="term-section-body">
             <div class="chart-caption mono" style="margin-bottom:18px">"{{ experiment.hypothesis_text }}"</div>
 
-            {% if experiment.status != "COMPLETED" %}
+            {% if experiment.status == "PLANNED" or experiment.status == "RUNNING" %}
+            {# claude code changed: 2026-10-26 — runs execute in the background; this page reloads itself until the run is terminal #}
+            <div class="term-message mono">Running{% if experiment.started_at %} since {{ experiment.started_at|time:"H:i" }}{% endif %}. A strategy backtest can take several minutes — this page refreshes itself every 10 seconds, and you can leave and come back from History.</div>
+            <script>setTimeout(function () { location.reload(); }, 10000);</script>
+            {% elif experiment.status != "COMPLETED" %}
             <div class="term-message mono">This experiment is {{ experiment.status }}. {{ experiment.error_message }}</div>
             {% else %}
 
             <div class="chart-caption mono" style="margin-bottom:8px">Dataset &amp; Signal</div>
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Asset</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset }}</span></div>
-                {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
+                {% if experiment.research_plan.spec.hypothesis_type == "strategy_backtest" %}
+                {# claude code changed: 2026-10-26 — Backtest Validation has no horizon either: show the data window #}
+                <div class="term-stat"><span class="term-stat-label">Window</span><span class="term-stat-value mono">{{ experiment.statistical_results.data_start|slice:":10" }} → {{ experiment.statistical_results.data_end|slice:":10" }}</span></div>
+                {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
                 {# claude code changed: new — Advanced Quant Research Capability Architecture. Pairs research has no forward-return horizon (see spec.py's validate_spec()) — showing "Asset B" here instead of a blank/meaningless Horizon stat. #}
                 <div class="term-stat"><span class="term-stat-label">Asset B</span><span class="term-stat-value mono">{{ experiment.research_plan.spec.asset_b }}</span></div>
                 {% else %}
@@ -86,6 +93,26 @@
             <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.reject_reason }}</div>
             {% endif %}
             <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.fdr_note }}</div>
+            {% elif experiment.statistical_results.metric == "strategy_backtest" %}
+            {# claude code changed: 2026-10-26 — Backtest Validation evidence (run_backtest, research mode). Red = loss / worse, green = profit / better. #}
+            {% with r=experiment.statistical_results %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Trades</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ r.n_trades_with_net_r|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean net R / trade</span><span class="term-stat-value mono" style="color:{% if r.mean_net_r > 0 %}var(--positive){% else %}var(--negative){% endif %}"><span class="stat-number" data-target="{{ r.mean_net_r|default_if_none:0 }}" data-decimals="3">0</span>R</span></div>
+                <div class="term-stat"><span class="term-stat-label">One-sided p (mean &gt; 0)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ r.p_value_one_sided|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Bootstrap 95% CI</span><span class="term-stat-value mono">{% if r.bootstrap_ci95_mean_net_r %}{{ r.bootstrap_ci95_mean_net_r.0|floatformat:3 }}R to {{ r.bootstrap_ci95_mean_net_r.1|floatformat:3 }}R{% else %}not computed{% endif %}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Win rate</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ r.win_rate|default_if_none:0 }}" data-decimals="1">0</span>%</span></div>
+                <div class="term-stat"><span class="term-stat-label">Profit factor</span><span class="term-stat-value mono" style="color:{% if r.profit_factor > 1 %}var(--positive){% else %}var(--negative){% endif %}"><span class="stat-number" data-target="{{ r.profit_factor|default_if_none:0 }}" data-decimals="2">0</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Balance</span><span class="term-stat-value mono" style="color:{% if r.final_balance >= r.initial_balance %}var(--positive){% else %}var(--negative){% endif %}">${{ r.initial_balance|floatformat:"2g" }} → ${{ r.final_balance|floatformat:"2g" }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Max drawdown</span><span class="term-stat-value mono" style="color:var(--negative)">−${{ r.max_drawdown_usd|floatformat:"2g" }} (−{{ r.max_drawdown|floatformat:2 }}%)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Lag-1 autocorr.</span><span class="term-stat-value mono">{% if r.lag1_autocorrelation is not None %}{{ r.lag1_autocorrelation|floatformat:3 }}{% else %}n/a{% endif %}</span></div>
+            </div>
+            <div class="chart-caption mono" style="margin-bottom:18px">Research mode: every strategy the router can fire is allowed, including ones not yet validated. Costs: the venue's fees and slippage on every fill. One run over the whole history — no holdout.</div>
+            {% endwith %}
             {% elif experiment.statistical_results %}
             <div class="term-stat-row" style="margin-bottom:18px">
                 <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.ic|default_if_none:0 }}" data-decimals="4">0</span></span></div>

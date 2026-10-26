@@ -87,48 +87,56 @@
 }
 .mkt-tab.active .mkt-tab-count { background: rgba(255,255,255,0.25); }
 
+/* claude code changed: 2026-10-26 — owner request: the Paper Trader card and the Watchlist row (first built phone-only on
+   2026-10-25) now show on laptops too; the phone keeps its tighter spacing below. */
+.mkt-paper { display: block; padding: var(--sp-4) var(--sp-5) 0; max-width: 640px; }
+.mkt-paper-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+                  font-size: 18px; font-weight: 700; color: var(--text-primary); }
+.mkt-paper-open { padding: 6px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border-strong);
+                  color: var(--text-primary) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
+.mkt-paper-card { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 16px;
+                  background: var(--bg-1); border: 1px solid var(--border); text-decoration: none; color: inherit; }
+.mkt-paper-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 48px; height: 48px;
+                  border-radius: 50%; color: var(--accent); background: var(--bg-2);
+                  border: 2px solid var(--border-strong); }   /* plain disc: no ring that would read as a progress value */
+.mkt-paper-icon svg { width: 20px; height: 20px; }
+.mkt-paper-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.mkt-paper-label { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.mkt-paper-value { font-family: var(--font-mono); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mkt-paper-value.pos { color: var(--positive); }
+.mkt-paper-value.neg { color: var(--negative); }
+.mkt-paper-sub { font-size: 12px; color: var(--text-dim); line-height: 1.4; }
+.mkt-paper-chev { font-size: 24px; color: var(--text-secondary); flex-shrink: 0; }
+.mkt-rail-section { display: block; }
+.mkt-rail-section:not(:has(.mkt-card)) { display: none; }
+.mkt-sec-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: var(--sp-4) var(--sp-5) 10px;
+    font-size: 18px; font-weight: 700; letter-spacing: 0;
+    color: var(--text-primary) !important; text-decoration: none;   /* the theme's link colour must not tint the heading */
+}
+.mkt-sec-head span { color: var(--text-secondary); font-size: 22px; line-height: 1; margin-left: auto; }
+.mkt-rail {
+    display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory;
+    padding: 0 var(--sp-5) 6px; scrollbar-width: thin;
+}
+.mkt-rail .mkt-card { flex: 0 0 260px; scroll-snap-align: start; }
+.mkt-phone-only { display: none; }   /* after .mkt-sec-head: the phone's "All markets" heading stays phone-only */
+/* claude code changed: 2026-10-26 — while a search is active the results come first: no Paper Trader card or Watchlist row */
+.mkt-searching .mkt-paper, .mkt-searching .mkt-rail-section { display: none !important; }
+
 /* claude code changed: 2026-10-25 — owner request, PHONE ONLY (≤860px): the layout of the owner's reference screenshot —
    section headings with ›, a sideways-scrolling Watchlist row, a segmented Crypto | Forex switch, and compact cards
    (symbol + logo, name, wide chart, price, change). The search lives in the app bar (partials/_topbar.html). */
-.mkt-rail-section, .mkt-phone-only, .mkt-paper { display: none; }
 @media (max-width: 860px) {
-    /* claude code changed: 2026-10-25 — Paper Trader card (the reference screenshot's account card position) */
-    .mkt-paper { display: block; padding: 18px 16px 4px; }
-    .mkt-paper-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
-                      font-size: 18px; font-weight: 700; color: var(--text-primary); }
-    .mkt-paper-open { padding: 6px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border-strong);
-                      color: var(--text-primary) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
-    .mkt-paper-card { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 16px;
-                      background: var(--bg-1); border: 1px solid var(--border); text-decoration: none; color: inherit; }
-    .mkt-paper-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 48px; height: 48px;
-                      border-radius: 50%; color: var(--accent); background: var(--bg-2);
-                      border: 2px solid var(--border-strong); }   /* plain disc: no ring that would read as a progress value */
-    .mkt-paper-icon svg { width: 20px; height: 20px; }
-    .mkt-paper-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-    .mkt-paper-label { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-    .mkt-paper-value { font-family: var(--font-mono); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .mkt-paper-value.pos { color: var(--positive); }
-    .mkt-paper-value.neg { color: var(--negative); }
-    .mkt-paper-sub { font-size: 12px; color: var(--text-dim); line-height: 1.4; }
-    .mkt-paper-chev { font-size: 24px; color: var(--text-secondary); flex-shrink: 0; }
+    .mkt-paper { padding: 18px 16px 4px; max-width: none; }   /* claude code changed: 2026-10-26 — phone spacing only */
     .mkt-page { gap: 0; padding-left: 0; padding-right: 0; }
     .mkt-page .mkt-header { display: none; }
     .mkt-phone-only { display: flex; }
-    .mkt-rail-section { display: block; }
-    .mkt-rail-section:not(:has(.mkt-card)) { display: none; }
-    .mkt-sec-head {
-        display: flex; align-items: center; gap: 6px;
-        padding: 20px 16px 10px;
-        font-size: 18px; font-weight: 700; letter-spacing: 0;
-        color: var(--text-primary) !important; text-decoration: none;   /* the theme's link colour must not tint the heading */
-    }
-    .mkt-sec-head span { color: var(--text-secondary); font-size: 22px; line-height: 1; margin-left: auto; }
-    .mkt-rail {
-        display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory;
-        padding: 0 16px 6px; scrollbar-width: none;
-    }
+    .mkt-sec-head { padding: 20px 16px 10px; }   /* claude code changed: 2026-10-26 — base styles moved above; phone spacing only */
+    .mkt-rail { padding: 0 16px 6px; scrollbar-width: none; }
     .mkt-rail::-webkit-scrollbar { display: none; }
-    .mkt-rail .mkt-card { flex: 0 0 44%; scroll-snap-align: start; }
+    .mkt-rail .mkt-card { flex: 0 0 44%; }
 
     /* segmented switch */
     .mkt-tabs { gap: 6px; padding: 0 16px 14px; }
@@ -171,9 +179,9 @@
 
 <div class="term-body mkt-page" style="padding-top:0">{# claude code changed: 2026-10-25 — mkt-page: phone-only compact layout hook #}
 
-    {# claude code changed: 2026-10-25 — owner request (phone only): a "Watchlist ›" row of cards scrolling sideways, as in #}
-    {# the owner's reference screenshot. Hidden on laptops and when nothing is watchlisted (CSS :has). #}
-    {# claude code changed: 2026-10-25 — owner request (phone only): a Paper Trader card at the top, where the reference #}
+    {# claude code changed: 2026-10-25 — owner request: a "Watchlist ›" row of cards scrolling sideways, as in #}
+    {# the owner's reference screenshot. Hidden when nothing is watchlisted (CSS :has). 2026-10-26: on laptops too. #}
+    {# claude code changed: 2026-10-25 — owner request: a Paper Trader card at the top (2026-10-26: phones and laptops), where the reference #}
     {# screenshot has its account card. Figures are the Paper Trader's last cached historical replay (paper only, no money); #}
     {# when it has not run yet the card just invites a run — the Markets page never starts the simulation itself (up to a minute). #}
     <section class="mkt-paper" aria-label="Paper Trader">
@@ -235,6 +243,8 @@
         <button class="mkt-tab" disabled title="No data source configured">Indices</button>
         <button class="mkt-tab" disabled title="No data source configured">Commodities</button>
     </div>
+
+    <div id="mkt-no-match" class="mkt-unavailable" hidden></div>{# claude code changed: 2026-10-26 — shown when a search matches nothing #}
 
     <!-- ── Crypto panel ── -->
     <div id="tab-crypto" role="tabpanel">
@@ -300,7 +310,7 @@ document.querySelectorAll('.mkt-tab[data-tab]').forEach(function(btn) {
     var bar = document.getElementById('appbar-search');
     var box = document.getElementById('mkt-search');
     if (!bar) return;
-    bar.form.addEventListener('submit', function (e) { e.preventDefault(); });
+    bar.form.addEventListener('submit', function (e) { e.preventDefault(); mktOpenSingleMatch(bar.value); });   // claude code changed: 2026-10-26 — Enter opens a single match
     bar.addEventListener('input', function () { if (box) box.value = this.value; filterCards(this.value); });
     if (bar.value) document.addEventListener('DOMContentLoaded', function () { if (box) box.value = bar.value; filterCards(bar.value); });
 })();

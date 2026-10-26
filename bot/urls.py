@@ -1,7 +1,7 @@
 from django.urls import path, include
 
 from bot.views.dashboard import (
-    dashboard, live_data, portfolio_backtest_view, live_regime_monitor, walk_forward_view,
+    dashboard, backtest_detail, live_data, portfolio_backtest_view, live_regime_monitor, walk_forward_view,   # claude code changed: 2026-10-26 — + backtest_detail
 )
 from bot.views.forex_dashboard import forex_dashboard   # claude code changed: new — Forex Research Dashboard mission
 from bot.views.market_intelligence import market_intelligence
@@ -40,6 +40,7 @@ from bot.views.system_health import system_health
 urlpatterns = [
     # ---- EXECUTIVE ----
     path('', dashboard, name='dashboard'),
+    path('backtest/', backtest_detail, name='backtest_detail'),   # claude code changed: 2026-10-26 — moved off the home page
 
     # ---- MARKETS (discovery screen) ----   # claude code changed: new
     path('markets/', markets, name='markets'),
@@ -74,6 +75,7 @@ urlpatterns = [
     # Keeps this file's flat route list from doubling in size as the
     # curriculum grows past its first course.
     path('academy/', include('bot.academy.urls')),
+    path('account/', include('bot.billing.urls')),   # claude code changed: 2026-10-26 — Billing page, Stripe Checkout/Portal/webhook
 
     # ---- RESEARCH LAB (MVP) ----
     # claude code changed: new — same one-include-line pattern as Academy

@@ -10,3 +10,4 @@ from django.contrib import admin
 # for why this matters for manage.py makemigrations, not just the admin UI.
 from bot.academy import admin as academy_admin  # noqa: F401
 from bot.research_lab import admin as research_lab_admin  # noqa: F401  # claude code changed: new — same discovery mechanism, Research Lab models
+from bot.billing import admin as billing_admin  # noqa: F401  # claude code changed: 2026-10-26 — same discovery mechanism, billing model

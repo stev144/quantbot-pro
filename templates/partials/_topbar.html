@@ -103,6 +103,7 @@
         <div class="term-nav-sheet-account">
             {% if user.is_authenticated %}
             <span class="term-nav-sheet-user">Signed in as <b>{{ user.username }}</b></span>
+            <a href="{% url 'billing' %}" class="term-btn mono">{{ billing_nav_label|default:"Billing" }}</a>{# claude code changed: 2026-10-26 — plan / trial days left #}
             <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="term-btn mono">Logout</button></form>
             {% else %}
             <a href="{% url 'login' %}" class="term-btn mono">Sign In</a>
@@ -245,6 +246,7 @@
         {# a GET request shouldn't have side effects). #}
         {% if user.is_authenticated %}
         <span class="term-topbar-user mono">{{ user.username }}</span>
+        <a href="{% url 'billing' %}" class="term-btn mono">{{ billing_nav_label|default:"Billing" }}</a>{# claude code changed: 2026-10-26 — plan / trial days left #}
         <form method="post" action="{% url 'logout' %}" class="term-symbol-form">
             {% csrf_token %}
             <button type="submit" class="term-btn mono">Logout</button>
