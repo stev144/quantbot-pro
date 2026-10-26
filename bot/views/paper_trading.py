@@ -21,6 +21,25 @@ _CACHE_KEY = "paper_trading_results_v5"  # claude code changed: v5 — ranging g
 _CACHE_TTL = 3600
 
 
+def cached_paper_summary():  # claude code changed: 2026-10-25 — summary card for the Markets page (phone)
+    """Totals of the Paper Trader's last cached run, or None when it has not run in this server process.
+    Reads the cache only — never starts the simulation (up to a minute), so the Markets page stays fast."""
+    results = cache.get(_CACHE_KEY)
+    if not results:
+        return None
+    ok = [r for r in results.values() if "error" not in r]
+    if not ok:
+        return None
+    return {
+        "net_pnl":     round(sum(r["stats"]["total_pnl"] for r in ok), 2),
+        "net_pnl_abs": abs(round(sum(r["stats"]["total_pnl"] for r in ok), 2)),   # the template shows the sign itself
+        "trades":      sum(r["stats"]["total_trades"] for r in ok),
+        "pairs":       len(ok),
+        "open_cycles": sum(1 for r in ok if r.get("open_position")),
+        "open_pnl":    round(sum(r["open_position"]["profit_usdt"] for r in ok if r.get("open_position")), 2),
+    }
+
+
 def paper_trading(request):  # claude code changed: new — ranging paper trader view
     error   = None
     results = cache.get(_CACHE_KEY)

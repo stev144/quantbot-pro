@@ -25,9 +25,12 @@ def markets(request):  # claude code changed: new
             if q.get("available"):
                 q["in_watchlist"] = q["symbol"] in watchlisted
 
+    from bot.views.paper_trading import cached_paper_summary   # claude code changed: 2026-10-25 — Paper Trader card (cache only)
+
     return render(request, "markets.html", {
         **data,
         "active": "markets",
+        "paper": cached_paper_summary(),   # claude code changed: 2026-10-25 — None until the Paper Trader has run
     })
 
 

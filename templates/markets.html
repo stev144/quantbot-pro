@@ -90,8 +90,27 @@
 /* claude code changed: 2026-10-25 — owner request, PHONE ONLY (≤860px): the layout of the owner's reference screenshot —
    section headings with ›, a sideways-scrolling Watchlist row, a segmented Crypto | Forex switch, and compact cards
    (symbol + logo, name, wide chart, price, change). The search lives in the app bar (partials/_topbar.html). */
-.mkt-rail-section, .mkt-phone-only { display: none; }
+.mkt-rail-section, .mkt-phone-only, .mkt-paper { display: none; }
 @media (max-width: 860px) {
+    /* claude code changed: 2026-10-25 — Paper Trader card (the reference screenshot's account card position) */
+    .mkt-paper { display: block; padding: 18px 16px 4px; }
+    .mkt-paper-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+                      font-size: 18px; font-weight: 700; color: var(--text-primary); }
+    .mkt-paper-open { padding: 6px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border-strong);
+                      color: var(--text-primary) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
+    .mkt-paper-card { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 16px;
+                      background: var(--bg-1); border: 1px solid var(--border); text-decoration: none; color: inherit; }
+    .mkt-paper-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 48px; height: 48px;
+                      border-radius: 50%; color: var(--accent); background: var(--bg-2);
+                      border: 2px solid var(--border-strong); }   /* plain disc: no ring that would read as a progress value */
+    .mkt-paper-icon svg { width: 20px; height: 20px; }
+    .mkt-paper-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+    .mkt-paper-label { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+    .mkt-paper-value { font-family: var(--font-mono); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .mkt-paper-value.pos { color: var(--positive); }
+    .mkt-paper-value.neg { color: var(--negative); }
+    .mkt-paper-sub { font-size: 12px; color: var(--text-dim); line-height: 1.4; }
+    .mkt-paper-chev { font-size: 24px; color: var(--text-secondary); flex-shrink: 0; }
     .mkt-page { gap: 0; padding-left: 0; padding-right: 0; }
     .mkt-page .mkt-header { display: none; }
     .mkt-phone-only { display: flex; }
@@ -154,6 +173,32 @@
 
     {# claude code changed: 2026-10-25 — owner request (phone only): a "Watchlist ›" row of cards scrolling sideways, as in #}
     {# the owner's reference screenshot. Hidden on laptops and when nothing is watchlisted (CSS :has). #}
+    {# claude code changed: 2026-10-25 — owner request (phone only): a Paper Trader card at the top, where the reference #}
+    {# screenshot has its account card. Figures are the Paper Trader's last cached historical replay (paper only, no money); #}
+    {# when it has not run yet the card just invites a run — the Markets page never starts the simulation itself (up to a minute). #}
+    <section class="mkt-paper" aria-label="Paper Trader">
+        <div class="mkt-paper-head">
+            <span>Paper Trader</span>
+            <a class="mkt-paper-open" href="{% url 'paper_trading' %}" data-slow-nav="Running the paper-trading simulation — the first load can take up to a minute. This page is not frozen.">Open</a>
+        </div>
+        <a class="mkt-paper-card" href="{% url 'paper_trading' %}" data-slow-nav="Running the paper-trading simulation — the first load can take up to a minute. This page is not frozen.">
+            <span class="mkt-paper-icon" aria-hidden="true">
+                <svg viewBox="0 0 20 20" fill="currentColor"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/></svg>
+            </span>
+            <span class="mkt-paper-body">
+                {% if paper %}
+                <span class="mkt-paper-label">Simulated net P&amp;L</span>
+                <span class="mkt-paper-value {% if paper.net_pnl >= 0 %}pos{% else %}neg{% endif %}">{% if paper.net_pnl >= 0 %}+{% else %}−{% endif %}${{ paper.net_pnl_abs|floatformat:"2g" }}</span>
+                <span class="mkt-paper-sub">{{ paper.trades }} trades · {{ paper.pairs }} pair{{ paper.pairs|pluralize }} · {{ paper.open_cycles }} open cycle{{ paper.open_cycles|pluralize }} · historical replay, not a live account</span>
+                {% else %}
+                <span class="mkt-paper-label">Test before you trade</span>
+                <span class="mkt-paper-sub">Replay the DCA strategy on historical prices with paper money. Tap to run it (up to a minute).</span>
+                {% endif %}
+            </span>
+            <span class="mkt-paper-chev" aria-hidden="true">›</span>
+        </a>
+    </section>
+
     {% if user.is_authenticated %}
     <section class="mkt-rail-section" aria-label="Your watchlist">
         <a class="mkt-sec-head" href="{% url 'watchlist' %}">Watchlist <span aria-hidden="true">›</span></a>
