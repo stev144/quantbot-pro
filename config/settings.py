@@ -140,8 +140,8 @@ EXPLAINER_AI_MODEL = config("EXPLAINER_AI_MODEL", default="claude-haiku-5-5")   
 # the subtle-statistics questions; ~22x Haiku's cost per answer)
 EXPLAINER_AI_MODEL_RESEARCH = config("EXPLAINER_AI_MODEL_RESEARCH", default="claude-sonnet-5-5")
 EXPLAINER_MAX_QUESTION_CHARS = config("EXPLAINER_MAX_QUESTION_CHARS", default=500, cast=int)
-EXPLAINER_MAX_OUTPUT_TOKENS = config("EXPLAINER_MAX_OUTPUT_TOKENS", default=2000, cast=int)   # includes thinking tokens
-EXPLAINER_TIMEOUT_SECONDS = config("EXPLAINER_TIMEOUT_SECONDS", default=30.0, cast=float)
+EXPLAINER_MAX_OUTPUT_TOKENS = config("EXPLAINER_MAX_OUTPUT_TOKENS", default=4000, cast=int)   # includes thinking tokens  # claude code changed: 2026-10-27 — was 2000; explainer-v2 answers (key words + everyday example) reached it (adf_test/build cut off at exactly 2000)
+EXPLAINER_TIMEOUT_SECONDS = config("EXPLAINER_TIMEOUT_SECONDS", default=60.0, cast=float)   # claude code changed: 2026-10-27 — was 30; a longer answer takes longer to generate
 EXPLAINER_USER_PER_MINUTE = config("EXPLAINER_USER_PER_MINUTE", default=3, cast=int)
 EXPLAINER_USER_PER_DAY = config("EXPLAINER_USER_PER_DAY", default=15, cast=int)
 EXPLAINER_GLOBAL_PER_DAY = config("EXPLAINER_GLOBAL_PER_DAY", default=100, cast=int)

@@ -104,9 +104,56 @@ class MetricsCellTest(SimpleTestCase):
              "rvol_note": "n/a: mixed broker feed", "half_life": {"text": "none", "title": "no evidence"},
              "spread_bps": 1.9, "spread_pct_of_day": 5.1}
         html = render_to_string("partials/_hq_metrics_cell.html", {"m": m})
-        for text in ("VOL 7D <b>12.4%", "0.92 normal", "HALF-LIFE <b>none", "RVOL <b>n/a", "n/a: mixed broker feed",
-                     "1.9 bp · 5.1% of 1-day σ"):
+        for text in ("VOL 7D <b>12.4%", '0.92 <i class="hq-st">normal</i>', "HALF-LIFE <b>none", "RVOL <b>n/a",
+                     "n/a: mixed broker feed", "1.9 bp · 5.1% of 1-day σ"):   # claude code changed: 2026-10-27 — state word in its own span
             self.assertIn(text, html)
 
     def test_missing_metrics_say_computing(self):
         self.assertIn("computing", render_to_string("partials/_hq_metrics_cell.html", {"m": None}))
+
+
+class SharedMetricsTest(SimpleTestCase):   # claude code changed: 2026-10-27 — home + Markets use the same helper
+    SNAP = {"available": True,
+            "metrics": {"BTC_USDT": {"vol_7d_pct": 30.0, "bars_per_year": 8760, "half_life": {"text": "none", "title": ""}}},
+            "fx_metrics": {"EUR_USD": {"vol_7d_pct": 6.0, "bars_per_year": 6240, "pair": "EUR/USD",
+                                       "half_life": {"text": "none", "title": ""}}}}
+    LIVE = {"crypto": {"BTC_USDT": {"bid": "99.99", "ask": "100.01"}},
+            "forex": {"EUR_USD": {"bid": 1.1000, "ask": 1.1002, "change_pct": 0.2},
+                      "GBP_USD": {"bid": 1.3, "ask": 1.3002, "change_pct": -0.1},
+                      "USD_JPY": {"bid": 150.0, "ask": 150.02, "change_pct": 0.05}}}
+
+    def test_quote_metrics_adds_the_live_spread(self):
+        from bot.views.home_intelligence import quote_metrics
+        m = quote_metrics("BTC_USDT", "crypto", self.SNAP, self.LIVE)
+        self.assertAlmostEqual(m["spread_bps"], 2.0)
+        self.assertEqual(quote_metrics("EUR_USD", "forex", self.SNAP, self.LIVE)["pair"], "EUR/USD")
+        self.assertIsNone(quote_metrics("ETH_USDT", "crypto", self.SNAP, self.LIVE))           # not computed yet
+        self.assertIsNone(quote_metrics("BTC_USDT", "crypto", {"available": False}, self.LIVE))
+
+    def test_forex_pairs_section_ranks_real_pairs(self):
+        from bot.research.cross_section_engine import MIN_ASSETS_FOR_CROSS_SECTION
+        from bot.views.home_intelligence import forex_pairs_section
+        live = {"forex": dict(self.LIVE["forex"])}
+        for i in range(MIN_ASSETS_FOR_CROSS_SECTION):   # enough pairs for a cross-section; all below the three above
+            live["forex"][f"X{i}_Y{i}"] = {"bid": 1.0, "ask": 1.0001, "change_pct": -0.5 - i / 100}
+        out = forex_pairs_section(live, self.SNAP)
+        self.assertTrue(out["available"], out.get("reason"))
+        self.assertEqual([r["symbol"] for r in out["rows"][:3]], ["EUR_USD", "USD_JPY", "GBP_USD"])
+        self.assertEqual(out["rows"][0]["display"], "EUR/USD")
+        self.assertIsNotNone(out["rows"][0]["metrics"])
+
+    def test_fx_row_and_markets_card_show_the_chips(self):
+        from bot.views.home_intelligence import quote_metrics
+        m = quote_metrics("EUR_USD", "forex", self.SNAP, self.LIVE)
+        row = render_to_string("partials/_hq_fx_row.html",
+                               {"r": {"symbol": "EUR_USD", "display": "EUR/USD", "return_pct": 0.2, "z": 1.1, "rank": 1,
+                                      "metrics": m}, "n": 3})
+        self.assertIn("EUR/USD", row)
+        self.assertIn('class="r num pos-t"', row)
+        self.assertIn("gold-t", row)
+        self.assertIn("VOL 7D", row)
+        card = render_to_string("partials/_mkt_card.html",
+                                {"q": {"symbol": "EUR_USD", "asset_class": "forex", "display_symbol": "EUR/USD",
+                                       "price": "1.1001", "change_pct": 0.2, "positive": True, "metrics": m}})
+        self.assertIn('class="mkt-metrics"', card)
+        self.assertIn("SPREAD", card)

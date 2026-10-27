@@ -32,6 +32,18 @@ body:has(.rl-page) #bubble-canvas { display: none !important; }   /* bubbles.js 
 .rl-dl dt { color: var(--text-dim); }
 .rl-dl dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
 .rl-dl dd.num, .rl-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.rl-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }   /* claude code changed: 2026-10-27 — Measure / Value / What it means */
+.rl-tbl th, .rl-tbl td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.rl-tbl thead th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.rl-tbl tbody th { color: var(--text-dim); font-weight: 500; width: 26%; }
+.rl-tbl td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-primary); width: 24%; overflow-wrap: anywhere; }
+.rl-tbl td:last-child { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+@media (max-width: 640px) {
+  .rl-tbl thead { display: none; }
+  .rl-tbl, .rl-tbl tbody, .rl-tbl tr, .rl-tbl th, .rl-tbl td { display: block; width: auto !important; }
+  .rl-tbl tr { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .rl-tbl th, .rl-tbl td { border: 0; padding: 2px 0; }
+}
 .rl-list { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.55; color: var(--text-secondary); }
 .rl-list li + li { margin-top: 4px; }
 details.rl-more summary { cursor: pointer; color: var(--accent); font-size: 13px; }
@@ -122,68 +134,89 @@ details.rl-more summary { cursor: pointer; color: var(--accent); font-size: 13px
         </section>
     </div>
 
-    <!-- full record -->
+    <!-- full record -->{# claude code changed: 2026-10-27 — table with a plain-English "What it means" column; the words come from research_extras.METRIC_WORDS (shared with the results page) #}
     <section class="rl-card" aria-labelledby="rl-rec" style="margin-top:16px">
         <h2 class="rl-h2" id="rl-rec">Full statistical record</h2>
-        <dl class="rl-dl">
+        <p class="rl-note" style="margin:-4px 0 12px">Every number the engine produced, with what it means in plain English. {% p_value_words %}</p>
+        <table class="rl-tbl">
+            <thead><tr><th scope="col">Measure</th><th scope="col">Value</th><th scope="col">What it means</th></tr></thead>
+            <tbody>
         {% if spec.hypothesis_type == "pairs" %}
-            <dt>Cointegration p-value</dt><dd class="num">{{ r.coint_pvalue|pvalue }}</dd>
-            <dt>ADF p-value (diagnostic)</dt><dd class="num">{{ r.adf_pvalue|pvalue }}</dd>
-            <dt>Hedge ratio</dt><dd class="num">{{ r.hedge_ratio|default:"not evaluated" }}</dd>
-            <dt>Half-life</dt><dd class="num">{{ r.half_life_time|default:"not evaluated" }} {{ r.half_life_time_unit|default:"" }} ({{ r.half_life_candles|default:"?" }} candles, timeframe {{ spec.timeframe|default:"unconfirmed" }})</dd>
-            <dt>Cointegrated (raw test)</dt><dd>{{ r.is_cointegrated|default:"not evaluated" }}</dd>
-            <dt>Passes tradability filter</dt><dd>{{ r.passes_filters|default:"not evaluated" }}</dd>
-            {% if r.fdr_note %}<dt>FDR</dt><dd>{{ r.fdr_note }}</dd>{% endif %}
+            <tr><th scope="row">Cointegration p-value</th><td class="num">{{ r.coint_pvalue|pvalue }}</td><td>{{ "coint_p"|means }} {{ r.coint_pvalue|p_hint }}</td></tr>
+            <tr><th scope="row">ADF p-value (diagnostic)</th><td class="num">{{ r.adf_pvalue|pvalue }}</td><td>{{ "adf_p"|means }}</td></tr>
+            <tr><th scope="row">Hedge ratio</th><td class="num">{{ r.hedge_ratio|default:"not evaluated" }}</td><td>{{ "hedge_ratio"|means }}</td></tr>
+            <tr><th scope="row">Half-life</th><td class="num">{{ r.half_life_time|default:"not evaluated" }} {{ r.half_life_time_unit|default:"" }} ({{ r.half_life_candles|default:"?" }} candles, timeframe {{ spec.timeframe|default:"unconfirmed" }})</td><td>{{ "half_life"|means }}</td></tr>
+            <tr><th scope="row">Cointegrated (raw test)</th><td>{{ r.is_cointegrated|default:"not evaluated" }}</td><td>{{ "is_coint"|means }}</td></tr>
+            <tr><th scope="row">Passes tradability filter</th><td>{{ r.passes_filters|default:"not evaluated" }}</td><td>{{ "tradability"|means }}</td></tr>
+            {% if r.fdr_note %}<tr><th scope="row">FDR</th><td>{{ r.fdr_note }}</td><td>{{ "fdr_p"|means }}</td></tr>{% endif %}
         {% elif r.metric == "conditional_event_test" %}
-            <dt>Total observations</dt><dd class="num">{{ r.sample_size|default:"not evaluated" }}</dd>
-            <dt>Condition true</dt><dd class="num">{{ r.n_condition_true|default:"not evaluated" }}{% if r.pct_condition_true is not None %} ({{ r.pct_condition_true|as_pct|floatformat:2 }}% of observations){% endif %}</dd>
-            <dt>Condition false (baseline)</dt><dd class="num">{{ r.n_condition_false|default:"not evaluated" }}</dd>
-            <dt>Episodes (contiguous runs)</dt><dd class="num">{{ r.n_condition_episodes|default:"not evaluated" }}{% if r.episode_ratio %} · {{ r.episode_ratio|floatformat:1 }} candles per episode{% endif %}</dd>
-            <dt>Mean forward return, condition true</dt><dd class="num">{% if r.mean_return_when_true is not None %}{{ r.mean_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
-            <dt>Mean forward return, baseline</dt><dd class="num">{% if r.mean_return_when_false is not None %}{{ r.mean_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
-            <dt>Median forward return, condition true</dt><dd class="num">{% if r.median_return_when_true is not None %}{{ r.median_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
-            <dt>Median forward return, baseline</dt><dd class="num">{% if r.median_return_when_false is not None %}{{ r.median_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
-            <dt>Expected / observed direction</dt><dd>{{ r.expected_direction|default:"unspecified" }} / {{ r.observed_direction|default:"not evaluated" }}</dd>
-            <dt>Mann–Whitney U p-value</dt><dd class="num">{{ r.mannwhitney_p_value|pvalue }}</dd>
-            <dt>Block-permutation p-value</dt><dd class="num">{{ r.block_permutation_p_value|pvalue }}</dd>
-            <dt>FDR-adjusted p-value</dt><dd class="num">{{ r.fdr_adjusted_p_value|default:"not evaluated" }} (no family correction applied — no registered hypothesis family)</dd>
-            <dt>Passes FDR</dt><dd>{{ r.passes_fdr|default:"not evaluated" }}</dd>
+            <tr><th scope="row">Total observations</th><td class="num">{{ r.sample_size|default:"not evaluated" }}</td><td>{{ "observations"|means }}</td></tr>
+            <tr><th scope="row">Condition true</th><td class="num">{{ r.n_condition_true|default:"not evaluated" }}{% if r.pct_condition_true is not None %} ({{ r.pct_condition_true|as_pct|floatformat:2 }}% of observations){% endif %}</td><td>{{ "condition_true"|means }}</td></tr>
+            <tr><th scope="row">Condition false (baseline)</th><td class="num">{{ r.n_condition_false|default:"not evaluated" }}</td><td>{{ "condition_false"|means }}</td></tr>
+            <tr><th scope="row">Episodes (contiguous runs)</th><td class="num">{{ r.n_condition_episodes|default:"not evaluated" }}{% if r.episode_ratio %} · {{ r.episode_ratio|floatformat:1 }} candles per episode{% endif %}</td><td>{{ "episodes"|means }}</td></tr>
+            <tr><th scope="row">Mean forward return, condition true</th><td class="num">{% if r.mean_return_when_true is not None %}{{ r.mean_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</td><td>{{ "mean_true"|means }}{% if r.horizon %} Here: the next {{ r.horizon }} candles.{% endif %}</td></tr>
+            <tr><th scope="row">Mean forward return, baseline</th><td class="num">{% if r.mean_return_when_false is not None %}{{ r.mean_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</td><td>{{ "mean_baseline"|means }}</td></tr>
+            <tr><th scope="row">Median forward return, condition true</th><td class="num">{% if r.median_return_when_true is not None %}{{ r.median_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</td><td>{{ "median_true"|means }}</td></tr>
+            <tr><th scope="row">Median forward return, baseline</th><td class="num">{% if r.median_return_when_false is not None %}{{ r.median_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</td><td>{{ "median_baseline"|means }}</td></tr>
+            <tr><th scope="row">Expected / observed direction</th><td>{{ r.expected_direction|default:"unspecified" }} / {{ r.observed_direction|default:"not evaluated" }}</td><td>{{ "direction"|means }}{% if r.expected_direction and r.observed_direction and r.expected_direction != r.observed_direction %} Here they differ.{% endif %}</td></tr>
+            <tr><th scope="row">Mann–Whitney U p-value</th><td class="num">{{ r.mannwhitney_p_value|pvalue }}</td><td>{{ "mannwhitney"|means }}</td></tr>
+            <tr><th scope="row">Block-permutation p-value</th><td class="num">{{ r.block_permutation_p_value|pvalue }}</td><td>{{ "block_perm"|means }} {{ r.block_permutation_p_value|p_hint }}{% if r.mannwhitney_p_value is not None and r.block_permutation_p_value is not None and r.mannwhitney_p_value < 0.05 and r.block_permutation_p_value >= 0.05 %} The quick test above says "different", but this one says luck explains it — trust this one.{% endif %}</td></tr>
+            <tr><th scope="row">FDR-adjusted p-value</th><td class="num">{{ r.fdr_adjusted_p_value|default:"not evaluated" }}{% if r.fdr_adjusted_p_value is None %} (no family correction applied — no registered hypothesis family){% endif %}</td><td>{{ "fdr_p"|means }}</td></tr>
+            <tr><th scope="row">Passes FDR</th><td>{{ r.passes_fdr|default:"not evaluated" }}</td><td>{{ "passes_fdr"|means }}</td></tr>
         {% elif r.metric == "strategy_backtest" %}
-            <dt>Data window</dt><dd class="num">{{ r.data_start|default:"?" }} → {{ r.data_end|default:"?" }}</dd>
-            <dt>Trades (with net R)</dt><dd class="num">{{ r.n_trades|default:0 }} ({{ r.n_trades_with_net_r|default:0 }})</dd>
-            <dt>Mean / sd net R per trade</dt><dd class="num">{{ r.mean_net_r|floatformat:4 }} / {{ r.std_net_r|floatformat:4 }}</dd>
-            <dt>t-statistic, one-sided p</dt><dd class="num">{{ r.t_stat|floatformat:3 }}, {{ r.p_value_one_sided|floatformat:4 }}</dd>
-            <dt>Bootstrap 95% CI, mean net R</dt><dd class="num">{% if r.bootstrap_ci95_mean_net_r %}{{ r.bootstrap_ci95_mean_net_r.0|floatformat:4 }} to {{ r.bootstrap_ci95_mean_net_r.1|floatformat:4 }}{% else %}not computed{% endif %}</dd>
-            <dt>Lag-1 autocorrelation</dt><dd class="num">{% if r.lag1_autocorrelation is not None %}{{ r.lag1_autocorrelation|floatformat:3 }}{% else %}n/a{% endif %}</dd>
-            <dt>Win rate / profit factor</dt><dd class="num">{{ r.win_rate|floatformat:1 }}% / {{ r.profit_factor|floatformat:2 }}</dd>
-            <dt>Balance</dt><dd class="num">${{ r.initial_balance|floatformat:"2g" }} → ${{ r.final_balance|floatformat:"2g" }}</dd>
-            <dt>Max drawdown</dt><dd class="num">−${{ r.max_drawdown_usd|floatformat:"2g" }} (−{{ r.max_drawdown|floatformat:2 }}%)</dd>
+            <tr><th scope="row">Data window</th><td class="num">{{ r.data_start|default:"?" }} → {{ r.data_end|default:"?" }}</td><td>{{ "data_window"|means }}</td></tr>
+            <tr><th scope="row">Trades (with net R)</th><td class="num">{{ r.n_trades|default:0 }} ({{ r.n_trades_with_net_r|default:0 }})</td><td>{{ "trades"|means }} In brackets: trades with a full result after costs.</td></tr>
+            <tr><th scope="row">Mean / sd net R per trade</th><td class="num">{{ r.mean_net_r|floatformat:4 }} / {{ r.std_net_r|floatformat:4 }}</td><td>{{ "mean_r"|means }}</td></tr>
+            <tr><th scope="row">t-statistic, one-sided p</th><td class="num">{{ r.t_stat|floatformat:3 }}, {{ r.p_value_one_sided|floatformat:4 }}</td><td>{{ "t_p"|means }} {{ r.p_value_one_sided|p_hint }}</td></tr>
+            <tr><th scope="row">Bootstrap 95% CI, mean net R</th><td class="num">{% if r.bootstrap_ci95_mean_net_r %}{{ r.bootstrap_ci95_mean_net_r.0|floatformat:4 }} to {{ r.bootstrap_ci95_mean_net_r.1|floatformat:4 }}{% else %}not computed{% endif %}</td><td>{{ "bootstrap_ci"|means }}</td></tr>
+            <tr><th scope="row">Lag-1 autocorrelation</th><td class="num">{% if r.lag1_autocorrelation is not None %}{{ r.lag1_autocorrelation|floatformat:3 }}{% else %}n/a{% endif %}</td><td>{{ "autocorr"|means }}</td></tr>
+            <tr><th scope="row">Win rate / profit factor</th><td class="num">{{ r.win_rate|floatformat:1 }}% / {{ r.profit_factor|floatformat:2 }}</td><td>{{ "win_rate"|means }} {{ "profit_factor"|means }}</td></tr>
+            <tr><th scope="row">Balance</th><td class="num">${{ r.initial_balance|floatformat:"2g" }} → ${{ r.final_balance|floatformat:"2g" }}</td><td>{{ "balance"|means }}</td></tr>
+            <tr><th scope="row">Max drawdown</th><td class="num">−${{ r.max_drawdown_usd|floatformat:"2g" }} (−{{ r.max_drawdown|floatformat:2 }}%)</td><td>{{ "max_dd"|means }}</td></tr>
         {% else %}
-            <dt>Information Coefficient</dt><dd class="num">{{ r.ic|default:"not evaluated" }}</dd>
-            <dt>Block-permutation p-value</dt><dd class="num">{{ r.block_permutation_p_value|pvalue }}</dd>
-            <dt>Sample size</dt><dd class="num">{{ r.sample_size|default:"not evaluated" }}</dd>
-            <dt>FDR-adjusted p-value</dt><dd class="num">{{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</dd>
-            <dt>Passes FDR</dt><dd>{{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</dd>
+            <tr><th scope="row">Information Coefficient</th><td class="num">{{ r.ic|default:"not evaluated" }}</td><td>{{ "ic"|means }}</td></tr>
+            <tr><th scope="row">Block-permutation p-value</th><td class="num">{{ r.block_permutation_p_value|pvalue }}</td><td>{{ "ic_block_perm"|means }} {{ r.block_permutation_p_value|p_hint }}</td></tr>
+            <tr><th scope="row">Sample size</th><td class="num">{{ r.sample_size|default:"not evaluated" }}</td><td>{{ "sample_size"|means }}</td></tr>
+            <tr><th scope="row">FDR-adjusted p-value</th><td class="num">{{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</td><td>{{ "fdr_p"|means }}</td></tr>
+            <tr><th scope="row">Passes FDR</th><td>{{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</td><td>{{ "passes_fdr"|means }}</td></tr>
         {% endif %}
-        </dl>
+            </tbody>
+        </table>
     </section>
 
     <!-- reproducibility -->
     <section class="rl-card" aria-labelledby="rl-rep">
         <h2 class="rl-h2" id="rl-rep">Reproducibility</h2>
-        <dl class="rl-dl">
-            <dt>Research ID</dt><dd class="num">{{ experiment.id }}</dd>
-            <dt>Code version</dt><dd class="num">{{ experiment.code_version|default:"not recorded" }}</dd>
-            <dt>Random seed</dt><dd class="num">{{ experiment.random_seed|default_if_none:"not recorded" }}</dd>
-            <dt>Created</dt><dd>{% if experiment.created_at %}<time class="local-time" datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</dd>
-            <dt>Started</dt><dd>{% if experiment.started_at %}<time class="local-time" datetime="{{ experiment.started_at|date:'c' }}">{{ experiment.started_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</dd>
-            <dt>Completed</dt><dd>{% if experiment.completed_at %}<time class="local-time" datetime="{{ experiment.completed_at|date:'c' }}">{{ experiment.completed_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</dd>
-            {% if experiment.rerun_of %}<dt>Rerun of</dt><dd class="num"><a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></dd>{% endif %}
-        </dl>
+        <table class="rl-tbl">{# claude code changed: 2026-10-27 — same three-column table #}
+            <thead><tr><th scope="col">Item</th><th scope="col">Value</th><th scope="col">What it means</th></tr></thead>
+            <tbody>
+            <tr><th scope="row">Research ID</th><td class="num">{{ experiment.id }}</td><td>{{ "research_id"|means }}</td></tr>
+            <tr><th scope="row">Code version</th><td class="num">{{ experiment.code_version|default:"not recorded" }}</td><td>{{ "code_version"|means }}</td></tr>
+            <tr><th scope="row">Random seed</th><td class="num">{{ experiment.random_seed|default_if_none:"not recorded" }}</td><td>{{ "seed"|means }}</td></tr>
+            <tr><th scope="row">Created</th><td>{% if experiment.created_at %}<time class="local-time" datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</td><td>{{ "created"|means }}</td></tr>
+            <tr><th scope="row">Started</th><td>{% if experiment.started_at %}<time class="local-time" datetime="{{ experiment.started_at|date:'c' }}">{{ experiment.started_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</td><td>{{ "started"|means }}</td></tr>
+            <tr><th scope="row">Completed</th><td>{% if experiment.completed_at %}<time class="local-time" datetime="{{ experiment.completed_at|date:'c' }}">{{ experiment.completed_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</td><td>{{ "completed"|means }}</td></tr>
+            {% if experiment.rerun_of %}<tr><th scope="row">Rerun of</th><td class="num"><a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></td><td>{{ "rerun_of"|means }}</td></tr>{% endif %}
+            </tbody>
+        </table>
         <p class="rl-note" style="margin-top:10px">The same code version and random seed reproduce the same evidence. Records are never overwritten — a rerun creates a new experiment.</p>
-        <details class="rl-more" style="margin-top:10px">
-            <summary>Full tool call log ({{ experiment.tool_call_log|length }} call{{ experiment.tool_call_log|length|pluralize }})</summary>
-            <pre class="rl-pre">{{ experiment.tool_call_log }}</pre>
+        <details class="rl-more" style="margin-top:10px">{# claude code changed: 2026-10-27 — readable steps first, the raw log kept for auditors #}
+            <summary>Engine steps — full tool call log ({{ experiment.tool_call_log|length }} step{{ experiment.tool_call_log|length|pluralize }})</summary>
+            <p class="rl-note" style="margin:8px 0">Each step the research engine ran, in order. A "tool" is one fixed, tested piece of calculation code; the engine can only run these registered tools, so every number on this page comes from code, not from an AI writing it.</p>
+            <table class="rl-tbl">
+                <thead><tr><th scope="col">Step</th><th scope="col">Result</th><th scope="col">What it did</th></tr></thead>
+                <tbody>
+                {% for call in experiment.tool_call_log %}
+                <tr><th scope="row">{{ forloop.counter }}. <span class="rl-num">{{ call.tool_name }}</span></th>
+                    <td class="num">{% if call.status == "success" %}<span class="pos">success</span>{% else %}<span class="neg">{{ call.status|default:"unknown" }}</span>{% endif %}{% if call.duration_seconds is not None %} · {{ call.duration_seconds|floatformat:2 }} s{% endif %}</td>
+                    <td>{{ call.tool_name|tool_words }}{% if call.error %} <span class="neg">Error: {{ call.error }}</span>{% endif %}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <details class="rl-more" style="margin-top:8px">
+                <summary>Raw log (for auditors)</summary>
+                <pre class="rl-pre">{{ experiment.tool_call_log }}</pre>
+            </details>
         </details>
     </section>
 </main>

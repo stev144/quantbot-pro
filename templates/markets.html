@@ -146,12 +146,12 @@
     .mkt-tab.active { background: var(--bg-2); border-color: var(--border-strong); color: var(--text-primary); }
     .mkt-tab.active .mkt-tab-count, .mkt-tab-count { background: rgba(255,255,255,0.1); }
 
-    /* compact cards, two per row */
-    .mkt-page .mkt-grid { grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px 16px; }
+    /* claude code changed: 2026-10-27 — owner: ONE card per row on phones (was two), with the risk & cost tiles */
+    .mkt-page .mkt-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 0 16px 16px; }
     .mkt-page .mkt-card {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
-        grid-template-areas: "sym logo" "name logo" "spark spark" "price price" "chg heart" "asof asof";
+        grid-template-areas: "sym logo" "name logo" "spark spark" "price price" "chg heart" "asof asof" "metrics metrics";
         gap: 2px 6px; padding: 12px; border-radius: 14px; align-items: center;
     }
     .mkt-page .mkt-card-top, .mkt-page .coin-id, .mkt-page .mkt-card-identity, .mkt-page .mkt-card-top > div:last-child,
@@ -170,7 +170,19 @@
     .mkt-page .mkt-watchlist-btn { grid-area: heart; justify-self: end; }
     .mkt-page .live-asof { grid-area: asof; font-size: 10px; margin-top: 4px; max-width: 100%;
                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* claude code changed: 2026-10-27 — risk & cost as a 2-column tile grid under the price */
+    .mkt-page .mkt-grid .mkt-metrics { grid-area: metrics; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .mkt-page .mkt-grid .mkt-metrics .hq-mchips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .mkt-page .mkt-grid .mkt-metrics .hq-m { display: flex; flex-direction: column; gap: 2px; white-space: normal; padding: 7px 9px;
+        border-radius: 7px; background: var(--bg-2); border-color: color-mix(in srgb, var(--hq-gold) 22%, var(--border)); font-size: 10px; }
+    .mkt-page .mkt-grid .mkt-metrics .hq-m b { font-size: 13.5px; }
+    .mkt-page .mkt-grid .mkt-metrics .hq-m.wide { grid-column: 1 / -1; }
+    .mkt-page .mkt-price { color: var(--hq-gold); }   /* price is unsigned: gold; the change keeps green / red */
+    .mkt-rail .mkt-metrics { display: none; }   /* the sideways Watchlist row stays compact */
 }
+/* claude code changed: 2026-10-27 — wider screens: the chips sit under the card body; never in the sideways Watchlist row */
+.mkt-rail .mkt-metrics { display: none; }
+.mkt-metrics { margin-top: 10px; }
 </style>
 {% endblock %}
 

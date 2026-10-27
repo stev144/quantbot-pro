@@ -1,10 +1,11 @@
 {% load coin_extras %}{# claude code changed: 2026-10-26 — new; one row of the home page's relative-value table (r = a home_intelligence.cross_section row) #}
+{# claude code changed: 2026-10-27 — colour coding: signed numbers green/red, other values gold; |z| >= 2 gets an EXTREME tag (was an amber z) #}
 <tr data-side="{{ side }}" data-regime="{{ r.regime_words }}" data-extreme="{% if r.extreme %}1{% else %}0{% endif %}">
     <td class="hq-first" data-label="Asset"><a class="hq-asset" href="{% url 'market_workspace' 'crypto' r.symbol %}">{% coin_logo r.symbol 18 %}{{ r.display }}</a>{% if r.name %} <span class="dim-t">{{ r.name }}</span>{% endif %}</td>
     <td class="r num {% if r.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="24 h return">{% if r.return_pct >= 0 %}+{% endif %}{{ r.return_pct|floatformat:2 }}%</td>
-    <td class="r num{% if r.extreme %} warn-t{% endif %}" data-label="Z-score">{% if r.z >= 0 %}+{% endif %}{{ r.z|floatformat:2 }}</td>
-    <td class="r num" data-label="Rank">{{ r.rank }} / {{ n }}</td>
-    <td data-label="Regime">{{ r.regime_words }}</td>
+    <td class="r num {% if r.z >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="Z-score">{% if r.z >= 0 %}+{% endif %}{{ r.z|floatformat:2 }}{% if r.extreme %} <span class="hq-xtag" title="|z| ≥ 2: unusual within today's cross-section — not a signal">EXTREME</span>{% endif %}</td>
+    <td class="r num gold-t" data-label="Rank">{{ r.rank }} / {{ n }}</td>
+    <td class="gold-t" data-label="Regime">{{ r.regime_words }}</td>
     {% include "partials/_hq_metrics_cell.html" with m=r.metrics %}{# claude code changed: 2026-10-27 #}
     <td data-label="Data"><span class="hq-tag live" title="last trade {{ r.as_of|date:'H:i' }} UTC">LIVE</span></td>
 </tr>

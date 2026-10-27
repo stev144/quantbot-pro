@@ -1,0 +1,8 @@
+{% load coin_extras %}{# claude code changed: 2026-10-27 — new; one forex PAIR row of the home page's relative-value table (r = home_intelligence.forex_pairs_section row): flags + names + session as on the Markets cards; signed numbers green/red, others gold #}
+<tr>
+    <td class="hq-first" data-label="Pair"><a class="hq-asset" href="{% url 'market_workspace' 'forex' r.symbol %}">{{ r.display }}</a> <span class="hq-fxid">{% fx_pair r.symbol 16 %}</span></td>
+    <td class="r num {% if r.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="24 h change">{% if r.return_pct >= 0 %}+{% endif %}{{ r.return_pct|floatformat:3 }}%</td>
+    <td class="r num {% if r.z >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="Z-score">{% if r.z >= 0 %}+{% endif %}{{ r.z|floatformat:2 }}</td>
+    <td class="r num gold-t" data-label="Rank">{{ r.rank }} / {{ n }}</td>
+    {% include "partials/_hq_metrics_cell.html" with m=r.metrics %}
+</tr>

@@ -40,7 +40,7 @@ CORR_HIGH = 0.7                  # display threshold for "highly correlated pair
 MIN_CORR_OBS = 100               # fewer synchronised hourly returns than this → correlation not reported
 HISTORY_BARS = 168               # selected-asset regime history: last 7 days of 1 h candles
 
-SNAPSHOT_KEY = "home_universe_snapshot_v2"   # claude code changed: 2026-10-27 — v2 adds per-coin risk & cost metrics
+SNAPSHOT_KEY = "home_universe_snapshot_v3"   # claude code changed: 2026-10-27 — v2 added per-coin risk & cost metrics, v3 per-forex-pair metrics
 SNAPSHOT_LOCK_KEY = "home_universe_snapshot_lock_v1"
 SNAPSHOT_REFRESH_SECONDS = 15 * 60
 SNAPSHOT_KEEP_SECONDS = 6 * 3600
@@ -263,6 +263,7 @@ def compute_universe_snapshot() -> dict:
         },
         "correlation": correlation,
         "metrics": metrics,   # claude code changed: 2026-10-27 — {symbol: asset_metrics(...)}
+        "fx_metrics": forex_metrics(q["symbol"] for q in md.get_markets_list().get("forex", []) if q.get("available")),   # claude code changed: 2026-10-27
         "fetch_aborted": ov.get("fetch_aborted", False),
     }
 
@@ -348,7 +349,7 @@ def get_universe_snapshot(now: pd.Timestamp = None, start_refresh: bool = True) 
         if snap is not None:
             cache.set(SNAPSHOT_KEY, snap, SNAPSHOT_KEEP_SECONDS)
     age = (now - pd.Timestamp(snap["computed_at"])).total_seconds() if snap else None
-    due = snap is None or age > SNAPSHOT_REFRESH_SECONDS or (snap.get("available") and "metrics" not in snap)   # claude code changed: 2026-10-27 — a pre-metrics snapshot refreshes at once
+    due = snap is None or age > SNAPSHOT_REFRESH_SECONDS or (snap.get("available") and "fx_metrics" not in snap)   # claude code changed: 2026-10-27 — a pre-metrics snapshot refreshes at once
     refreshing = bool(cache.get(SNAPSHOT_LOCK_KEY))
     if due and start_refresh and getattr(settings, "HOME_UNIVERSE_SNAPSHOT_BACKGROUND", True):
         if cache.add(SNAPSHOT_LOCK_KEY, True, SNAPSHOT_LOCK_SECONDS):
@@ -583,68 +584,57 @@ def annotate_regimes(crypto: dict, snapshot: dict) -> None:
         r["extreme"] = abs(r["z"]) >= EXTREME_Z
 
 
+def quote_metrics(symbol: str, asset_class: str, snapshot: dict, live: dict):   # claude code changed: 2026-10-27 — new
+    """Risk & cost metrics of one market (from the background snapshot's candles) plus its live spread, or None while
+    the snapshot has not computed it. Shared by the home page and the Markets page."""
+    from bot.market_intel.asset_metrics import spread
+    snap = snapshot or {}
+    if not snap.get("available"):
+        return None
+    m = (snap.get("fx_metrics") if asset_class == "forex" else snap.get("metrics") or {}) or {}
+    m = m.get(symbol)
+    if not m:
+        return None
+    q = (live or {}).get(asset_class, {}).get(symbol, {})
+    return dict(m, **spread(q.get("bid"), q.get("ask"), m["vol_7d_pct"], m["bars_per_year"]))
+
+
 def annotate_metrics(crypto: dict, snapshot: dict, live: dict) -> None:   # claude code changed: 2026-10-27 — new
     """Adds each crypto row's risk & cost metrics (from the snapshot's candles) and its live spread."""
-    from bot.market_intel.asset_metrics import spread
-    metrics = (snapshot or {}).get("metrics", {}) if (snapshot or {}).get("available") else {}
-    live_c = live.get("crypto", {})
     for r in crypto.get("rows", []):
-        m = metrics.get(r["symbol"])
-        if m:
-            q = live_c.get(r["symbol"], {})
-            r["metrics"] = dict(m, **spread(q.get("bid"), q.get("ask"), m["vol_7d_pct"], m["bars_per_year"]))
+        r["metrics"] = quote_metrics(r["symbol"], "crypto", snapshot, live)
 
 
-FX_METRICS_KEY = "home_fx_metrics_v1"   # claude code changed: 2026-10-27
-FX_METRICS_SECONDS = 15 * 60
-
-
-def forex_metrics(pairs) -> dict:   # claude code changed: 2026-10-27 — new
-    """{pair: asset_metrics(...)} from each pair's hourly CSV (refreshed hourly from MT5); cached 15 minutes."""
+def forex_metrics(pairs) -> dict:   # claude code changed: 2026-10-27 — new; computed in the background snapshot
+    """{pair: asset_metrics(...)} from each pair's hourly CSV (refreshed hourly from MT5)."""
     from bot.market_intel.asset_metrics import CANDLES_NEEDED, asset_metrics
     from bot.mt5_data_fetcher import symbol_to_filename
-    pairs = sorted(pairs)
-    cached = cache.get(FX_METRICS_KEY)
-    if cached is not None and cached.get("pairs") == pairs:
-        return cached["metrics"]
     out = {}
-    for sym in pairs:
+    for sym in sorted(pairs):
         try:
             path = settings.BASE_DIR / "data" / "forex" / symbol_to_filename(sym.replace("_", "/"))
             d = pd.read_csv(path).tail(CANDLES_NEEDED * 2)
             d.index = pd.to_datetime(d.pop("timestamp"), utc=True)
             # no RVOL: the stored tick volume changes scale ~3x in the week of 2026-10-12 for every pair at once (the
             # candles come from more than one MT5 feed), so a 24 h vs 29-day volume ratio would compare two brokers
-            out[sym] = dict(asset_metrics(d, "forex", None),
+            out[sym] = dict(asset_metrics(d, "forex", None), pair=sym.replace("_", "/"),
                             rvol_note="n/a: the stored MT5 tick volume mixes more than one broker feed (scale changes "
                                       "~3x from the week of 12 Oct), so recent vs past volume is not comparable")
         except Exception as exc:
             logger.warning("home_intelligence: forex metrics for %s failed: %s", sym, exc)
-    cache.set(FX_METRICS_KEY, {"pairs": pairs, "metrics": out}, FX_METRICS_SECONDS)
     return out
 
 
-def annotate_forex_metrics(forex: dict, live: dict) -> None:   # claude code changed: 2026-10-27 — new
-    """Each currency row takes the metrics and live spread of the USD pair its return comes from (see currency_vs_usd)."""
-    from bot.market_intel.asset_metrics import spread
+def forex_pairs_section(live: dict, snapshot: dict) -> dict:   # claude code changed: 2026-10-27 — new (owner: show real pairs)
+    """Cross-section of the live forex PAIRS on their 24 h change (rank 1 = largest rise), each with its own risk &
+    cost metrics. Pairs share currencies (EUR is in many of them), so they are not independent observations."""
     live_fx = live.get("forex", {})
-    usd_pair = {}
-    for sym in live_fx:
-        base, _, quote = sym.partition("_")
-        if quote == "USD" and base != "USD":
-            usd_pair[base] = sym
-        elif base == "USD" and quote != "USD":
-            usd_pair[quote] = sym
-    rows = forex.get("rows", [])
-    wanted = {usd_pair[r["symbol"]] for r in rows if r["symbol"] in usd_pair}
-    metrics = forex_metrics(wanted) if wanted else {}
-    for r in rows:
-        sym = usd_pair.get(r["symbol"])
-        m = metrics.get(sym)
-        if m:
-            q = live_fx.get(sym, {})
-            r["metrics"] = dict(m, pair=sym.replace("_", "/"),
-                                **spread(q.get("bid"), q.get("ask"), m["vol_7d_pct"], m["bars_per_year"]))
+    returns = {s: v.get("change_pct") for s, v in live_fx.items() if v.get("change_pct") is not None}
+    out = cross_section(returns)
+    for r in out.get("rows", []):
+        r["display"] = r["symbol"].replace("_", "/")
+        r["metrics"] = quote_metrics(r["symbol"], "forex", snapshot, live)
+    return out
 
 
 def get_home_intelligence(df, regime_result, backtest_results, symbol, user=None) -> dict:
@@ -661,7 +651,7 @@ def get_home_intelligence(df, regime_result, backtest_results, symbol, user=None
     snapshot = get_universe_snapshot(now)
     annotate_regimes(crypto, snapshot)
     annotate_metrics(crypto, snapshot, live)    # claude code changed: 2026-10-27
-    annotate_forex_metrics(forex, live)         # claude code changed: 2026-10-27
+    forex["pairs"] = forex_pairs_section(live, snapshot)   # claude code changed: 2026-10-27 — real pairs, like the Markets page
     return {
         "now": now,
         "crypto": crypto,

@@ -1634,3 +1634,19 @@ body > :not(.term-topbar):not(.term-bottom-nav):not(#bubble-canvas):not(.term-ty
  * account buttons stay on one line; the nav pills wrap instead */
 .term-brand-sub { white-space: nowrap; }
 .term-topbar-right .term-btn, .term-topbar-right a { white-space: nowrap; }
+
+
+/* claude code changed: 2026-10-27 — risk & cost chips (partials/_metrics_chips.html), shared by the home page and the
+   Markets cards. Unsigned values are gold; the volatility state word keeps its own colour. */
+:root { --hq-gold: #e3b341; }
+:root[data-theme="light"] { --hq-gold: #8a6400; }
+.gold-t { color: var(--hq-gold); }
+.hq-mchips { display: flex; flex-wrap: wrap; gap: 4px 6px; justify-content: flex-start; max-width: 360px; }
+.hq-m { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .03em; color: var(--text-dim); white-space: nowrap;
+        padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; }
+.hq-m b { color: var(--hq-gold); font-weight: 600; }
+.hq-m i.hq-st { font-style: normal; color: var(--text-dim); }
+.hq-m i.hq-st.cmp { color: var(--neutral); }
+.hq-m i.hq-st.exp { color: var(--warning); }
+@media (max-width: 860px) { .hq-mchips { justify-content: flex-end; max-width: none; } }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) { --hq-gold: #8a6400; } }   /* claude code changed: 2026-10-27 — same light-mode rule as the theme above */

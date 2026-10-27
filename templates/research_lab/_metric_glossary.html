@@ -1,0 +1,56 @@
+{% load research_extras %}{# claude code changed: 2026-10-27 — new; plain-English meaning of every number in research_lab/_evidence_tiles.html, same branches. Words come from research_extras.METRIC_WORDS (shared with the report). #}
+{% with r=experiment.statistical_results %}{% if r %}
+<style>
+.rl-gloss summary { cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; }
+.rl-gloss table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.rl-gloss th, .rl-gloss td { text-align: left; vertical-align: top; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.rl-gloss tbody th { color: var(--text-dim); font-weight: 500; width: 32%; }
+.rl-gloss td { color: var(--text-secondary); line-height: 1.5; }
+@media (max-width: 640px) { .rl-gloss th, .rl-gloss td { display: block; width: auto !important; border: 0; padding: 2px 0; } .rl-gloss tr { display: block; padding: 6px 0; border-bottom: 1px solid var(--border); } }
+</style>
+<details class="rl-gloss" style="margin:0 0 18px">
+    <summary>What do these numbers mean? (plain English)</summary>
+    <p class="chart-caption" style="margin:8px 0 0">{% p_value_words %}</p>
+    <table>
+        <tbody>
+        {% if r.metric == "conditional_event_test" %}
+            <tr><th scope="row">Total observations</th><td>{{ "observations"|means }}</td></tr>
+            <tr><th scope="row">Qualifying observations</th><td>{{ "condition_true"|means }}</td></tr>
+            <tr><th scope="row">Qualifying episodes</th><td>{{ "episodes"|means }}</td></tr>
+            <tr><th scope="row">Mean return (condition true)</th><td>{{ "mean_true"|means }}</td></tr>
+            <tr><th scope="row">Mean return (baseline)</th><td>{{ "mean_baseline"|means }}</td></tr>
+            <tr><th scope="row">Median return</th><td>{{ "median_true"|means }}</td></tr>
+            <tr><th scope="row">Expected / observed direction</th><td>{{ "direction"|means }}</td></tr>
+            <tr><th scope="row">Mann-Whitney p</th><td>{{ "mannwhitney"|means }}</td></tr>
+            <tr><th scope="row">Block-Permutation p</th><td>{{ "block_perm"|means }} {{ r.block_permutation_p_value|p_hint }}{% if r.mannwhitney_p_value is not None and r.block_permutation_p_value is not None and r.mannwhitney_p_value < 0.05 and r.block_permutation_p_value >= 0.05 %} The quick test above says "different", but this one says luck explains it — trust this one.{% endif %}</td></tr>
+            <tr><th scope="row">FDR-Adjusted p</th><td>{{ "fdr_p"|means }}</td></tr>
+            <tr><th scope="row">Passes FDR</th><td>{{ "passes_fdr"|means }}</td></tr>
+        {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
+            <tr><th scope="row">Cointegration p-value</th><td>{{ "coint_p"|means }} {{ r.coint_pvalue|p_hint }}</td></tr>
+            <tr><th scope="row">ADF p-value</th><td>{{ "adf_p"|means }}</td></tr>
+            <tr><th scope="row">Hedge ratio (β)</th><td>{{ "hedge_ratio"|means }}</td></tr>
+            <tr><th scope="row">Half-life</th><td>{{ "half_life"|means }}</td></tr>
+            <tr><th scope="row">Is cointegrated (raw test)</th><td>{{ "is_coint"|means }}</td></tr>
+            <tr><th scope="row">Passes tradability filter</th><td>{{ "tradability"|means }}</td></tr>
+            <tr><th scope="row">FDR</th><td>{{ "fdr_p"|means }}</td></tr>
+        {% elif r.metric == "strategy_backtest" %}
+            <tr><th scope="row">Trades</th><td>{{ "trades"|means }}</td></tr>
+            <tr><th scope="row">Mean net R / trade</th><td>{{ "mean_r"|means }}</td></tr>
+            <tr><th scope="row">One-sided p (mean &gt; 0)</th><td>{{ "t_p"|means }} {{ r.p_value_one_sided|p_hint }}</td></tr>
+            <tr><th scope="row">Bootstrap 95% CI</th><td>{{ "bootstrap_ci"|means }}</td></tr>
+            <tr><th scope="row">Win rate</th><td>{{ "win_rate"|means }}</td></tr>
+            <tr><th scope="row">Profit factor</th><td>{{ "profit_factor"|means }}</td></tr>
+            <tr><th scope="row">Max drawdown</th><td>{{ "max_dd"|means }}</td></tr>
+            <tr><th scope="row">Balance</th><td>{{ "balance"|means }}</td></tr>
+            <tr><th scope="row">Lag-1 autocorr.</th><td>{{ "autocorr"|means }}</td></tr>
+        {% else %}
+            <tr><th scope="row">Information Coefficient</th><td>{{ "ic"|means }}</td></tr>
+            <tr><th scope="row">Block-Permutation p</th><td>{{ "ic_block_perm"|means }} {{ r.block_permutation_p_value|p_hint }}</td></tr>
+            <tr><th scope="row">Sample Size</th><td>{{ "sample_size"|means }}</td></tr>
+            <tr><th scope="row">FDR-Adjusted p</th><td>{{ "fdr_p"|means }}</td></tr>
+            <tr><th scope="row">Passes FDR</th><td>{{ "passes_fdr"|means }}</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</details>
+{% endif %}{% endwith %}

@@ -44,6 +44,7 @@ standard card: `regime` (a RegimeDetector row) and `zscore` + `zscore_asof` (lat
         </div>
         <div class="mkt-sparkline live-spark">{{ q.sparkline }}</div>
     </div>
+    {% if q.metrics %}<div class="mkt-metrics">{% include "partials/_metrics_chips.html" with m=q.metrics %}</div>{% endif %}{# claude code changed: 2026-10-27 — home page risk & cost metrics #}
     {% if regime %}
     <div class="mkt-strip">
         <span class="badge {% if regime.regime == 'TRENDING_UP' %}pos{% elif regime.regime == 'TRENDING_DOWN' %}neg{% elif regime.regime == 'HIGH_VOLATILITY' %}warn{% else %}neu{% endif %}">{{ regime.regime }}</span>
