@@ -12,11 +12,18 @@
             <span class="term-section-meta">passing score: <span class="stat-number" data-target="{{ quiz.passing_score }}" data-decimals="0" data-suffix="%">0%</span></span>
         </div>
         <div class="term-section-body">
+            {# claude code changed: 2026-10-26 — instructions and question counter (owner brief: clear quiz instructions) #}
+            <div class="chart-caption" style="margin-bottom:16px; line-height:1.6">
+                {{ questions|length }} question{{ questions|length|pluralize }} · pass mark {{ quiz.passing_score }}%. Answer every question,
+                then submit once. Each submission is recorded as a separate attempt and counts toward your average score;
+                you can retake the quiz. Correct answers and explanations are shown after you submit.
+            </div>
             <form method="post">
                 {% csrf_token %}
                 {% for q in questions %}
-                <div style="margin-bottom:18px">
-                    <div class="chart-caption" style="margin-bottom:6px">{{ q.prompt }}</div>
+                <fieldset style="margin:0 0 18px; border:1px solid var(--border); border-radius:8px; padding:12px 14px">
+                    <legend class="chart-caption" style="padding:0 6px">Question {{ forloop.counter }} of {{ questions|length }}</legend>
+                    <div style="margin-bottom:8px; color:var(--text-primary); line-height:1.5">{{ q.prompt }}</div>
 
                     {% if q.question_type == "multiple_choice" or q.question_type == "code_comprehension" %}
                         {% for choice in q.payload.choices %}
@@ -38,7 +45,7 @@
                         </label>
                         {% endfor %}
                     {% endif %}
-                </div>
+                </fieldset>
                 {% endfor %}
                 <button type="submit" class="term-btn mono">Submit</button>
             </form>

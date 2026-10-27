@@ -617,7 +617,7 @@ function renderRows() {
         // claude code changed: position rows are clickable to open detail modal
         var rowClick = r.has_position ? ' onclick="openPositionModal(\'' + r.pair.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')" style="cursor:pointer"' : '';
         return '<tr class="' + rowCls + '"' + rowClick + ' data-regime="' + r.regime + '" data-pair="' + r.pair + '">'
-            + '<td><span class="pair-name">' + r.pair + '</span></td>'
+            + '<td><span class="pair-name">' + r.pair + '</span>' + (r.sessions ? '<span class="fx-session" title="Most active session(s): the home trading sessions of the pair's two currencies">' + r.sessions + (r.sessions.indexOf('·') > -1 ? ' sessions' : ' session') + '</span>' : '') + '</td>'   // claude code changed: 2026-10-26 — trading session(s)
             + '<td><span class="regime-badge regime-' + r.regime + '">' + regimeLabel + '</span></td>'
             + '<td class="num">' + adxHtml + '</td>'
             + '<td class="num">' + (r.atr_pct !== null ? r.atr_pct + '%' : '—') + '</td>'

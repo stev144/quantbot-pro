@@ -12,13 +12,15 @@ from bot.ai.client import has_api_key
 def research_explainer(request):
     data = request.POST if request.method == "POST" else request.GET
     concept_id = (data.get("concept") or "").strip()
-    mode = data.get("mode") if data.get("mode") in svc.MODES else "beginner"
+    mode = svc.LEGACY_MODES.get(data.get("mode"), data.get("mode"))   # claude code changed: 2026-10-26 — three levels
+    mode = mode if mode in svc.MODES else "new"
     result = None
     if request.method == "POST":
         if not request.user.is_authenticated:
             return redirect_to_login(request.get_full_path())
         result = svc.explain(request.user, request.POST.get("question", ""), concept_id, mode)
         result["status_label"] = svc.STATUS_LABELS.get(result["status"], result["status"])
+        result["mode_label"] = svc.MODE_LABELS.get(result.get("mode"), "Explanation")   # claude code changed: 2026-10-26
         local = {"concept": result.get("concept"), "ladder": result.get("ladder")}
     else:
         local = svc.local_documentation(concept_id)
@@ -31,10 +33,14 @@ def research_explainer(request):
         "related": related,
         "mode": mode,
         "result": result,
-        "question": (result or {}).get("question") or request.POST.get("question", ""),
+        # claude code changed: 2026-10-26 — ?q= pre-fills the box (lesson "Ask the tutor" links); it is never sent by itself
+        "question": (result or {}).get("question") or request.POST.get("question", "")
+                    or request.GET.get("q", "")[:settings.EXPLAINER_MAX_QUESTION_CHARS],
         "ai_available": settings.EXPLAINER_AI_ENABLED and has_api_key(),
         "max_chars": settings.EXPLAINER_MAX_QUESTION_CHARS,
         "model": svc.model_for(mode),   # claude code changed: 2026-10-26 — per-mode model
-        "models": {"beginner": settings.EXPLAINER_AI_MODEL, "research": settings.EXPLAINER_AI_MODEL_RESEARCH},
+        "models": {"new": settings.EXPLAINER_AI_MODEL, "deeper": settings.EXPLAINER_AI_MODEL_RESEARCH},
+        "mode_labels": svc.MODE_LABELS,
+        "prerequisites": [c for c in (get_concept(p) for p in (concept.prerequisites if concept else ())) if c],
         "registry_version": REGISTRY_VERSION,
     })

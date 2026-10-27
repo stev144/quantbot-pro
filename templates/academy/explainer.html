@@ -66,8 +66,10 @@ answer (when available) is plain, auto-escaped text — never marked safe.
 
                 <label class="rx-l">Explanation level</label>
                 <div class="rx-modes" role="radiogroup" aria-label="Explanation level">
-                    <input type="radio" id="rx-m-b" name="mode" value="beginner"{% if mode == "beginner" %} checked{% endif %}><label for="rx-m-b">Beginner</label>
-                    <input type="radio" id="rx-m-r" name="mode" value="research"{% if mode == "research" %} checked{% endif %}><label for="rx-m-r">Research</label>
+                    {# claude code changed: 2026-10-26 — three teaching levels; New is the default #}
+                    <input type="radio" id="rx-m-n" name="mode" value="new"{% if mode == "new" %} checked{% endif %}><label for="rx-m-n">Explain Like I'm New</label>
+                    <input type="radio" id="rx-m-b" name="mode" value="build"{% if mode == "build" %} checked{% endif %}><label for="rx-m-b">Build My Understanding</label>
+                    <input type="radio" id="rx-m-d" name="mode" value="deep"{% if mode == "deep" %} checked{% endif %}><label for="rx-m-d">Technical Deep Dive</label>
                 </div>
 
                 <label class="rx-l" for="rx-q">Your question</label>
@@ -90,7 +92,7 @@ answer (when available) is plain, auto-escaped text — never marked safe.
                     {% else %}
                     <a class="term-btn" href="{% url 'login' %}?next={% url 'academy_explainer' %}">Sign in to ask the AI</a>
                     {% endif %}
-                    <span class="rx-note">{% if ai_available %}AI on{% if user.is_staff %} · Beginner: {{ models.beginner }} · Research: {{ models.research }} (staff only){% endif %}{% else %}AI off — the definitions and evidence still work{% endif %}</span>
+                    <span class="rx-note">{% if ai_available %}AI on{% if user.is_staff %} · New: {{ models.new }} · Build / Deep Dive: {{ models.deeper }} (staff only){% endif %}{% else %}AI off — the definitions and evidence still work{% endif %}</span>
                 </div>
             </form>
 
@@ -100,13 +102,15 @@ answer (when available) is plain, auto-escaped text — never marked safe.
             </div>
             {% if result.answer %}
             <div class="rx-answer">
-                <div class="rx-h">Explanation{% if result.answer.out_of_scope %} (outside the Explainer's scope){% endif %}</div>
+                <div class="rx-h">{{ result.mode_label|default:"Explanation" }}{% if result.answer.out_of_scope %} (outside the Explainer's scope){% endif %}</div>
                 {{ result.answer.answer|linebreaks }}
-                {% if result.answer.worked_example %}<div class="rx-h">Worked example</div>{{ result.answer.worked_example|linebreaks }}{% endif %}
+                {% if result.answer.key_terms %}<div class="rx-h">Key words</div><dl class="rx-dl">{% for t in result.answer.key_terms %}<dt>{{ t.term }}</dt><dd>{{ t.meaning }}</dd>{% endfor %}</dl>{% endif %}
+                {% if result.answer.everyday_example %}<div class="rx-h">An everyday example</div>{{ result.answer.everyday_example|linebreaks }}{% endif %}
+                {% if result.answer.worked_example %}<div class="rx-h">Worked example (illustration)</div>{{ result.answer.worked_example|linebreaks }}{% endif %}
                 {% if result.answer.maths %}<div class="rx-h">The mathematics</div><div class="rx-mono">{{ result.answer.maths }}</div>{% endif %}
-                {% if result.answer.limitations %}<div class="rx-h">Caveats</div><ul class="rx-list">{% for x in result.answer.limitations %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+                {% if result.answer.limitations %}<div class="rx-h">What it does NOT mean</div><ul class="rx-list">{% for x in result.answer.limitations %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
                 {% if result.answer.follow_up_questions %}
-                <div class="rx-h">Follow-up questions</div>
+                <div class="rx-h">Go deeper</div>
                 <div class="rx-chips">{% for q in result.answer.follow_up_questions %}<button type="button" class="rx-chip" data-q="{{ q }}">{{ q }}</button>{% endfor %}</div>
                 {% endif %}
                 <div class="rx-meta">
@@ -126,6 +130,10 @@ answer (when available) is plain, auto-escaped text — never marked safe.
             <h2 style="margin:4px 0 4px; font-size:18px; color:var(--text-primary)">{{ concept.name }}</h2>
             <p class="rx-note" style="font-size:13.5px; color:var(--text-secondary)">{{ concept.summary }}</p>
             <p style="font-size:13.5px; line-height:1.6; color:var(--text-secondary)">{{ concept.definition }}</p>
+            {% if prerequisites %}{# claude code changed: 2026-10-26 — building blocks first #}
+            <div class="rx-note" style="margin:-4px 0 10px">Before this, make sure you know:
+                {% for c in prerequisites %}<a class="rx-link" href="?concept={{ c.id }}&mode={{ mode }}">{{ c.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</div>
+            {% endif %}
             <div class="rx-h">Formula</div>
             <div class="rx-mono">{{ concept.formula }}</div>
             <dl class="rx-dl" style="margin-top:10px">

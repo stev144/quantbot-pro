@@ -31,6 +31,9 @@ def enroll(request, slug):
     course = get_course_detail(slug)
     if course is None:
         raise Http404("Course not found")
+    if not course.is_published:   # claude code changed: 2026-10-26 — planned courses have no lessons yet; enrolling gave "0 / 0"
+        messages.info(request, f"{course.title} is planned and not yet published, so it cannot be joined yet.")
+        return redirect("academy_course_detail", slug=slug)
 
     enrollment = enroll_student(request.user, course)
     if enrollment is None:

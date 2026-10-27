@@ -150,7 +150,7 @@
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
         <div>
             <div class="metric-label" style="margin-bottom:6px">
-                <span class="dca-dot" style="background:var(--accent)"></span>{% fx_flags "GBP/JPY" 18 %} GBP/JPY LONG{# claude code changed: 2026-10-22 — FX flags #}
+                <span class="dca-dot" style="background:var(--accent)"></span>{% fx_flags "GBP/JPY" 18 %} GBP/JPY LONG {% fx_session "GBP/JPY" %}{# claude code changed: 2026-10-22 — FX flags #}
                 <span class="term-section-meta" style="margin-left:8px"><span class="stat-number" data-target="{{ s.total_trades }}" data-decimals="0">0</span> trades · walk-forward out-of-sample</span>
             </div>
             <div class="dca-big-pnl pos">+$<span class="stat-number" data-target="{{ s.total_pnl }}" data-decimals="2">0.00</span></div>

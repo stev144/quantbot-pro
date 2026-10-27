@@ -30,7 +30,9 @@ def _resp(text, stop="end_turn", in_t=1000, out_t=500):
 
 
 def _answer(**over):
-    a = {"answer": "A z-score measures distance from the mean in standard deviations.", "worked_example": "",
+    a = {"answer": "A z-score measures distance from the mean in standard deviations.",
+         "key_terms": [{"term": "standard deviation", "meaning": "the typical size of a wobble"}],
+         "everyday_example": "Your commute is usually 30 minutes give or take 5.", "worked_example": "",
          "maths": "z = (x − μ) / σ", "limitations": ["Not a forecast."], "follow_up_questions": ["What is σ?"],
          "out_of_scope": False}
     a.update(over)
@@ -77,6 +79,9 @@ class RegistryTest(SimpleTestCase):
                     self.assertTrue(os.path.exists(os.path.join(settings.BASE_DIR, t)), t)
                 for r in c.related:
                     self.assertIn(r, reg.CONCEPTS)
+                for r in c.prerequisites:                                    # claude code changed: 2026-10-26
+                    self.assertIn(r, reg.CONCEPTS)
+                    self.assertNotEqual(r, c.id)
 
     def test_academy_lessons_exist_in_the_curriculum(self):
         from bot.academy.curriculum_seed import FULLY_AUTHORED_COURSE
@@ -137,6 +142,15 @@ class DefinitionMathsTest(SimpleTestCase):
         self.assertAlmostEqual(hl, math.log(2) / 0.1, places=6)
         explosive = pd.Series(1.01 ** np.arange(200))
         self.assertEqual(CointegrationEngine._estimate_half_life(CointegrationEngine.__new__(CointegrationEngine), explosive), float("inf"))
+
+    def test_correlation_known_answers(self):   # claude code changed: 2026-10-26 — the new building-block concept
+        x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertAlmostEqual(float(np.corrcoef(x, 2 * x + 7)[0, 1]), 1.0)
+        self.assertAlmostEqual(float(np.corrcoef(x, -x)[0, 1]), -1.0)
+        # two independent random walks: their PRICES can look strongly correlated by accident, their returns do not
+        rng = np.random.default_rng(0)
+        a, b = np.cumsum(rng.normal(size=2000)), np.cumsum(rng.normal(size=2000))
+        self.assertLess(abs(float(np.corrcoef(np.diff(a), np.diff(b))[0, 1])), 0.1)
 
     def test_ols_hedge(self):
         from bot.quant_core.cointegration import ols_hedge
@@ -237,6 +251,28 @@ class ServiceTest(TestCase):
         self.assertEqual(r["estimated_cost_usd"], Decimal("0"))
         self.assertEqual(len(fc.calls), 1)
         self.assertEqual(ExplainerRequest.objects.filter(status="CACHED", called_api=False).count(), 1)
+
+    @override_settings(EXPLAINER_AI_MODEL_RESEARCH="claude-sonnet-5-5")
+    def test_three_levels_models_and_legacy_names(self):   # claude code changed: 2026-10-26
+        self.assertEqual(svc.model_for("new"), "claude-haiku-5-5")
+        self.assertEqual(svc.model_for("build"), "claude-sonnet-5-5")
+        self.assertEqual(svc.model_for("deep"), "claude-sonnet-5-5")
+        self.assertEqual(svc.model_for("beginner"), "claude-haiku-5-5")      # old links still work
+        self.assertEqual(svc.model_for("research"), "claude-sonnet-5-5")
+        fc = FakeClient(_resp(_answer()))
+        r = self.ask(fc, mode="nonsense")
+        self.assertEqual(r["mode"], "new")                                   # default level for everyone
+        self.assertIn("EXPLAIN LIKE I'M NEW", fc.calls[0]["messages"][0]["content"])
+        self.assertEqual(r["answer"]["key_terms"][0]["term"], "standard deviation")
+        self.assertIn("commute", r["answer"]["everyday_example"])
+
+    def test_prerequisites_reach_the_model_without_code_refs(self):
+        fc = FakeClient(_resp(_answer()))
+        self.ask(fc, q="What is cointegration?", concept="cointegration", mode="new")
+        content = fc.calls[0]["messages"][0]["content"]
+        for name in ("Correlation", "Spread (between two prices)", "Stationarity"):
+            self.assertIn(name, content)
+        self.assertNotIn("_calculate_spread", content)
 
     def test_cache_key_versioning(self):
         base = svc.cache_key("z_score", "beginner", "What is a Z-score?", "claude-haiku-5-5")
@@ -372,7 +408,7 @@ class ExplainerPageTest(TestCase):
         ctx = {"concepts": reg.all_concepts(), "concept": concept, "ladder": ev.evidence_ladder(concept, files=[]),
                "related": [], "mode": "beginner", "result": result, "question": "", "ai_available": True,
                "max_chars": 500, "model": "claude-haiku-5-5",
-               "models": {"beginner": "claude-haiku-5-5", "research": "claude-sonnet-5-5"},
+               "models": {"new": "claude-haiku-5-5", "deeper": "claude-sonnet-5-5"}, "mode_labels": svc.MODE_LABELS,
                "registry_version": reg.REGISTRY_VERSION}
         for user, visible in ((AnonymousUser(), False),
                               (get_user_model().objects.create_user("rx_plain", password="x"), False),

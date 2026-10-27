@@ -1,120 +1,194 @@
 {% extends 'base.html' %}
 {% load static %}
-{% load research_extras %}{# claude code changed: 2026-10-26 — as_pct #}
+{% load research_extras %}
 {% block title %}Research Report — {{ experiment.id }}{% endblock %}
-{% block head %}<link rel="stylesheet" href="{% static 'css/academy.css' %}">{% endblock %}
+{% comment %}
+claude code changed: 2026-10-26 — report redesign (owner request: "redesigned to Steph Quant Technologies standards").
+Every field of the previous report is kept; it is reorganised into: summary (hypothesis, verdict, evidence class) →
+key evidence tiles (research_lab/_evidence_tiles.html, the same partial as the results page) → what the result means →
+what was tested + limitations → full statistical record → reproducibility. Prose in the UI font, numbers and IDs in
+mono. Times are UTC (labelled) with the viewer's local time added by partials/_local_time.html. Adds the missing
+strategy-backtest record (it fell through to "IC: not evaluated").
+{% endcomment %}
+{% block head %}
+<link rel="stylesheet" href="{% static 'css/academy.css' %}">
+<style>
+/* claude code changed: 2026-10-26 — Research Lab report */
+.rl-page { max-width: 980px; margin: 0 auto; padding: var(--sp-4) var(--sp-5) 110px; }
+body:has(.rl-page) #bubble-canvas { display: none !important; }   /* bubbles.js sets display inline */
+.rl-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1); padding: 18px 20px; margin-bottom: 16px; }
+.rl-kicker { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.rl-hero h1 { margin: 8px 0 10px; font-size: 21px; line-height: 1.35; color: var(--text-primary); font-weight: 600; }
+.rl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rl-chip { font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+.rl-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.rl-verdict .badge { font-size: 13px; padding: 4px 12px; }
+.rl-note { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+.rl-h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); font-weight: 650; }
+.rl-prose { font-size: 14.5px; line-height: 1.65; color: var(--text-primary); margin: 0; }
+.rl-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.rl-two .rl-card { margin-bottom: 0; }
+.rl-dl { display: grid; grid-template-columns: minmax(150px, max-content) minmax(0, 1fr); gap: 7px 16px; margin: 0; font-size: 13.5px; }
+.rl-dl dt { color: var(--text-dim); }
+.rl-dl dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.rl-dl dd.num, .rl-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.rl-list { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.55; color: var(--text-secondary); }
+.rl-list li + li { margin-top: 4px; }
+details.rl-more summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.rl-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; max-height: 420px; overflow: auto; }
+@media (max-width: 760px) { .rl-two { grid-template-columns: minmax(0, 1fr); } .rl-two .rl-card { margin-bottom: 16px; } }
+@media (max-width: 640px) {
+  .rl-page { padding: var(--sp-3) 8px 110px; }
+  .rl-card { padding: 16px 14px; }
+  .rl-dl { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .rl-dl dd { margin-bottom: 8px; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
-
 {% include "partials/_topbar.html" with active="research_lab_mvp" %}
+{% with spec=experiment.research_plan.spec r=experiment.statistical_results %}
+<main class="rl-page">
+    {% url 'research_lab_results' experiment_id=experiment.id as back_url %}
+    {% include "research_lab/_back_nav.html" with back_url=back_url use_browser_history=True %}
 
-<div class="term-body">
-    <div class="term-section academy-step-card" style="max-width:720px; margin:0 auto;">
-        {% comment %}claude code changed: report is reachable from its own experiment's results page AND from another report's rerun_of chain — genuinely ambiguous parent, prefers browser history with results (this experiment) as the safe fallback.{% endcomment %}
-        {% url 'research_lab_results' experiment_id=experiment.id as back_url %}
-        {% include "research_lab/_back_nav.html" with back_url=back_url use_browser_history=True %}
-        <div class="term-section-head">
-            <span class="term-section-title">Research Report</span>
-            <span class="term-section-meta mono">{{ experiment.id }}</span>
+    <!-- summary -->
+    <section class="rl-card rl-hero" aria-labelledby="rl-title">
+        <div class="rl-kicker">Research report · {% if experiment.created_at %}<time class="local-time" datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"j M Y, H:i" }} UTC</time>{% endif %}</div>
+        <h1 id="rl-title">“{{ experiment.hypothesis_text }}”</h1>
+        <div class="rl-chips">
+            {% if spec.asset %}<span class="rl-chip">{{ spec.asset }}{% if spec.asset_b %} / {{ spec.asset_b }}{% endif %}</span>{% endif %}
+            {% if spec.timeframe %}<span class="rl-chip">{{ spec.timeframe }} candles</span>{% endif %}
+            <span class="rl-chip">{% if spec.hypothesis_type == "strategy_backtest" %}Strategy backtest{% else %}{{ spec.hypothesis_type|default:"feature"|capfirst }} hypothesis{% endif %}</span>
+            {% if spec.target.horizon %}<span class="rl-chip">horizon {{ spec.target.horizon }} candles</span>{% endif %}
+            {% if spec.direction %}<span class="rl-chip">expected: {{ spec.direction }}</span>{% endif %}
         </div>
-        <div class="term-section-body mono">
-
-            {# claude code changed: Bug 3 fix — explicit "Original" vs "Executed" labels, per the brief's own required provenance vocabulary. These are two genuinely different fields on the model (hypothesis_text is immutable; research_plan.spec is the confirmed/executed spec) — the labels now say so instead of implying they're the same thing. #}
-            <p><strong>Original hypothesis:</strong> "{{ experiment.hypothesis_text }}"</p>
-            <p><strong>Executed specification:</strong></p>
-            <ul>
-                <li>Asset: {{ experiment.research_plan.spec.asset }}</li>
-                <li>Timeframe: {{ experiment.research_plan.spec.timeframe }}</li>
-                <li>Hypothesis type: {{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</li>
-                {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
-                <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} <span class="stat-number" data-target="{{ experiment.research_plan.spec.conditions.0.threshold|default_if_none:'' }}" data-decimals="2">{{ experiment.research_plan.spec.conditions.0.threshold }}</span></li>
-                {% elif experiment.research_plan.spec.hypothesis_type == "pairs" %}
-                {# claude code changed: new — Advanced Quant Research Capability Architecture #}
-                <li>Pair: {{ experiment.research_plan.spec.asset }} / {{ experiment.research_plan.spec.asset_b }}</li>
-                {% else %}
-                <li>Feature: {{ experiment.research_plan.spec.features|join:", "|default:"none specified" }}</li>
-                {% endif %}
-                {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
-                <li>Target: cointegration / spread stationarity (no forward-return horizon — see spec.py's validate_spec())</li>
-                {% else %}
-                <li>Target: forward return</li>
-                {# claude code changed: Multi-Asset Foundation Refactor STEP 3 — was a literal "hours, timeframe=1h" regardless of the spec's actual timeframe #}
-                <li>Horizon: <span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon }}" data-decimals="0">{{ experiment.research_plan.spec.target.horizon }}</span> candles{% if experiment.research_plan.spec.timeframe == "1h" %} (<span class="stat-number" data-target="{{ experiment.research_plan.spec.target.horizon }}" data-decimals="0">{{ experiment.research_plan.spec.target.horizon }}</span> hours, timeframe=1h){% else %} (timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }}){% endif %}</li>
-                {% endif %}
-                <li>Expected direction: {{ experiment.research_plan.spec.direction|default:"unspecified" }}</li>
-            </ul>
-            <p><strong>Dataset:</strong> <span class="stat-number" data-target="{{ experiment.research_plan.data_availability.checks|length }}" data-decimals="0">{{ experiment.research_plan.data_availability.checks|length }}</span> data requirement(s) checked, all_available={{ experiment.research_plan.data_availability.all_available }}</p>
-            {% if experiment.capability_id %}
-            <p><strong>Capability:</strong> {{ experiment.capability_id }} &mdash; subscription tier at planning: {{ experiment.research_plan.entitlement.tier_at_planning|default:"CORE" }}</p>
-            {% endif %}
-
-            <p><strong>Statistical evidence:</strong></p>
-            {% if experiment.research_plan.spec.hypothesis_type == "pairs" %}
-            {# claude code changed: new — Advanced Quant Research Capability Architecture #}
-            <ul>
-                <li>Cointegration p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.coint_pvalue|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.coint_pvalue|default:"not evaluated" }}</span></li>
-                <li>ADF p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.adf_pvalue|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.adf_pvalue|default:"not evaluated" }}</span></li>
-                <li>Hedge ratio: <span class="stat-number" data-target="{{ experiment.statistical_results.hedge_ratio|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.hedge_ratio|default:"not evaluated" }}</span></li>
-                {# claude code changed: Multi-Asset Foundation Refactor Phase 1B — was a hardcoded "hours" suffix regardless of the actual timeframe the evidence was computed on #}
-                <li>Half-life: <span class="stat-number" data-target="{{ experiment.statistical_results.half_life_time|default_if_none:'' }}" data-decimals="2">{{ experiment.statistical_results.half_life_time|default:"not evaluated" }}</span> {{ experiment.statistical_results.half_life_time_unit|default:"" }} (<span class="stat-number" data-target="{{ experiment.statistical_results.half_life_candles|default_if_none:'' }}" data-decimals="2">{{ experiment.statistical_results.half_life_candles|default:"?" }}</span> candles, timeframe={{ experiment.research_plan.spec.timeframe|default:"unconfirmed" }})</li>
-                <li>Is cointegrated (raw test): {{ experiment.statistical_results.is_cointegrated|default:"not evaluated" }}</li>
-                <li>Passes tradability filter: {{ experiment.statistical_results.passes_filters|default:"not evaluated" }}</li>
-                <li>{{ experiment.statistical_results.fdr_note|default:"" }}</li>
-            </ul>
-            {% elif experiment.statistical_results.metric == "conditional_event_test" %}
-            {# claude code changed: Statistical Integrity Hardening — expanded per gap #4/#8/#10/#12; FDR is now computed (m=1 identity), not skipped. #}
-            <ul>
-                <li>Total observations: <span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.sample_size|default:"not evaluated" }}</span></li>
-                <li>Qualifying observations (condition true): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_true|default:"not evaluated" }}</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|as_pct }}" data-decimals="2" data-suffix="%">{{ experiment.statistical_results.pct_condition_true|as_pct|floatformat:2 }}%</span> of dataset){# claude code changed: 2026-10-26 — was the raw fraction with a % sign (2.65% showed as 0.03%) #}</li>
-                <li>Non-qualifying observations (condition false / baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_false|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_false|default:"not evaluated" }}</span></li>
-                <li>Qualifying episodes (contiguous runs, not raw candles): <span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_episodes|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.n_condition_episodes|default:"not evaluated" }}</span> — average <span class="stat-number" data-target="{{ experiment.statistical_results.episode_ratio|default_if_none:'' }}" data-decimals="1">{{ experiment.statistical_results.episode_ratio|floatformat:1 }}</span> candles/episode</li>
-                <li>Mean forward return when condition true (per observation): <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.mean_return_when_true is not None %}{{ experiment.statistical_results.mean_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
-                <li>Mean return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.mean_return_when_false is not None %}{{ experiment.statistical_results.mean_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
-                <li>Median return when condition true: <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.median_return_when_true is not None %}{{ experiment.statistical_results.median_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
-                <li>Median return when condition false (baseline): <span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|as_pct }}" data-decimals="4" data-suffix="%">{% if experiment.statistical_results.median_return_when_false is not None %}{{ experiment.statistical_results.median_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</span></li>
-                <li>Expected direction: {{ experiment.statistical_results.expected_direction|default:"unspecified" }}</li>
-                <li>Observed direction: {{ experiment.statistical_results.observed_direction|default:"not evaluated" }}</li>
-                <li>Mann-Whitney U p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.mannwhitney_p_value|default:"not evaluated" }}</span></li>
-                <li>Block-permutation p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</span></li>
-                <li>FDR-adjusted p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.fdr_adjusted_p_value|default:"not evaluated" }}</span> (no family correction applied — no registered hypothesis family){# claude code changed: 2026-10-03 F-11 #}</li>
-                <li>Passes FDR: {{ experiment.statistical_results.passes_fdr|default:"not evaluated" }}</li>
-            </ul>
-            {% else %}
-            <ul>
-                <li>IC: <span class="stat-number" data-target="{{ experiment.statistical_results.ic|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.ic|default:"not evaluated" }}</span></li>
-                <li>Block-permutation p-value: <span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.statistical_results.block_permutation_p_value|default:"not evaluated" }}</span></li>
-                <li>Sample size: <span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:'' }}" data-decimals="0">{{ experiment.statistical_results.sample_size|default:"not evaluated" }}</span></li>
-                <li>FDR-adjusted p-value: <span class="stat-number" data-target="{{ experiment.validation_results.fdr_adjusted_p_value|default_if_none:'' }}" data-decimals="4">{{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</span></li>
-                <li>Passes FDR: {{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</li>
-            </ul>
-            {% endif %}
-
-            <p><strong>Limitations:</strong></p>
-            <ul>
-                {% for w in experiment.warnings %}<li>{{ w }}</li>{% empty %}<li>None recorded.</li>{% endfor %}
-                <li>Single-experiment result — no walk-forward or out-of-sample validation was run in this MVP pass.</li>
-            </ul>
-
-            <p><strong>Verdict:</strong> {{ experiment.verdict }} (criteria version {{ verdict_criteria_version }})</p>
-            <p><strong>Explanation:</strong> {{ experiment.ai_interpretation }}</p>
-
-            <p><strong>Code version:</strong> {{ experiment.code_version }}</p>
-            <p><strong>Random seed:</strong> <span class="stat-number" data-target="{{ experiment.random_seed|default_if_none:'' }}" data-decimals="0">{{ experiment.random_seed }}</span></p>
-            <p><strong>Experiment timestamps:</strong> created {% if experiment.created_at %}<time class="local-time" datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}, started {% if experiment.started_at %}<time class="local-time" datetime="{{ experiment.started_at|date:'c' }}">{{ experiment.started_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}, completed {% if experiment.completed_at %}<time class="local-time" datetime="{{ experiment.completed_at|date:'c' }}">{{ experiment.completed_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}{# claude code changed: 2026-10-26 — times were UTC without saying so #}</p>
-            <p><strong>Research ID:</strong> {{ experiment.id }}</p>
-
-            {% if experiment.rerun_of %}<p><strong>Rerun of:</strong> <a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></p>{% endif %}
-
-            <details style="margin-top:20px">
-                <summary class="mono">Full tool call log (<span class="stat-number" data-target="{{ experiment.tool_call_log|length }}" data-decimals="0">{{ experiment.tool_call_log|length }}</span> calls)</summary>
-                <pre class="mono" style="white-space:pre-wrap; font-size:12px">{{ experiment.tool_call_log }}</pre>
-            </details>
-
+        <div class="rl-verdict">
+            <span class="badge {{ experiment.verdict|verdict_class }}">{{ experiment.verdict|default:"NO VERDICT" }}</span>
+            <span class="rl-note">Verdict criteria v{{ verdict_criteria_version }}{% if evidence %} · {% if evidence.is_current_evidence %}current evidence{% else %}<b>{{ evidence.label }}</b> — not current evidence{% endif %}{% endif %}</span>
         </div>
+    </section>
+
+    <!-- key evidence -->
+    <section class="rl-card" aria-labelledby="rl-ev">
+        <h2 class="rl-h2" id="rl-ev">Key evidence</h2>
+        {% include "research_lab/_evidence_tiles.html" %}
+    </section>
+
+    <!-- meaning -->
+    {% if experiment.ai_interpretation %}
+    <section class="rl-card" aria-labelledby="rl-mean">
+        <h2 class="rl-h2" id="rl-mean">What the result means</h2>
+        <p class="rl-prose">{{ experiment.ai_interpretation }}</p>
+    </section>
+    {% endif %}
+
+    <div class="rl-two">
+        <section class="rl-card" aria-labelledby="rl-spec">
+            <h2 class="rl-h2" id="rl-spec">What was tested</h2>
+            <dl class="rl-dl">
+                <dt>Original hypothesis</dt><dd>“{{ experiment.hypothesis_text }}”</dd>
+                <dt>Asset</dt><dd>{{ spec.asset }}{% if spec.hypothesis_type == "pairs" %} / {{ spec.asset_b }}{% endif %}</dd>
+                <dt>Timeframe</dt><dd>{{ spec.timeframe }}</dd>
+                <dt>Hypothesis type</dt><dd>{{ spec.hypothesis_type|default:"feature" }}</dd>
+                {% if spec.hypothesis_type == "conditional" %}
+                <dt>Condition</dt><dd class="num">{{ spec.conditions.0.feature }} {{ spec.conditions.0.operator }} {{ spec.conditions.0.threshold }}</dd>
+                {% elif spec.hypothesis_type == "pairs" or spec.hypothesis_type == "strategy_backtest" %}
+                {% else %}
+                <dt>Feature</dt><dd>{{ spec.features|join:", "|default:"none specified" }}</dd>
+                {% endif %}
+                {% if spec.hypothesis_type == "pairs" %}
+                <dt>Target</dt><dd>Cointegration / spread stationarity (no forward-return horizon)</dd>
+                {% elif spec.hypothesis_type == "strategy_backtest" %}
+                <dt>Target</dt><dd>The platform's strategy, net of costs, over the whole history</dd>
+                {% else %}
+                <dt>Target</dt><dd>Forward return</dd>
+                <dt>Horizon</dt><dd class="num">{{ spec.target.horizon }} candles{% if spec.timeframe == "1h" %} ({{ spec.target.horizon }} hours){% endif %}</dd>
+                {% endif %}
+                <dt>Expected direction</dt><dd>{{ spec.direction|default:"unspecified" }}</dd>
+                <dt>Data checks</dt><dd>{{ experiment.research_plan.data_availability.checks|length }} requirement(s), all available: {{ experiment.research_plan.data_availability.all_available|yesno:"yes,no,unknown" }}</dd>
+                {% if experiment.capability_id %}<dt>Capability</dt><dd>{{ experiment.capability_id }} · tier at planning {{ experiment.research_plan.entitlement.tier_at_planning|default:"CORE" }}</dd>{% endif %}
+            </dl>
+        </section>
+        <section class="rl-card" aria-labelledby="rl-lim">
+            <h2 class="rl-h2" id="rl-lim">Limitations</h2>
+            <ul class="rl-list">
+                {% for w in experiment.warnings %}<li>{{ w }}</li>{% empty %}<li>No warnings were recorded for this run.</li>{% endfor %}
+                <li>Single-experiment result — no walk-forward or out-of-sample validation was run in this pass.</li>
+                {% if evidence and not evidence.is_current_evidence %}<li>{{ evidence.reason }}</li>{% endif %}
+            </ul>
+        </section>
     </div>
-</div>
 
+    <!-- full record -->
+    <section class="rl-card" aria-labelledby="rl-rec" style="margin-top:16px">
+        <h2 class="rl-h2" id="rl-rec">Full statistical record</h2>
+        <dl class="rl-dl">
+        {% if spec.hypothesis_type == "pairs" %}
+            <dt>Cointegration p-value</dt><dd class="num">{{ r.coint_pvalue|pvalue }}</dd>
+            <dt>ADF p-value (diagnostic)</dt><dd class="num">{{ r.adf_pvalue|pvalue }}</dd>
+            <dt>Hedge ratio</dt><dd class="num">{{ r.hedge_ratio|default:"not evaluated" }}</dd>
+            <dt>Half-life</dt><dd class="num">{{ r.half_life_time|default:"not evaluated" }} {{ r.half_life_time_unit|default:"" }} ({{ r.half_life_candles|default:"?" }} candles, timeframe {{ spec.timeframe|default:"unconfirmed" }})</dd>
+            <dt>Cointegrated (raw test)</dt><dd>{{ r.is_cointegrated|default:"not evaluated" }}</dd>
+            <dt>Passes tradability filter</dt><dd>{{ r.passes_filters|default:"not evaluated" }}</dd>
+            {% if r.fdr_note %}<dt>FDR</dt><dd>{{ r.fdr_note }}</dd>{% endif %}
+        {% elif r.metric == "conditional_event_test" %}
+            <dt>Total observations</dt><dd class="num">{{ r.sample_size|default:"not evaluated" }}</dd>
+            <dt>Condition true</dt><dd class="num">{{ r.n_condition_true|default:"not evaluated" }}{% if r.pct_condition_true is not None %} ({{ r.pct_condition_true|as_pct|floatformat:2 }}% of observations){% endif %}</dd>
+            <dt>Condition false (baseline)</dt><dd class="num">{{ r.n_condition_false|default:"not evaluated" }}</dd>
+            <dt>Episodes (contiguous runs)</dt><dd class="num">{{ r.n_condition_episodes|default:"not evaluated" }}{% if r.episode_ratio %} · {{ r.episode_ratio|floatformat:1 }} candles per episode{% endif %}</dd>
+            <dt>Mean forward return, condition true</dt><dd class="num">{% if r.mean_return_when_true is not None %}{{ r.mean_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
+            <dt>Mean forward return, baseline</dt><dd class="num">{% if r.mean_return_when_false is not None %}{{ r.mean_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
+            <dt>Median forward return, condition true</dt><dd class="num">{% if r.median_return_when_true is not None %}{{ r.median_return_when_true|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
+            <dt>Median forward return, baseline</dt><dd class="num">{% if r.median_return_when_false is not None %}{{ r.median_return_when_false|as_pct|floatformat:4 }}%{% else %}not evaluated{% endif %}</dd>
+            <dt>Expected / observed direction</dt><dd>{{ r.expected_direction|default:"unspecified" }} / {{ r.observed_direction|default:"not evaluated" }}</dd>
+            <dt>Mann–Whitney U p-value</dt><dd class="num">{{ r.mannwhitney_p_value|pvalue }}</dd>
+            <dt>Block-permutation p-value</dt><dd class="num">{{ r.block_permutation_p_value|pvalue }}</dd>
+            <dt>FDR-adjusted p-value</dt><dd class="num">{{ r.fdr_adjusted_p_value|default:"not evaluated" }} (no family correction applied — no registered hypothesis family)</dd>
+            <dt>Passes FDR</dt><dd>{{ r.passes_fdr|default:"not evaluated" }}</dd>
+        {% elif r.metric == "strategy_backtest" %}
+            <dt>Data window</dt><dd class="num">{{ r.data_start|default:"?" }} → {{ r.data_end|default:"?" }}</dd>
+            <dt>Trades (with net R)</dt><dd class="num">{{ r.n_trades|default:0 }} ({{ r.n_trades_with_net_r|default:0 }})</dd>
+            <dt>Mean / sd net R per trade</dt><dd class="num">{{ r.mean_net_r|floatformat:4 }} / {{ r.std_net_r|floatformat:4 }}</dd>
+            <dt>t-statistic, one-sided p</dt><dd class="num">{{ r.t_stat|floatformat:3 }}, {{ r.p_value_one_sided|floatformat:4 }}</dd>
+            <dt>Bootstrap 95% CI, mean net R</dt><dd class="num">{% if r.bootstrap_ci95_mean_net_r %}{{ r.bootstrap_ci95_mean_net_r.0|floatformat:4 }} to {{ r.bootstrap_ci95_mean_net_r.1|floatformat:4 }}{% else %}not computed{% endif %}</dd>
+            <dt>Lag-1 autocorrelation</dt><dd class="num">{% if r.lag1_autocorrelation is not None %}{{ r.lag1_autocorrelation|floatformat:3 }}{% else %}n/a{% endif %}</dd>
+            <dt>Win rate / profit factor</dt><dd class="num">{{ r.win_rate|floatformat:1 }}% / {{ r.profit_factor|floatformat:2 }}</dd>
+            <dt>Balance</dt><dd class="num">${{ r.initial_balance|floatformat:"2g" }} → ${{ r.final_balance|floatformat:"2g" }}</dd>
+            <dt>Max drawdown</dt><dd class="num">−${{ r.max_drawdown_usd|floatformat:"2g" }} (−{{ r.max_drawdown|floatformat:2 }}%)</dd>
+        {% else %}
+            <dt>Information Coefficient</dt><dd class="num">{{ r.ic|default:"not evaluated" }}</dd>
+            <dt>Block-permutation p-value</dt><dd class="num">{{ r.block_permutation_p_value|pvalue }}</dd>
+            <dt>Sample size</dt><dd class="num">{{ r.sample_size|default:"not evaluated" }}</dd>
+            <dt>FDR-adjusted p-value</dt><dd class="num">{{ experiment.validation_results.fdr_adjusted_p_value|default:"not evaluated" }}</dd>
+            <dt>Passes FDR</dt><dd>{{ experiment.validation_results.passes_fdr|default:"not evaluated" }}</dd>
+        {% endif %}
+        </dl>
+    </section>
+
+    <!-- reproducibility -->
+    <section class="rl-card" aria-labelledby="rl-rep">
+        <h2 class="rl-h2" id="rl-rep">Reproducibility</h2>
+        <dl class="rl-dl">
+            <dt>Research ID</dt><dd class="num">{{ experiment.id }}</dd>
+            <dt>Code version</dt><dd class="num">{{ experiment.code_version|default:"not recorded" }}</dd>
+            <dt>Random seed</dt><dd class="num">{{ experiment.random_seed|default_if_none:"not recorded" }}</dd>
+            <dt>Created</dt><dd>{% if experiment.created_at %}<time class="local-time" datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</dd>
+            <dt>Started</dt><dd>{% if experiment.started_at %}<time class="local-time" datetime="{{ experiment.started_at|date:'c' }}">{{ experiment.started_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</dd>
+            <dt>Completed</dt><dd>{% if experiment.completed_at %}<time class="local-time" datetime="{{ experiment.completed_at|date:'c' }}">{{ experiment.completed_at|date:"j M Y, H:i" }} UTC</time>{% else %}—{% endif %}</dd>
+            {% if experiment.rerun_of %}<dt>Rerun of</dt><dd class="num"><a href="{% url 'research_lab_report' experiment_id=experiment.rerun_of.id %}">{{ experiment.rerun_of.id }}</a></dd>{% endif %}
+        </dl>
+        <p class="rl-note" style="margin-top:10px">The same code version and random seed reproduce the same evidence. Records are never overwritten — a rerun creates a new experiment.</p>
+        <details class="rl-more" style="margin-top:10px">
+            <summary>Full tool call log ({{ experiment.tool_call_log|length }} call{{ experiment.tool_call_log|length|pluralize }})</summary>
+            <pre class="rl-pre">{{ experiment.tool_call_log }}</pre>
+        </details>
+    </section>
+</main>
+{% endwith %}
 {% include "partials/_footer.html" with label="Research Lab" note="reproducible — same code_version + random_seed will produce the same evidence" %}
-
 {% endblock %}
 
 {% block scripts %}

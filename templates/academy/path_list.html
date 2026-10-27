@@ -15,7 +15,7 @@
     <div class="term-section">
         <div class="term-section-head">
             <span class="term-section-title"><a href="{% url 'academy_path_detail' slug=path.slug %}">{{ path.title }}</a></span>
-            <span class="term-section-meta"><span class="stat-number" data-target="{{ path.courses.count }}" data-decimals="0">0</span> course(s)</span>
+            <span class="term-section-meta">{% if path.n_available %}{{ path.n_available }} available{% if path.n_planned %} · {% endif %}{% endif %}{% if path.n_planned %}{{ path.n_planned }} planned{% endif %}</span>{# claude code changed: 2026-10-26 — was the count of all courses, mostly unpublished stubs #}
         </div>
         <div class="term-section-body">
             <div class="chart-caption">{{ path.description }}</div>

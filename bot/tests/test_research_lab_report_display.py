@@ -43,9 +43,44 @@ class ReportRenderTest(SimpleTestCase):
         import re
         raw = self._render()
         html = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", raw))   # the visible text
-        self.assertIn("2.65% of dataset", html)
-        self.assertNotIn("0.03% of dataset", html)
+        self.assertIn("2.65% of observations", html)
+        self.assertNotIn("0.03%", html)
         self.assertIn("0.0210%", html)                      # mean forward return, as a percentage
         self.assertIn("26 Oct 2026, 14:54 UTC", html)
         self.assertIn('class="local-time"', raw)             # the viewer's local time is added in the browser
         self.assertIn("your time", raw)                      # the local-time script is included
+
+
+class BacktestReportTest(SimpleTestCase):
+    """claude code changed: 2026-10-26 — strategy backtests used to fall through to "IC: not evaluated"."""
+
+    def test_backtest_record_is_shown(self):
+        import re
+        t = datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc)
+        exp = NS(id=uuid.uuid4(), hypothesis_text="the platform strategy is profitable on BTC",
+                 research_plan={"spec": {"asset": "BTC/USDT", "timeframe": "1h", "hypothesis_type": "strategy_backtest"},
+                                "data_availability": {"checks": [], "all_available": True}},
+                 statistical_results={"metric": "strategy_backtest", "n_trades": 1152, "n_trades_with_net_r": 1152,
+                                      "mean_net_r": -0.66, "std_net_r": 1.2, "t_stat": -18.7, "p_value_one_sided": 1.0,
+                                      "bootstrap_ci95_mean_net_r": [-0.73, -0.59], "lag1_autocorrelation": 0.02,
+                                      "win_rate": 28.4, "profit_factor": 0.41, "initial_balance": 5000.0,
+                                      "final_balance": 1.34, "max_drawdown": 99.97, "max_drawdown_usd": 4998.66,
+                                      "data_start": "2025-01-01", "data_end": "2026-10-03"},
+                 created_at=t, started_at=t, completed_at=t, verdict="REJECTED", status="COMPLETED", warnings=[])
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+        html = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", render_to_string("research_lab/report.html", {"experiment": exp}, request=request)))
+        self.assertIn("Strategy backtest", html)
+        self.assertIn("-0.6600 / 1.2000", html)
+        self.assertIn("-0.7300 to -0.5900", html)
+        self.assertIn("−$4,998.66 (−99.97%)", html)
+        self.assertNotIn("Information Coefficient", html)
+
+
+class PValueFilterTest(SimpleTestCase):
+    def test_known_answers(self):   # claude code changed: 2026-10-26
+        from bot.templatetags.research_extras import pvalue
+        self.assertEqual(pvalue(2.6711958e-05), "< 0.0001")
+        self.assertEqual(pvalue(0.985), "0.9850")
+        self.assertEqual(pvalue(0.0001), "0.0001")
+        self.assertEqual(pvalue(None), "not evaluated")

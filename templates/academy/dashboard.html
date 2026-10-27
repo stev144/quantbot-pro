@@ -1,78 +1,198 @@
 {% extends 'base.html' %}
 {% load static %}
 {% block title %}Academy — Steph Quant Technologies{% endblock %}
-{# claude code changed: rebrand from Quant Bot Pro to Steph Quant Technologies #}
+{% comment %}
+claude code changed: 2026-10-26 — Academy dashboard redesign (owner brief "Professional Academy Redesign"). Welcome +
+next step, four progress cards with honest empty states (unknown ≠ zero), skill levels, the Quant Learning Journey
+(bot/academy/journey.py: real published / planned counts), learning tools, enrolled courses. Data:
+bot/academy/views/dashboard_data.py. Theme tokens only; no Academy-only identity.
+{% endcomment %}
+{% block head %}
+<link rel="stylesheet" href="{% static 'css/academy.css' %}">
+<style>
+/* claude code changed: 2026-10-26 — Academy dashboard */
+.ac-page { max-width: 1240px; margin: 0 auto; padding: var(--sp-4) var(--sp-5) 110px; }
+body:has(.ac-page) #bubble-canvas { display: none !important; }   /* no falling logos behind learning content */
+.ac-welcome { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px 24px;
+  padding: 22px 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1); margin-bottom: 20px; }
+.ac-welcome h1 { margin: 0; font-size: 22px; color: var(--text-primary); font-weight: 650; }
+.ac-welcome p { margin: 6px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.5; max-width: 640px; }
+.ac-next { margin-top: 10px; font-size: 13px; color: var(--text-dim); }
+.ac-next b { color: var(--text-primary); font-weight: 600; }
+.ac-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.ac-btn { display: inline-block; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 14px; text-decoration: none;
+  background: var(--positive); color: #fff !important; border: 1px solid var(--positive); }
+.ac-btn.ghost { background: transparent; color: var(--text-primary) !important; border-color: var(--border-strong); }
+.ac-btn:focus-visible, .ac-card a:focus-visible, .ac-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ac-h2 { margin: 36px 0 12px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); font-weight: 650; }
+.ac-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.ac-card { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-1); min-width: 0; min-height: 118px; }
+.ac-label { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.ac-value { font-size: 26px; font-weight: 650; color: var(--text-primary); font-family: var(--font-mono); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ac-value.muted { font-size: 17px; color: var(--text-secondary); font-family: var(--font-ui); font-weight: 600; }
+.ac-sub { font-size: 12.5px; color: var(--text-dim); line-height: 1.45; }
+.ac-bar { height: 6px; border-radius: 3px; background: var(--bg-2); overflow: hidden; }
+.ac-bar > span { display: block; height: 100%; background: var(--positive); }
+.ac-skills { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.ac-skill { padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-1); }
+.ac-skill .ac-value { font-size: 15px; font-family: var(--font-ui); margin: 4px 0 6px; }
+.ac-journey { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.ac-stage { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-1); text-decoration: none; color: inherit; min-width: 0; }
+a.ac-stage:hover { border-color: var(--accent); }
+.ac-stage-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ac-stage-num { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.ac-stage h3 { margin: 0; font-size: 16px; color: var(--text-primary); font-weight: 650; }
+.ac-level { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.ac-level.beginner { color: var(--positive); } .ac-level.intermediate { color: var(--neutral); } .ac-level.advanced { color: var(--warning); }
+.ac-avail { margin-top: auto; font-size: 12.5px; color: var(--text-secondary); }
+.ac-avail.none { color: var(--text-dim); font-style: italic; }
+.ac-tools { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.ac-note { margin-top: 18px; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+@media (max-width: 1000px) { .ac-cards, .ac-skills { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ac-journey, .ac-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .ac-page { padding: var(--sp-3) 8px 110px; }
+  .ac-welcome { padding: 18px 16px; }
+  .ac-cards, .ac-skills, .ac-journey, .ac-tools { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { .ac-bar > span { transition: none; } }
+</style>
+{% endblock %}
+
 {% block content %}
-
 {% include "partials/_topbar.html" with active="academy" %}
+<main class="ac-page">
 
-<div class="term-body">
+    <section class="ac-welcome" aria-labelledby="ac-hello">
+        <div>
+            <h1 id="ac-hello">{% if enrollments %}Welcome back, {% else %}Welcome, {% endif %}{{ user.first_name|default:user.username }}</h1>
+            {% if next_lesson %}
+            <p>Build your understanding of quantitative finance, one concept at a time.</p>
+            <div class="ac-next">Next lesson: <b>{{ next_lesson.title }}</b> · {{ recommended_course.title }} ({{ recommended_course.path.title }})</div>
+            {% elif all_enrolled_done %}
+            <p>You have completed every lesson in your enrolled courses. Choose your next course from the learning journey below.</p>
+            {% else %}
+            <p>Your journey starts here. Learn the foundations before moving into quantitative research.</p>
+            {% endif %}
+        </div>
+        <div class="ac-actions">
+            {% if next_lesson %}
+            <a class="ac-btn" href="{% url 'academy_lesson_detail' course_slug=recommended_course.slug lesson_slug=next_lesson.slug %}">Continue learning</a>
+            {% else %}
+            {% if start_course %}<a class="ac-btn" href="{% url 'academy_course_detail' slug=start_course.slug %}">Start learning</a>
+            {% else %}<a class="ac-btn" href="{% url 'academy_path_list' %}">Start learning</a>{% endif %}
+            {% endif %}
+            {% if onboarding_needed %}<a class="ac-btn ghost" href="{% url 'academy_onboarding' %}">Take the 2-minute diagnostic</a>{% endif %}
+        </div>
+    </section>
 
-    {% if onboarding_needed %}
-    <div class="term-section">
-        <div class="term-section-body">
-            <div class="chart-caption">
-                Take the onboarding diagnostic so the Academy can recommend where to start, instead of assuming
-                everyone begins in the same place.
-            </div>
-            <a class="term-btn mono" href="{% url 'academy_onboarding' %}">Start Diagnostic</a> <a class="term-btn mono" href="{% url 'academy_leverage_reality' %}">Leverage Reality</a><!-- # claude code changed: 2026-10-22 — Academy tool link --> <a class="term-btn mono" href="{% url 'academy_explainer' %}">Research Explainer</a>{# claude code changed: 2026-10-26 — Research Explainer link #}
+    <h2 class="ac-h2">Your progress</h2>
+    <div class="ac-cards">
+        <div class="ac-card">
+            <span class="ac-label">Lessons completed</span>
+            {% if total_lessons_enrolled %}
+            <span class="ac-value"><span class="stat-number" data-target="{{ completed_lessons }}" data-decimals="0">{{ completed_lessons }}</span> / {{ total_lessons_enrolled }}</span>
+            <span class="ac-sub">{% if completed_lessons %}Lessons finished in your enrolled courses.{% else %}Start with your first lesson.{% endif %}</span>
+            {% else %}
+            <span class="ac-value">0</span>
+            <span class="ac-sub">Enroll in a course to start.</span>
+            {% endif %}
+        </div>
+        <div class="ac-card">
+            <span class="ac-label">Learning progress</span>
+            {% if progress_pct is not None %}
+            <span class="ac-value"><span class="stat-number" data-target="{{ progress_pct }}" data-decimals="0" data-suffix="%">{{ progress_pct }}%</span></span>
+            <div class="ac-bar" role="img" aria-label="{{ progress_pct }} percent of enrolled lessons completed"><span style="width:{{ progress_pct }}%"></span></div>
+            <span class="ac-sub">Completed lessons ÷ all lessons in your enrolled courses.</span>
+            {% else %}
+            <span class="ac-value muted">Not yet available</span>
+            <span class="ac-sub">Shown once you are enrolled in a course.</span>
+            {% endif %}
+        </div>
+        <div class="ac-card">
+            <span class="ac-label">Quiz attempts</span>
+            <span class="ac-value"><span class="stat-number" data-target="{{ quiz_attempts_count }}" data-decimals="0">{{ quiz_attempts_count }}</span></span>
+            <span class="ac-sub">Completed quiz attempts, retakes included.</span>
+        </div>
+        <div class="ac-card">
+            <span class="ac-label">Average quiz score</span>
+            {% if avg_quiz_score is not None %}
+            <span class="ac-value"><span class="stat-number" data-target="{{ avg_quiz_score }}" data-decimals="1" data-suffix="%">{{ avg_quiz_score }}%</span></span>
+            <span class="ac-sub">Mean score across your completed attempts.</span>
+            {% else %}
+            <span class="ac-value muted">Not yet available</span>
+            <span class="ac-sub">Complete your first quiz to establish your average.</span>
+            {% endif %}
         </div>
     </div>
+
+    <h2 class="ac-h2">Your starting level</h2>
+    {% if profile and profile.onboarding_completed_at %}
+    <div class="ac-skills">
+        {% for label, level in skill_levels %}
+        <div class="ac-skill">
+            <span class="ac-label">{{ label }}</span>
+            <div class="ac-value">{{ level|title }}</div>
+            <div class="academy-level-track"><div class="academy-level-fill {{ level }}"></div></div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="ac-note">From your diagnostic. <a href="{% url 'academy_onboarding' %}">Retake the diagnostic</a> if your skills have changed.</div>
+    {% else %}
+    <div class="ac-card" style="min-height:0"><span class="ac-value muted">Not assessed yet</span>
+        <span class="ac-sub">An optional 2-minute diagnostic suggests where to begin. You can also start learning straight away.</span></div>
     {% endif %}
 
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">Your Progress</span>
-        </div>
-        <div class="term-section-body">
-            <div class="term-stat-row">
-                <div class="term-stat"><span class="term-stat-label">Lessons Completed</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ completed_lessons|default_if_none:0 }}" data-decimals="0">0</span>{% if total_lessons_enrolled %} / <span class="stat-number" data-target="{{ total_lessons_enrolled }}" data-decimals="0">0</span>{% endif %}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Quiz Attempts</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ quiz_attempts_count|default_if_none:0 }}" data-decimals="0">0</span></span></div>
-                <div class="term-stat"><span class="term-stat-label">Avg Quiz Score</span><span class="term-stat-value mono">{% if avg_quiz_score is not None %}<span class="stat-number" data-target="{{ avg_quiz_score }}" data-decimals="1" data-suffix="%">0%</span>{% else %}—{% endif %}</span></div>
-            </div>
-
-            {% if profile %}
-            <div class="chart-caption" style="margin-top:16px">Skill levels (from your diagnostic)</div>
-            <div class="term-stat-row">
-                <div class="term-stat"><span class="term-stat-label">Trading Experience</span><span class="term-stat-value mono">{{ profile.trading_experience_level }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Programming</span><span class="term-stat-value mono">{{ profile.programming_level }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Quantitative</span><span class="term-stat-value mono">{{ profile.quant_level }}</span></div>
-                <div class="term-stat"><span class="term-stat-label">Research</span><span class="term-stat-value mono">{{ profile.research_level }}</span></div>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">Enrolled Courses</span>
-        </div>
-        <div class="term-section-body">
-            {% if enrollments %}
-            <div class="term-table-wrap">
-                <table class="term-table">
-                    <thead><tr><th>Course</th><th>Path</th><th>Status</th></tr></thead>
-                    <tbody>
-                        {% for e in enrollments %}
-                        <tr>
-                            <td>{% if e.course %}<a href="{% url 'academy_course_detail' slug=e.course.slug %}">{{ e.course.title }}</a>{% else %}{{ e.learning_path }}{% endif %}</td>
-                            <td class="text-dim">{{ e.course.path.title|default:e.learning_path.title }}</td>
-                            <td><span class="badge pos">{{ e.status }}</span></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+    <h2 class="ac-h2">The Quant Learning Journey</h2>
+    <div class="ac-journey">
+        {% for s in journey %}
+        {% if s.first_course %}<a class="ac-stage" href="{% url 'academy_course_detail' slug=s.first_course.slug %}">{% else %}<div class="ac-stage">{% endif %}
+            <div class="ac-stage-top"><span class="ac-stage-num">Stage {{ forloop.counter }}</span><span class="ac-level {{ s.level|lower }}">{{ s.level }}</span></div>
+            <h3>{{ s.title }}</h3>
+            <span class="ac-sub">{{ s.summary }}</span>
+            {% if s.n_available %}
+            <span class="ac-avail">{{ s.n_available }} course{{ s.n_available|pluralize }} available{% if s.n_planned %} · {{ s.n_planned }} planned{% endif %} — start with {{ s.first_course.title }} →</span>
+            {% elif s.n_planned %}
+            <span class="ac-avail none">{{ s.n_planned }} course{{ s.n_planned|pluralize }} planned — content in preparation</span>
             {% else %}
-            <div class="chart-caption">Not enrolled in anything yet — <a href="{% url 'academy_path_list' %}">browse the curriculum</a>.</div>
+            <span class="ac-avail none">Planned — content in preparation</span>
             {% endif %}
-        </div>
+        {% if s.first_course %}</a>{% else %}</div>{% endif %}
+        {% endfor %}
     </div>
 
-</div>
+    <h2 class="ac-h2">Learning tools</h2>
+    <div class="ac-tools">
+        <a class="ac-stage" href="{% url 'academy_explainer' %}"><h3>Research Explainer</h3><span class="ac-sub">Ask about a concept — Z-scores, cointegration, out-of-sample testing — at the level that suits you.</span></a>
+        <a class="ac-stage" href="{% url 'academy_zscore_lab' %}"><h3>Z-Score Lab</h3><span class="ac-sub">Change a sample and an observation and see how the Z-score responds — illustrative numbers.</span></a>
+        <a class="ac-stage" href="{% url 'academy_leverage_reality' %}"><h3>Leverage Reality</h3><span class="ac-sub">See how leverage changes margin and liquidation, with hypothetical positions.</span></a>
+        <a class="ac-stage" href="{% url 'academy_path_list' %}"><h3>Full curriculum</h3><span class="ac-sub">Every learning path and course, with what is available now and what is planned.</span></a>
+    </div>
 
-{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice — see each course's disclaimer" %}
+    <h2 class="ac-h2">Enrolled courses</h2>
+    {% if enrollments %}
+    <div class="term-table-wrap">
+        <table class="term-table">
+            <thead><tr><th>Course</th><th>Path</th><th>Status</th></tr></thead>
+            <tbody>
+                {% for e in enrollments %}
+                <tr>
+                    <td>{% if e.course %}<a href="{% url 'academy_course_detail' slug=e.course.slug %}">{{ e.course.title }}</a>{% else %}{{ e.learning_path }}{% endif %}</td>
+                    <td class="text-dim">{% if e.course %}{{ e.course.path.title }}{% else %}{{ e.learning_path.title }}{% endif %}</td>{# claude code changed: 2026-10-26 — the default: fallback crashed for every course enrolment #}
+                    <td><span class="badge pos">{{ e.status|title }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="ac-sub">Not enrolled in anything yet — choose a course from the learning journey above.</div>
+    {% endif %}
 
+    <div class="ac-note">Education, not financial advice. Completing courses teaches research methods; it does not make anyone a profitable trader.</div>
+</main>
+{% include "partials/_footer.html" with label="Steph Quant Academy" note="education, not financial advice — see each course's disclaimer" %}
 {% endblock %}
 
 {% block scripts %}

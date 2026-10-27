@@ -1,0 +1,79 @@
+{% load research_extras %}{# claude code changed: 2026-10-26 — new; the evidence tiles, moved unchanged from results.html so the report shows the same numbers (no second copy) #}
+            {% if experiment.statistical_results.metric == "conditional_event_test" %}
+            {# claude code changed: Statistical Integrity Hardening — expanded from 5 to include the fields gap #4/#8/#10 require: qualifying %, median return, FDR (now computed, not skipped), episode count, expected vs observed direction. #}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Total observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying observations</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_true|default_if_none:0 }}" data-decimals="0">0</span> (<span class="stat-number" data-target="{{ experiment.statistical_results.pct_condition_true|as_pct|default:0 }}" data-decimals="2" data-suffix="%">0%</span>)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Qualifying episodes (contiguous runs)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.n_condition_episodes|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Mean Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_true|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean Return (baseline / condition false)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mean_return_when_false|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (condition true)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_true|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Median Return (baseline)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.median_return_when_false|as_pct|default:0 }}" data-decimals="4" data-suffix="%">0%</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Expected direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.expected_direction|default:"unspecified" }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Observed direction</span><span class="term-stat-value mono">{{ experiment.statistical_results.observed_direction }}</span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Mann-Whitney p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.mannwhitney_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{% if experiment.statistical_results.fdr_adjusted_p_value is not None %}<span class="stat-number" data-target="{{ experiment.statistical_results.fdr_adjusted_p_value }}" data-decimals="4">0</span>{% else %}not applied{% endif %}</span></div>{# claude code changed: 2026-10-03 F-11 — was default_if_none:0, which displayed an unapplied correction as p = 0 #}
+                <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_fdr|default_if_none:"not applied" }}</span></div>
+            </div>
+            {% if experiment.statistical_results.episode_ratio > 3 %}
+            <div class="chart-caption mono" style="margin-bottom:18px">Note: ~<span class="stat-number" data-target="{{ experiment.statistical_results.episode_ratio|default_if_none:0 }}" data-decimals="1">0</span> qualifying candles per episode — many qualifying candles come from the same contiguous regime, not independent events. The block-permutation p-value above already accounts for this serial dependence (it shuffles whole blocks, not individual candles); the raw qualifying-observation count does not.</div>
+            {% endif %}
+            {% elif experiment.research_plan.spec.hypothesis_type == "pairs" and experiment.statistical_results %}
+            {# claude code changed: new — Advanced Quant Research Capability Architecture. run_cointegration_test()'s evidence shape (is_cointegrated/passes_filters/half_life_hours) has no "metric" key and no "ic" — a distinct branch, not the generic IC branch below, which would otherwise silently show blank/wrong fields for a pairs result. #}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Cointegration p-value</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.coint_pvalue|default_if_none:0 }}" data-decimals="6">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">ADF p-value</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.adf_pvalue|default_if_none:0 }}" data-decimals="6">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Hedge ratio (&beta;)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.hedge_ratio|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                {# claude code changed: Multi-Asset Foundation Refactor Phase 1B — was a hardcoded "h" suffix on half_life_hours, correct only because every dataset this engine has ever run on is 1h candles. Now reads the honestly timeframe-aware half_life_time/half_life_time_unit. #}
+                <div class="term-stat"><span class="term-stat-label">Half-life</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.half_life_time|default_if_none:0 }}" data-decimals="1">0</span> {{ experiment.statistical_results.half_life_time_unit|default:"hours" }} (<span class="stat-number" data-target="{{ experiment.statistical_results.half_life_candles|default_if_none:0 }}" data-decimals="1">0</span> candles)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Is cointegrated (raw test)</span><span class="term-stat-value mono">{{ experiment.statistical_results.is_cointegrated }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Passes tradability filter</span><span class="term-stat-value mono">{{ experiment.statistical_results.passes_filters }}</span></div>
+            </div>
+            {% if experiment.statistical_results.reject_reason %}
+            <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.reject_reason }}</div>
+            {% endif %}
+            <div class="chart-caption mono" style="margin-bottom:18px">{{ experiment.statistical_results.fdr_note }}</div>
+            {% elif experiment.statistical_results.metric == "strategy_backtest" %}
+            {# claude code changed: 2026-10-26 — Backtest Validation evidence (run_backtest, research mode). Red = loss / worse, green = profit / better. #}
+            {% with r=experiment.statistical_results %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Trades</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ r.n_trades_with_net_r|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Mean net R / trade</span><span class="term-stat-value mono" style="color:{% if r.mean_net_r > 0 %}var(--positive){% else %}var(--negative){% endif %}"><span class="stat-number" data-target="{{ r.mean_net_r|default_if_none:0 }}" data-decimals="3">0</span>R</span></div>
+                <div class="term-stat"><span class="term-stat-label">One-sided p (mean &gt; 0)</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ r.p_value_one_sided|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Bootstrap 95% CI</span><span class="term-stat-value mono">{% if r.bootstrap_ci95_mean_net_r %}{{ r.bootstrap_ci95_mean_net_r.0|floatformat:3 }}R to {{ r.bootstrap_ci95_mean_net_r.1|floatformat:3 }}R{% else %}not computed{% endif %}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Win rate</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ r.win_rate|default_if_none:0 }}" data-decimals="1">0</span>%</span></div>
+                <div class="term-stat"><span class="term-stat-label">Profit factor</span><span class="term-stat-value mono" style="color:{% if r.profit_factor > 1 %}var(--positive){% else %}var(--negative){% endif %}"><span class="stat-number" data-target="{{ r.profit_factor|default_if_none:0 }}" data-decimals="2">0</span></span></div>
+            </div>
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Balance</span><span class="term-stat-value mono" style="color:{% if r.final_balance >= r.initial_balance %}var(--positive){% else %}var(--negative){% endif %}">${{ r.initial_balance|floatformat:"2g" }} → ${{ r.final_balance|floatformat:"2g" }}</span></div>
+                <div class="term-stat"><span class="term-stat-label">Max drawdown</span><span class="term-stat-value mono" style="color:var(--negative)">−${{ r.max_drawdown_usd|floatformat:"2g" }} (−{{ r.max_drawdown|floatformat:2 }}%)</span></div>
+                <div class="term-stat"><span class="term-stat-label">Lag-1 autocorr.</span><span class="term-stat-value mono">{% if r.lag1_autocorrelation is not None %}{{ r.lag1_autocorrelation|floatformat:3 }}{% else %}n/a{% endif %}</span></div>
+            </div>
+            <div class="chart-caption mono" style="margin-bottom:18px">Research mode: every strategy the router can fire is allowed, including ones not yet validated. Costs: the venue's fees and slippage on every fill. One run over the whole history — no holdout.</div>
+            {% endwith %}
+            {% elif experiment.statistical_results %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">Information Coefficient</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.ic|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Block-Permutation p</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.block_permutation_p_value|default_if_none:0 }}" data-decimals="4">0</span></span></div>
+                <div class="term-stat"><span class="term-stat-label">Sample Size</span><span class="term-stat-value mono"><span class="stat-number" data-target="{{ experiment.statistical_results.sample_size|default_if_none:0 }}" data-decimals="0">0</span></span></div>
+            </div>
+            {% if experiment.validation_results %}
+            <div class="term-stat-row" style="margin-bottom:18px">
+                <div class="term-stat"><span class="term-stat-label">FDR-Adjusted p</span><span class="term-stat-value mono">{% if experiment.validation_results.fdr_adjusted_p_value is not None %}<span class="stat-number" data-target="{{ experiment.validation_results.fdr_adjusted_p_value }}" data-decimals="4">0</span>{% else %}not applied{% endif %}</span></div>{# claude code changed: 2026-10-03 F-11 — was default_if_none:0, which displayed an unapplied correction as p = 0 #}
+                <div class="term-stat"><span class="term-stat-label">Passes FDR</span><span class="term-stat-value mono">{{ experiment.validation_results.passes_fdr|default_if_none:"not applied" }}</span></div>
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="chart-caption mono" style="margin-bottom:18px">Not evaluated by this experiment.</div>
+            {% endif %}

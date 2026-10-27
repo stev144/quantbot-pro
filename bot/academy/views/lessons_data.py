@@ -48,3 +48,24 @@ def get_next_lesson(lesson):
     if idx + 1 < len(all_lessons):
         return all_lessons[idx + 1]
     return None
+
+
+def get_lesson_outline(user, lesson):   # claude code changed: 2026-10-26 — lesson page outline + position + previous
+    """Modules and lessons of the lesson's course with each lesson's status ("completed" / "current" / "todo"), the
+    previous lesson, and this lesson's 1-based position. Completion comes only from LessonProgress (never from viewing)."""
+    course = lesson.module.course
+    done = set(LessonProgress.objects.filter(student=user, status="completed",
+                                             lesson__module__course=course).values_list("lesson_id", flat=True))
+    modules, flat = [], []
+    for module in course.modules.all():
+        items = []
+        for l in module.lessons.all():
+            status = "current" if l.id == lesson.id else "completed" if l.id in done else "todo"
+            items.append({"lesson": l, "status": status, "done": l.id in done})
+            flat.append(l)
+        modules.append({"module": module, "lessons": items})
+    idx = [l.id for l in flat].index(lesson.id)
+    return {"modules": modules, "position": idx + 1, "total": len(flat),
+            "previous": flat[idx - 1] if idx > 0 else None, "is_completed": lesson.id in done,
+            "n_done": len(done)}
+

@@ -1,0 +1,179 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Z-Score Lab — Academy{% endblock %}
+{% comment %}
+claude code changed: 2026-10-26 — new page: Z-Score Exploration Lab. The server renders the starting state with
+bot/academy/zlab.py (works without JavaScript; the form re-submits); the script below repeats the SAME formula for
+live updates — z = (x − mean) / sd, sample sd (n − 1), undefined when sd = 0 or n < 2. Illustrative numbers only.
+{% endcomment %}
+{% block head %}
+<style>
+/* claude code changed: 2026-10-26 — Z-Score Lab */
+.zl-page { max-width: 1100px; margin: 0 auto; padding: var(--sp-4) var(--sp-5) 110px; }
+body:has(.zl-page) #bubble-canvas { display: none !important; }
+.zl-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1); padding: 20px 22px; margin-bottom: 16px; }
+.zl-kicker { font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.zl-title { margin: 6px 0 6px; font-size: 24px; color: var(--text-primary); }
+.zl-sub { margin: 0; color: var(--text-secondary); font-size: 14px; line-height: 1.55; }
+.zl-badge { display: inline-block; margin-top: 10px; font-size: 12px; font-weight: 700; letter-spacing: .05em; color: var(--warning);
+  border: 1px solid var(--warning); border-radius: 999px; padding: 2px 10px; }
+.zl-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.zl-grid .zl-card { margin-bottom: 0; }
+.zl-label { display: block; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 6px; font-weight: 600; }
+.zl-card textarea, .zl-card input[type=number] { width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 14px;
+  color: var(--text-primary); background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.zl-card textarea { min-height: 70px; resize: vertical; }
+.zl-card input[type=range] { width: 100%; accent-color: var(--positive); }
+.zl-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+.zl-row input[type=number] { width: 140px; }
+.zl-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.zl-presets button, .zl-submit { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-2); color: var(--text-secondary); }
+.zl-presets button:hover { border-color: var(--accent); color: var(--text-primary); }
+.zl-card :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.zl-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.zl-stat { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.zl-stat span { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); }
+.zl-stat b { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 20px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.zl-stat.z b { color: var(--positive); }
+.zl-out { margin-top: 12px; font-size: 15px; line-height: 1.55; color: var(--text-primary); min-height: 1.5em; }
+.zl-svg { width: 100%; height: auto; margin-top: 14px; display: block; }
+.zl-note { font-size: 13px; color: var(--text-dim); line-height: 1.55; }
+.zl-note li + li { margin-top: 4px; }
+@media (max-width: 860px) { .zl-grid { grid-template-columns: minmax(0, 1fr); } .zl-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .zl-page { padding: var(--sp-3) 8px 110px; } .zl-card { padding: 16px 14px; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "partials/_topbar.html" with active="academy" %}
+<main class="zl-page">
+    <section class="zl-card">
+        <div class="zl-kicker">Academy · Quant Lab</div>
+        <h1 class="zl-title">Z-Score Exploration Lab</h1>
+        <p class="zl-sub">A Z-score says how many standard deviations a number sits from the average of a reference sample. Change the sample and the observation and watch what happens.</p>
+        <span class="zl-badge">ILLUSTRATIVE NUMBERS — NOT LIVE MARKET DATA</span>
+    </section>
+
+    <form method="get" action="{% url 'academy_zscore_lab' %}" id="zl-form">
+        <div class="zl-grid">
+            <section class="zl-card" aria-labelledby="zl-in">
+                <h2 class="zl-label" id="zl-in">1 · Reference sample</h2>
+                <label class="zl-note" for="zl-sample">Numbers separated by commas or spaces (up to 50)</label>
+                <textarea id="zl-sample" name="sample" spellcheck="false">{{ sample_text }}</textarea>
+                <div class="zl-presets" role="group" aria-label="Example samples">
+                    <button type="button" data-sample="99, 100, 101, 100, 99, 101, 100, 100">Calm sample</button>
+                    <button type="button" data-sample="90, 110, 95, 105, 100, 85, 115, 100">Volatile sample</button>
+                    <button type="button" data-add="130">Add an outlier (130)</button>
+                    <button type="button" data-sample="98, 101, 100, 103, 99, 102, 97, 100">Reset</button>
+                </div>
+                <h2 class="zl-label" style="margin-top:16px">2 · Observation</h2>
+                <label class="zl-note" for="zl-x-range">Drag, or type an exact value</label>
+                <input type="range" id="zl-x-range" min="80" max="120" step="0.1" value="{{ x }}" aria-label="Observation value">
+                <div class="zl-row">
+                    <input type="number" id="zl-x" name="x" step="any" value="{{ x }}" aria-label="Observation value (exact)">
+                    <noscript><button class="zl-submit" type="submit">Calculate</button></noscript>
+                </div>
+            </section>
+
+            <section class="zl-card" aria-labelledby="zl-res">
+                <h2 class="zl-label" id="zl-res">3 · Result</h2>
+                <div class="zl-stats">
+                    <div class="zl-stat"><span>Sample size</span><b id="zl-n">{{ result.n }}</b></div>
+                    <div class="zl-stat"><span>Average (mean)</span><b id="zl-mean">{% if result.mean is not None %}{{ result.mean|floatformat:2 }}{% else %}—{% endif %}</b></div>
+                    <div class="zl-stat"><span>Std deviation</span><b id="zl-sd">{% if result.sd is not None %}{{ result.sd|floatformat:2 }}{% else %}—{% endif %}</b></div>
+                    <div class="zl-stat z"><span>Z-score</span><b id="zl-z" data-server-z="{% if result.z is not None %}{{ result.z|floatformat:6 }}{% endif %}">{% if result.z is not None %}{{ result.z|floatformat:2 }}{% else %}—{% endif %}</b></div>
+                </div>
+                <div class="zl-out" id="zl-out" aria-live="polite">{% if result.z is not None %}The observation is {{ result.interpretation }}.{% else %}{{ result.reason }}{% endif %}</div>
+                <div class="zl-note" id="zl-calc" style="margin-top:6px">{% if result.z is not None %}z = ({{ x|floatformat:2 }} − {{ result.mean|floatformat:2 }}) ÷ {{ result.sd|floatformat:2 }} = {{ result.z|floatformat:2 }}{% endif %}</div>
+                <svg class="zl-svg" id="zl-svg" viewBox="0 0 600 130" role="img" aria-label="Number line with the sample, its average, one and two standard deviation bands, and the observation"></svg>
+            </section>
+        </div>
+    </form>
+
+    <section class="zl-card" aria-labelledby="zl-learn">
+        <h2 class="zl-label" id="zl-learn">What to notice</h2>
+        <ul class="zl-note">
+            <li><b>The same observation can have very different Z-scores.</b> 104 is +2.0 against the default sample, but much smaller against the volatile one — Z depends entirely on the reference sample.</li>
+            <li><b>One outlier changes everyone.</b> Adding 130 raises the standard deviation, so every other value's |Z| shrinks.</li>
+            <li><b>Formula:</b> z = (x − mean) ÷ standard deviation, using the sample standard deviation (dividing by n − 1), the same convention the platform uses. With fewer than two numbers, or no spread at all, Z is undefined.</li>
+            <li><b>An extreme Z is not a forecast.</b> A value 3 standard deviations from the average is unusual for that sample; it does not mean prices will move back. Markets have fat tails and trends, so "unusual" values happen more often than a bell curve suggests.</li>
+        </ul>
+        <p class="zl-note">Want it explained another way? <a href="{% url 'academy_explainer' %}?concept=z_score&mode=new">Ask the Research Explainer about Z-scores</a>.</p>
+    </section>
+</main>
+{% include "partials/_footer.html" with label="Steph Quant Academy" note="illustrative numbers — education, not financial advice" %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// claude code changed: 2026-10-26 — the same formula as bot/academy/zlab.py (sample sd, n − 1)
+(function () {
+    var sampleEl = document.getElementById('zl-sample'), xEl = document.getElementById('zl-x'), rangeEl = document.getElementById('zl-x-range');
+    function parse(text) {
+        return text.split(/[\s,;]+/).filter(Boolean).map(Number).filter(function (v) { return isFinite(v); }).slice(0, 50);
+    }
+    function compute(s, x) {
+        var n = s.length;
+        if (n < 2) return {n: n, mean: null, sd: null, z: null, reason: 'Enter at least two numbers in the sample.'};
+        var mean = s.reduce(function (a, b) { return a + b; }, 0) / n;
+        var sd = Math.sqrt(s.reduce(function (a, v) { return a + (v - mean) * (v - mean); }, 0) / (n - 1));
+        if (sd === 0) return {n: n, mean: mean, sd: 0, z: null, reason: 'Every number in the sample is the same, so the standard deviation is 0 and z is undefined.'};
+        return {n: n, mean: mean, sd: sd, z: (x - mean) / sd, reason: ''};
+    }
+    function describe(z) {
+        var a = Math.abs(z), side = z > 0 ? 'above' : z < 0 ? 'below' : 'at';
+        if (a === 0) return 'exactly at the sample average';
+        var t = a.toFixed(2) + ' standard deviations ' + side + ' the average — ';
+        if (a < 1) return t + 'ordinary for this sample';
+        if (a < 2) return t + 'noticeably away, but not rare';
+        if (a < 3) return t + 'unusual for this sample';
+        return t + 'very unusual for this sample';
+    }
+    function draw(s, x, r) {
+        var svg = document.getElementById('zl-svg'), W = 600, pad = 24, y = 70, out = [];
+        if (r.mean === null) { svg.innerHTML = ''; return; }
+        var lo = Math.min.apply(null, s.concat([x, r.mean - 3 * r.sd])), hi = Math.max.apply(null, s.concat([x, r.mean + 3 * r.sd]));
+        if (hi === lo) { hi = lo + 1; }
+        function px(v) { return pad + (v - lo) / (hi - lo) * (W - 2 * pad); }
+        if (r.sd > 0) {
+            out.push('<rect x="' + px(r.mean - 2 * r.sd) + '" y="40" width="' + (px(r.mean + 2 * r.sd) - px(r.mean - 2 * r.sd)) + '" height="60" fill="var(--neutral-dim)"/>');
+            out.push('<rect x="' + px(r.mean - r.sd) + '" y="40" width="' + (px(r.mean + r.sd) - px(r.mean - r.sd)) + '" height="60" fill="var(--positive-dim)"/>');
+        }
+        out.push('<line x1="' + pad + '" x2="' + (W - pad) + '" y1="' + y + '" y2="' + y + '" stroke="var(--border-strong)"/>');
+        out.push('<line x1="' + px(r.mean) + '" x2="' + px(r.mean) + '" y1="34" y2="106" stroke="var(--text-secondary)" stroke-dasharray="4 3"/>');
+        out.push('<text x="' + px(r.mean) + '" y="26" text-anchor="middle" font-size="12" fill="var(--text-secondary)">mean</text>');
+        s.forEach(function (v) { out.push('<circle cx="' + px(v) + '" cy="' + y + '" r="5" fill="var(--neutral)" opacity="0.85"/>'); });
+        out.push('<path d="M ' + px(x) + ' ' + (y - 11) + ' l 9 11 l -9 11 l -9 -11 z" fill="var(--warning)"/>');
+        out.push('<text x="' + px(x) + '" y="122" text-anchor="middle" font-size="12" fill="var(--warning)">observation</text>');
+        out.push('<text x="' + pad + '" y="16" font-size="11" fill="var(--text-dim)">green band: within 1 sd · blue band: within 2 sd</text>');
+        svg.innerHTML = out.join('');
+    }
+    function fmt(v) { return v === null ? '—' : v.toFixed(2); }
+    function update() {
+        var s = parse(sampleEl.value), x = Number(xEl.value), r = compute(s, x);
+        document.getElementById('zl-n').textContent = r.n;
+        document.getElementById('zl-mean').textContent = fmt(r.mean);
+        document.getElementById('zl-sd').textContent = fmt(r.sd);
+        var zEl = document.getElementById('zl-z');
+        zEl.textContent = fmt(r.z);
+        zEl.setAttribute('data-js-z', r.z === null ? '' : r.z.toFixed(6));
+        document.getElementById('zl-out').textContent = r.z === null ? r.reason : 'The observation is ' + describe(r.z) + '.';
+        document.getElementById('zl-calc').textContent = r.z === null ? '' : 'z = (' + x.toFixed(2) + ' − ' + r.mean.toFixed(2) + ') ÷ ' + r.sd.toFixed(2) + ' = ' + r.z.toFixed(2);
+        if (r.mean !== null && r.sd > 0) {
+            rangeEl.min = (r.mean - 4 * r.sd).toFixed(1); rangeEl.max = (r.mean + 4 * r.sd).toFixed(1);
+            rangeEl.step = Math.max(r.sd / 50, 0.01).toFixed(2);
+        }
+        rangeEl.value = x;
+        draw(s, x, r);
+    }
+    sampleEl.addEventListener('input', update);
+    xEl.addEventListener('input', update);
+    rangeEl.addEventListener('input', function () { xEl.value = Number(rangeEl.value).toFixed(2); update(); });
+    document.querySelectorAll('[data-sample]').forEach(function (b) { b.addEventListener('click', function () { sampleEl.value = b.dataset.sample; update(); }); });
+    document.querySelectorAll('[data-add]').forEach(function (b) { b.addEventListener('click', function () { sampleEl.value = (sampleEl.value.trim() ? sampleEl.value.trim() + ', ' : '') + b.dataset.add; update(); }); });
+    document.getElementById('zl-form').addEventListener('submit', function (e) { e.preventDefault(); update(); });
+    update();
+})();
+</script>
+{% endblock %}

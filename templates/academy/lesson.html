@@ -1,30 +1,130 @@
 {% extends 'base.html' %}
+{% load static %}
 {% block title %}{{ lesson.title }} — {{ course.title }}{% endblock %}
+{% comment %}
+claude code changed: 2026-10-26 — lesson page redesign (owner brief). Breadcrumb, position ("Lesson 2 of 4"), course
+outline with completed ticks (a collapsible <details> on phones), the sanitised lesson body (bot/academy/content_render.py,
+unchanged), previous / next, the unchanged "Mark complete" POST (completion is never recorded by opening a page), and an
+"Ask the tutor" box linking to the Research Explainer with the lesson's concept and a question pre-filled (nothing is
+sent to the AI until the student presses Explain).
+{% endcomment %}
+{% block head %}
+<link rel="stylesheet" href="{% static 'css/academy.css' %}">
+<style>
+/* claude code changed: 2026-10-26 — lesson page */
+.ls-page { max-width: 1240px; margin: 0 auto; padding: var(--sp-4) var(--sp-5) 110px; }
+body:has(.ls-page) #bubble-canvas { display: none !important; }
+.ls-crumb { font-size: 12.5px; color: var(--text-dim); margin-bottom: 12px; }
+.ls-crumb a { color: var(--text-secondary); }
+.ls-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 22px; align-items: start; }
+.ls-side { position: sticky; top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1); padding: 14px; }
+.ls-side summary { cursor: pointer; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); font-weight: 650; list-style: none; }
+.ls-side summary::-webkit-details-marker { display: none; }
+.ls-mod { font-size: 12px; color: var(--text-dim); margin: 12px 0 6px; }
+.ls-outline { list-style: none; margin: 0; padding: 0; }
+.ls-outline li a { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; font-size: 13px;
+  color: var(--text-secondary); text-decoration: none; line-height: 1.35; }
+.ls-outline li a:hover { background: var(--bg-2); }
+.ls-outline li.current a { background: var(--positive-dim); color: var(--text-primary); font-weight: 600; }
+.ls-dot { flex: 0 0 auto; width: 16px; text-align: center; color: var(--text-dim); }
+.ls-outline li.completed .ls-dot { color: var(--positive); }
+.ls-main { min-width: 0; }
+.ls-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1); padding: 22px 26px; }
+.ls-kicker { font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.ls-title { margin: 6px 0 14px; font-size: 24px; color: var(--text-primary); font-weight: 650; line-height: 1.25; }
+.ls-body { font-size: 15px; line-height: 1.7; color: var(--text-primary); }
+.ls-body h1 { display: none; }   /* the page title above already shows the lesson title */
+.ls-body h2 { font-size: 17px; margin: 26px 0 8px; color: var(--text-primary); }
+.ls-body p, .ls-body li { color: var(--text-secondary); }
+.ls-body strong { color: var(--text-primary); }
+.ls-body table { border-collapse: collapse; margin: 10px 0 14px; font-size: 14px; display: block; overflow-x: auto; }
+.ls-body th, .ls-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.ls-body code { font-family: var(--font-mono); font-size: 13px; }
+.ls-nav { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; margin-top: 18px; }
+.ls-btn { display: inline-block; padding: 10px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; text-decoration: none; cursor: pointer;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text-primary); font-family: inherit; }
+.ls-btn.primary { background: var(--positive); border-color: var(--positive); color: #fff; }
+.ls-btn:focus-visible, .ls-outline a:focus-visible, .ls-tutor a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ls-done { font-size: 13px; color: var(--positive); font-weight: 600; }
+.ls-tutor { margin-top: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1); padding: 16px 18px; }
+.ls-tutor h2 { margin: 0 0 4px; font-size: 15px; color: var(--text-primary); }
+.ls-tutor p { margin: 0 0 10px; font-size: 13px; color: var(--text-dim); }
+.ls-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ls-chips a { font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); text-decoration: none; }
+.ls-chips a:hover { border-color: var(--accent); color: var(--text-primary); }
+@media (max-width: 900px) {
+  .ls-grid { grid-template-columns: minmax(0, 1fr); }
+  .ls-side { position: static; }
+}
+@media (max-width: 640px) { .ls-page { padding: var(--sp-3) 8px 110px; } .ls-card { padding: 18px 16px; } .ls-title { font-size: 21px; } }
+</style>
+{% endblock %}
+
 {% block content %}
-
 {% include "partials/_topbar.html" with active="academy" %}
+<main class="ls-page">
+    <nav class="ls-crumb" aria-label="Breadcrumb">
+        <a href="{% url 'academy_dashboard' %}">Academy</a> › {{ course.path.title }} › <a href="{% url 'academy_course_detail' slug=course.slug %}">{{ course.title }}</a>
+    </nav>
+    <div class="ls-grid">
+        <aside>
+            <details class="ls-side" open id="ls-outline">
+                <summary>Course outline · {{ outline.n_done }} of {{ outline.total }} done</summary>
+                {% for m in outline.modules %}
+                <div class="ls-mod">{{ m.module.title }}</div>
+                <ol class="ls-outline">
+                    {% for item in m.lessons %}
+                    <li class="{{ item.status }}"><a href="{% url 'academy_lesson_detail' course_slug=course.slug lesson_slug=item.lesson.slug %}"{% if item.status == "current" %} aria-current="page"{% endif %}>
+                        <span class="ls-dot" {% if item.done %}role="img" aria-label="completed"{% else %}aria-hidden="true"{% endif %}>{% if item.done %}✓{% elif item.status == "current" %}●{% else %}○{% endif %}</span>
+                        <span>{{ item.lesson.title }}</span></a></li>
+                    {% endfor %}
+                </ol>
+                {% endfor %}
+            </details>
+        </aside>
 
-<div class="term-body">
-    <div class="term-section">
-        <div class="term-section-head">
-            <span class="term-section-title">{{ lesson.title }}</span>
-            <span class="term-section-meta">{{ course.title }}</span>
-        </div>
-        <div class="term-section-body">
-            <div class="term-lesson-body">
-                {{ rendered_body|safe }}
+        <div class="ls-main">
+            <article class="ls-card">
+                <div class="ls-kicker">Lesson {{ outline.position }} of {{ outline.total }} · {{ course.title }}</div>
+                <h1 class="ls-title">{{ lesson.title }}</h1>
+                <div class="ls-body">{{ rendered_body|safe }}</div>{# sanitised with bleach in content_render.py #}
+            </article>
+
+            <div class="ls-nav">
+                <div>{% if outline.previous %}<a class="ls-btn" href="{% url 'academy_lesson_detail' course_slug=course.slug lesson_slug=outline.previous.slug %}">← {{ outline.previous.title }}</a>{% endif %}</div>
+                {% if outline.is_completed %}{# already completed: plain links, so the original completion date is never overwritten #}
+                <div><span class="ls-done">✓ Completed</span>
+                    {% if next_lesson %}<a class="ls-btn primary" href="{% url 'academy_lesson_detail' course_slug=course.slug lesson_slug=next_lesson.slug %}">Next lesson →</a>
+                    {% else %}<a class="ls-btn primary" href="{% url 'academy_course_detail' slug=course.slug %}">Back to course</a>{% endif %}</div>
+                {% else %}
+                <form method="post" action="{% url 'academy_complete_lesson' course_slug=course.slug lesson_slug=lesson.slug %}">
+                    {% csrf_token %}
+                    <button type="submit" class="ls-btn primary">{% if next_lesson %}Mark complete & continue →{% else %}Mark complete{% endif %}</button>
+                </form>
+                {% endif %}
             </div>
 
-            <form method="post" action="{% url 'academy_complete_lesson' course_slug=course.slug lesson_slug=lesson.slug %}" style="margin-top:20px">
-                {% csrf_token %}
-                <button type="submit" class="term-btn mono">
-                    {% if next_lesson %}Mark Complete & Continue{% else %}Mark Complete{% endif %}
-                </button>
-            </form>
+            {% if tutor_concept %}
+            <section class="ls-tutor" aria-labelledby="ls-tutor-h">
+                <h2 id="ls-tutor-h">Ask the tutor about this lesson</h2>
+                <p>Opens the Research Explainer on <b>{{ tutor_concept.name }}</b> with your question ready — you choose the level and press Explain.</p>
+                <div class="ls-chips">
+                    <a href="{% url 'academy_explainer' %}?concept={{ tutor_concept.id }}&mode=new&q={{ 'Explain '|add:tutor_concept.name|add:' simply, with an everyday example.'|urlencode }}">Explain this simply</a>
+                    <a href="{% url 'academy_explainer' %}?concept={{ tutor_concept.id }}&mode=build&q={{ 'Give me another worked example of '|add:tutor_concept.name|add:'.'|urlencode }}">Give me another example</a>
+                    <a href="{% url 'academy_explainer' %}?concept={{ tutor_concept.id }}&mode=build&q={{ 'Explain the formula for '|add:tutor_concept.name|add:' step by step.'|urlencode }}">Explain the formula</a>
+                    <a href="{% url 'academy_explainer' %}?concept={{ tutor_concept.id }}&mode=new&q={{ 'Ask me three short questions to test my understanding of '|add:tutor_concept.name|add:', with the answers at the end.'|urlencode }}">Test my understanding</a>
+                </div>
+            </section>
+            {% endif %}
         </div>
     </div>
-</div>
+</main>
+{% include "partials/_footer.html" with label="Steph Quant Academy" note="education, not financial advice" %}
+{% endblock %}
 
-{% include "partials/_footer.html" with label="Quant Bot Academy" note="education, not financial advice" %}
-
+{% block scripts %}
+<script>
+// claude code changed: 2026-10-26 — the outline starts collapsed on phones so the lesson comes first
+(function () { var d = document.getElementById('ls-outline'); if (d && window.matchMedia('(max-width: 900px)').matches) d.removeAttribute('open'); })();
+</script>
 {% endblock %}

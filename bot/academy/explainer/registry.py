@@ -9,7 +9,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-REGISTRY_VERSION = "2026-10-26.3"
+REGISTRY_VERSION = "2026-10-26.4"
 
 
 @dataclass(frozen=True)
@@ -32,9 +32,80 @@ class Concept:
     related: Tuple[str, ...] = ()
     suggested_questions: Tuple[str, ...] = ()
     academy_lessons: Tuple[Tuple[str, str, str], ...] = ()   # (course_slug, lesson_slug, title) of approved Academy lessons
+    prerequisites: Tuple[str, ...] = ()            # claude code changed: 2026-10-26 — concepts a beginner needs first
 
 
 CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
+    # claude code changed: 2026-10-26 — building blocks taught before cointegration (owner: beginners need these first)
+    Concept(
+        id="correlation",
+        name="Correlation",
+        summary="How closely two things tend to move up and down together, on a scale from −1 to +1.",
+        definition=("Correlation measures how consistently two series move in the same direction at the same time. "
+                    "+1 means they always move together in a straight-line way, −1 means always opposite, 0 means no "
+                    "straight-line relationship. In markets it is measured on returns (the percentage changes), not on "
+                    "the price levels, because two unrelated trending prices can look strongly 'correlated' by accident."),
+        formula="ρ(X, Y) = cov(X, Y) / (sd(X) · sd(Y));  sample version: Σ(xᵢ − x̄)(yᵢ − ȳ) / √(Σ(xᵢ − x̄)² · Σ(yᵢ − ȳ)²).",
+        units="Dimensionless, from −1 to +1.",
+        inputs="Two return series on the same timestamps.",
+        implementation=(("bot.views.home_intelligence", "correlation_summary"),
+                        ("bot.views.feature_intelligence_data", "get_feature_correlation_matrix")),
+        tests=("bot/tests/test_home_intelligence.py",),
+        limitations=(
+            "Correlation is not causation: two assets can move together because of a shared third cause.",
+            "It only captures straight-line relationships, and it changes over time (it often jumps towards 1 in crashes).",
+            "High correlation of returns does not mean the prices stay close together — that is a different property "
+            "(cointegration).",
+        ),
+        intended_use="Describing co-movement and diversification.",
+        related=("cointegration", "spread"),
+        suggested_questions=("What is correlation?", "What is the difference between correlation and cointegration?"),
+    ),
+    Concept(
+        id="spread",
+        name="Spread (between two prices)",
+        summary="The gap between two prices after scaling one of them — the quantity pairs research watches.",
+        definition=("A spread measures how far apart two prices are. The simplest spread is A − B. When the two assets "
+                    "have different sizes or sensitivities, one is scaled first: in our pairs research the spread is the "
+                    "log price of A minus a fitted amount (β) of the log price of B, minus a constant. If the spread "
+                    "keeps returning to its usual level, the pair is a candidate for further research; if it wanders "
+                    "off and never comes back, it is not."),
+        formula="spread_t = log(A_t) − α̂ − β̂ · log(B_t), with α̂ and β̂ fitted by OLS on the training window.",
+        units="Log-price units (approximately a percentage gap for small values).",
+        inputs="Two aligned close-price series and the fitted hedge ratio.",
+        implementation=(("bot.research.cointegration_engine", "CointegrationEngine._calculate_spread"),),
+        tests=("bot/tests/test_cointegration_engine.py",),
+        limitations=(
+            "A spread that has stayed in a band in the past can break out permanently later.",
+            "The hedge ratio is estimated, so the spread carries estimation error.",
+        ),
+        intended_use="The series whose behaviour cointegration and half-life describe.",
+        related=("cointegration", "ols_hedge_ratio", "stationarity"),
+        prerequisites=("correlation",),
+        suggested_questions=("What is a spread between two assets?",),
+    ),
+    Concept(
+        id="stationarity",
+        name="Stationarity",
+        summary="A series is stationary when its typical level and wobble stay the same over time instead of drifting.",
+        definition=("A stationary series keeps returning to the same average and varies by a similar amount in every "
+                    "period, like the temperature of a room with a thermostat. A non-stationary series, like most "
+                    "prices, can drift anywhere and has no level it must come back to. Many statistical tools assume "
+                    "stationarity, and cointegration is exactly the question of whether a combination of two "
+                    "non-stationary prices is stationary."),
+        formula=("Weak stationarity: E[y_t] = μ and Var(y_t) = σ² for all t, and Cov(y_t, y_{t−k}) depends only on k. "
+                 "A random walk y_t = y_{t−1} + ε_t is the standard non-stationary example (its variance grows with t)."),
+        units="A property of a series (tested, e.g. with the ADF test).",
+        implementation=(("bot.quant_core.cointegration", "persistence_adf"),),
+        tests=("bot/tests/test_quant_core.py",),
+        limitations=(
+            "No finite sample can prove stationarity; tests can only find evidence against a unit root.",
+            "A series can look stationary in one period and break in the next (structural breaks).",
+        ),
+        intended_use="Deciding which statistical tools are valid, and the core idea behind cointegration.",
+        related=("adf_test", "spread", "cointegration"),
+        suggested_questions=("What does stationary mean?",),
+    ),
     Concept(
         id="z_score",
         name="Z-score (rolling, single asset)",
@@ -66,6 +137,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="cross_sectional_zscore",
+        prerequisites=("z_score",),   # claude code changed: 2026-10-26
         name="Cross-sectional Z-score",
         summary="How unusual one asset's return is compared with all the other assets over the same period.",
         definition=("At one moment, take every asset's return, subtract the average return across assets and divide by "
@@ -119,6 +191,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="dispersion",
+        prerequisites=("cross_sectional_zscore",),   # claude code changed: 2026-10-26
         name="Cross-sectional dispersion",
         summary="How spread out the assets' returns are at the same moment.",
         definition=("The standard deviation of the assets' returns at one moment. High dispersion means assets are "
@@ -146,6 +219,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="ols_hedge_ratio",
+        prerequisites=("correlation",),   # claude code changed: 2026-10-26
         name="OLS hedge ratio (pairs)",
         summary="The straight-line relationship between two assets' log prices, estimated by least squares.",
         definition=("Ordinary least squares fits a straight line through the log price of asset A against the log price "
@@ -173,6 +247,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="adf_test",
+        prerequisites=("stationarity",),   # claude code changed: 2026-10-26
         name="Augmented Dickey–Fuller (ADF) test",
         summary="A test of whether a series wanders without returning (a unit root) or tends to revert.",
         definition=("The null hypothesis is that the series has a unit root (it is non-stationary). The test regresses "
@@ -199,6 +274,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="cointegration",
+        prerequisites=("correlation", "spread", "stationarity", "ols_hedge_ratio"),   # claude code changed: 2026-10-26
         name="Cointegration (Engle–Granger procedure)",
         summary="Two non-stationary prices whose particular combination stays stationary — they drift together.",
         definition=("Two series that each wander (are integrated of order one) are cointegrated if some linear "
@@ -236,6 +312,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="ou_half_life",
+        prerequisites=("spread", "stationarity"),   # claude code changed: 2026-10-26
         name="Ornstein–Uhlenbeck half-life",
         summary="How many candles a spread takes, on average, to close half of its distance to equilibrium.",
         definition=("A mean-reverting spread is modelled as an Ornstein–Uhlenbeck process. In discrete time this is an "
@@ -261,6 +338,7 @@ CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
     ),
     Concept(
         id="information_coefficient",
+        prerequisites=("correlation",),   # claude code changed: 2026-10-26
         name="Information Coefficient (IC)",
         summary="The rank correlation between a feature now and the return that follows.",
         definition=("The Spearman rank correlation between a feature's value at time t and the forward return label. "
@@ -355,4 +433,8 @@ def model_context(concept: Concept) -> str:
             parts.append(f"{label}: {value}")
     if concept.limitations:
         parts.append("Known limitations:\n" + "\n".join(f"- {x}" for x in concept.limitations))
+    pre = [CONCEPTS[c] for c in concept.prerequisites if c in CONCEPTS]   # claude code changed: 2026-10-26
+    if pre:
+        parts.append("Building blocks a beginner needs first (approved one-line definitions):\n"
+                     + "\n".join(f"- {c.name}: {c.summary}" for c in pre))
     return "\n".join(parts)

@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from django.core.cache import cache
 from django.shortcuts import render
+from bot.templatetags.coin_extras import fx_sessions as _fx_sessions   # claude code changed: 2026-10-26
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,7 @@ def _compute_pair_metrics(csv_path: Path) -> dict | None:
 
         return {
             "pair":          _pair_name(csv_path),
+            "sessions":      " · ".join(_fx_sessions(_pair_name(csv_path))),   # claude code changed: 2026-10-26 — trading session(s)
             "price":         round(price, 5),
             "regime":        regime,
             "regime_label":  regime.replace("_", " ").lower(),  # claude code changed: pre-formatted for template

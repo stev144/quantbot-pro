@@ -17,7 +17,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
-from bot.academy.curriculum_seed import LEARNING_PATHS, FULLY_AUTHORED_COURSE
+from bot.academy.curriculum_seed import LEARNING_PATHS, AUTHORED_COURSES   # claude code changed: 2026-10-26 — several authored courses
 from bot.academy.models import (
     LearningPath, Course, Module, Lesson, Question, Quiz, QuizQuestion,
 )
@@ -59,10 +59,10 @@ class Command(BaseCommand):
             f"Loaded {path_count} learning path(s), {course_count} course(s) (catalog)."
         ))
 
-        self._load_fully_authored_course()
+        for spec in AUTHORED_COURSES:   # claude code changed: 2026-10-26 — was the single FULLY_AUTHORED_COURSE
+            self._load_fully_authored_course(spec)
 
-    def _load_fully_authored_course(self):
-        spec = FULLY_AUTHORED_COURSE
+    def _load_fully_authored_course(self, spec):
         try:
             course = Course.objects.get(slug=spec["course_slug"])
         except Course.DoesNotExist:

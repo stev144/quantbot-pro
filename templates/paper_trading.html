@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% load static %}
+{% load coin_extras %}{# claude code changed: 2026-10-26 — fx_session #}
 {# claude code changed: ranging gate removed — now unrestricted QC-1 paper trader #}
 
 {% block head %}
@@ -97,7 +98,7 @@
 <div class="term-section">
     <div class="term-section-head">
         <span class="term-section-title">
-            {{ pair }}&nbsp;
+            {{ pair }} {% fx_session pair %}&nbsp;
             {% if r.validated %}<span class="pt-badge-validated">VALIDATED</span>
             {% else %}<span class="pt-badge-exploratory">EXPLORATORY</span>{% endif %}
         </span>

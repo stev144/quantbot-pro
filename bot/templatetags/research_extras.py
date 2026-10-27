@@ -49,3 +49,13 @@ def as_pct(value):   # claude code changed: 2026-10-26 — fractions (0.02645) s
     except (TypeError, ValueError):
         return ""
 
+
+@register.filter
+def pvalue(value):   # claude code changed: 2026-10-26 — "0.0000267…" shown as "< 0.0001"; 4 decimals otherwise
+    """Display a p-value: '< 0.0001' below that, else 4 decimals. None/'' → 'not evaluated'."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "not evaluated"
+    return "< 0.0001" if v < 0.0001 else f"{v:.4f}"
+

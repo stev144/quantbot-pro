@@ -1607,3 +1607,30 @@
   .term-panel { padding-left: 12px; padding-right: 12px; }
 }
 
+
+/* ============================================================
+ * STAT TILES — claude code changed: 2026-10-26. term-stat-row / term-stat / term-stat-label / term-stat-value were
+ * used by the Academy dashboard, quiz result, DCA Engine and Research Lab results but defined nowhere, so labels and
+ * values ran together ("Lessons Completed0"). Label above value, equal tiles, wraps on narrow screens.
+ * ============================================================ */
+.term-stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.term-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); }
+.term-stat-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); }
+.term-stat-value { font-size: 18px; color: var(--text-primary); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+
+/* claude code changed: 2026-10-26 — forex trading session label (coin_extras.fx_session), its own line under the names */
+.fx-session { display: block; font-size: 11px; color: var(--accent); letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-session::before { content: "◷ "; opacity: .8; }
+
+/* claude code changed: 2026-10-26 — owner: "the words are too small". A uniform zoom enlarges every page's text
+ * together with its spacing (like browser zoom), instead of editing hundreds of individual font sizes; phones get a
+ * smaller step because their layouts are already tight. */
+body > :not(.term-topbar):not(.term-bottom-nav):not(#bubble-canvas):not(.term-typed-strip) { zoom: 1.1; }   /* the bars already fit exactly */
+@media (max-width: 640px) { body > :not(.term-topbar):not(.term-bottom-nav):not(#bubble-canvas):not(.term-typed-strip) { zoom: 1.05; } }
+
+
+/* claude code changed: 2026-10-26 — the longer brand line ("Research & Quantitative Systematic Trading") and the
+ * account buttons stay on one line; the nav pills wrap instead */
+.term-brand-sub { white-space: nowrap; }
+.term-topbar-right .term-btn, .term-topbar-right a { white-space: nowrap; }

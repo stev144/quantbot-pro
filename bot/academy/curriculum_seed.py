@@ -81,7 +81,8 @@ LEARNING_PATHS = [
             ("momentum", "Momentum", _INTERMEDIATE, "Trend-following strategy logic and its failure modes."),
             ("mean-reversion", "Mean Reversion", _INTERMEDIATE, "Range-bound strategy logic and its failure modes."),
             ("cross-sectional-strategies", "Cross-Sectional Strategies", _ADVANCED, "Ranking assets against each other instead of trading them in isolation."),
-            ("cointegration", "Cointegration", _ADVANCED, "When two assets' prices are statistically tied together over time."),
+            ("cointegration", "From Correlation to Cointegration", _BEGINNER,
+             "Beginner-first: correlation, spreads and stationarity, then cointegration and the Engle–Granger test."),   # claude code changed: 2026-10-26 — authored (was an advanced stub)
             ("pairs-trading", "Pairs Trading", _ADVANCED, "Trading the spread between cointegrated assets."),
             ("kalman-filtering", "Kalman Filtering", _ADVANCED, "Tracking a relationship that changes slowly over time, without look-ahead."),
             ("statistical-arbitrage", "Statistical Arbitrage", _ADVANCED, "Where cointegration, filtering, and execution costs meet."),
@@ -258,3 +259,82 @@ FULLY_AUTHORED_COURSE = {
         ],
     },
 }
+
+
+# claude code changed: 2026-10-26 — second authored course (owner: beginners need the building blocks before
+# cointegration). Worked-example numbers are recomputed in bot/tests/test_academy_cointegration_course.py.
+CORRELATION_TO_COINTEGRATION_COURSE = {
+    "path_slug": "strategy-engineering",
+    "course_slug": "cointegration",
+    "modules": [
+        {
+            "title": "From Correlation to Cointegration",
+            "order": 1,
+            "lessons": [
+                {"slug": "two-prices-and-correlation", "title": "Two Price Series and Correlation", "order": 1,
+                 "content_file": "strategy_engineering/cointegration/01_two_prices_and_correlation.md"},
+                {"slug": "spreads", "title": "What Is a Spread?", "order": 2,
+                 "content_file": "strategy_engineering/cointegration/02_spreads.md"},
+                {"slug": "stationarity", "title": "Stationarity: Series That Come Back", "order": 3,
+                 "content_file": "strategy_engineering/cointegration/03_stationarity.md"},
+                {"slug": "cointegration-engle-granger", "title": "Cointegration and the Engle–Granger Test", "order": 4,
+                 "content_file": "strategy_engineering/cointegration/04_cointegration_engle_granger.md"},
+            ],
+        },
+    ],
+    "quiz": {
+        "title": "From Correlation to Cointegration — Course Quiz",
+        "passing_score": 70,
+        "questions": [
+            {
+                "question_type": "multiple_choice",
+                "prompt": "Two coins' prices both rose steadily all year. What can you conclude?",
+                "payload": {
+                    "choices": [
+                        "They are cointegrated",
+                        "Their returns must be strongly correlated",
+                        "Nothing yet — trending prices can look related by chance",
+                        "Trading the pair would have been profitable",
+                    ],
+                    "correct_index": 2,
+                },
+                "explanation": "Most prices trend, so two unrelated prices can rise together by chance. You would at least "
+                               "compare returns, and test whether a spread between them is stationary.",
+            },
+            {
+                "question_type": "true_false",
+                "prompt": "If two assets' returns have a correlation of 0.9, their prices must stay close together.",
+                "payload": {"correct": False},
+                "explanation": "Correlation of returns measures moving together day by day. Prices can still drift apart "
+                               "for ever — staying together is cointegration, a different property.",
+            },
+            {
+                "question_type": "multiple_choice",
+                "prompt": "An Engle–Granger test on two series (with a constant) gives a statistic of −3.0. The 5% "
+                          "critical values are −2.86 for an ordinary ADF test and −3.34 for Engle–Granger. What is "
+                          "the correct conclusion at 5%?",
+                "payload": {
+                    "choices": [
+                        "Cointegrated, because −3.0 is below −2.86",
+                        "Not significant at 5%, because −3.0 is above the Engle–Granger value of −3.34",
+                        "The two assets are proven unrelated",
+                        "The pair is proven profitable",
+                    ],
+                    "correct_index": 1,
+                },
+                "explanation": "The spread came from a fitted line, so the stricter residual-based (MacKinnon) critical "
+                               "value applies. Using the ordinary ADF table would wrongly declare cointegration.",
+            },
+            {
+                "question_type": "true_false",
+                "prompt": "A pair that passes a cointegration test is guaranteed to make money after trading costs.",
+                "payload": {"correct": False},
+                "explanation": "Cointegration describes the sample. It does not guarantee the spread comes back fast "
+                               "enough, that the relationship lasts, or that anything is left after fees and slippage.",
+            },
+        ],
+    },
+}
+
+AUTHORED_COURSES = [FULLY_AUTHORED_COURSE, CORRELATION_TO_COINTEGRATION_COURSE]   # claude code changed: 2026-10-26
+

@@ -14,7 +14,9 @@
         <div class="term-section-body">
             <div class="chart-caption">{{ course.description }}</div>
 
-            {% if unmet_prerequisites %}
+            {% if not course.is_published %}{# claude code changed: 2026-10-26 — planned courses cannot be joined #}
+            <div class="term-message mono" style="margin-top:12px">Planned — this course is being prepared and is not yet published.</div>
+            {% elif unmet_prerequisites %}
             <div class="term-message error mono" style="margin-top:12px">
                 Requires first: {% for p in unmet_prerequisites %}{{ p.title }}{% if not forloop.last %}, {% endif %}{% endfor %}
             </div>

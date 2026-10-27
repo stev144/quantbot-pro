@@ -103,6 +103,44 @@ def _flag(code, px):
                        px, px, max(7, px * 0.36), code[:3])
 
 
+# claude code changed: 2026-10-26 — owner request: every forex pair shows its trading session(s). Convention (stated in
+# the tooltip): a pair is most active in the home sessions of its two currencies; metals trade mainly London + New York.
+SESSION_ORDER = ("Sydney", "Tokyo", "London", "New York")
+CURRENCY_SESSION = {
+    "AUD": "Sydney", "NZD": "Sydney",
+    "JPY": "Tokyo", "CNH": "Tokyo", "CNY": "Tokyo", "HKD": "Tokyo", "SGD": "Tokyo", "THB": "Tokyo",
+    "EUR": "London", "GBP": "London", "CHF": "London", "SEK": "London", "NOK": "London", "DKK": "London",
+    "PLN": "London", "CZK": "London", "HUF": "London", "ZAR": "London", "TRY": "London",
+    "USD": "New York", "CAD": "New York", "MXN": "New York",
+}
+SESSION_TOOLTIP = ("Most active session(s): the home trading sessions of the pair's two currencies "
+                   "(Sydney, Tokyo, London, New York). Forex trades around the clock on weekdays.")
+
+
+def fx_sessions(symbol):
+    """Ordered session names for a currency pair, e.g. 'EUR/USD' → ['London', 'New York']; [] if not a pair."""
+    pair = split_pair(symbol)
+    if not pair:
+        return []
+    names = set()
+    for code in pair:
+        if code in ("XAU", "XAG", "XPT", "XPD"):
+            names.update({"London", "New York"})
+        elif code in CURRENCY_SESSION:
+            names.add(CURRENCY_SESSION[code])
+    return [s for s in SESSION_ORDER if s in names]
+
+
+@register.simple_tag
+def fx_session(symbol):
+    """'London · New York session' as a small labelled span; '' for anything that is not a currency pair."""
+    names = fx_sessions(symbol)
+    if not names:
+        return ""
+    label = " · ".join(names) + (" sessions" if len(names) > 1 else " session")
+    return format_html('<span class="fx-session" title="{}">{}</span>', SESSION_TOOLTIP, label)
+
+
 @register.simple_tag
 def fx_flags(symbol, size=22):
     """Two overlapping flags only (no names)."""
@@ -124,5 +162,5 @@ def fx_pair(symbol, size=18):
     if not pair:
         return ""
     names = [CURRENCIES.get(c, (None, c))[1] for c in pair]
-    return format_html('<span class="fx-pair">{}<span class="fx-names">{} <span class="fx-sep">/</span> {}</span></span>',
-                       fx_flags(symbol, size), names[0], names[1])
+    return format_html('<span class="fx-pair">{}<span class="fx-names">{} <span class="fx-sep">/</span> {}{}</span></span>',
+                       fx_flags(symbol, size), names[0], names[1], fx_session(symbol))   # claude code changed: 2026-10-26 — + session

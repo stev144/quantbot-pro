@@ -16,7 +16,7 @@ detail (moved unchanged to /backtest/, templates/backtest_detail.html). Nothing 
 <style>
 /* claude code changed: 2026-10-26 — home page (Quantitative Market Intelligence) styles; theme tokens only */
 .hq-page { padding: var(--sp-4) var(--sp-5) 110px; max-width: 1480px; margin: 0 auto; }   /* bottom: clear of the floating nav */
-body:has(.hq-page) #bubble-canvas { display: none; }   /* no falling logos behind data */
+body:has(.hq-page) #bubble-canvas { display: none !important; }   /* claude code changed: 2026-10-26 — bubbles.js sets display inline in Navy/Midnight */   /* no falling logos behind data */
 .hq-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin-bottom: 14px; }
 .hq-title { margin: 0; font-size: 22px; font-weight: 650; color: var(--text-primary); letter-spacing: .01em; }
 .hq-sub { margin: 4px 0 0; color: var(--text-secondary); font-size: 13.5px; }
@@ -266,8 +266,8 @@ details.hq-how p, details.hq-how li { line-height: 1.5; }
                 <h3>Largest pair moves</h3>
                 {% if f.top_pair %}
                 <ul class="hq-list">
-                    <li><span>{% fx_flags f.top_pair.symbol 16 %} {{ f.top_pair.display }}</span><span class="num {% if f.top_pair.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{% if f.top_pair.return_pct >= 0 %}+{% endif %}{{ f.top_pair.return_pct|floatformat:2 }}%</span></li>
-                    <li><span>{% fx_flags f.bottom_pair.symbol 16 %} {{ f.bottom_pair.display }}</span><span class="num {% if f.bottom_pair.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{% if f.bottom_pair.return_pct >= 0 %}+{% endif %}{{ f.bottom_pair.return_pct|floatformat:2 }}%</span></li>
+                    <li><span>{% fx_flags f.top_pair.symbol 16 %} {{ f.top_pair.display }} {% fx_session f.top_pair.symbol %}</span><span class="num {% if f.top_pair.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{% if f.top_pair.return_pct >= 0 %}+{% endif %}{{ f.top_pair.return_pct|floatformat:2 }}%</span></li>
+                    <li><span>{% fx_flags f.bottom_pair.symbol 16 %} {{ f.bottom_pair.display }} {% fx_session f.bottom_pair.symbol %}</span><span class="num {% if f.bottom_pair.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}">{% if f.bottom_pair.return_pct >= 0 %}+{% endif %}{{ f.bottom_pair.return_pct|floatformat:2 }}%</span></li>
                 </ul>
                 <div class="hq-note" style="margin-top:6px">Regimes are not shown for forex: the detector's EMA-gap threshold is not calibrated for FX (a pending research-policy decision).</div>
                 {% else %}<div class="hq-big small dim-t">Unavailable</div>{% endif %}

@@ -7,8 +7,14 @@ from django.shortcuts import render, redirect
 
 from bot.academy.views.lessons_data import (
     get_lesson, student_can_access_lesson, get_rendered_body,
-    mark_lesson_complete, get_next_lesson,
+    mark_lesson_complete, get_next_lesson, get_lesson_outline,
 )
+
+
+def _tutor_concept(lesson):   # claude code changed: 2026-10-26 — "Ask the tutor" box
+    from bot.academy.explainer.registry import get_concept
+    from bot.academy.journey import concept_for_lesson
+    return get_concept(concept_for_lesson(lesson.module.course.slug, lesson.slug))
 
 
 @login_required
@@ -26,6 +32,8 @@ def lesson_detail(request, course_slug, lesson_slug):
         "course": lesson.module.course,
         "rendered_body": get_rendered_body(lesson),
         "next_lesson": get_next_lesson(lesson),
+        "outline": get_lesson_outline(request.user, lesson),   # claude code changed: 2026-10-26 — lesson page redesign
+        "tutor_concept": _tutor_concept(lesson),
     }
     return render(request, "academy/lesson.html", context)
 

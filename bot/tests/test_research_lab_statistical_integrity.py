@@ -265,9 +265,11 @@ class ConditionalEvidenceNumberFidelityTest(TestCase):
 
         results_response = self.client.get(reverse("research_lab_results", kwargs={"experiment_id": experiment.id}))
         self.assertContains(results_response, f"{stat['n_condition_episodes']}")
-        self.assertContains(results_response, f"{stat['pct_condition_true']:.2f}")
+        pct_shown = f"{stat['pct_condition_true'] * 100:.2f}%"   # claude code changed: 2026-10-26 — stored as a fraction, shown as a percent (was matching the old "0.10%" bug)
+        self.assertContains(results_response, pct_shown)
 
         report_response = self.client.get(reverse("research_lab_report", kwargs={"experiment_id": experiment.id}))
         report_body = report_response.content.decode()
+        self.assertIn(pct_shown, report_body)   # claude code changed: 2026-10-26 — the report shows the same percent
         self.assertIn(str(stat["n_condition_episodes"]), report_body)
         self.assertIn(observed_dir, report_body)
