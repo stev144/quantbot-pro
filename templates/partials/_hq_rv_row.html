@@ -5,5 +5,6 @@
     <td class="r num{% if r.extreme %} warn-t{% endif %}" data-label="Z-score">{% if r.z >= 0 %}+{% endif %}{{ r.z|floatformat:2 }}</td>
     <td class="r num" data-label="Rank">{{ r.rank }} / {{ n }}</td>
     <td data-label="Regime">{{ r.regime_words }}</td>
+    {% include "partials/_hq_metrics_cell.html" with m=r.metrics %}{# claude code changed: 2026-10-27 #}
     <td data-label="Data"><span class="hq-tag live" title="last trade {{ r.as_of|date:'H:i' }} UTC">LIVE</span></td>
 </tr>

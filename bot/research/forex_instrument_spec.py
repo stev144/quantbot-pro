@@ -21,7 +21,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace  # claude code changed: 2026-10-27 — replace() for with_paper_broker_costs
 from typing import Optional
 
 from bot.instruments import ASSET_CLASS_FOREX, Instrument, get_instrument  # claude code changed: reuse, not re-derive
@@ -492,3 +492,29 @@ QC_PORTFOLIO_CSV_FILES: dict = {  # claude code changed: updated — EUR/CAD rep
     "EUR/CAD": "EUR_CAD_1h.csv",
     "NZD/CHF": "NZD_CHF_1h.csv",
 }
+
+
+# ── Paper-Trader broker cost snapshot (read from MT5, 2026-10-27) ─────────────────────────────────────────────
+# claude code changed: 2026-10-27 — new. Costs read from the attached MT5 terminal (GlobalDynamicMarkets-Demo,
+# symbol GBPJPY, point 0.001 = 0.1 pip, swap_mode 1 = points). Applied ONLY by the Paper Trader
+# (bot/paper_trading/ranging_paper_engine.py); QC_PORTFOLIO_SPECS is left unchanged so the frozen DCA Engine page,
+# the walk-forward validator and sealed/evaluated results are not silently re-costed.
+#   spread : 1.5 pips — mean of the last 30 days' H1 bar spreads (14.1 pts), rounded up because MT5 stores the
+#            lowest spread in each bar (median 0.9, worst 30.7 pips; 3.3 pips live at 01:06 UTC)
+#   swap   : long −5.27 pts/day = −0.527 pips; short −35.83 pts/day = −3.583 pips (demo account; triple on Wednesday,
+#            which the hourly simulator does not apply — it charges per candle held, so weekends go uncharged)
+#   commission : 0.0 — confirmed no-commission by the owner 2026-10-27
+#   slippage   : not modelled (the simulator has no slippage input)
+PAPER_COST_SNAPSHOT_SOURCE = "MT5_GlobalDynamicMarkets-Demo_2026-10-27"   # claude code changed: 2026-10-27
+
+PAPER_BROKER_COSTS: dict = {   # claude code changed: 2026-10-27
+    "GBP/JPY": {"spread_typical_pips": 1.5, "commission_per_lot": 0.0, "swap_long": -0.527, "swap_short": -3.583},
+}
+
+
+def with_paper_broker_costs(pair: str, spec: ForexInstrumentSpec) -> ForexInstrumentSpec:   # claude code changed: 2026-10-27
+    """The spec with the Paper-Trader cost snapshot applied, or the spec unchanged when the pair has none."""
+    costs = PAPER_BROKER_COSTS.get(pair)
+    if costs is None:
+        return spec
+    return replace(spec, source=PAPER_COST_SNAPSHOT_SOURCE, **costs)

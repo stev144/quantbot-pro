@@ -391,7 +391,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
       validated       : True only for GBP/JPY (QC-1 holdout positive)
     """
     from bot.research.fx_fold_splitter import make_fx_splits, FxFold
-    from bot.research.forex_instrument_spec import QC_PORTFOLIO_SPECS, QC_PORTFOLIO_CSV_FILES
+    from bot.research.forex_instrument_spec import QC_PORTFOLIO_SPECS, QC_PORTFOLIO_CSV_FILES, with_paper_broker_costs  # claude code changed: 2026-10-27 — MT5 cost snapshot
     from bot.research.fx_fold_runner import (
         compute_wilder_adx,
         compute_causal_atr_series,
@@ -409,6 +409,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
     results = {}
 
     for pair, pair_spec in QC_PORTFOLIO_SPECS.items():
+        pair_spec = with_paper_broker_costs(pair, pair_spec)   # claude code changed: 2026-10-27 — Paper Trader only; shared specs untouched
         csv_file = QC_PORTFOLIO_CSV_FILES[pair]
         try:
             df_full = pd.read_csv(
@@ -472,7 +473,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 spread_pips=spread_pips if spread_pips else None,
                 commission_per_lot=commission_lot,
                 swap_long_pips=swap_long_pips if swap_long_pips else None,
-                swap_short_pips=None,
+                swap_short_pips=getattr(pair_spec, "swap_short", None),   # claude code changed: 2026-10-27 — was None, which kept cost_complete False even with full costs
                 lot_size=lot_size,
                 max_cycle_candles=QC1_MAX_CYCLE_CANDLES,
             )
@@ -587,6 +588,14 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
                 "max_margin":     round(max_margin, 2),
                 "max_notional":   max_notional,
                 "open_position":  open_position,  # claude code changed: current open cycle; None if flat
+                "costs": {   # claude code changed: 2026-10-27 — what this run charged, shown on the page
+                    "complete":    cost_complete,
+                    "source":      pair_spec.source,
+                    "spread_pips": getattr(pair_spec, "spread_typical_pips", None),
+                    "commission":  commission_lot,
+                    "swap_long":   getattr(pair_spec, "swap_long", None),
+                    "slippage":    "not modelled",
+                },
             }
 
         except Exception as exc:

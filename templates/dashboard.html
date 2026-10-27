@@ -60,6 +60,10 @@ body:has(.hq-page) #bubble-canvas { display: none !important; }   /* claude code
 .hq-table th { text-align: left; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .hq-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: middle; }
 .hq-table td.r, .hq-table th.r { text-align: right; }
+.hq-mchips { display: flex; flex-wrap: wrap; gap: 4px 6px; justify-content: flex-start; max-width: 360px; }   /* claude code changed: 2026-10-27 — risk & cost chips */
+.hq-m { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .03em; color: var(--text-dim); white-space: nowrap; padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; }
+.hq-m b { color: var(--text-secondary); font-weight: 600; } .hq-m.cmp b { color: var(--neutral); } .hq-m.exp b { color: var(--warning); }
+@media (max-width: 860px) { .hq-mchips { justify-content: flex-end; max-width: none; } }
 .hq-table tr.hq-sep td { color: var(--text-dim); font-size: 11.5px; padding-top: 10px; border-bottom: 0; }
 .hq-asset { display: inline-flex; align-items: center; gap: 7px; color: var(--text-primary); font-weight: 600; text-decoration: none; }
 .hq-asset:hover { text-decoration: underline; }
@@ -293,16 +297,17 @@ details.hq-how p, details.hq-how li { line-height: 1.5; }
                     <label><input type="checkbox" id="rv-extreme"> only |z| ≥ {{ intel.extreme_z|floatformat:0 }}</label>
                 </div>
                 <table class="hq-table stack" id="rv-table">
-                    <thead><tr><th>Asset</th><th class="r">24 h return</th><th class="r" title="Relative extremity describes how unusual an observation is within its reference universe. It does not guarantee reversal or profitability.">Z-score ⓘ</th><th class="r">Rank</th><th>Regime</th><th>Data</th></tr></thead>
+                    <thead><tr><th>Asset</th><th class="r">24 h return</th><th class="r" title="Relative extremity describes how unusual an observation is within its reference universe. It does not guarantee reversal or profitability.">Z-score ⓘ</th><th class="r">Rank</th><th>Regime</th><th title="Descriptive risk &amp; cost context — volatility, half-life (only when a Dickey-Fuller test rejects a random walk), relative volume, live spread. Not a signal.">Risk &amp; cost ⓘ</th><th>Data</th></tr></thead>
                     <tbody>
-                        <tr class="hq-sep"><td colspan="6">Strongest relative performers</td></tr>
+                        <tr class="hq-sep"><td colspan="7">Strongest relative performers</td></tr>
                         {% for r in c.rows|slice:":8" %}{# claude code changed: 2026-10-26 — with fewer than 16 coins the two ends overlap #}{% include "partials/_hq_rv_row.html" with side="pos" n=c.n %}{% endfor %}
-                        <tr class="hq-sep"><td colspan="6">Weakest relative performers</td></tr>
+                        <tr class="hq-sep"><td colspan="7">Weakest relative performers</td></tr>
                         {% for r in c.rows|slice:"-8:" reversed %}{% include "partials/_hq_rv_row.html" with side="neg" n=c.n %}{% endfor %}
                     </tbody>
                 </table>
                 <div class="hq-note" id="rv-empty" hidden>No rows match these filters.</div>
                 <div class="hq-note" style="margin-top:8px">Rank 1 = highest 24 h return, of {{ c.n }} eligible coins; ties ordered by symbol. Filters only hide rows — the z-scores always use all {{ c.n }} coins.</div>
+                <div class="hq-note" style="margin-top:4px">{# claude code changed: 2026-10-27 #}Risk &amp; cost: VOL 7D = annualised volatility of hourly returns, last 7 days · VOL RATIO = mean daily range last 7 ÷ 30 days (the RangeAnalytics engine's states) · HALF-LIFE = AR(1) half-life of the price, shown only when a Dickey-Fuller test rejects a random walk at 5% (about 1 coin in 20 passes by chance) · RVOL = last 24 h hourly volume ÷ the 29 days before · SPREAD = live bid/ask, and its share of a typical day's move. Hover any figure for its detail. Descriptive, not signals.</div>
                 {% else %}
                 <div class="hq-big small dim-t">Unavailable</div><div class="hq-note">{{ c.reason }}</div>
                 {% endif %}
@@ -311,7 +316,7 @@ details.hq-how p, details.hq-how li { line-height: 1.5; }
             <div data-universe-panel="forex" hidden>
                 {% if f.available %}
                 <table class="hq-table stack">
-                    <thead><tr><th>Currency</th><th class="r">24 h vs USD</th><th class="r" title="Relative extremity describes how unusual an observation is within its reference universe. It does not guarantee reversal or profitability.">Z-score ⓘ</th><th class="r">Rank</th></tr></thead>
+                    <thead><tr><th>Currency</th><th class="r">24 h vs USD</th><th class="r" title="Relative extremity describes how unusual an observation is within its reference universe. It does not guarantee reversal or profitability.">Z-score ⓘ</th><th class="r">Rank</th><th title="Descriptive risk &amp; cost context — volatility, half-life (only when a Dickey-Fuller test rejects a random walk) and live spread, from the currency's USD pair; no relative volume for forex. Not a signal.">Risk &amp; cost ⓘ</th></tr></thead>
                     <tbody>
                         {% for r in f.rows %}
                         <tr>
@@ -319,11 +324,12 @@ details.hq-how p, details.hq-how li { line-height: 1.5; }
                             <td class="r num {% if r.return_pct >= 0 %}pos-t{% else %}neg-t{% endif %}" data-label="24 h vs USD">{% if r.return_pct >= 0 %}+{% endif %}{{ r.return_pct|floatformat:3 }}%</td>
                             <td class="r num" data-label="Z-score">{% if r.z >= 0 %}+{% endif %}{{ r.z|floatformat:2 }}</td>
                             <td class="r num" data-label="Rank">{{ r.rank }} / {{ f.n }}</td>
+                            {% include "partials/_hq_metrics_cell.html" with m=r.metrics %}{# claude code changed: 2026-10-27 — from its USD pair #}
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
-                <div class="hq-note" style="margin-top:8px">The US dollar is the reference, so it has no row. Rank 1 = strongest against USD.</div>
+                <div class="hq-note" style="margin-top:8px">The US dollar is the reference, so it has no row. Rank 1 = strongest against USD. Risk &amp; cost figures come from each currency's USD pair (MT5 hourly candles and live bid/ask). RVOL is not shown for forex: the stored tick volume mixes more than one MT5 broker feed, so recent and past volume are not comparable.</div>
                 {% else %}
                 <div class="hq-big small dim-t">Unavailable</div><div class="hq-note">{{ f.reason }}</div>
                 {% endif %}
@@ -477,7 +483,7 @@ details.hq-how p, details.hq-how li { line-height: 1.5; }
             <p class="hq-sec-sub">Coins at |z| ≥ {{ intel.extreme_z|floatformat:0 }} in today's cross-section, largest first. Each dimension is shown separately; there is no combined score.</p></div></div>
         {% if intel.watchlist %}
         <table class="hq-table stack">
-            <thead><tr><th>Asset</th><th class="r">24 h return</th><th class="r">Z-score</th><th class="r">Rank</th><th>Regime</th><th class="r">24 h volume</th><th></th></tr></thead>
+            <thead><tr><th>Asset</th><th class="r">24 h return</th><th class="r">Z-score</th><th class="r">Rank</th><th>Regime</th><th title="Descriptive risk &amp; cost context — volatility, half-life (only when a Dickey-Fuller test rejects a random walk), relative volume, live spread. Not a signal.">Risk &amp; cost ⓘ</th><th class="r">24 h volume</th><th></th></tr></thead>
             <tbody>
                 {% for w in intel.watchlist %}
                 <tr>
@@ -486,6 +492,7 @@ details.hq-how p, details.hq-how li { line-height: 1.5; }
                     <td class="r num" data-label="Z-score">{% if w.z >= 0 %}+{% endif %}{{ w.z|floatformat:2 }}</td>
                     <td class="r num" data-label="Rank">{{ w.rank }} / {{ c.n }}</td>
                     <td data-label="Regime">{{ w.regime_words }}</td>
+                    {% include "partials/_hq_metrics_cell.html" with m=w.metrics %}{# claude code changed: 2026-10-27 #}
                     <td class="r num" data-label="24 h volume">{% if w.quote_volume %}{% if w.quote_volume >= 1000000 %}${% widthratio w.quote_volume 1000000 1 %}M{% else %}${% widthratio w.quote_volume 1000 1 %}k{% endif %}{% else %}—{% endif %}</td>
                     <td data-label="Open"><a class="hq-link" href="{% url 'market_workspace' 'crypto' w.symbol %}">Inspect</a> · <a class="hq-link" href="{% url 'dashboard' %}?symbol={{ w.compact }}#regime">Regime</a></td>
                 </tr>

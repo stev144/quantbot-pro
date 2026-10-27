@@ -17,7 +17,7 @@ from django.shortcuts import render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_KEY = "paper_trading_results_v5"  # claude code changed: v5 — ranging gate removed, single unrestricted simulation
+_CACHE_KEY = "paper_trading_results_v6"  # claude code changed: v6 — 2026-10-27 GBP/JPY MT5 costs (was v5: ranging gate removed)
 _CACHE_TTL = 3600
 
 
@@ -40,6 +40,19 @@ def cached_paper_summary():  # claude code changed: 2026-10-25 — summary card 
     }
 
 
+def max_drawdown_pct(equity):  # claude code changed: 2026-10-27 — drawdown % in brackets (owner rule)
+    """Deepest fall of the cumulative-P&L curve as a % of its running peak (no account capital exists here).
+    None when the curve never had a positive peak."""
+    peak, worst = None, None
+    for pt in equity or []:
+        p = pt["p"]
+        peak = p if peak is None else max(peak, p)
+        if peak > 0:
+            pct = (p - peak) / peak * 100
+            worst = pct if worst is None else min(worst, pct)
+    return round(worst, 1) if worst is not None else None
+
+
 def paper_trading(request):  # claude code changed: new — ranging paper trader view
     error   = None
     results = cache.get(_CACHE_KEY)
@@ -60,12 +73,15 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
         if "error" not in r:
             pairs_data[pair] = {
                 "equity":     r.get("equity",    []),
+                "equity_settled": r.get("equity_settled", []),   # claude code changed: 2026-10-27 — balance (closed trades) line
                 "drawdown":   r.get("drawdown",  []),
                 "fill_dist":  r.get("fill_dist", {}),
                 "ladder_depth": r.get("ladder_depth", 0),
             }
 
     pair_list = [p for p in results if "error" not in results[p]]
+    for p in pair_list:   # claude code changed: 2026-10-27 — max drawdown as % of peak cumulative P&L
+        results[p]["stats"]["max_dd_pct"] = max_drawdown_pct(results[p].get("equity"))
 
     # aggregate capital stats for page header  # claude code changed: leverage-aware capital summary
     entry_usdt   = None

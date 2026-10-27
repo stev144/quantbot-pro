@@ -26,7 +26,7 @@ _FOREX_DIR = _ROOT / "data" / "forex"
 _CACHE_KEY = "forex_scanner_v1"
 _CACHE_TTL = 1800   # 30 minutes
 
-_SIM_CACHE_KEY = "paper_sim_v1"   # full simulation results per pair (equity, trades, stats, open_position)
+_SIM_CACHE_KEY = "paper_sim_v2"   # claude code changed: 2026-10-27 — v2 (was v1): GBP/JPY MT5 costs. Full simulation results per pair (equity, trades, stats, open_position)
 _SIM_CACHE_TTL = 3600             # 1 hour
 _POS_CACHE_KEY = _SIM_CACHE_KEY   # alias kept for backward compat
 _CANDLES   = 200    # candles loaded per pair for indicator computation
