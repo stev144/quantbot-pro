@@ -1,0 +1,51 @@
+
+"""
+PARTS THAT OUR STEPH QUANT TECHNOLOG1IES WILL ACTUALLY NEED FOR EDGE ENGINEERING
+
+Machine Learning Models:               STATISTICS:
+1.  Logistic regression Model            1. Descriptive statistics
+2.	Randon Forest Model:               2. Probability Modelling
+3.	Gradient Boosting Modal:           3. Regression
+4.	Clustering Model:                  4. Cointegration
+5.	Anomaly Dectection Model:          5. Kalman filtering
+6.	Linear Regression Model:           6. Hypothesis testing
+7.	Hidded Markov Models:              7. Pvalues
+                                       8. Sharpe
+PURE MATH                             9. Max drawdown
+ 1. algebra                          10. Expectancy 
+ 2. Functions                        11. Profit factor
+ 3. Exponential and Logarithms
+4. Linear algebra
+
+PROGRAMMING:         DATA SCIENCE
+Python:              1. Data acquisition
+Pandas:              2.	Data Cleaning: 
+Numpy                3.	Feature Engineering:.
+Scipy                4.	Featue Validation:
+Scikit-learn         5.	Labels / targets
+SQL                  6.	Data Splitting: 
+HTML                  7.	Walk forward validation with a rolling window:
+CSS
+JavaScript
+Gi
+
+SOFTWARE ENGINEEEING
+1.	Modular architecture: 
+2.	Logging:
+3.	Secrets Management:
+4.	Git.
+5.	Background jobs:
+6.	Caching:
+7.	Security Engineering.6
+8.	Django:
+
+"""
+
+
+
+
+
+
+
+          
+

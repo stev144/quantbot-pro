@@ -1,0 +1,731 @@
+Steph Quant Technologies — Professional DCA Engine Capital-Survival, Execution-Cost & Historical Stress-Test Upgrade
+
+1. ROLE AND ENGINEERING STANDARD
+
+Act as a senior quantitative researcher, Python/Django architect, trading-systems engineer, and independent risk auditor working inside the existing Steph Quant Technologies codebase.
+Your task is to audit and upgrade the existing DCA engine into a historically accurate, cost-aware capital-survival and stress-testing system.
+This is an engineering and research task, not a strategy-optimization exercise.
+The system must reveal the real financial consequences of running the existing DCA strategy across historical market conditions, including adverse trends, market crashes, prolonged underwater positions, capital exhaustion, and genuine liquidation events where the account model supports liquidation.
+Do not assume the strategy is profitable or safe. Do not manufacture favorable results. Do not equate a high closed-cycle win rate with a positive or robust trading edge.
+
+2. NON-NEGOTIABLE PROJECT RULES
+
+Work inside the existing Steph Quant Technologies architecture.
+
+Begin with an audit of the current implementation before modifying code.
+
+Identify the actual DCA configuration, execution path, order-sizing logic, position accounting, simulation engine, historical data loader, cost configuration, analytics, dashboard views, templates and tests.
+
+Reuse existing execution-cost, position-tracking, simulation and backtesting components wherever appropriate. Do not introduce duplicate accounting engines or conflicting sources of truth.
+
+Preserve the existing strategy parameters and baseline behavior unless a change is necessary to correct a demonstrated accounting or simulation defect.
+
+Do not silently change entry logic, DCA spacing, order multipliers, take-profit activation, trailing exits, or position direction.
+
+Do not delete, weaken or rewrite existing tests merely to achieve a passing test count.
+
+Do not introduce live order execution, live trading credentials, or production trading endpoints. All work must remain in historical simulation or explicitly controlled offline testing.
+
+Do not use future information, survivorship-biased asset universes, or future event knowledge to make historical trading decisions.
+
+Do not claim a liquidation occurred unless the simulator establishes that the applicable account and instrument rules triggered it.
+
+Do not invent historical results, cost percentages, event dates, or benchmark values.
+
+Do not begin strategy tuning or parameter optimization in this phase.
+
+First produce an implementation audit and a proposed file-level change plan. Then implement the upgrade in small, testable steps, preserving a baseline against which changes can be verified.
+
+
+
+
+Long cycles add after adverse downward price movements.
+
+Short cycles add after adverse upward price movements.
+
+Take-profit activation: 2.5% above the weighted average entry for longs, with the corresponding directionally correct logic for shorts.
+
+Trailing exit: 0.5%.
+
+No hard stop-loss in the reported baseline.
+
+No maximum cycle duration in the reported baseline.
+
+Existing execution assumptions reportedly include a 0.0005 slippage rate and a 0.001 Binance taker-fee rate. Verify these against the current source code and configuration; do not assume they are universally correct for every instrument or execution type.
+
+The nominal order sizes implied by this configuration are 6, 12, 24, 48, 96, 192 and 384 USDT, totaling 762 USDT before costs.
+This is a nominal ladder total, not proof that 762 USDT is sufficient account capital. Calculate actual funding requirements using the existing sizing conventions, fees, open exposure, unrealized losses and any applicable margin requirements.
+Document discrepancies between the reported baseline and the actual code before deciding how to resolve them.
+
+4. PHASE A — AUDIT AND BASELINE REPRODUCTION
+
+Before implementing changes:
+
+Trace the full lifecycle of a DCA cycle, from signal or cycle initiation through order fills, additional entries, take-profit activation, trailing exit and final closure.
+
+Identify whether current P&L includes commissions, spread, slippage, funding, borrowing charges and other applicable expenses.
+
+Identify whether the simulator tracks balance, equity, available cash, reserved funds, open exposure and unrealized P&L independently.
+
+Determine whether capital is accidentally replenished, reset, or implicitly treated as unlimited between cycles.
+
+Determine how multiple simultaneous cycles share account capital.
+
+Inspect candle resolution, fill assumptions, gaps, partial fills and intrabar event ordering.
+
+Identify how unfinished cycles at the end of the historical dataset are currently handled.
+
+Record current test results and reproduce the baseline on a fixed dataset and configuration.
+
+Identify the existing source of truth for execution costs and reuse it.
+
+Provide a file-by-file change plan with risks and dependencies.
+
+Do not proceed on the assumption that an accounting field is absent merely because the dashboard does not display it. Trace the underlying implementation first.
+
+5. PHASE B — AUTHORITATIVE ACCOUNTING ENGINE
+
+Implement or repair account accounting so that every simulated timestamp has a consistent financial state.
+Track at minimum:
+
+Initial account capital.
+
+External deposits and withdrawals, if supported.
+
+Cash balance.
+
+Reserved or committed capital.
+
+Free cash available for subsequent DCA orders.
+
+Open positions and quantities.
+
+Weighted-average entry price.
+
+Gross realized trading P&L.
+
+Gross unrealized P&L.
+
+Trading fees.
+
+Spread costs, where modeled.
+
+Slippage costs.
+
+Funding payments and borrowing costs, where applicable.
+
+Liquidation fees and other explicitly modeled charges.
+
+Net realized P&L.
+
+Net unrealized P&L.
+
+Total account equity.
+
+Peak equity.
+
+Current and maximum drawdown.
+
+Margin used and available margin for leveraged instruments.
+
+Open exposure by symbol and direction.
+
+Capital committed to each individual DCA cycle.
+
+Establish and document a precise accounting convention.
+At a minimum, enforce a reconciliation identity consistent with the account model:
+Equity = cash + marked-to-market position value - applicable liabilities.
+For a cash-based accounting model, separately reconcile the initial capital and external cash flows against realized P&L, unrealized P&L and all accrued or paid costs.
+Do not double-count fees, slippage or funding in both the cash ledger and a second equity adjustment.
+For derivatives, account for contract quantity, multiplier, leverage, margin, funding and liquidation according to the applicable instrument model. Do not apply spot-account assumptions to perpetual futures or leveraged FX.
+Record a timestamped ledger entry for every fill, fee, funding payment, realized P&L event, deposit, withdrawal and liquidation.
+Every completed or open cycle must be traceable to the underlying ledger records.
+
+6. PHASE C — COST AND SLIPPAGE ATTRIBUTION
+
+This is a mandatory deliverable, not an optional analytics feature.
+Calculate trading costs from actual simulated fills and account for both entry-side and exit-side expenses.
+Where the required data is available, model:
+
+Maker and taker commissions using the applicable fee schedule.
+
+Bid-ask spread and side-specific execution prices.
+
+Slippage on every buy and sell, including each additional DCA order.
+
+Funding payments for perpetual futures.
+
+Borrowing or financing costs for applicable leveraged positions.
+
+Borrow costs for short positions where the instrument and broker require them.
+
+Liquidation fees and other instrument-specific charges.
+
+Any additional explicitly configured execution costs.
+
+Avoid double-counting spread and slippage if the execution-price model already incorporates them.
+If historical spreads, funding rates or borrowing rates are unavailable, make the assumption explicit, provide a configurable proxy where appropriate, and mark the affected results as estimated rather than historically verified.
+
+Mandatory cost metrics
+
+Calculate and display:
+
+Gross trading P&L before costs.
+
+Total commissions.
+
+Total spread cost.
+
+Total slippage cost.
+
+Total funding cost.
+
+Total borrowing/financing cost.
+
+Total liquidation charges.
+
+Other modeled costs, itemized separately.
+
+Total trading and financing costs.
+
+Net P&L after all costs.
+
+Gross profit from winning cycles before costs.
+
+Gross losses from losing cycles before costs.
+
+Total gross positive P&L.
+
+Total gross negative P&L.
+
+Net profit factor after costs.
+
+Cost per completed cycle.
+
+Average cost per order and per filled DCA level.
+
+Average cost as a percentage of traded notional.
+
+Cost by symbol, direction, month, market regime and DCA level.
+
+Use clear, non-ambiguous definitions for every metric.
+
+Critical metric: percentage of profits consumed by costs
+
+The dashboard must explicitly show how much gross profitability is being consumed by execution and financing costs.
+Calculate:
+A. Net P&L = gross trading P&L - total modeled costs.
+B. Cost-to-gross-profit ratio = total modeled costs / gross positive trading P&L × 100, when gross positive P&L is strictly positive.
+C. Cost as a percentage of gross absolute trading P&L = total modeled costs / (gross positive P&L + absolute gross negative P&L) × 100, when the denominator is positive.
+D. Cost as a percentage of traded notional = total modeled costs / total executed notional × 100, when executed notional is positive.
+E. Profit retention ratio = net P&L / gross trading P&L × 100, only when the signed gross trading P&L is positive. Label this metric clearly and allow values below zero when costs exceed gross profits.
+F. Cost drag in percentage points of return = gross return on starting capital minus net return on starting capital, using a consistent fixed starting-capital and external-cash-flow convention.
+Do not calculate these ratios with zero denominators. Return an explicit N/A state instead.
+Do not silently cap ratios at 100%. Costs can exceed gross positive profits, especially when gross losses are also present. Explain the denominator and interpretation next to each metric.
+Do not describe all costs as a percentage of “profits” when the denominator is actually turnover, absolute P&L or starting equity.
+
+Required dashboard presentation
+
+Provide a cost breakdown with values and percentages, including a prominent statement such as:
+“Execution and financing costs consumed X% of gross positive trading P&L.”
+Also show:
+
+Gross P&L: $X.
+
+Total costs: $Y.
+
+Net P&L: $Z.
+
+Cost-to-gross-profit ratio: X%.
+
+Traded notional: $N.
+
+Cost as a percentage of notional: X%.
+
+Gross return versus net return.
+
+Profit retained after costs.
+
+Whether costs turned a grossly profitable strategy into a net-losing strategy.
+
+These are output formats, not hardcoded sample values. All displayed values must come from the simulated ledger.
+If gross positive P&L is zero or negative, display “N/A — no positive gross P&L denominator” for the cost-to-gross-profit ratio and explain the relevant alternative metrics.
+
+7. PHASE D — FIXED-CAPITAL HISTORICAL REPLAY, 2022–2026
+
+Replay the existing strategy chronologically over the full available historical period from 2022 through 2026, using the project's actual dataset boundaries and timestamps.
+Requirements:
+
+Use a fixed starting capital selected explicitly in the experiment configuration.
+
+Do not silently inject extra capital when a new DCA order is needed.
+
+Process all orders and costs in chronological order.
+
+Mark open positions to market at each simulation step.
+
+Update cash, equity, free cash, margin and drawdown after each relevant event.
+
+Respect actual symbol-specific order-size and quantity conventions.
+
+Prevent orders that exceed available funds or violate the configured account rules.
+
+Record precisely why an order was rejected or a cycle could not continue.
+
+Maintain cycle state across candles without resetting unresolved exposure.
+
+Record all unresolved positions at the end of the dataset and their marked-to-market P&L.
+
+Separate realized performance from the value of open positions.
+
+Include a documented end-of-data liquidation scenario only as a separate counterfactual, not as if that exit actually occurred.
+
+Preserve the original baseline output for comparison.
+
+The simulation must never assume that a position survives merely because a later candle eventually recovers.
+
+8. PHASE E — CAPITAL EXHAUSTION AND LIQUIDATION CLASSIFICATION
+
+Create explicit and mutually distinguishable outcome states.
+At minimum:
+
+PROFITABLE_EXIT.
+
+LOSING_EXIT.
+
+OPEN_UNRESOLVED_AT_DATA_END.
+
+DCA_LADDER_EXHAUSTED.
+
+INSUFFICIENT_FREE_CASH.
+
+ORDER_REJECTED.
+
+MARGIN_CALL, if modeled.
+
+LIQUIDATED, if the actual liquidation condition is reached.
+
+BANKRUPTCY_OR_INSOLVENCY, only when supported by the account model and its defined rules.
+
+DATA_OR_EXECUTION_UNCERTAINTY, when the available data cannot establish the event order or exact result.
+
+These states must not be treated as interchangeable.
+For each failure or forced closure, record:
+
+Symbol and cycle ID.
+
+Direction.
+
+Entry timestamp and price.
+
+Final DCA level reached.
+
+Failure or liquidation timestamp.
+
+Triggering market price.
+
+Estimated or simulated execution price.
+
+Equity and free cash before the event.
+
+Margin used and maintenance-margin requirement, where applicable.
+
+Floating loss immediately before closure.
+
+Realized loss after closure.
+
+Accumulated costs.
+
+Peak capital commitment.
+
+Maximum adverse excursion.
+
+Duration of the cycle.
+
+Exact rule or condition that triggered the outcome.
+
+Confidence or limitation of the historical reconstruction.
+
+For leveraged accounts, implement instrument-appropriate maintenance-margin and liquidation logic.
+If the broker's exact liquidation model is unavailable, label the result as a configurable approximation. Do not claim to reproduce a real broker's liquidation engine without the necessary rules and inputs.
+For spot accounts, do not report exchange liquidation unless a real liquidation mechanism exists in the modeled product.
+
+9. PHASE F — HISTORICAL EQUITY, CAPITAL AND DRAWDOWN CHARTS
+
+Upgrade the existing DCA dashboard instead of creating an unrelated standalone dashboard.
+The main chart must plot the full historical account trajectory and include:
+
+Account balance.
+
+Total equity, including unrealized P&L.
+
+Peak equity.
+
+Drawdown percentage.
+
+Capital deployed or reserved.
+
+Free cash.
+
+Cumulative gross P&L.
+
+Cumulative costs.
+
+Cumulative net P&L.
+
+Entry, additional DCA orders and exit markers.
+
+Ladder exhaustion markers.
+
+Liquidation and capital-failure markers.
+
+Historical event annotations.
+
+Optional market price overlay, with a separate axis where necessary.
+
+Use chart controls or separate coordinated charts if displaying everything at once makes the chart unreadable.
+Provide zoomable date ranges, symbol filtering, cycle filtering and a detailed hover tooltip.
+The tooltip for any timestamp should expose the underlying values, including balance, equity, open unrealized P&L, free cash, capital deployed, cumulative costs, cumulative net P&L and drawdown.
+Every marker must link to the corresponding cycle or ledger records.
+
+Required account-risk summary cards
+
+Display:
+
+Starting capital.
+
+Ending balance.
+
+Ending equity.
+
+Gross realized P&L.
+
+Unrealized P&L.
+
+Total costs.
+
+Net P&L.
+
+Net return on starting capital.
+
+Maximum equity drawdown.
+
+Maximum absolute drawdown in currency.
+
+Longest drawdown recovery period.
+
+Maximum capital deployed.
+
+Minimum free cash.
+
+Maximum number of simultaneous open cycles.
+
+Total completed cycles.
+
+Unresolved cycles.
+
+Ladder exhaustion count and rate.
+
+Capital-insufficiency count.
+
+Actual or modeled liquidation count.
+
+Longest cycle duration.
+
+Worst floating loss.
+
+Worst realized cycle loss.
+
+Gross and net profit factor.
+
+Win rate before and after costs, with clearly defined denominators.
+
+Never hide unresolved positions when calculating the completed-cycle win rate. Display completed-cycle performance and open-cycle exposure separately.
+
+10. PHASE G — HISTORICAL MARKET EVENTS AND STRESS WINDOWS
+
+Create an evidence-based event annotation layer for the available historical period.
+Investigate relevant events including, where applicable to the selected instrument:
+
+March 2020 COVID crash, if the historical dataset extends to it.
+
+2022 inflation, rate hikes and sustained directional markets.
+
+Terra/Luna and FTX-related crypto market disruptions in 2022.
+
+March 2023 banking turmoil.
+
+The 31 July–early August 2024 Bank of Japan decision and yen carry-trade unwind.
+
+Major instrument-specific crashes, exchange failures, delistings, liquidity events and extreme volatility episodes.
+
+Relevant events during 2025 and 2026, only when independently verified and covered by the available data.
+
+The 2022–2026 replay cannot itself measure a March 2020 event if the selected data begins in 2022. Treat March 2020 as a separate extended-history test if appropriate data is available. Otherwise, label it as a documented external reference, not a simulated result.
+Each event record must contain:
+
+Event identifier and title.
+
+Event start and end timestamps.
+
+Source URL and publication timestamp where available.
+
+Relevant asset or market.
+
+Verified event description.
+
+Event category, such as monetary policy, liquidity shock, exchange failure or geopolitical shock.
+
+Measured market return and volatility during a configurable event window.
+
+Maximum adverse move for the affected trading direction.
+
+DCA ladder levels reached during the window.
+
+Capital deployed and maximum floating loss during the window.
+
+Realized losses, if any.
+
+Whether the event coincided with exhaustion, funding failure or liquidation.
+
+Data coverage and attribution limitations.
+
+Separate documented historical facts from measured price behavior and simulated trading consequences.
+Do not automatically attribute every decline to a news event. Do not use future event information as a live trading signal during historical replay.
+Do not force the simulator to close a position merely because an event annotation appears.
+
+11. PHASE H — STRESS TESTING
+
+Build a configurable stress-test suite around the unchanged baseline.
+Test:
+
+Fixed starting capital at multiple user-selected levels.
+
+Higher commissions and spreads.
+
+Adverse slippage multipliers.
+
+Market gaps and adverse intrabar execution.
+
+Missing or delayed candles.
+
+Sustained one-directional price movements.
+
+Rapid volatility expansion.
+
+Correlated adverse moves across simultaneous positions.
+
+Funding-rate shocks for perpetual futures.
+
+Borrowing-cost shocks for applicable leveraged products.
+
+Reduced liquidity and rejected orders.
+
+Ladder exhaustion with the existing no-stop-loss baseline.
+
+Positions that remain open at the end of the dataset.
+
+Use historical replay and clearly labelled hypothetical scenarios as separate experiment classes.
+Do not choose stress parameters merely to produce favorable results. Document the rationale for each assumption.
+Report both absolute dollar losses and percentage-of-equity losses.
+
+12. PHASE I — RESEARCH INTEGRITY AND PERFORMANCE COMPARISON
+
+The upgraded engine must distinguish:
+
+Gross versus net returns.
+
+Closed-trade performance versus marked-to-market account performance.
+
+Normal historical performance versus stress-test performance.
+
+Completed cycles versus unresolved cycles.
+
+Actual modeled liquidation versus ladder exhaustion.
+
+Observed historical market events versus hypothetical shocks.
+
+Historical data coverage versus unobserved periods.
+
+Results before and after execution costs.
+
+Produce a baseline-versus-upgraded comparison report.
+The accounting upgrade must not artificially improve the strategy's returns. If results differ, explain whether the difference comes from correcting cost treatment, fill assumptions, capital constraints, open-position valuation, or another identified defect.
+Where appropriate, calculate net expectancy per cycle, profit factor, maximum drawdown, return on starting capital, exposure duration and cost drag.
+Do not optimize strategy parameters in this phase. Do not use the same data repeatedly to select a strategy and then claim that data proves out-of-sample profitability.
+
+13. PHASE J — TESTING REQUIREMENTS
+
+Add unit, integration and regression tests covering at least:
+
+Accounting
+
+Cash and equity reconciliation.
+
+Realized versus unrealized P&L.
+
+Weighted-average entry prices.
+
+Fees on every applicable fill.
+
+Slippage on entry and exit.
+
+Funding and financing charges.
+
+No double-counting of costs.
+
+External cash flows, where supported.
+
+Multiple simultaneous positions.
+
+Zero-denominator cost ratios.
+
+DCA behavior
+
+Long and short ladder progression.
+
+Existing spacing and order multipliers.
+
+Existing take-profit activation.
+
+Existing trailing-exit behavior.
+
+Correct cycle-state transitions.
+
+Insufficient capital before the next order.
+
+Ladder exhaustion without falsely claiming liquidation.
+
+Open cycles at the end of historical data.
+
+Liquidation and execution
+
+Maintenance-margin thresholds.
+
+Liquidation fees.
+
+Gap and adverse-fill behavior.
+
+Intrabar stop/target ambiguity.
+
+Insufficient historical resolution.
+
+Rejected orders.
+
+No negative cash or impossible fills unless explicitly permitted by the modeled account rules.
+
+Analytics
+
+Drawdown calculations based on equity peaks.
+
+Absolute and percentage drawdown.
+
+Cost-to-gross-profit ratio.
+
+Cost-to-notional ratio.
+
+Gross versus net return.
+
+Profit retention.
+
+Cost drag.
+
+Profit factor before and after costs.
+
+Correct aggregation across symbols and periods.
+
+Correct failure and liquidation counts.
+
+Regression and leakage
+
+Existing tests remain intact.
+
+Historical processing is chronological.
+
+No look-ahead bias.
+
+No silent account resets or capital replenishment.
+
+No use of future events to generate historical trading decisions.
+
+Deterministic replay for a fixed dataset and configuration.
+
+Run focused tests first, followed by relevant integration tests and the full project test suite.
+Report all pre-existing failures separately from new failures. Do not claim success if the suite has not completed.
+
+14. DELIVERABLES
+
+Provide:
+
+Initial architecture audit.
+
+Baseline reproduction report.
+
+File-by-file implementation plan.
+
+Implemented and tested accounting changes.
+
+Cost-attribution engine and dashboard.
+
+Historical equity and drawdown charts.
+
+DCA cycle and liquidation event ledger.
+
+Historical event annotation dataset with sources.
+
+Stress-test configuration and results.
+
+Baseline-versus-upgraded comparison.
+
+Unit, integration and regression test report.
+
+Known limitations and unresolved risks.
+
+Exact commands used to run the tests and replay.
+
+Exact commands to launch the upgraded dashboard.
+
+A clear list of files changed and the reason for each change.
+
+Do not invent results when the available historical data or execution model is insufficient.
+
+15. ACCEPTANCE CRITERIA
+
+The task is not complete until:
+
+The full supported historical period has been replayed successfully.
+
+Every account balance and equity figure reconciles to the ledger.
+
+Open positions and unrealized losses are visible.
+
+Capital is not silently replenished.
+
+All modeled execution and financing costs are accounted for.
+
+The percentage of gross positive P&L consumed by costs is displayed when mathematically defined.
+
+Cost as a percentage of traded notional is displayed.
+
+Gross P&L, net P&L, gross return and net return are distinguishable.
+
+Ladder exhaustion, insufficient capital, unresolved positions and liquidation are recorded separately.
+
+Liquidation claims are supported by the configured instrument and account rules.
+
+Historical event annotations are sourced and clearly distinguished from causal proof.
+
+Stress tests report absolute and percentage losses.
+
+Existing strategy behavior is preserved except where a documented correction is required.
+
+Relevant regression tests pass, with any remaining failures explicitly documented.
+
+No live trading endpoints or live orders have been introduced.
+
+FINAL INSTRUCTION
+
+Begin with the audit. Show me the existing files, the current accounting and cost flow, the known deficiencies, and the proposed implementation plan.
+Then implement the upgrade in controlled stages.
+The priority is not to make the DCA strategy look profitable. The priority is to determine, as honestly and reproducibly as possible, whether the strategy can survive realistic costs, adverse market conditions, prolonged open positions and limited account capital.
+A strategy that earns frequent small profits but occasionally destroys the account must be exposed by the simulator, not hidden by its win rate.
