@@ -2,9 +2,9 @@
 """
 Django view for the Ranging Paper Trader page.
 
-Runs the ranging-gated DCA simulation for every QC_PORTFOLIO_SPECS pair and
-compares it against the unrestricted QC-1 baseline on the same data.  Cached
-1 hour — first load takes ~20 s.
+Replays QC-1 for every QC_PORTFOLIO_SPECS pair on its own fixed $3,100 account
+(run_paper_account_simulation: ESMA leverage, 50 % margin close-out, MT5 costs).
+Cached 1 hour — first load takes ~60 s.  # claude code changed: 2026-10-28 — was the unlimited-capital ranging simulation
 
 Governance (G5): IS_PAPER_ONLY=True enforced in the engine module.  Results are
 exploratory — the ranging gate was NOT pre-registered in QC-1's protocol.
@@ -17,7 +17,7 @@ from django.shortcuts import render
 
 logger = logging.getLogger(__name__)
 
-_CACHE_KEY = "paper_trading_results_v6"  # claude code changed: v6 — 2026-10-27 GBP/JPY MT5 costs (was v5: ranging gate removed)
+_CACHE_KEY = "paper_trading_results_v7"  # claude code changed: v7 — 2026-10-28 fixed $3,100 account per pair, margin close-out, MT5 costs for every pair (was v6)
 _CACHE_TTL = 3600
 
 
@@ -37,6 +37,8 @@ def cached_paper_summary():  # claude code changed: 2026-10-25 — summary card 
         "pairs":       len(ok),
         "open_cycles": sum(1 for r in ok if r.get("open_position")),
         "open_pnl":    round(sum(r["open_position"]["profit_usdt"] for r in ok if r.get("open_position")), 2),
+        "deposits":    round(sum(r["account"]["starting_capital"] for r in ok if r.get("account")), 2),   # claude code changed: 2026-10-28 — one fixed account per pair
+        "accounts_failed": sum(1 for r in ok if r.get("account", {}).get("status") in ("BUST", "LIQUIDATED", "DEPLETED")),   # claude code changed: 2026-10-28
     }
 
 
@@ -53,14 +55,19 @@ def max_drawdown_pct(equity):  # claude code changed: 2026-10-27 — drawdown % 
     return round(worst, 1) if worst is not None else None
 
 
+def _account_usd():  # claude code changed: 2026-10-28 — the engine's fixed deposit per pair
+    from bot.paper_trading.ranging_paper_engine import PAPER_ACCOUNT_USD
+    return PAPER_ACCOUNT_USD
+
+
 def paper_trading(request):  # claude code changed: new — ranging paper trader view
     error   = None
     results = cache.get(_CACHE_KEY)
 
     if results is None:
         try:
-            from bot.paper_trading.ranging_paper_engine import run_ranging_paper_simulation
-            results = run_ranging_paper_simulation()
+            from bot.paper_trading.ranging_paper_engine import run_paper_account_simulation   # claude code changed: 2026-10-28 — account-aware replay (was run_ranging_paper_simulation: unlimited capital)
+            results = run_paper_account_simulation()   # claude code changed: 2026-10-28
             cache.set(_CACHE_KEY, results, _CACHE_TTL)
         except Exception as exc:
             logger.exception("paper_trading view: simulation failed")
@@ -80,8 +87,8 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
             }
 
     pair_list = [p for p in results if "error" not in results[p]]
-    for p in pair_list:   # claude code changed: 2026-10-27 — max drawdown as % of peak cumulative P&L
-        results[p]["stats"]["max_dd_pct"] = max_drawdown_pct(results[p].get("equity"))
+    # claude code changed: 2026-10-28 — max_dd_pct now comes from the engine as % of peak account equity (owner rule:
+    # an account exists now); max_drawdown_pct() is kept for curves without an account
 
     # aggregate capital stats for page header  # claude code changed: leverage-aware capital summary
     entry_usdt   = None
@@ -108,5 +115,6 @@ def paper_trading(request):  # claude code changed: new — ranging paper trader
         "leverage":          leverage,          # claude code changed: 30
         "entry_notional":    entry_notional,    # claude code changed: $3,000
         "total_max_margin":  total_max_margin,  # claude code changed: sum of max margin across all pairs
+        "account_usd":       _account_usd(),    # claude code changed: 2026-10-28 — fixed deposit per pair
     }
     return render(request, "paper_trading.html", context)

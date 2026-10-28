@@ -15,6 +15,11 @@ import pandas as pd
 from bot.instruments import UnknownInstrumentError, get_instrument, resolve_ohlcv_path
 
 
+def zone_s_start() -> pd.Timestamp:   # claude code changed: 2026-10-28 — first candle a Research Lab statistic may use (D-3/D-8)
+    from bot.quant_core.research_zones import ZONES
+    return ZONES.S0
+
+
 def load_ohlcv(asset: str) -> pd.DataFrame:
     """Reads the local, already-fetched OHLCV CSV for one symbol — never a
     live network call. Raises FileNotFoundError if the data isn't there;
@@ -49,6 +54,16 @@ def load_ohlcv(asset: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df.dropna(subset=["close"], inplace=True)
     df.sort_index(inplace=True)
+    # claude code changed: 2026-10-28 — owner decision D-3 (signed 2026-10-03): exploration runs "inside S only".
+    # Every Research Lab tool is exploration, so the data stop at the last zone-S candle (ZONES.S1). Before this the
+    # feature / conditional / backtest tools read validation zone V too, and — because data/forex/*.csv run past the
+    # 2026-10-04 holdout start — the FX sealed holdout (QC-2's EUR/CAD included); FX pairs research crashed on the
+    # cointegration engine's own seal guard (HoldoutSealedError). Only the D-8 init window (the 1,000 candles before
+    # S) is kept before S, as indicator warm-up; evaluation itself starts at ZONES.S0 (see zone_s_start()).
+    from bot.quant_core.research_zones import ZONES
+    df = df.loc[ZONES.init_window()[0]:ZONES.S1]
+    df.attrs["data_window"] = {"zone": "S", "through": ZONES.S1.isoformat(), "rule": "D-3: exploration inside zone S only"}   # claude code changed: 2026-10-28
+    ZONES.assert_no_sealed_data(df.index, f"Research Lab data ({asset})")
     # claude code changed: new — attach instrument identity as DataFrame
     # metadata (pandas .attrs), not a new column. Purely additive: shape,
     # columns, and dtypes are byte-for-byte identical to before, so every

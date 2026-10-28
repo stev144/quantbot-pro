@@ -51,12 +51,28 @@ standard card: `regime` (a RegimeDetector row) and `zscore` + `zscore_asof` (lat
         <span class="mkt-strip-conf" title="RegimeDetector agreement: how many of its indicator votes agree — not a probability">{{ regime.confidence }}</span>
         {% if regime.volatility_extreme %}<span class="badge warn" title="Volatility extreme flag">VOL</span>{% endif %}
     </div>
+    {% if regime.qm %}{% with m=regime.qm %}{# claude code changed: 2026-10-28 — institutional metrics (bot/quant_metrics) replace ADX / ATR× / EMA / BB; all descriptive, none is a signal #}
+    <div class="mkt-strip-metrics">
+        <span title="Rolling z-score of log price vs its 1-week mean, in standard deviations (a distance, not a probability)">ZS <b>{% if m.zscore is not None %}{% if m.zscore >= 0 %}+{% endif %}{{ m.zscore|floatformat:2 }}{% else %}–{% endif %}</b></span>
+        <span title="Momentum rank: 30-day return, percentile within the symbols on this page (100 = strongest)">MOM <b>{% if m.momentum_rank is not None %}{{ m.momentum_rank|floatformat:0 }}{% else %}–{% endif %}</b></span>
+        <span title="20-day realised volatility {{ m.volatility|floatformat:0 }}% a year — percentile {{ m.volatility_percentile|floatformat:0 }} of this asset's own past year"{% if m.volatility_regime == 'EXTREME' or m.volatility_regime == 'HIGH' %} class="warn"{% endif %}>VOL <b>{{ m.volatility_regime|default:"–" }}</b></span>
+        <span title="Liquidity score: Amihud illiquidity (price move per $ traded, 30 days), percentile within this page's symbols (100 = most liquid)">LIQ <b>{% if m.liquidity_score is not None %}{{ m.liquidity_score|floatformat:0 }}{% else %}–{% endif %}</b></span>
+    </div>
+    <div class="mkt-strip-metrics">
+        <span title="Variance ratio (1-day vs 1-hour returns), implied Hurst {{ m.hurst|floatformat:2 }}. TRENDING / MEAN_REVERTING only when the Lo–MacKinlay test rejects a random walk at 5% (z* = {{ m.variance_ratio_z|floatformat:2 }})">H <b>{{ m.hurst|floatformat:2|default:"–" }}</b> {% if m.hurst_regime == 'TRENDING' %}TREND{% elif m.hurst_regime == 'MEAN_REVERTING' %}MR{% elif m.hurst_regime %}RW{% endif %}</span>
+        <span title="Trend quality: 100 × Φ(t) of the 1-week drift with a Newey–West standard error. 50 = no drift; above 97.5 or below 2.5 = significant at 5%">TQ <b>{% if m.trend_quality is not None %}{{ m.trend_quality|floatformat:0 }}{% else %}–{% endif %}</b></span>
+        <span title="Kaufman efficiency ratio over 24 hours: 0 = noise, 1 = straight line">ER <b>{% if m.efficiency_ratio is not None %}{{ m.efficiency_ratio|floatformat:2 }}{% else %}–{% endif %}</b></span>
+        <span title="Annualised Sharpe of daily returns over 90 days (30-day: {{ m.sharpe_30|floatformat:1 }} ± {{ m.sharpe_30_se|floatformat:1 }}). ± is one standard error — short-window Sharpe ratios are very noisy">SR90 <b>{% if m.sharpe_90 is not None %}{{ m.sharpe_90|floatformat:1 }}<small>±{{ m.sharpe_90_se|floatformat:1 }}</small>{% else %}–{% endif %}</b></span>
+    </div>
+    {% if m.mean_reversion_setup %}<div class="mkt-strip"><span class="badge neu" title="|z| ≥ 2 and the variance-ratio test rejects a random walk toward mean reversion. A descriptive flag, not a probability or a trade signal">MR setup</span></div>{% endif %}
+    {% endwith %}{% else %}
     <div class="mkt-strip-metrics">
         <span title="Average Directional Index (trend strength; ≥ 25 votes trending)">ADX <b>{{ regime.adx }}</b></span>
         <span title="ATR ratio (≥ 1.7 = HIGH_VOLATILITY)"{% if regime.atr_ratio > 1.7 %} class="warn"{% endif %}>ATR× <b>{{ regime.atr_ratio }}</b></span>
         <span title="EMA spread % (≥ 0.5 % votes trending)">EMA <b>{{ regime.ema_spread_pct }}%</b></span>
         <span title="Bollinger Band width % (≤ 2 % votes ranging)">BB <b>{{ regime.bb_width_pct }}%</b></span>
     </div>
+    {% endif %}
     {% endif %}
     {% if zscore_asof %}
     <div class="mkt-strip">

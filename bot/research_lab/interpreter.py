@@ -58,8 +58,10 @@ ASSET_ALIASES = {
     "chainlink": "LINK/USDT", "link": "LINK/USDT",
 }
 
-_RISE_WORDS = ("rise", "rises", "rising", "increase", "increases", "rally", "pump", "gain", "gains", "climb", "higher")
-_FALL_WORDS = ("fall", "falls", "falling", "decrease", "decreases", "drop", "drops", "decline", "declines", "dump", "crash", "lower")
+_RISE_WORDS = ("rise", "rises", "rising", "increase", "increases", "rally", "pump", "gain", "gains", "climb", "higher",
+               "bullish", "bounce", "bounces", "up")   # claude code changed: 2026-10-28 — owner phrasing ("more bearish") was not recognised
+_FALL_WORDS = ("fall", "falls", "falling", "decrease", "decreases", "drop", "drops", "decline", "declines", "dump", "crash", "lower",
+               "bearish", "down")   # claude code changed: 2026-10-28
 
 # claude code changed: was `\s*` between the number and the unit word —
 # didn't match hyphenated phrasing like "24-hour" (a hyphen is not `\s`).
@@ -123,7 +125,21 @@ _RELATIVE_THRESHOLD_RE = re.compile(r"\b(above|below|>|<)\s*(?:the\s+)?average\b
 # standard. A hypothesis that means "pairs" but never uses a form of
 # "cointegrated" is left as an ordinary feature/conditional guess rather
 # than assumed.
-_COINTEGRATION_RE = re.compile(r"cointegrat\w*", re.IGNORECASE)
+_COINTEGRATION_RE = re.compile(r"co-?integrat\w*", re.IGNORECASE)   # claude code changed: 2026-10-28 — also "co-integration"
+
+# claude code changed: 2026-10-28 — owner report: the cointegration capability "keeps asking for a feature and the
+# expected direction". Only the literal stem "cointegrat" was recognised, so "pairs trade X vs Y", "X and Y form a
+# mean-reverting pair", "the spread between X and Y mean-reverts" or "the X/Y ratio is stationary" all fell into the
+# feature path (Feature / Direction / Horizon). These phrases are pairs language only when TWO distinct assets are
+# named — suggest_spec() requires that before using them; "cointegrat" alone still triggers as before.
+_PAIRS_PHRASE_RE = re.compile(
+    r"\bpairs?[\s-]+trad\w*"
+    r"|\bmean[\s-]?revert\w*\s+(?:pair|spread)\b"
+    r"|\b(?:spread|ratio)\b[^.]{0,60}?\b(?:stationary|mean[\s-]?revert\w*|revert\w*\s+to\s+(?:the\s+)?mean)"
+    r"|\bstationary\s+(?:spread|ratio)\b"
+    r"|\bhedge\s+ratio\b",
+    re.IGNORECASE,
+)
 
 
 def _guess_asset(text: str, exclude: Optional[str] = None) -> Optional[str]:
@@ -300,8 +316,9 @@ def suggest_spec(hypothesis_text: str) -> ResearchSpec:
     # student could never actually complete the form this produced.
     # Checked before the conditional/feature branch since a cointegration
     # hypothesis is a completely different axis from those two.
-    if _COINTEGRATION_RE.search(hypothesis_text):
-        asset_b = _guess_asset(hypothesis_text, exclude=asset) if asset else None
+    asset_b_guess = _guess_asset(hypothesis_text, exclude=asset) if asset else None   # claude code changed: 2026-10-28
+    if _COINTEGRATION_RE.search(hypothesis_text) or (_PAIRS_PHRASE_RE.search(hypothesis_text) and asset_b_guess):   # claude code changed: 2026-10-28 — pairs phrasing + two named assets
+        asset_b = asset_b_guess   # claude code changed: 2026-10-28
         if asset_b is None:
             ambiguous.append("asset_b")
         ambiguous.append("timeframe")  # claude code changed: never guessed here either, same as the feature/conditional path below
@@ -389,9 +406,14 @@ def describe_executed_spec(spec: ResearchSpec) -> str:
         condition_desc = f"{c.get('feature')} {c.get('operator')} {c.get('threshold')}"
         return f"Condition: {condition_desc}. Target: forward return over {horizon_desc} on {spec.asset}."
 
+    if spec.hypothesis_type == "pairs":   # claude code changed: 2026-10-28 — was described as "Feature: no feature specified ... None candles"
+        return (f"Pairs: {spec.asset} vs {spec.asset_b} ({spec.timeframe}). Engle–Granger cointegration of log prices on "
+                f"selection-zone data, with the half-life filter and an out-of-sample persistence check. "
+                f"No feature, direction or forward-return horizon applies.")
+
     if spec.hypothesis_type == "strategy_backtest":   # claude code changed: 2026-10-26 — Backtest Validation
         return (f"Strategy backtest: the platform's regime-routed strategy on {spec.asset} ({spec.timeframe}), "
-                f"full history, net of fees and slippage. Claim: positive net expectancy per trade.")
+                f"selection-zone history, net of fees and slippage. Claim: positive net expectancy per trade.")   # claude code changed: 2026-10-28 — was "full history" (D-3: exploration inside zone S only)
 
     feature_desc = spec.features[0] if spec.features else "no feature specified"
     return f"Feature: {feature_desc} (continuous). Target: forward return over {horizon_desc} on {spec.asset}."
@@ -458,6 +480,26 @@ def explain_evidence(experiment) -> str:
             lines.append(f"Mann-Whitney U p-value: {p:.4f}.")
         if block_p is not None:
             lines.append(f"Block-permutation p-value: {block_p:.4f}.")
+    elif "is_cointegrated" in stat:   # claude code changed: 2026-10-28 — pairs evidence (was explained as an IC with no value)
+        p = stat.get("coint_pvalue")
+        if stat.get("status") == "BLOCKED":
+            lines.append(f"The test was refused before it could run: {stat.get('reject_reason')}.")
+        elif p is None:
+            lines.append(f"The cointegration test could not run: {stat.get('reject_reason')}.")
+        else:
+            lines.append(f"Engle–Granger cointegration p-value on {stat.get('n_zone_s_candles')} selection-zone candles: {p:.4f} "
+                         f"(threshold 0.05); hedge ratio {stat.get('hedge_ratio'):+.4f}.")
+            hl, unit = stat.get("half_life_time"), stat.get("half_life_time_unit") or "candles"
+            if stat.get("is_cointegrated"):
+                if hl is not None and hl != float("inf"):
+                    lines.append(f"Spread half-life: {hl:.1f} {unit}.")
+                if stat.get("oos_adf_pvalue") is not None:
+                    lines.append(f"Out-of-sample persistence ADF p-value (frozen coefficients): {stat.get('oos_adf_pvalue'):.4f}.")
+                if stat.get("reject_reason"):
+                    lines.append(f"Filter result: {stat.get('reject_reason')}.")
+            else:
+                lines.append("The test did not find the pair cointegrated. That means no evidence of a stable relationship "
+                             "was found, not proof that none exists.")
     elif stat.get("metric") == "strategy_backtest":   # claude code changed: 2026-10-26 — Backtest Validation; reads stored evidence only
         n = stat.get("n_trades_with_net_r")
         mean_r = stat.get("mean_net_r")

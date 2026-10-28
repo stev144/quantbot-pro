@@ -287,7 +287,11 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             description="Test relative-rank and cross-sectional z-score features computed across the whole symbol universe at each timestamp, not just one asset in isolation — a genuine Type C (fold/purge/embargo/permutation/FDR) OOS evaluation, not an ad-hoc IC check.",
             category=RELATIONSHIP_RESEARCH, required_tier=PRO, risk_tier="MEDIUM", compute_tier="MEDIUM",
             backing_engine="bot.research.oos_validator.evaluate_cross_sectional_oos (features from bot.research.cross_section_engine, connected via bot.research.run_cross_sectional_oos)",
-            engine_status=IMPLEMENTED_AND_READY, has_tests=True,
+            # claude code changed: 2026-10-28 — was IMPLEMENTED_AND_READY. Owner decision D-6 (signed 2026-10-03):
+            # "Until [the point-in-time universe] exists, cross-sectional research stays BLOCKED" (survivor-only
+            # symbol lists, F-10); Deep Health reports D-6 BLOCKED. It also had no hypothesis_type, so no Research Lab
+            # request could reach it — "ready" was not true in either sense.
+            engine_status=BLOCKED_BY_DEPENDENCY, has_tests=True,
             # claude code changed: new — Phase 15. bot.research.regime_conditional_oos
             # and regime_conditional_permutation slice this capability's own
             # already-computed fold-level records by regime post hoc, without
@@ -329,7 +333,7 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             # — correctly left CRYPTO-only until that tool wrapper gains a
             # universe/asset-class parameter (a real, separate, not-yet-
             # scheduled wiring task).
-            status_note="Type C evaluator + permutation test + top-K/FDR sweep implemented and wired into the Research Lab tool layer. Volatility-adjusted ranking is not yet computed anywhere in this codebase — a real, disclosed gap, not silently substituted with a different feature.",
+            status_note="Blocked by owner decision D-6: cross-sectional research needs a point-in-time universe (delisted coins included) before any result can be trusted — today's symbol lists contain survivors only. The evaluator, permutation test and FDR sweep are built and tested; volatility-adjusted ranking is not computed anywhere yet.",   # claude code changed: 2026-10-28
         ),
         ResearchCapability(
             id="contagion_divergence_research",
@@ -457,7 +461,7 @@ RESEARCH_CAPABILITIES: Dict[str, ResearchCapability] = {
             # branch, Formalize option, background execution. Tests: bot/tests/test_research_lab_backtest_validation.py.
             engine_status=IMPLEMENTED_AND_READY, has_tests=True, hypothesis_type="strategy_backtest",
             supported_asset_classes=["CRYPTO", "FOREX"],
-            status_note="Tests positive net expectancy (after fees and slippage) of the platform's regime-routed strategy on one asset over its full history. In-sample only, so a positive result is capped at OBSERVATION.",
+            status_note="Tests positive net expectancy (after fees and slippage) of the platform's regime-routed strategy on one asset over the selection zone (2021-11 → 2024-03, owner decision D-3). In-sample only, so a positive result is capped at OBSERVATION.",   # claude code changed: 2026-10-28 — was "full history"
         ),
     ]
 }

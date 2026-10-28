@@ -2191,7 +2191,7 @@ def check_forex_capability_governance() -> List[HealthFinding]:
 
     check_name = "a Forex-unsupported capability is blocked for FOREX, not silently allowed"
     result = ResearchEntitlementService.can_access(user, "cross_sectional_research", asset_class="FOREX")
-    blocked_correctly = (not result.allowed) and result.reason_code == ASSET_CLASS_NOT_SUPPORTED
+    blocked_correctly = (not result.allowed) and result.reason_code in (ASSET_CLASS_NOT_SUPPORTED, "ENGINE_NOT_READY")   # claude code changed: 2026-10-28 — cross-sectional is now BLOCKED by D-6, refused before the asset-class check; either refusal is correct
     findings.append(HealthFinding(
         component=component, check=check_name,
         severity=GREEN_SEVERITY if blocked_correctly else RED_SEVERITY,

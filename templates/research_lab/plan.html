@@ -26,9 +26,23 @@
             {# claude code changed: Conditional Hypothesis Integrity fix — shows the real executed research question (Condition: X op threshold), never just a bare feature name, when hypothesis_type == "conditional" #}
             <div class="chart-caption mono">Executed specification</div>
             <ul class="mono" style="margin:8px 0 18px">
+                {% with ht=experiment.research_plan.spec.hypothesis_type %}{# claude code changed: 2026-10-28 — pairs and backtest have their own steps; they used to list the feature test's horizon, permutation test and FDR #}
+                {% if ht == "pairs" %}
+                <li>Dataset availability for {{ experiment.research_plan.spec.asset }} and {{ experiment.research_plan.spec.asset_b }}</li>
+                <li>Hypothesis type: <strong>pairs (cointegration)</strong></li>
+                <li>Engle–Granger cointegration test of log prices, {{ experiment.research_plan.spec.asset }} on {{ experiment.research_plan.spec.asset_b }}</li>
+                <li>Half-life of the spread, and an out-of-sample persistence check with frozen coefficients</li>
+                <li>Selection-zone data only (2021-11-07 → 2024-03-31, owner decisions D-3 / D-8)</li>
+                <li class="text-dim">No feature, direction or forward-return horizon applies to a pairs test</li>
+                {% elif ht == "strategy_backtest" %}
                 <li>Dataset availability for {{ experiment.research_plan.spec.asset }}</li>
-                <li>Hypothesis type: <strong>{{ experiment.research_plan.spec.hypothesis_type|default:"feature" }}</strong></li>
-                {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
+                <li>Hypothesis type: <strong>strategy backtest</strong></li>
+                <li>Regime-routed strategy backtest, net of fees and slippage, selection-zone data only (D-3)</li>
+                <li>One-sided t-test and bootstrap confidence interval on mean net R per trade</li>
+                {% else %}
+                <li>Dataset availability for {{ experiment.research_plan.spec.asset }}</li>
+                <li>Hypothesis type: <strong>{{ ht|default:"feature" }}</strong></li>
+                {% if ht == "conditional" %}
                 <li>Condition: {{ experiment.research_plan.spec.conditions.0.feature }} {{ experiment.research_plan.spec.conditions.0.operator }} <span class="stat-number" data-target="{{ experiment.research_plan.spec.conditions.0.threshold }}" data-decimals="2">0</span></li>
                 {% else %}
                 {% if experiment.research_plan.spec.features %}<li>Feature (continuous): {{ experiment.research_plan.spec.features|join:", " }}</li>{% endif %}
@@ -39,8 +53,11 @@
                 {% if experiment.research_plan.spec.hypothesis_type == "conditional" %}
                 <li class="text-dim">No FDR correction applies to conditional/event tests in this pass — known limitation</li>
                 {% else %}
-                <li>Multiple-testing (FDR) correction</li>
+                <li>Multiple-testing (FDR) step — a single hypothesis has no family to correct across, so it cannot lower the bar</li>{# claude code changed: 2026-10-28 #}
                 {% endif %}
+                <li>Selection-zone data only (2021-11-07 → 2024-03-31, owner decision D-3)</li>{# claude code changed: 2026-10-28 #}
+                {% endif %}
+                {% endwith %}
             </ul>
 
             <div class="chart-caption mono">Tools approved for this experiment</div>

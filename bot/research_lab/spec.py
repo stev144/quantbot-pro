@@ -338,7 +338,9 @@ def validate_spec(spec: ResearchSpec) -> SpecValidationResult:
     if not spec.hypothesis_text or not spec.hypothesis_text.strip():
         errors.append("hypothesis_text is required")
 
-    if spec.hypothesis_type not in HYPOTHESIS_TYPES:
+    if not spec.hypothesis_type:   # claude code changed: 2026-10-28 — nothing submitted (e.g. the chosen option is locked for this plan)
+        errors.append("choose a hypothesis type — if the option you meant is greyed out, it is not available on your plan")
+    elif spec.hypothesis_type not in HYPOTHESIS_TYPES:
         errors.append(f"hypothesis_type '{spec.hypothesis_type}' must be one of {HYPOTHESIS_TYPES}")
 
     if "asset" not in unresolved:

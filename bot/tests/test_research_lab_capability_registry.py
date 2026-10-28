@@ -69,13 +69,12 @@ class MissingEnginesCannotBeExposedTest(SimpleTestCase):
         """The one capability this pass actually finished wiring end to end."""
         self.assertTrue(RESEARCH_CAPABILITIES["cointegration_pairs_research"].operationally_ready)
 
-    def test_cross_sectional_research_is_ready(self):
-        # claude code changed: new — statistics-infrastructure mission.
-        # cross_sectional_research went from NOT_IMPLEMENTED (pointing at
-        # cross_section_engine.py alone — real features, no OOS evaluation)
-        # to a real, tested, tool-reachable Type C capability. See
-        # capability_registry.py's own updated status_note for the full story.
-        self.assertTrue(RESEARCH_CAPABILITIES["cross_sectional_research"].operationally_ready)
+    def test_cross_sectional_research_is_blocked_by_d6(self):
+        # claude code changed: 2026-10-28 — was "is_ready". The evaluator is built and tested, but owner decision D-6
+        # keeps cross-sectional research BLOCKED until a point-in-time universe exists (survivor-only lists, F-10).
+        cap = RESEARCH_CAPABILITIES["cross_sectional_research"]
+        self.assertFalse(cap.operationally_ready)
+        self.assertEqual(cap.engine_status, "BLOCKED_BY_DEPENDENCY")
 
 
 class HypothesisTypeMappingTest(SimpleTestCase):

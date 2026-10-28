@@ -80,6 +80,42 @@ class SelectionAndTradingTest(SimpleTestCase):
         self.assertEqual(res["breaks"]["checks_run"], 4)
 
 
+class KalmanLevelTest(SimpleTestCase):   # claude code changed: 2026-10-28 — design v2 variant L
+    def test_level_variant_equals_static_when_beta_cannot_move(self):
+        pa, pb = _pair()
+        _, sel = _sel(pa, pb)
+        old = wf.LEVEL_SLOWDOWN
+        try:
+            wf.LEVEL_SLOWDOWN = float("inf")                              # g = 0 -> Q = 0 -> beta frozen at beta_hat
+            rl = wf.trade_pair("A", "B", pa, pb, sel, T, "L", ZeroCost())
+        finally:
+            wf.LEVEL_SLOWDOWN = old
+        rs = wf.trade_pair("A", "B", pa, pb, sel, T, "S", ZeroCost())
+        key = lambda r: [(t["entry"], t["exit"], t["dir"], round(t["gross"], 9)) for t in r["trades"]]
+        self.assertTrue(rs["trades"])
+        self.assertEqual(key(rl), key(rs))
+
+    def test_level_signal_is_not_absorbed_on_a_planted_pair(self):
+        pa, pb = _pair()
+        _, sel = _sel(pa, pb)
+        res = wf.trade_pair("A", "B", pa, pb, sel, T, "L", ZeroCost())
+        self.assertGreaterEqual(len(res["trades"]), 2)                    # stage 2's K made ~0 trades here
+        self.assertGreater(res["frac_z2"]["L"], 0.5 * res["frac_z2"]["S"])
+        self.assertLess(abs(res["beta_drift_L"]), 0.05)
+
+    def test_level_signal_has_no_look_ahead(self):
+        pa, pb = _pair()
+        _, sel = _sel(pa, pb)
+        cut = T + pd.Timedelta(hours=500)   # claude code changed: 2026-10-28 — late enough that trades precede it
+        pa2 = pa.copy()
+        pa2.loc[cut:] *= 1.5
+        r1 = wf.trade_pair("A", "B", pa, pb, sel, T, "L", ZeroCost())
+        r2 = wf.trade_pair("A", "B", pa2, pb, sel, T, "L", ZeroCost())
+        before = lambda r: [(t["entry"], t["dir"], t["beta"]) for t in r["trades"] if pd.Timestamp(t["entry"]) < cut]
+        self.assertTrue(before(r1))
+        self.assertEqual(before(r1), before(r2))
+
+
 class CostTest(SimpleTestCase):
     def test_crypto_costs_and_funding_known_answer(self):
         t0, t1 = pd.Timestamp("2025-06-02", tz="UTC"), pd.Timestamp("2025-06-03", tz="UTC")

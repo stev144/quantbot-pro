@@ -26,7 +26,7 @@ _FOREX_DIR = _ROOT / "data" / "forex"
 _CACHE_KEY = "forex_scanner_v1"
 _CACHE_TTL = 1800   # 30 minutes
 
-_SIM_CACHE_KEY = "paper_sim_v2"   # claude code changed: 2026-10-27 — v2 (was v1): GBP/JPY MT5 costs. Full simulation results per pair (equity, trades, stats, open_position)
+_SIM_CACHE_KEY = "paper_sim_v3"   # claude code changed: 2026-10-28 — v3 (was v2): fixed-account replay. Full simulation results per pair (equity, trades, stats, open_position)
 _SIM_CACHE_TTL = 3600             # 1 hour
 _POS_CACHE_KEY = _SIM_CACHE_KEY   # alias kept for backward compat
 _CANDLES   = 200    # candles loaded per pair for indicator computation
@@ -266,8 +266,8 @@ def _get_paper_sim() -> dict:  # claude code changed: new — full simulation re
     if cached is not None:
         return cached
     try:
-        from bot.paper_trading.ranging_paper_engine import run_ranging_paper_simulation
-        full = run_ranging_paper_simulation()
+        from bot.paper_trading.ranging_paper_engine import run_paper_account_simulation   # claude code changed: 2026-10-28 — same fixed-account replay as the Paper Trader page
+        full = run_paper_account_simulation()   # claude code changed: 2026-10-28
         sim = {}
         for pair, r in full.items():
             if "error" in r:

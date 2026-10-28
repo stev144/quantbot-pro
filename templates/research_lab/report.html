@@ -119,7 +119,7 @@ details.rl-more summary { cursor: pointer; color: var(--accent); font-size: 13px
                 <dt>Target</dt><dd>Forward return</dd>
                 <dt>Horizon</dt><dd class="num">{{ spec.target.horizon }} candles{% if spec.timeframe == "1h" %} ({{ spec.target.horizon }} hours){% endif %}</dd>
                 {% endif %}
-                <dt>Expected direction</dt><dd>{{ spec.direction|default:"unspecified" }}</dd>
+                {% if spec.hypothesis_type != "pairs" and spec.hypothesis_type != "strategy_backtest" %}<dt>Expected direction</dt><dd>{{ spec.direction|default:"unspecified" }}</dd>{% endif %}{# claude code changed: 2026-10-28 — no direction applies to pairs or backtest #}
                 <dt>Data checks</dt><dd>{{ experiment.research_plan.data_availability.checks|length }} requirement(s), all available: {{ experiment.research_plan.data_availability.all_available|yesno:"yes,no,unknown" }}</dd>
                 {% if experiment.capability_id %}<dt>Capability</dt><dd>{{ experiment.capability_id }} · tier at planning {{ experiment.research_plan.entitlement.tier_at_planning|default:"CORE" }}</dd>{% endif %}
             </dl>

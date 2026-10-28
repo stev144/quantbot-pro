@@ -32,6 +32,11 @@ LAST_MONTH = pd.Timestamp("2026-09-01", tz="UTC")
 Q, HL_MIN, HL_MAX = 0.05, 2.0, 120.0
 ENTRY_Z, BREAK_Z, BREAK_P, CHECK_EVERY_H = 2.0, 3.0, 0.10, 168
 KALMAN_DELTA = 1e-4
+LEVEL_SLOWDOWN = 10.0   # claude code changed: 2026-10-28 — design v2 variant L: hedge adapts 10x slower than the spread reverts
+DESIGN_FILE_V2 = "STAGE2B_KALMAN_LEVEL_Z_DESIGN_2026-10-28.md"   # claude code changed: 2026-10-28 — design v2
+STAGE2_RESULT = "research_data/recent_pairs_wf/stage2_20261027T195720Z.json"   # claude code changed: 2026-10-28 — v2 reuses its selection
+LABEL_V2 = ("EXPLORATORY — Stage 2b Kalman level-z, NOT CLAIM-ELIGIBLE (pre-seal history, designed after Stage 2 results "
+            "were seen; CRRP-2026-10-02)")   # claude code changed: 2026-10-28 — design v2
 NOTIONAL = 1000.0
 CRYPTO_FEE, CRYPTO_SLIP = 0.0005, 0.0005    # per side per leg (PERP_TAKER_FEE_RATE; 5 bp slippage)
 COVERAGE_MIN, CRYPTO_TOP_N = 0.95, 50
@@ -143,7 +148,22 @@ def trade_pair(a, b, pa: pd.Series, pb: pd.Series, sel: dict, t: pd.Timestamp, v
         x = x + K * e
         P = P - np.outer(K, H) @ P
         beta_f[i] = x[1]
-    z = z_static if variant == "S" else zk
+    # claude code changed: 2026-10-28 — design v2 variant L: Kalman on beta only (intercept frozen), level z, prior beta
+    sw = d.loc[:t - HOUR]
+    m_a, m_b = float(np.log(sw["a"]).mean()), float(np.log(sw["b"]).mean())   # claude code changed: v2 selection means
+    var_x = float(np.log(sw["b"]).var(ddof=1))   # claude code changed: v2 Var_sel(x)
+    g = 1.0 / (LEVEL_SLOWDOWN * hl)   # claude code changed: v2 steady-state gain
+    q_l = R * g * g / var_x if var_x > 0 else 0.0   # claude code changed: v2 Q = R g^2 / Var_sel(x)
+    bl, pl = beta, 0.0   # claude code changed: v2 initial state beta_hat, P0 = 0
+    zl, beta_l = np.empty(len(m)), np.empty(len(m))   # claude code changed: v2
+    for i in range(len(m)):   # claude code changed: v2 filter loop
+        pl += q_l
+        xi = lb[i] - m_b
+        s_i = (la[i] - m_a) - bl * xi              # spread with the prior beta (information to t - 1 only)
+        zl[i], beta_l[i] = (s_i - mu) / sd, bl
+        k = pl * xi / (xi * xi * pl + R)
+        bl, pl = bl + k * s_i, pl - k * xi * pl
+    z = {"S": z_static, "K": zk, "L": zl}[variant]   # claude code changed: 2026-10-28 — v2 adds variant L
     ts = m.index
     trades, pos, breaks, dropped, over = [], 0, {"eg_p": 0, "sigma_hl": 0}, False, 0
     entry = None
@@ -188,12 +208,14 @@ def trade_pair(a, b, pa: pd.Series, pb: pd.Series, sel: dict, t: pd.Timestamp, v
             close_at(j, "z_cross")
         elif pos == 0 and not dropped and abs(z[i]) >= ENTRY_Z and j < last:
             pos = -1 if z[i] > 0 else 1                # +1 = long the spread (long A, short beta*B)
-            b_e = beta if variant == "S" else beta_f[i]
+            b_e = {"S": beta, "K": beta_f[i], "L": beta_l[i]}[variant]   # claude code changed: 2026-10-28 — v2 variant L
             entry = {"t": ts[j], "pa": m["a"].iloc[j], "pb": m["b"].iloc[j], "dir": pos, "beta": float(b_e),
                      "variant": variant}
     breaks["checks_run"] = n_checks
     return {"trades": trades, "breaks": breaks, "dropped": dropped,
-            "beta_drift": float(beta_f[-1] - beta) if len(beta_f) else None}
+            "beta_drift": float(beta_f[-1] - beta) if len(beta_f) else None,
+            "beta_drift_L": float(bl - beta),   # claude code changed: 2026-10-28 — v2 diagnostics
+            "frac_z2": {"S": float(np.mean(np.abs(z_static) >= ENTRY_Z)), "L": float(np.mean(np.abs(zl) >= ENTRY_Z))}}
 
 
 class CryptoCost:
@@ -329,17 +351,18 @@ def _monthly_tests(monthly: List[float]) -> dict:
             "worst_month": float(x.min()), "best_month": float(x.max())}
 
 
-def summarise(asset_class: str, results: List[dict]) -> dict:
+def summarise(asset_class: str, results: List[dict], variants=("S", "K")) -> dict:   # claude code changed: 2026-10-28 — v2 variants
     by_month = {r["month"]: r for r in results}
     ms = sorted(by_month)
     trades = [t for r in results for t in r["trades"]]
     ok = lambda xs: [x for x in xs if x is not None]
-    ps, pb = ok([p for r in results for p in r["persist_sel"]]), ok([p for r in results for p in r["persist_base"]])
+    ps = ok([p for r in results for p in r.get("persist_sel", [])])   # claude code changed: 2026-10-28 — v2 has no persistence step
+    pb = ok([p for r in results for p in r.get("persist_base", [])])   # claude code changed: 2026-10-28 — v2 has no persistence step
     out = {"asset_class": asset_class, "months": len(ms),
            "pairs_selected_per_month": [len(by_month[m]["selected"]) for m in ms],
            "persistence": {"selected_n": len(ps), "selected_rate": float(np.mean(np.array(ps) < 0.05)) if ps else None,
                            "baseline_n": len(pb), "baseline_rate": float(np.mean(np.array(pb) < 0.05)) if pb else None}}
-    for v in ("S", "K"):
+    for v in variants:   # claude code changed: 2026-10-28 — v2 variants
         tv = [t for t in trades if t["variant"] == v]
         for label, mult in (("net", 1), ("net_2x_costs", 2)):
             monthly = [sum(t["gross"] - mult * t["fees"] + (t["carry"] if t["carry"] > 0 else mult * t["carry"])
@@ -354,7 +377,8 @@ def summarise(asset_class: str, results: List[dict]) -> dict:
                               "gross_per_trade": float(np.mean([t["gross"] for t in tv])) if tv else None,
                               "costs_per_trade": float(np.mean([t["fees"] - t["carry"] for t in tv])) if tv else None,
                               "exit_reasons": pd.Series([t["reason"] for t in tv]).value_counts().to_dict() if tv else {},
-                              "max_drawdown_usd": float(dd), "peak_cum_net": float(peak.max())}
+                              "max_drawdown_usd": float(dd), "peak_cum_net": float(peak.max()),
+                              "max_drawdown_pct_of_peak": float(dd / peak.max() * 100) if peak.max() > 0 else None}   # claude code changed: 2026-10-28 — drawdown %
     return out
 
 
@@ -386,6 +410,97 @@ def run(n_workers: int = 6, out_dir="research_data/recent_pairs_wf", classes=("c
     return path
 
 
+# ── design v2 (Stage 2b): Kalman level-z, reusing Stage 2's selection ───────────────────────────────────────────────
+# claude code changed: 2026-10-28 — new section: design STAGE2B_KALMAN_LEVEL_Z_DESIGN_2026-10-28.md
+class ReproductionError(AssertionError):
+    pass
+
+
+def _rederive(a, b, close, t, recorded):
+    """Re-derive one recorded Stage 2 selection from the CSVs; stop if the p-value or half-life differs."""
+    s0, s1 = t - SELECT, t - HOUR
+    r, dsel = eg_fixed(np.log(close[a].loc[s0:s1]), np.log(close[b].loc[s0:s1]))
+    if r is None or abs(r.pvalue - recorded["p"]) > 1e-9:
+        raise ReproductionError(f"{t:%Y-%m} {a}~{b}: EG p {None if r is None else r.pvalue} vs recorded {recorded['p']}")
+    resid = dsel.iloc[:, 0] - r.alpha - r.beta * dsel.iloc[:, 1]
+    grid = resid.reindex(pd.date_range(resid.index[0], resid.index[-1], freq="h"))
+    h = ar1_half_life(grid, candle_hours=1.0, min_obs=1000)
+    hl = h.value.half_life_hours if h.ok else None
+    if hl is None or abs(hl - recorded["half_life_h"]) > 1e-9:
+        raise ReproductionError(f"{t:%Y-%m} {a}~{b}: half-life {hl} vs recorded {recorded['half_life_h']}")
+    return {"alpha": r.alpha, "beta": r.beta, "mu": float(resid.mean()), "sd": float(resid.std(ddof=1)), "half_life_h": hl}
+
+
+def _same_trades(new, old) -> bool:
+    key = lambda t: (t["pair"], t["entry"], t["exit"], t["dir"], t["reason"])
+    new, old = sorted(new, key=key), sorted(old, key=key)
+    return len(new) == len(old) and all(key(x) == key(y) and abs(x["net"] - y["net"]) < 1e-6 for x, y in zip(new, old))
+
+
+def run_month_level(rec: dict) -> dict:
+    """One month of design v2: re-derive Stage 2's selected pairs, re-run S (must reproduce Stage 2), run L."""
+    ac, data = _W["asset_class"], _W["data"]
+    t = pd.Timestamp(rec["month"])
+    s0, t_end = t - SELECT, t + TRADE - HOUR
+    close = {s: d["close"] for s, d in data.items()}
+    cost = CryptoCost(_W["extra"]) if ac == "crypto" else ForexCost(_W["extra"])
+    out = {"month": rec["month"], "selected": [], "trades": []}
+    s_new = []
+    for info in rec["selected"]:
+        a, b = info["pair"].split("~")
+        sel = _rederive(a, b, close, t, info)
+        row = {"pair": info["pair"], "half_life_h": sel["half_life_h"], "beta": sel["beta"]}
+        for v in ("S", "L"):
+            res = trade_pair(a, b, close[a].loc[s0:t_end], close[b].loc[s0:t_end], sel, t, v, cost)
+            for tr in res["trades"]:
+                tr["month"] = rec["month"]
+            (s_new if v == "S" else out["trades"]).extend(res["trades"])
+            row[f"breaks_{v}"], row[f"dropped_{v}"] = res["breaks"], res["dropped"]
+            if v == "L":
+                row.update(beta_drift_L=res["beta_drift_L"], frac_z2=res["frac_z2"])
+        out["selected"].append(row)
+    if not _same_trades(s_new, [x for x in rec["trades"] if x["variant"] == "S"]):
+        raise ReproductionError(f"{rec['month']}: variant S does not reproduce Stage 2")
+    out["trades"] += s_new
+    return out
+
+
+def run_level(n_workers: int = 6, out_dir="research_data/recent_pairs_wf", classes=("crypto", "forex")) -> Path:
+    from concurrent.futures import ProcessPoolExecutor
+    design, stage2 = Path(DESIGN_FILE_V2).read_bytes(), Path(STAGE2_RESULT).read_bytes()
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        commit = None
+    prior = json.loads(stage2)
+    result = {"label": LABEL_V2, "design_file": DESIGN_FILE_V2, "design_sha256": hashlib.sha256(design).hexdigest(),
+              "stage2_result": STAGE2_RESULT, "stage2_result_sha256": hashlib.sha256(stage2).hexdigest(),
+              "code_version": commit, "code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+              "created_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+              "bonferroni_alpha": 0.05 / 6, "level_slowdown": LEVEL_SLOWDOWN}
+    for ac in classes:
+        if ac == "crypto":
+            data, extra = load_crypto()
+        else:
+            data = load_forex()
+            extra = json.loads(Path(out_dir, "fx_costs_snapshot.json").read_text())
+        with ProcessPoolExecutor(max_workers=n_workers, initializer=_init, initargs=(ac, data, extra)) as ex:
+            res = list(ex.map(run_month_level, prior[ac]["months"]))
+        summ = summarise(ac, res, variants=("S", "L"))
+        fz = [r["frac_z2"] for m in res for r in m["selected"]]
+        summ["frac_candles_abs_z_ge_2"] = {v: float(np.mean([f[v] for f in fz])) if fz else None for v in ("S", "L")}
+        drift = [r["beta_drift_L"] for m in res for r in m["selected"]]
+        summ["L_beta_drift_abs_median"] = float(np.median(np.abs(drift))) if drift else None
+        summ["S_reproduces_stage2"] = True                       # run_month_level raises otherwise
+        result[ac] = {"summary": summ, "months": res}
+    stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%SZ")
+    path = Path(out_dir) / f"stage2b_{stamp}.json"
+    with open(path, "x", encoding="utf-8") as f:
+        json.dump(result, f, indent=1, default=lambda v: v.isoformat() if hasattr(v, "isoformat") else
+                  (None if isinstance(v, float) and not math.isfinite(v) else str(v)))
+    return path
+
+
 if __name__ == "__main__":
     import os
     import sys
@@ -393,5 +508,7 @@ if __name__ == "__main__":
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     import django
     django.setup()
-    print(run(n_workers=int(sys.argv[1]) if len(sys.argv) > 1 else 6,
-              classes=tuple(sys.argv[2].split(",")) if len(sys.argv) > 2 else ("crypto", "forex")))
+    fn = run_level if "--level" in sys.argv else run   # claude code changed: 2026-10-28 — v2 entry point
+    args = [x for x in sys.argv[1:] if x != "--level"]   # claude code changed: 2026-10-28
+    print(fn(n_workers=int(args[0]) if args else 6,
+             classes=tuple(args[1].split(",")) if len(args) > 1 else ("crypto", "forex")))

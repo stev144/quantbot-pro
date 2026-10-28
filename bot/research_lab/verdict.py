@@ -80,6 +80,9 @@ def compute_verdict(
         return VerdictResult("INVALID_RESEARCH", ["statistical test produced no usable IC value"])
 
     block_p = statistical_test.get("block_permutation_p_value")
+    if block_p is None or block_p != block_p:   # claude code changed: 2026-10-28 — None/NaN used to crash the format below
+        return VerdictResult("INVALID_RESEARCH", [f"IC={ic:+.4f}, but the block-permutation test produced no p-value — "
+                                                  "no dependence-aware decision is possible (D-2)"])
     explanation.append(f"IC={ic:+.4f}, block-permutation p={block_p:.4f} (alpha={ALPHA})")
 
     if hypothesized_direction in ("positive", "negative"):
@@ -107,14 +110,17 @@ def compute_verdict(
 
     # claude code changed: passes_fdr is True from here on — verdict strength graded by IC magnitude only
     abs_ic = abs(ic)
+    # claude code changed: 2026-10-28 — the experiment is ONE hypothesis, so its "FDR correction" is over a family of
+    # one and equals the raw block-permutation p: it corrects nothing. Said so, instead of "survives FDR correction".
+    fdr_note = "the FDR step had a family of one hypothesis, so it could not correct for multiple testing"
     if abs_ic >= IC_STRONG:
-        explanation.append(f"|IC|={abs_ic:.4f} clears the strong threshold ({IC_STRONG}) and survives FDR correction")
+        explanation.append(f"|IC|={abs_ic:.4f} clears the strong threshold ({IC_STRONG}); {fdr_note}")
         return _ladder(explanation, effect_observed=True, dependence_aware_test=True)   # claude code changed: D-7 — was SUPPORTED
     if abs_ic >= IC_MODERATE:
-        explanation.append(f"|IC|={abs_ic:.4f} clears the moderate threshold ({IC_MODERATE}) and survives FDR correction")
+        explanation.append(f"|IC|={abs_ic:.4f} clears the moderate threshold ({IC_MODERATE}); {fdr_note}")
         return _ladder(explanation, effect_observed=True, dependence_aware_test=True)   # claude code changed: D-7 — was PARTIALLY_SUPPORTED
 
-    explanation.append(f"|IC|={abs_ic:.4f} survives FDR correction but is below the moderate threshold ({IC_MODERATE}) — statistically real but too weak to act on")
+    explanation.append(f"|IC|={abs_ic:.4f} is significant but below the moderate threshold ({IC_MODERATE}) — too weak to act on; {fdr_note}")
     return VerdictResult("INCONCLUSIVE", explanation)
 
 
@@ -373,6 +379,9 @@ def compute_verdict_backtest(backtest: Optional[Dict]) -> VerdictResult:
 
     mean_r = backtest.get("mean_net_r")
     p = backtest.get("p_value_one_sided")
+    if p is not None and "p_value_one_sided_ar1" in backtest:   # claude code changed: 2026-10-28 — decide on the more conservative of the IID and AR(1)-adjusted p (D-2)
+        p_ar1 = backtest.get("p_value_one_sided_ar1")
+        p = 1.0 if p_ar1 is None else max(p, p_ar1)
     ci = backtest.get("bootstrap_ci95_mean_net_r") or [None, None]
     if mean_r is None or p is None or ci[0] is None:
         return VerdictResult("INVALID_RESEARCH", ["the backtest produced no usable net-R statistics"])

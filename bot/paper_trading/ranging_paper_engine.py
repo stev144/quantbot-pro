@@ -18,7 +18,10 @@ G3 Stats      : ranging_mask is computed causally (ADX-14 and ATR window use
                 future price to decide its own regime label
 G4 Quant-real : spread_pips from ForexInstrumentSpec applied at every fill;
                 same lot sizing ($6 / fill_price LONG) as QC-1; time exit at
-                72 candles; 7-level ladder with validated ATR-scaled spacing
+                72 candles; 5-fill ladder (LCEX-1 cap) with validated ATR-scaled spacing  # claude code changed: 2026-10-28 — was "7-level"
+NOTE (2026-10-28): the Paper Trader page now uses run_paper_account_simulation() at the end of this file — a fixed
+account per pair with margin close-out. run_ranging_paper_simulation() has no account (unlimited capital) and is kept
+only for bot.research.dca_cycle_extractor.  # claude code changed: 2026-10-28
 G5 Governance : IS_PAPER_ONLY = True — constant, never set to False;
                 all trades tagged source="paper_ranging"; clearly exploratory
                 (ranging gate was NOT pre-registered in QC-1's protocol);
@@ -301,6 +304,21 @@ def _simulate_ranging_gated(
     return trades, equity_pts
 
 
+def _regime_summary(adx_arr, atr14, atr50, ranging_mask) -> Tuple[float, str, float]:  # claude code changed: 2026-10-28 — body moved verbatim from run_ranging_paper_simulation
+    """(% of candles RANGING, latest candle's regime label, latest ADX) — causal, latest candle only."""
+    ranging_pct = round(float(ranging_mask.mean()) * 100, 1)
+    last_adx  = adx_arr[-1]
+    last_ratio = (float(atr14[-1] / atr50[-1])
+                  if atr50[-1] > 0 and not math.isnan(atr14[-1]) else None)
+    if last_ratio is not None and last_ratio > _ATR_RATIO_HV:
+        current_regime = "HIGH_VOLATILITY"
+    elif not math.isnan(last_adx) and last_adx > _ADX_TRENDING:
+        current_regime = "TRENDING"
+    else:
+        current_regime = "RANGING"
+    return ranging_pct, current_regime, last_adx
+
+
 # ── main engine entry point ───────────────────────────────────────────────────
 
 def _build_mtm_equity(
@@ -538,19 +556,7 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
 
             drawdown = _drawdown_series(equity)   # claude code changed: now MTM-based equity
 
-            # ranging % of sim data
-            ranging_pct = round(float(ranging_mask.mean()) * 100, 1)
-
-            # current regime (latest candle, causal)
-            last_adx  = adx_arr[-1]
-            last_ratio = (float(atr14[-1] / atr50[-1])
-                          if atr50[-1] > 0 and not math.isnan(atr14[-1]) else None)
-            if last_ratio is not None and last_ratio > _ATR_RATIO_HV:
-                current_regime = "HIGH_VOLATILITY"
-            elif not math.isnan(last_adx) and last_adx > _ADX_TRENDING:
-                current_regime = "TRENDING"
-            else:
-                current_regime = "RANGING"
+            ranging_pct, current_regime, last_adx = _regime_summary(adx_arr, atr14, atr50, ranging_mask)   # claude code changed: 2026-10-28 — moved into a helper shared with the account simulation
 
             # ── capital metadata ──────────────────────────────────────────────
             # max_margin  = total margin committed if all fills trigger
@@ -602,4 +608,172 @@ def run_ranging_paper_simulation() -> Dict:  # claude code changed: new — main
             logger.exception("paper_trader: error on pair %s", pair)
             results[pair] = {"error": str(exc), "validated": pair in VALIDATED_PAIRS}
 
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Account-aware Paper Trader  # claude code changed: 2026-10-28 — new section (owner-approved fix of the 2026-10-28 audit)
+# ══════════════════════════════════════════════════════════════════════════════
+# The legacy run_ranging_paper_simulation() above has no account: losses larger than the margin never stop it, so its
+# P&L assumes unlimited capital. It is kept unchanged because bot.research.dca_cycle_extractor reads its cycle schema.
+# The Paper Trader page, the Markets card and the Forex Scanner now use run_paper_account_simulation(): every pair is
+# replayed on its OWN fixed account by bot.research.fx_survival_replay (same strategy decisions via decide_in_cycle,
+# walk-forward ladder specs, ESMA leverage per pair, 50 % margin close-out against each bar's adverse extreme,
+# negative-balance protection, MT5 per-bar spread history, broker swap at each rollover). Nothing is re-implemented.
+
+PAPER_LADDER_MULTIPLE = 1.0 + sum(_MULTIPLIERS)                      # 31 entry-sizes when all 5 fills trigger
+PAPER_ACCOUNT_USD = PAPER_ENTRY_USDT * PAPER_LADDER_MULTIPLE          # $3,100: margin for the full ladder
+_PAPER_SOURCE = "paper_account"
+
+
+def _daily_points(ts: pd.Series, values: pd.Series, offset: float) -> List[Dict]:
+    s = pd.Series(values.to_numpy(dtype=float), index=pd.DatetimeIndex(ts)).resample("1D").last().dropna()
+    return [{"d": str(d)[:10], "p": round(float(v) - offset, 4)} for d, v in s.items()]
+
+
+def paper_account_summary(pair: str, res: Dict, leverage: float) -> Dict:
+    """Map one fx_survival_replay result (one pair, one account) to the Paper Trader's display dict.
+    Pure function of the replay output — no data access — so it is unit-testable."""
+    from bot.research import fx_survival_replay as sr
+    rows, cycles, events, ledger = res["rows"], res["cycles"], res["events"], res["ledger"]
+    start = float(res["starting_capital"])
+    eq = rows["equity"].to_numpy(dtype=float)
+    eq_worst = rows["equity_intrabar_worst"].to_numpy(dtype=float)
+    eq_worst = np.where(np.isnan(eq_worst), eq, eq_worst)
+    peak = np.maximum.accumulate(np.maximum(eq, start))                # peak equity, never below the deposit
+    dd = np.minimum(eq_worst, eq) - peak
+    k = int(np.argmin(dd)) if len(dd) else 0
+    max_dd = float(dd[k]) if len(dd) else 0.0
+    max_dd_pct = float(dd[k] / peak[k] * 100) if len(dd) else 0.0
+
+    closed = cycles[cycles["outcome"] != sr.OPEN_UNRESOLVED_AT_DATA_END] if len(cycles) else cycles
+    openc = cycles[cycles["outcome"] == sr.OPEN_UNRESOLVED_AT_DATA_END] if len(cycles) else cycles
+    trades = [{
+        "entry_time": str(c.entry_ts), "exit_time": str(c.exit_ts), "entry_price": float(c.entry_price),
+        "exit_price": float(c.exit_exec_price), "wap": float(c.wap), "fills": int(c.fills),
+        "profit_usdt": float(c.net_pnl_usd), "gross_usdt": float(c.gross_pnl_usd),
+        "spread_usdt": float(c.spread_usd), "swap_usdt": float(c.swap_usd), "commission_usdt": float(c.commission_usd),
+        "candles_held": float(c.duration_h), "exit_reason": c.exit_reason, "outcome": c.outcome,
+        "liquidated": c.outcome == sr.LIQUIDATED, "source": _PAPER_SOURCE,
+    } for c in closed.itertuples()] if len(closed) else []
+
+    by_fills: Dict[int, Dict] = {}
+    for t in trades:
+        b = by_fills.setdefault(t["fills"], {"cycles": 0, "wins": 0, "net": 0.0, "liquidated": 0})
+        b["cycles"] += 1
+        b["wins"] += t["profit_usdt"] > 0
+        b["net"] += t["profit_usdt"]
+        b["liquidated"] += t["liquidated"]
+    for b in by_fills.values():
+        b["net"] = round(b["net"], 2)
+        b["net_abs"] = abs(b["net"])                     # the template prints the sign itself
+        b["win_pct"] = round(b["wins"] / b["cycles"] * 100, 1)
+
+    ev = events["type"].value_counts().to_dict() if len(events) else {}
+    liq_ts = events.loc[events["type"] == sr.LIQUIDATED, "timestamp"] if len(events) else []
+    nbp = float(ledger.loc[ledger["type"] == "NEGATIVE_BALANCE_PROTECTION", "amount_usd"].sum()) if len(ledger) else 0.0
+    end_balance, end_equity = float(rows["balance"].iloc[-1]), float(rows["equity"].iloc[-1])
+    bust = bool(res.get("insolvent"))                    # balance fell below one entry's margin: trading stopped for good
+    bust_ts = events.loc[events["type"] == sr.BANKRUPTCY_OR_INSOLVENCY, "timestamp"] if len(events) else []
+    n_liq = int(ev.get(sr.LIQUIDATED, 0))
+    if bust:
+        status = "BUST"
+    elif n_liq:
+        status = "LIQUIDATED"
+    elif end_equity < 0.5 * start:
+        status = "DEPLETED"                              # ended below half the deposit
+    else:
+        status = "SURVIVED"
+
+    wins = sum(1 for t in trades if t["profit_usdt"] > 0)
+    stats = {
+        "total_trades": len(trades), "wins": wins,
+        "win_pct": round(wins / len(trades) * 100, 1) if trades else 0.0,
+        "total_pnl": round(end_balance - start, 4),            # closed cycles + any negative-balance credit
+        "closed_net": round(sum(t["profit_usdt"] for t in trades), 4),
+        "max_dd": round(max_dd, 4), "max_dd_pct": round(max_dd_pct, 1),   # % of peak equity (owner rule)
+        "avg_fills": round(float(np.mean([t["fills"] for t in trades])), 2) if trades else 0.0,
+    }
+    account = {
+        "starting_capital": start, "ending_balance": round(end_balance, 2), "ending_equity": round(end_equity, 2),
+        "return_pct": round((end_equity - start) / start * 100, 1), "min_equity": round(float(np.min(eq_worst)), 2),
+        "status": status, "liquidations": n_liq,
+        "first_liquidation": str(pd.Timestamp(liq_ts.iloc[0]))[:16] if n_liq else None,
+        "bust_at": str(pd.Timestamp(bust_ts.iloc[0]))[:16] if bust and len(bust_ts) else None,
+        "margin_calls": int(ev.get(sr.MARGIN_CALL, 0)),
+        "orders_refused_no_margin": int(ev.get(sr.INSUFFICIENT_FREE_CASH, 0)),
+        "orders_rejected_min_volume": int(ev.get(sr.ORDER_REJECTED, 0)),
+        "negative_balance_credit": round(nbp, 2), "leverage": leverage,
+    }
+    open_position = None
+    if len(openc):
+        o = openc.iloc[0]
+        open_position = {"entry_time": str(o.entry_ts)[:10], "entry_price": round(float(o.entry_price), 5),
+                         "wap": round(float(o.wap), 5), "fills": int(o.fills), "profit_usdt": round(float(o.net_pnl_usd), 2)}
+    labels = res["config"]["cost_labels"]
+    costs = {
+        "spread": labels["spread"], "slippage": labels["slippage"], "commission": labels["commission"],
+        "swap": labels["swap"],
+        "spread_usd": round(float(cycles["spread_usd"].sum()), 2) if len(cycles) else 0.0,
+        "swap_usd": round(float(cycles["swap_usd"].sum()), 2) if len(cycles) else 0.0,
+        "commission_usd": round(float(cycles["commission_usd"].sum()), 2) if len(cycles) else 0.0,
+    }
+    costs["swap_usd_abs"] = abs(costs["swap_usd"])                       # the template prints the sign itself
+    equity = _daily_points(rows["timestamp"], rows["equity"], 0.0)
+    pk, drawdown = start, []
+    for i, pt in enumerate(equity):
+        pk = max(pk, pt["p"])
+        drawdown.append({"i": i, "p": round(pt["p"] - pk, 4)})
+    return {
+        "equity": equity,                                                         # account equity in $, daily close
+        "equity_settled": _daily_points(rows["timestamp"], rows["balance"], 0.0),   # account balance in $, daily close
+        "drawdown": drawdown, "trades": trades, "stats": stats, "account": account,
+        "fill_dist": {f: b["cycles"] for f, b in sorted(by_fills.items())},
+        "pnl_by_fills": [{"fills": f, **b} for f, b in sorted(by_fills.items())],
+        "open_position": open_position, "costs": costs,
+    }
+
+
+def run_paper_account_simulation(pairs: Optional[List[str]] = None) -> Dict:
+    """Paper Trader: replay every QC_PORTFOLIO_SPECS pair (LONG) on its own fixed account of PAPER_ACCOUNT_USD.
+    Entry = $PAPER_ENTRY_USDT margin at the pair's ESMA leverage (1:30 majors, 1:20 others). Data stop at the FX
+    research seal (FX_RESEARCH_DATA_CUTOFF) — fx_survival_replay refuses later data."""
+    from bot.research import fx_survival_replay as sr
+    from bot.research.fx_fold_runner import compute_wilder_adx, compute_causal_atr_series
+    from bot.research.forex_instrument_spec import QC_PORTFOLIO_SPECS
+
+    VALIDATED_PAIRS = {"GBP/JPY"}   # G5: only QC-1 holdout-positive pair
+    snapshot, snap_path = sr.latest_broker_snapshot()
+    results: Dict = {}
+    for pair in (pairs or list(QC_PORTFOLIO_SPECS)):
+        try:
+            lev = sr.esma_leverage(pair)
+            strat = sr.StrategyConfig(entry_notional_usd=PAPER_ENTRY_USDT * lev)
+            pdat = sr.build_pair_data(pair, strategy=strat, snapshot=snapshot)
+            res = sr.run_replay([pdat], sr.AccountConfig(starting_capital_usd=PAPER_ACCOUNT_USD), strategy=strat,
+                                label=f"paper trader {pair}")
+            sr.reconcile(res)                                            # ledger ties out, or this pair errors
+            out = paper_account_summary(pair, res, lev)
+            keep = pdat.ts >= pdat.replay_start
+            df = pd.DataFrame({"open": pdat.o[keep], "high": pdat.h[keep], "low": pdat.l[keep], "close": pdat.c[keep]},
+                              index=pdat.ts[keep])
+            adx_arr = compute_wilder_adx(df)
+            atr14, atr50 = compute_causal_atr_series(df, window=14), compute_causal_atr_series(df, window=50)
+            ranging_pct, regime, last_adx = _regime_summary(adx_arr, atr14, atr50,
+                                                            _compute_ranging_mask(df, adx_arr, atr14, atr50))
+            spec_now = pdat.spec_schedule[-1][1]
+            out.update({
+                "ladder_depth": 1 + len(spec_now.base_pips), "validated": pair in VALIDATED_PAIRS,
+                "ranging_pct": ranging_pct, "current_regime": regime,
+                "current_adx": round(float(last_adx), 1) if not math.isnan(last_adx) else None,
+                "entry_usdt": PAPER_ENTRY_USDT, "leverage": int(lev), "entry_notional": int(PAPER_ENTRY_USDT * lev),
+                "max_margin": round(PAPER_ACCOUNT_USD, 2), "max_notional": round(PAPER_ACCOUNT_USD * lev, 2),
+                "window": {"start": str(pdat.replay_start)[:16], "end": str(pdat.ts[-1])[:16],
+                           "cutoff": pdat.provenance.get("cutoff")},
+            })
+            out["costs"]["broker_snapshot"] = snap_path.name if snap_path else None
+            results[pair] = out
+        except Exception as exc:
+            logger.exception("paper_trader: account replay failed for %s", pair)
+            results[pair] = {"error": str(exc), "validated": pair in VALIDATED_PAIRS}
     return results

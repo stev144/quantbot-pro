@@ -161,6 +161,8 @@ def run_conditional_test(asset: str, feature_name: str, operator: str, threshold
     instrument = df.attrs.get("instrument")
     timeframe = instrument.timeframe if instrument else "1h"
     enriched = calc.calculate_all_features(df, symbol=asset, timeframe=timeframe)
+    from bot.research_lab.tools.statistical_tools import _in_zone_s   # claude code changed: 2026-10-28 — evaluate zone-S rows only (D-3)
+    enriched = _in_zone_s(enriched)
 
     if feature_name not in enriched.columns:
         raise ValueError(f"'{feature_name}' is not a column feature_calculator.py produced")

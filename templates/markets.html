@@ -209,7 +209,7 @@
                 {% if paper %}
                 <span class="mkt-paper-label">Simulated net P&amp;L</span>
                 <span class="mkt-paper-value {% if paper.net_pnl >= 0 %}pos{% else %}neg{% endif %}">{% if paper.net_pnl >= 0 %}+{% else %}−{% endif %}${{ paper.net_pnl_abs|floatformat:"2g" }}</span>
-                <span class="mkt-paper-sub">{{ paper.trades }} trades · {{ paper.pairs }} pair{{ paper.pairs|pluralize }} · {{ paper.open_cycles }} open cycle{{ paper.open_cycles|pluralize }} · historical replay, not a live account</span>
+                <span class="mkt-paper-sub">{{ paper.trades }} trades · {{ paper.pairs }} pair{{ paper.pairs|pluralize }} on ${{ paper.deposits|floatformat:"0g" }} of deposits{% if paper.accounts_failed %} · <span class="neg">{{ paper.accounts_failed }} account{{ paper.accounts_failed|pluralize }} liquidated, bust or depleted</span>{% endif %} · {{ paper.open_cycles }} open cycle{{ paper.open_cycles|pluralize }} · historical replay, not a live account</span>{# claude code changed: 2026-10-28 — fixed-account replay #}
                 {% else %}
                 <span class="mkt-paper-label">Test before you trade</span>
                 <span class="mkt-paper-sub">Replay the DCA strategy on historical prices with paper money. Tap to run it (up to a minute).</span>

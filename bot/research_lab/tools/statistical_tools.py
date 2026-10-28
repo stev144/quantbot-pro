@@ -7,6 +7,8 @@
 # second IC/p-value implementation (section 25).
 # ============================================================
 
+import pandas as pd   # claude code changed: 2026-10-28 — zone-S row filter
+
 from bot.research.feature_calculator import FeatureCalculator
 from bot.research.feature_validator import FeatureValidator, apply_family_wide_correction
 from bot.research_lab.spec import SUPPORTED_HORIZONS  # claude code changed: moved to spec.py — single source, was independently defined here and could drift from validate_spec()'s check (Bug 4)
@@ -56,7 +58,14 @@ def _prepare(asset: str, horizon: int):
     timeframe = instrument.timeframe if instrument else "1h"
     asset_class = instrument.asset_class if instrument else None
     enriched = calc.calculate_all_features(df, symbol=asset, timeframe=timeframe)
+    enriched = _in_zone_s(enriched)   # claude code changed: 2026-10-28 — init-window rows were warm-up only (D-8)
     return enriched, SUPPORTED_HORIZONS[horizon], timeframe, asset_class
+
+
+def _in_zone_s(enriched):   # claude code changed: 2026-10-28 — evaluate zone-S rows only (D-3)
+    from bot.research_lab.tools._data import zone_s_start
+    ts = enriched["timestamp"] if "timestamp" in enriched.columns else enriched.index
+    return enriched[pd.DatetimeIndex(ts) >= zone_s_start()]
 
 
 @register_tool("run_statistical_test")

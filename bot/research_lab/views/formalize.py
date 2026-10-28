@@ -82,7 +82,7 @@ def _context(experiment, spec, errors=None):
 
 def _spec_from_post(post_data, hypothesis_text):
     horizon_raw = post_data.get("horizon", "").strip()
-    hypothesis_type = post_data.get("hypothesis_type", "feature")
+    hypothesis_type = post_data.get("hypothesis_type") or ""   # claude code changed: 2026-10-28 — was a silent "feature" default: a disabled (locked) radio is never submitted, so a pairs hypothesis became a feature one and the form demanded a feature, direction and horizon
 
     conditions = []
     features = []

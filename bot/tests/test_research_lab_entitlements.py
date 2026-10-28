@@ -185,19 +185,39 @@ class AssetClassGatingTest(TestCase):
         self.assertTrue(result.allowed)
         self.assertEqual(result.reason_code, OK)
 
+    # claude code changed: 2026-10-28 — these two used cross_sectional_research as the "ready but crypto-only"
+    # example; it is now BLOCKED by owner decision D-6, so a temporary ready, crypto-only capability stands in.
+    def _with_crypto_only_capability(self, fn):
+        from bot.research_lab.capability_registry import (
+            CORE, IMPLEMENTED_AND_READY, RESEARCH_CAPABILITIES, ResearchCapability)
+        cap = ResearchCapability(id="test_crypto_only", name="Test crypto-only", description="test", category="test",
+                                 required_tier=CORE, risk_tier="LOW", compute_tier="LOW", backing_engine="none",
+                                 engine_status=IMPLEMENTED_AND_READY, has_tests=True,
+                                 supported_asset_classes=["CRYPTO"])
+        RESEARCH_CAPABILITIES[cap.id] = cap
+        try:
+            return fn(cap.id)
+        finally:
+            del RESEARCH_CAPABILITIES[cap.id]
+
     def test_forex_blocked_capability(self):
-        """cross_sectional_research is deliberately NOT marked FOREX-supported
-        (its Research Lab tool has no asset-class parameter at all — see
-        capability_registry.py's own comment on that entry) — this must be
-        rejected at the entitlement layer, not silently allowed through."""
-        result = ResearchEntitlementService.can_access(self.pro_user, "cross_sectional_research", asset_class="FOREX")
+        """A capability not marked FOREX-supported must be rejected at the entitlement layer for FOREX, not
+        silently allowed through."""
+        result = self._with_crypto_only_capability(
+            lambda cid: ResearchEntitlementService.can_access(self.pro_user, cid, asset_class="FOREX"))
         self.assertFalse(result.allowed)
         self.assertEqual(result.reason_code, ASSET_CLASS_NOT_SUPPORTED)
 
     def test_crypto_only_capability_still_works_for_crypto(self):
-        result = ResearchEntitlementService.can_access(self.pro_user, "cross_sectional_research", asset_class="CRYPTO")
+        result = self._with_crypto_only_capability(
+            lambda cid: ResearchEntitlementService.can_access(self.pro_user, cid, asset_class="CRYPTO"))
         self.assertTrue(result.allowed)
         self.assertEqual(result.reason_code, OK)
+
+    def test_cross_sectional_is_refused_while_d6_blocks_it(self):   # claude code changed: 2026-10-28
+        result = ResearchEntitlementService.can_access(self.pro_user, "cross_sectional_research", asset_class="CRYPTO")
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason_code, "ENGINE_NOT_READY")
 
     def test_unsupported_asset_class_value_is_rejected(self):
         """Not just an unsupported CAPABILITY — an asset_class value that

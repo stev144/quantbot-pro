@@ -79,7 +79,35 @@ def run_cointegration_test(asset_a: str, asset_b: str) -> dict:
     # window + persistence on the rest, i.e. it read zone V and later). Exploration may use zone S only, so the
     # same single-pair test now runs on zone-S candles only, with seed eligibility recorded. Never claimable.
     from bot.research.cointegration_engine import pair_test_in_selection_zone
-    output = pair_test_in_selection_zone(asset_a, asset_b, df_a["close"], df_b["close"], timeframe=timeframe_a or "1h")
+    # claude code changed: 2026-10-28 — owner delegated ("finish the research lab fixes"); strictest option chosen.
+    # The signed FX holiday calendar (OD-FX-1, measured where >= 54 of 56 pairs had no quotes) marks some Christmas /
+    # New Year hours closed in which a few majors (EUR/USD, GBP/USD, AUD/USD) did quote, so the engine's guard refused
+    # those pairs outright. Here — Research Lab exploration only — quotes inside the signed closures are DROPPED
+    # before the test: the calendar stays as signed, only thin holiday-hour quotes are removed (never hours added),
+    # the canonical engine and its guard are untouched, and the count is reported with the result.
+    close_a, close_b = df_a["close"], df_b["close"]
+    dropped = {}
+    try:
+        from bot.quant_core.market_profile import profile_for_pair
+        cal = profile_for_pair(asset_a, asset_b).calendar
+    except Exception:
+        cal = None                                     # undecided market rules: the engine reports BLOCKED itself
+    if cal is not None and not cal.is_continuous:
+        keep_a, keep_b = cal.is_trading(close_a.index), cal.is_trading(close_b.index)
+        dropped = {asset_a: int((~keep_a).sum()), asset_b: int((~keep_b).sum())}
+        close_a, close_b = close_a[keep_a], close_b[keep_b]
+    try:
+        output = pair_test_in_selection_zone(asset_a, asset_b, close_a, close_b, timeframe=timeframe_a or "1h")
+    except ValueError as exc:   # claude code changed: 2026-10-28 — the FX calendar guard refuses data inside scheduled closures
+        if "scheduled closures" not in str(exc):
+            raise
+        # Not a test result and not negative evidence: the signed FX holiday calendar (OD-FX-1) and these files
+        # disagree, and the engine refuses rather than guessing which one is wrong. Reported as BLOCKED (verdict
+        # REQUIRES_REVIEW with this reason) instead of a crashed tool call.
+        return {"asset_a": asset_a, "asset_b": asset_b, "status": "BLOCKED", "is_cointegrated": False,
+                "passes_filters": False, "coint_pvalue": None,
+                "reject_reason": f"FX_CALENDAR_DATA_MISMATCH — {exc}",
+                "fdr_note": "not evaluated — refused before the cointegration test could run"}
     if output["status"] == "UNTESTABLE":
         output["reject_reason"] = f"insufficient zone-S data — {output['reject_reason']}"   # → INSUFFICIENT_DATA, never REJECTED
     # claude code changed: FDR correction for this field is only ever
@@ -88,6 +116,8 @@ def run_cointegration_test(asset_a: str, asset_b: str) -> dict:
     # honestly None rather than presenting an uncorrected value as if it
     # were FDR-adjusted.
     output["fdr_note"] = "adf_pvalue_fdr/passes_fdr are only computed by a full multi-pair cointegration_engine.py run, not a single-pair test"
+    if dropped:   # claude code changed: 2026-10-28 — disclosed, never silent
+        output["rows_dropped_inside_market_closures"] = dropped
     return output
 
 
@@ -286,6 +316,9 @@ def run_backtest(asset: str, initial_balance: float = 5000.0, random_seed: int =
     asset_class = instrument.asset_class if instrument is not None else None
     result = backtest(df, initial_balance=initial_balance, allow_unvalidated_strategies=True, asset_class=asset_class)
     trades = result.get("trades", [])
+    from bot.research_lab.tools._data import zone_s_start   # claude code changed: 2026-10-28 — statistics on trades entered in zone S only; the init window is warm-up (D-8)
+    s0 = zone_s_start()
+    trades = [t for t in trades if t.get("entry_index") is not None and df.index[int(t["entry_index"])] >= s0]
     net_r = np.array([t["net_r_multiple"] for t in trades if t.get("net_r_multiple") is not None], dtype=float)
 
     n = int(net_r.size)
@@ -326,6 +359,18 @@ def run_backtest(asset: str, initial_balance: float = 5000.0, random_seed: int =
         })
         if n >= 3 and net_r[:-1].std() > 0 and net_r[1:].std() > 0:
             evidence["lag1_autocorrelation"] = float(np.corrcoef(net_r[:-1], net_r[1:])[0, 1])
+        # claude code changed: 2026-10-28 — dependence-aware companion to the IID t-test (D-2: IID p-values never decide
+        # alone). AR(1) effective sample size n_eff = n(1 − ρ)/(1 + ρ) for ρ > 0 (ρ ≤ 0 → n, never inflated); the verdict
+        # uses the larger of the two p-values. EUR/USD's trades showed ρ = 0.66, i.e. n_eff ≈ n / 5.
+        rho = evidence["lag1_autocorrelation"]
+        n_eff = n * (1 - rho) / (1 + rho) if rho is not None and rho > 0 else float(n)
+        evidence["n_eff_ar1"] = float(n_eff)
+        if n_eff > 2 and evidence["std_net_r"] > 0:
+            t_adj = evidence["mean_net_r"] / (evidence["std_net_r"] / np.sqrt(n_eff))
+            evidence["p_value_one_sided_ar1"] = float(stats.t.sf(t_adj, df=n_eff - 1))
+        else:
+            evidence["p_value_one_sided_ar1"] = None
+    evidence["n_trades_before_zone_s_excluded"] = len(result.get("trades", [])) - len(trades)   # claude code changed: 2026-10-28
     return evidence
 
 

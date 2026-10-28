@@ -158,6 +158,7 @@ class FullWorkflowTest(TestCase):
         self.assertEqual(formalize_get.status_code, 200)
 
         formalize_post = self.client.post(reverse("research_lab_formalize", kwargs={"experiment_id": experiment.id}), data={
+            "hypothesis_type": "feature",   # claude code changed: 2026-10-28 — the form always sends it; a missing type is now an error, not a silent "feature"
             "asset": "BTC/USDT", "timeframe": "1h", "feature_name": "rsi",
             "direction": "", "horizon": "4", "risk_tier": "LOW",
         })
