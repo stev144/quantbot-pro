@@ -7,6 +7,43 @@
 {% include "partials/_topbar.html" with active="funding_carry" %}
 
 <div class="term-body">
+{# claude code changed: 2026-10-28 — live funding watch (bot/research/funding_watch.py), five-gate reviewed #}
+{% if watch %}
+<div class="term-section" style="margin-bottom:16px">
+    <div class="term-section-head">
+        <span class="term-section-title">Funding watch — would the cost-hurdle rule be in right now?</span>
+        <span class="term-section-meta">live · Binance settled funding · {{ watch.computed_at|slice:":16" }} UTC · refreshes every 10 min</span>
+    </div>
+    <div class="term-section-body">
+        <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin-bottom:12px">
+            <strong>{{ watch.label }}</strong><br>
+            Rule (from the study, unchanged): <b>ON</b> when the last 7 days of settled funding add up to at least one full round trip
+            (<b>{{ watch.hurdle_pct|floatformat:2 }}%</b> — spot 0.10% + perp 0.05% + 0.05% slippage per leg, in and out); out when the 7-day sum turns negative.
+            A position must keep its short fully collateralised and re-hedge after a +50% rally, or it risks liquidation.
+        </div>
+        {% if not watch.available %}
+        <div class="unavailable">Funding watch unavailable: {{ watch.reason }}</div>
+        {% endif %}
+        {% if watch.coins %}
+        <table class="mono" style="width:100%;font-size:12px;border-collapse:collapse">
+            <tr style="color:var(--text-dim);text-align:right"><th style="text-align:left">Coin</th><th style="text-align:left">Status</th><th>7-day funding</th><th>× hurdle</th><th>≈ per year</th><th>Latest rate</th><th>Every</th><th>Last settlement</th></tr>
+            {% for c in watch.coins %}
+            <tr style="text-align:right;border-top:1px solid var(--border-0)">
+                <td style="text-align:left">{{ c.symbol }}</td>
+                <td style="text-align:left">{% if c.status == "ON" %}<span class="badge pos">ON</span>{% elif c.status == "NEGATIVE" %}<span class="badge neg">NEGATIVE</span>{% elif c.status == "BELOW_HURDLE" %}<span class="badge neu">below hurdle</span>{% else %}<span class="badge warn" title="{{ c.reason }}">{{ c.status|lower }}</span>{% endif %}</td>
+                {% if c.f7_pct is not None %}
+                <td class="{% if c.f7_pct < 0 %}neg{% endif %}">{{ c.f7_pct|floatformat:3 }}%</td><td>{{ c.times_hurdle|floatformat:2 }}</td>
+                <td title="7-day sum × 365/7 — a linear extrapolation, not a forecast">{{ c.annual_equiv_pct|floatformat:1 }}%</td>
+                <td>{{ c.latest_rate_pct|floatformat:4 }}%</td><td>{{ c.interval_hours|floatformat:0 }} h</td><td>{{ c.last_settlement|slice:"5:16" }}</td>
+                {% else %}<td colspan="6" style="text-align:left;color:var(--text-dim)">{{ c.reason }}</td>{% endif %}
+            </tr>
+            {% endfor %}
+        </table>
+        <div class="chart-caption" style="margin-top:8px">{{ watch.n_on|default:0 }} of {{ watch.coins|length }} coins clear the hurdle. In the study, the rule was in most of 2024 and almost never in 2026; if several coins turn ON, a forward test would be written and frozen then — not before.</div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
 <div class="term-section">
     <div class="term-section-head">
         <span class="term-section-title">Funding Carry Monitor — long spot + short perpetual (hypothetical)</span>
@@ -15,7 +52,7 @@
     <div class="term-section-body">
         <div class="chart-caption" style="border-left:3px solid var(--warning);padding-left:8px;margin-bottom:12px">
             <strong>Historical research estimate — not a live yield or trading recommendation.</strong>
-            Classification: DESCRIPTIVE (pseudo-holdout history, not claim-eligible). No order, exchange credential or live data is involved.
+            Classification: DESCRIPTIVE (pseudo-holdout history, not claim-eligible). This historical report uses no order, exchange credential or live data; the live funding watch above reads Binance's public funding only and stores nothing.{# claude code changed: 2026-10-28 — accurate now that the page has a live watch #}
         </div>
         {% if not report %}
         <div class="unavailable">No funding-carry run has been recorded yet. A research run is started explicitly with <code>{{ command }}</code>; this page never computes on its own.</div>

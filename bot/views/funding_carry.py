@@ -25,13 +25,16 @@ def _summary(assets):
 
 
 def funding_carry(request):
+    from bot.research.funding_watch import cached_watch   # claude code changed: 2026-10-28 — live funding watch
+    watch = cached_watch()                                  # claude code changed: 2026-10-28
     report = fcm.load_report()
     if report is None:
-        return render(request, "funding_carry.html", {"active": "funding_carry", "report": None,
+        return render(request, "funding_carry.html", {"active": "funding_carry", "report": None, "watch": watch,
                                                       "command": "python manage.py run_funding_carry_monitor"})
     assets = sorted(report["assets"], key=lambda a: a["symbol"])
     return render(request, "funding_carry.html", {
         "active": "funding_carry", "report": report, "assets": assets,
         "unavailable": [a for a in assets if a["status"] != fcm.OK],
         "summary": _summary(assets),
+        "watch": watch,   # claude code changed: 2026-10-28 — live funding watch
     })
