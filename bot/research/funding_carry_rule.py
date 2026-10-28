@@ -30,7 +30,7 @@ import pandas as pd
 from bot.config.execution_costs import FEE_RATE, PERP_TAKER_FEE_RATE, SLIPPAGE_RATE
 from bot.research import funding_carry_monitor as M
 
-RT = 2.0 * (FEE_RATE + PERP_TAKER_FEE_RATE + 2.0 * SLIPPAGE_RATE)   # 0.005 at base tier
+RT = M.round_trip_costs(1.0, 1.0, 1.0, 1.0, 1.0, FEE_RATE, PERP_TAKER_FEE_RATE, SLIPPAGE_RATE)["total"]   # claude code changed: 2026-10-28 — from the monitor's own cost function (one source), = 0.005 at base tier
 WINDOW = pd.Timedelta(days=7)
 LEVERAGE = 2.0
 MAINTENANCE = 0.004
