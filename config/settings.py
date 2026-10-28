@@ -122,6 +122,9 @@ STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
 STRIPE_PRICE_ID = config('STRIPE_PRICE_ID', default='')
 BILLING_ENFORCED = config('BILLING_ENFORCED', default=False, cast=bool)
 BILLING_TRIAL_DAYS = config('BILLING_TRIAL_DAYS', default=30, cast=int)
+# claude code changed: 2026-10-28 — phone alerts (bot/notifications/ntfy.py): the topic name is the only secret
+NTFY_TOPIC = config('NTFY_TOPIC', default='')
+NTFY_SERVER = config('NTFY_SERVER', default='https://ntfy.sh')
 BILLING_PRICE_LABEL = config('BILLING_PRICE_LABEL', default='')   # display only, e.g. "$29 / month" — Stripe's Price is what is charged
 
 # claude code changed: 2026-10-26 — Research Lab runs execute in a background thread (a strategy backtest takes minutes,

@@ -175,6 +175,7 @@ def report(state: Dict) -> Dict:
         "days": len(rows), "first_day": rows[0]["day"], "last_day": rows[-1]["day"],
         "equity": round(eq.iloc[-1], 2), "return_pct": round((eq.iloc[-1] / CAPITAL - 1) * 100, 3),
         "max_drawdown_pct": round(float((eq / eq.cummax() - 1).min() * 100), 3),
+        "current_drawdown_pct": round(float(rows[-1]["drawdown_pct"]), 3),   # claude code changed: 2026-10-28 — for alerts
         "carry_usd": round(carry, 2), "cost_usd": round(cost, 2), "realised_vol_pct": vol,
         "units": rows[-1]["units"], "stopped": state["stopped"],
         "checks": {
