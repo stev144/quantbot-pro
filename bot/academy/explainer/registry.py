@@ -9,7 +9,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-REGISTRY_VERSION = "2026-10-26.4"
+REGISTRY_VERSION = "2026-10-28.2"   # claude code changed: 2026-10-28 — +standard_deviation, +python_pandas_research, +rolling_windows
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,96 @@ class Concept:
 
 
 CONCEPTS: Dict[str, Concept] = {c.id: c for c in [
+    # claude code changed: 2026-10-28 — new building block (owner: "What is standard deviation?" was refused because no
+    # approved concept covered it, although z-scores, volatility and the Sharpe ratio all depend on it)
+    Concept(
+        id="standard_deviation",
+        name="Standard deviation (volatility)",
+        summary="The typical size of the ups and downs around an average — the most common measure of risk.",
+        definition=("Standard deviation measures how far values usually sit from their own average. Small means the "
+                    "values cluster tightly around the average; large means they swing widely. In markets it is "
+                    "measured on returns (the percentage changes from one bar to the next), not on price levels, and "
+                    "the standard deviation of returns is what traders call volatility. Scaled to a year it becomes "
+                    "annualised volatility: multiply by the square root of the number of bars in a year."),
+        formula="sample sd: s = √( Σ(xᵢ − x̄)² / (n − 1) );  annualised volatility = sd(log returns) · √A, "
+                "where A = bars per year (for daily bars: 365 for crypto, about 260 for forex).",
+        units="Same units as the data (for returns: percent); annualised volatility in percent per year.",
+        inputs="A series of values — on this platform, log returns of closing prices.",
+        window="The platform's realised-volatility readouts use the last 7 days of hourly returns (home cards) and "
+               "the last 20 daily returns (Market Regime cards).",
+        data_source="Hourly and daily OHLC candles.",
+        implementation=(("bot.quant_metrics.factors", "realized_vol_series"),
+                        ("bot.market_intel.asset_metrics", "realized_vol_pct")),
+        tests=("bot/tests/test_quant_metrics.py",),
+        limitations=(
+            "It treats a move up and a move down the same, so it measures uncertainty, not loss on its own.",
+            "Market returns have fat tails: big moves happen more often than a normal (bell-curve) distribution with "
+            "the same standard deviation would suggest.",
+            "Volatility changes over time and clusters (calm periods and wild periods), so a past value is an "
+            "estimate of the recent past, not a promise about the future.",
+            "Computing it on price levels instead of returns gives a meaningless number for a trending price.",
+        ),
+        intended_use="Describing risk; the building block of z-scores, volatility regimes and the Sharpe ratio.",
+        related=("z_score", "correlation"),
+        suggested_questions=("What is standard deviation?", "Why is volatility measured on returns, not prices?"),
+    ),
+    # claude code changed: 2026-10-28 — two Python concepts (owner: the Academy teaches a "Python for Quant Trading" track,
+    # but the Explainer refused every Python question). Scope stays research programming, not general Python.
+    Concept(
+        id="python_pandas_research",
+        name="Python and pandas for research",
+        summary="How this platform's research code holds market data: Python, with pandas tables indexed by time.",
+        definition=("All research on this platform is written in Python. Price data is held in a pandas DataFrame — a "
+                    "table with one row per candle, indexed by the candle's open time in UTC, with columns such as "
+                    "open, high, low, close and volume. Calculations are vectorised: one operation is applied to a "
+                    "whole column at once (NumPy does the arithmetic underneath) instead of looping row by row, which "
+                    "is faster and leaves less room for off-by-one mistakes. Statistical tests come from the "
+                    "statsmodels and SciPy libraries."),
+        formula="log-return column: r = np.log(df['close']).diff()   ⇔   r_t = ln P_t − ln P_{t−1}",
+        units="Not applicable (a toolset, not a measurement).",
+        inputs="Hourly or daily OHLCV candles loaded from CSV files or from the Binance / MT5 data feeds.",
+        implementation=(("bot.research_lab.tools._data", "load_ohlcv"),
+                        ("bot.research.feature_calculator", "FeatureCalculator")),
+        tests=("bot/tests/test_research_lab_tools.py", "bot/tests/test_feature_calculator.py"),
+        limitations=(
+            "Code that runs is not code that is right: one shifted index can silently let future data into a result.",
+            "Floating-point arithmetic rounds: compare numbers with a tolerance, never with ==.",
+            "Every timestamp here is UTC; mixing a local-time column with UTC data misaligns candles.",
+        ),
+        intended_use="Reading the platform's research code; matches the Academy's Python for Quant Trading track "
+                     "(Python fundamentals, NumPy, pandas).",
+        related=("rolling_windows", "z_score"),
+        suggested_questions=("What is pandas?", "Why does the research code avoid Python loops?"),
+    ),
+    Concept(
+        id="rolling_windows",
+        name="Rolling windows and look-ahead bias",
+        prerequisites=("python_pandas_research",),
+        summary="Computing statistics over the last N candles — and the one-line mistakes that let the future leak in.",
+        definition=("A rolling window recomputes a statistic (an average, a standard deviation, …) over the most recent "
+                    "N rows at every row: df['close'].rolling(20).mean() at a candle uses that candle and the 19 "
+                    "before it, never later ones. Look-ahead bias is when a calculation at time t uses data from after "
+                    "t. The usual causes are shift(-h), which pulls future values back; a centred window "
+                    "(center=True); and scaling with statistics of the whole dataset. Forward-return labels are the "
+                    "one place future prices are used on purpose, and they are kept apart from features. On this "
+                    "platform a label assumes the trade is filled at the NEXT bar's open (owner decision D-1)."),
+        formula="rolling mean: m_t = (1/N) Σ_{i=t−N+1..t} x_i  (pandas: x.rolling(N).mean());  "
+                "research label: y_t = P_open(t+1+h) / P_open(t+1) − 1  (pandas: o.shift(-(1+h)) / o.shift(-1) − 1).",
+        units="Same units as the series being averaged; labels are fractional returns.",
+        inputs="A time-ordered column, such as closes or returns.",
+        window="Chosen per feature; the first N − 1 rows have no value (NaN) because a full window does not exist yet.",
+        implementation=(("bot.quant_core.timing", "research_forward_return"),
+                        ("bot.quant_metrics.factors", "realized_vol_series")),
+        tests=("bot/tests/test_d1_research_labels.py", "bot/tests/test_quant_metrics.py"),
+        limitations=(
+            "A rolling window only looks backwards if the rows are in time order — sort by timestamp first.",
+            "Rows count candles, not hours: a missing candle (for example a forex weekend) stretches the window in time.",
+            "A label column must never be used as a feature; it contains the future by design.",
+        ),
+        intended_use="Writing and reviewing feature code without look-ahead bias.",
+        related=("python_pandas_research", "z_score", "in_sample_vs_oos"),
+        suggested_questions=("What does rolling(20) do in pandas?", "What is look-ahead bias?"),
+    ),
     # claude code changed: 2026-10-26 — building blocks taught before cointegration (owner: beginners need these first)
     Concept(
         id="correlation",

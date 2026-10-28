@@ -434,3 +434,77 @@ class ExplainerPageTest(TestCase):
         self.assertNotIn("<script>alert(1)</script>", html)
         self.assertIn("&lt;script&gt;", html)
         self.assertNotIn("<b>x</b>", html)
+
+
+# claude code changed: 2026-10-28 — standard deviation concept + out-of-scope answers enforced in code
+@override_settings(EXPLAINER_AI_ENABLED=True, EXPLAINER_AI_MODEL="claude-haiku-5-5")
+class ScopeTest(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = get_user_model().objects.create_user("rx_scope", password="x")
+
+    def test_standard_deviation_question_finds_its_concept(self):
+        self.assertEqual(svc.guess_concept("what is standard deviation"), "standard_deviation")
+        self.assertEqual(svc.guess_concept("explain volatility to me"), "standard_deviation")
+
+    def test_standard_deviation_known_answer(self):
+        x = np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
+        self.assertAlmostEqual(float(np.std(x, ddof=1)), math.sqrt(32 / 7))   # sample sd, n − 1
+
+    def test_unrelated_question_without_concept_never_calls_the_ai(self):
+        fc = FakeClient()
+        r = svc.explain(self.user, "How do I book a hospital appointment?", None, "new", client=fc)
+        self.assertEqual(r["status"], "NO_CONCEPT")
+        self.assertEqual(fc.calls, [])
+
+    def test_out_of_scope_answer_is_replaced_and_not_cached(self):
+        from bot.academy.models import ExplainerRequest
+        q = "Which hospital treats heart disease best?"
+        fc = FakeClient(_resp(_answer(answer="Here is medical advice...", out_of_scope=True)))
+        r = svc.explain(self.user, q, "standard_deviation", "new", client=fc)
+        self.assertEqual(r["status"], "OUT_OF_SCOPE")
+        self.assertIsNone(r["answer"])
+        self.assertNotIn("medical", r["message"])
+        self.assertEqual(ExplainerRequest.objects.get().status, "OUT_OF_SCOPE")
+        fc2 = FakeClient(_resp(_answer(answer="Again off topic", out_of_scope=True)))
+        self.assertEqual(svc.explain(self.user, q, "standard_deviation", "new", client=fc2)["status"], "OUT_OF_SCOPE")
+        self.assertEqual(len(fc2.calls), 1)                                  # nothing was cached the first time
+
+
+# claude code changed: 2026-10-28 — Python concepts + tied matches offered as choices
+@override_settings(EXPLAINER_AI_ENABLED=True, EXPLAINER_AI_MODEL="claude-haiku-5-5")
+class PythonAndTiesTest(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = get_user_model().objects.create_user("rx_py", password="x")
+
+    def test_python_questions_find_python_concepts(self):
+        self.assertEqual(svc.guess_concept("what is python?"), "python_pandas_research")
+        self.assertEqual(svc.guess_concept("what is pandas"), "python_pandas_research")
+        self.assertIn("rolling_windows", svc.concept_candidates("what does a rolling window do"))   # ties with the rolling z-score: offered as a choice
+        self.assertEqual(svc.guess_concept("what is look-ahead bias"), "rolling_windows")
+
+    def test_rolling_window_and_label_formulas_match_the_code(self):
+        from bot.quant_core.timing import research_forward_return
+        o = pd.Series([10.0, 11.0, 12.0, 15.0, 18.0])
+        self.assertTrue(np.allclose(o.rolling(2).mean().to_numpy()[1:], [10.5, 11.5, 13.5, 16.5]))   # uses t and t−1 only
+        lab = research_forward_return(pd.DataFrame({"open": o}), 2)
+        self.assertAlmostEqual(lab.iloc[0], 15.0 / 11.0 - 1)            # P_open(t+1+h) / P_open(t+1) − 1, h = 2
+
+    def test_python_is_in_the_ai_scope(self):
+        self.assertIn("research programming in Python", svc.SYSTEM_PROMPT)
+
+    def test_tied_concepts_are_offered_not_refused(self):
+        fc = FakeClient()
+        r = svc.explain(self.user, "how do I read a z-score", None, "new", client=fc)
+        self.assertEqual(r["status"], "NO_CONCEPT")
+        ids = {c.id for c in r["candidates"]}
+        self.assertIn("z_score", ids)
+        self.assertIn("cross_sectional_zscore", ids)
+        self.assertEqual(fc.calls, [])                                   # still no AI call until a concept is chosen
+
+    def test_candidates_render_as_links_that_keep_the_question(self):
+        self.client.force_login(self.user)
+        r = self.client.post(reverse("academy_explainer"), {"question": "how do I read a z-score", "mode": "new"})
+        html = r.content.decode()
+        self.assertIn("?concept=z_score&amp;mode=new&amp;q=how%20do%20I%20read%20a%20z-score", html)

@@ -349,7 +349,8 @@ class QuestionResponse(models.Model):
 # estimated-cost reporting. Stores a hash and the length of the question, never its text.
 class ExplainerRequest(models.Model):
     STATUS_CHOICES = [(s, s) for s in ("OK", "CACHED", "DECLINED", "INVALID_AI_RESPONSE", "NOT_CONFIGURED",
-                                        "CREDITS_EXHAUSTED", "RATE_LIMITED", "TIMEOUT", "UNAVAILABLE", "ERROR")]
+                                        "CREDITS_EXHAUSTED", "RATE_LIMITED", "TIMEOUT", "UNAVAILABLE", "ERROR",
+                                        "OUT_OF_SCOPE")]   # claude code changed: 2026-10-28 — off-topic answers are not shown
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="explainer_requests")
     concept_id = models.CharField(max_length=64, blank=True)
     mode = models.CharField(max_length=16)

@@ -99,6 +99,13 @@ answer (when available) is plain, auto-escaped text — never marked safe.
             {% if result %}
             <div class="rx-status{% if result.status == 'OK' %} ok{% endif %}" role="status">
                 <b>{{ result.status_label|default:result.status }}</b>{% if result.message %} — {{ result.message }}{% endif %}
+                {% if result.candidates %}{# claude code changed: 2026-10-28 — tied concepts become one-click choices that keep the question #}
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+                    {% for c in result.candidates %}
+                    <a class="term-btn mono" href="?concept={{ c.id|urlencode }}&amp;mode={{ mode|urlencode }}&amp;q={{ result.question|urlencode }}" title="{{ c.summary }}">{{ c.name }}</a>
+                    {% endfor %}
+                </div>
+                {% endif %}
             </div>
             {% if result.answer %}
             <div class="rx-answer">
